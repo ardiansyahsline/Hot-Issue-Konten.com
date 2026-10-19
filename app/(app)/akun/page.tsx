@@ -1,8 +1,8 @@
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getProfile } from "@/lib/auth";
 import { NameForm, PasswordForm } from "./AkunForms";
 
 export default async function AkunPage() {
-  const { user, profile } = await getCurrentUser();
+  const [{ user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   return (
     <div className="mx-auto max-w-md space-y-4">
       <div>

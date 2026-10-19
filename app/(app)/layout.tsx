@@ -1,12 +1,12 @@
 import Link from "next/link";
 import Nav from "@/components/Nav";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getProfile } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user, profile } = await getCurrentUser();
+  const [{ user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const name = profile?.full_name || user.email;
 
   return (

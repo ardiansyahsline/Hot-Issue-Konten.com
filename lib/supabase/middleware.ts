@@ -21,9 +21,9 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // getClaims: verifikasi JWT (lokal kalau project pakai asymmetric signing key) + refresh session
+  const { data } = await supabase.auth.getClaims();
+  const user = data?.claims?.sub ? data.claims : null;
 
   const isLogin = request.nextUrl.pathname.startsWith("/login");
 

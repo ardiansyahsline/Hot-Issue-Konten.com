@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getProfile } from "@/lib/auth";
 import { HOT_THRESHOLD, STATUSES } from "@/lib/constants";
 import { CONTACT_TYPES, contactLink, displayContact } from "@/lib/contacts";
 import type { IssueRow } from "@/lib/types";
@@ -14,14 +14,15 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
 
-  const { supabase, user, profile } = await getCurrentUser();
-  const [{ data }, { data: notesData }] = await Promise.all([
+  const { supabase, user } = await getCurrentUser();
+  const [{ data }, { data: notesData }, profile] = await Promise.all([
     supabase.from("issue_list").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("issue_notes")
       .select("id, body, created_at, created_by, author:profiles!issue_notes_created_by_fkey(full_name)")
       .eq("issue_id", id)
       .order("created_at", { ascending: true }),
+    getProfile(),
   ]);
   if (!data) notFound();
   const issue = data as IssueRow;
