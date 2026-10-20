@@ -11,7 +11,7 @@
   --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.13), transparent 70%);
   --stat-k: 1;
   --aurora-a: 0.6;
-  --glow-under: 0 36px 70px -32px rgb(249 115 22 / 0.22);
+  --glow-under: 0 16px 26px -20px rgb(249 115 22 / 0.30), 0 12px 22px -18px rgb(236 72 153 / 0.14);
 }
 html.light {
   --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
@@ -21,7 +21,7 @@ html.light {
   --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.09), transparent 70%);
   --stat-k: 0.7;
   --aurora-a: 1;
-  --glow-under: 0 36px 70px -30px rgb(249 115 22 / 0.3);
+  --glow-under: 0 16px 26px -18px rgb(249 115 22 / 0.34), 0 12px 22px -16px rgb(236 72 153 / 0.18);
 }
 
 body {
@@ -36,16 +36,13 @@ body {
 ::selection { background: rgb(249 115 22 / 0.3); }
 
 @layer components {
-  /* Panel "Aurora": gradasi pastel oranye → pink → ungu di bagian atas + cahaya hangat di bawah */
+  /* Panel melayang: isi tetap putih bersih, cahaya warna lembut hanya di LUAR panel (bayangan) */
   .card {
     @apply rounded-2xl border border-zinc-800/80 bg-zinc-900;
     box-shadow: var(--shadow-card), var(--glow-under);
-    background-image:
-      radial-gradient(520px 170px at 0% 0%, rgb(251 146 60 / calc(0.16 * var(--aurora-a))), transparent 70%),
-      radial-gradient(460px 170px at 55% 0%, rgb(244 114 182 / calc(0.12 * var(--aurora-a))), transparent 70%),
-      radial-gradient(460px 170px at 100% 0%, rgb(167 139 250 / calc(0.14 * var(--aurora-a))), transparent 70%);
-    background-repeat: no-repeat;
   }
+  /* kartu yang ditumpuk rapat (daftar issue / catatan): bayangan netral saja, tanpa cahaya warna */
+  .card-flat { box-shadow: var(--shadow-card); }
   /* kartu angka (StatCard) punya gaya sendiri */
   .card-plain { background-image: none; }
   .card-hover { @apply transition duration-200 hover:-translate-y-0.5 hover:border-zinc-700; }

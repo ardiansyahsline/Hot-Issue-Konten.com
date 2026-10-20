@@ -121,7 +121,7 @@ export default async function CatatanPage({ searchParams }: { searchParams: SP }
           ) : (
             <ul className="space-y-3">
               {rows.map((r) => (
-                <li key={r.id} className="card card-hover p-5">
+                <li key={r.id} className="card card-flat card-hover p-5">
                   <div className="flex items-start gap-3">
                     <Avatar name={r.created_by_name} />
                     <div className="min-w-0 flex-1">

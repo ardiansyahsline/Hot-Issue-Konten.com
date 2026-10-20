@@ -153,7 +153,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                 <li key={i.id}>
                   <Link
                     href={`/issues/${i.id}`}
-                    className={`card card-hover block p-5 ${
+                    className={`card card-flat card-hover block p-5 ${
                       isHot(i) ? "border-red-900/70 bg-red-950/20" : ""
                     }`}
                   >
