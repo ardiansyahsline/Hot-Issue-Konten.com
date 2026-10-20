@@ -22,7 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <Link href="/" className="flex items-center gap-2.5">
               <Logo />
               <span className="leading-tight">
-                <span className="block text-[15px] font-bold tracking-tight">Hot Issues CS</span>
+                <span className="font-display block text-[15px] font-bold">Hot Issues CS</span>
                 <span className="block text-[11px] font-medium text-zinc-500">Konten.com</span>
               </span>
             </Link>

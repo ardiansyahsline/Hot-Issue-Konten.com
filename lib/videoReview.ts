@@ -12,11 +12,11 @@ export const VR_CATEGORIES = [
 ] as const;
 
 export const VR_STATUSES = {
-  menunggu: { label: "Menunggu", cls: "bg-sky-500/15 text-sky-300 ring-sky-500/30" },
-  diproses: { label: "Diproses", cls: "bg-amber-500/15 text-amber-300 ring-amber-500/30" },
-  disetujui: { label: "Disetujui", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30" },
-  ditolak: { label: "Ditolak", cls: "bg-red-500/15 text-red-300 ring-red-500/30" },
-  selesai: { label: "Selesai / Info", cls: "bg-zinc-500/15 text-zinc-300 ring-zinc-500/30" },
+  menunggu: { label: "Menunggu", cls: "bg-sky-500/15 text-sky-300 ring-sky-500/30", bar: "bg-sky-400", text: "belum ada respons" },
+  diproses: { label: "Diproses", cls: "bg-amber-500/15 text-amber-300 ring-amber-500/30", bar: "bg-amber-400", text: "diproses" },
+  disetujui: { label: "Disetujui", cls: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30", bar: "bg-emerald-500", text: "disetujui" },
+  ditolak: { label: "Ditolak", cls: "bg-red-500/15 text-red-300 ring-red-500/30", bar: "bg-red-500", text: "ditolak" },
+  selesai: { label: "Selesai / Info", cls: "bg-zinc-500/15 text-zinc-300 ring-zinc-500/30", bar: "bg-zinc-500", text: "selesai/info" },
 } as const;
 
 export type VrStatus = keyof typeof VR_STATUSES;
@@ -243,10 +243,9 @@ export function buildRangkuman(rows: VrSummaryRow[]): string {
   }
   const top = [...names.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
   const who = top.length > 1 ? top.slice(0, -1).join(", ") + " & " + top[top.length - 1] : (top[0] ?? "");
-  const oleh = who ? ` (${who})` : "";
 
   const parts: string[] = [];
-  parts.push(`Total ${total} kasus${first === last ? ` per ${tgl(first)}` : ` periode ${tgl(first)} – ${tgl(last)}`}.`);
+  parts.push(first === last ? `${total} kasus pada ${tgl(first)}.` : `${total} kasus dari ${tgl(first)} sampai ${tgl(last)}.`);
 
   const counts: [VrStatus, number, string][] = [
     ["disetujui", n("disetujui"), "disetujui"],
@@ -258,22 +257,21 @@ export function buildRangkuman(rows: VrSummaryRow[]): string {
   const nonZero = counts.filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
   if (nonZero.length) {
     const [mainKey, mainCount, mainText] = nonZero[0];
-    const lead =
-      mainCount === total
-        ? `Semua ${mainText}`
-        : mainCount > total / 2
-          ? `Sebagian besar ${mainText} (${mainCount})`
-          : `${mainCount} ${mainText}`;
+    const decided = ["disetujui", "ditolak", "selesai"].includes(mainKey);
+    const by = decided && who ? `, ditangani ${who}` : "";
+    if (mainCount === total) parts.push(`Semuanya ${mainText}${by}.`);
+    else if (mainCount > total / 2) parts.push(`Mayoritas ${mainText} (${mainCount} kasus)${by}.`);
+    else parts.push(`Paling banyak ${mainText} (${mainCount} kasus)${by}.`);
     const rest = nonZero.slice(1).map(([, c, t]) => `${c} ${t}`);
-    parts.push(`${lead}${mainKey === "disetujui" || mainKey === "ditolak" || mainKey === "selesai" ? oleh : ""}${rest.length ? "; " + rest.join(", ") : ""}.`);
-    if (who && !["disetujui", "ditolak", "selesai"].includes(mainKey)) parts.push(`Ditangani ${who}.`);
+    if (rest.length) parts.push(`Sisanya ${rest.join(", ")}.`);
+    if (!decided && who) parts.push(`Ditangani ${who}.`);
   }
 
   const latest = rows.filter((r) => r.report_date === last);
   const latestWaiting = latest.filter((r) => r.status === "menunggu").length;
   if (first !== last) {
     parts.push(
-      `Kasus terbaru per ${tgl(last)}: ${latest.length} kasus${latestWaiting ? `, ${latestWaiting} masih belum ada respons` : ""}.`
+      `Terbaru ${tgl(last)}: ${latest.length} kasus${latestWaiting ? `, ${latestWaiting} masih menunggu respons` : ""}.`
     );
   }
   return parts.join(" ");

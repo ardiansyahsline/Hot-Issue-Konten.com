@@ -115,7 +115,6 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
         {canWrite && (
           <div className="flex flex-wrap gap-2">
             <Link href="/video-review/import" className="btn-ghost">↻ Sync / Import Sheet</Link>
-            <Link href="/video-review/new" className="btn-primary">+ Kasus baru</Link>
           </div>
         )}
       </div>
@@ -126,74 +125,141 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
         </div>
       )}
 
-      {/* ---------------- REKAP: Kategori | Jumlah Kasus | Rangkuman ---------------- */}
+      {/* ---------------- REKAP: Kategori | Jumlah Kasus | Status | Rangkuman ---------------- */}
       <section className="card overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-6 pb-5 pt-6">
           <div>
-            <h2 className="text-base font-bold tracking-tight">Rekap per kategori</h2>
-            <p className="text-xs text-zinc-500">
-              Dihitung otomatis dari data{from || to ? ` · ${from ? ddmmyy(from) : "awal"} – ${to ? ddmmyy(to) : "sekarang"}` : ""}. Klik kategori untuk filter tabel.
+            <h2 className="section-title">Rekap per kategori</h2>
+            <p className="mt-1 text-[13px] text-zinc-500">
+              Dihitung otomatis dari data
+              {from || to ? ` · ${from ? ddmmyy(from) : "awal"} – ${to ? ddmmyy(to) : "sekarang"}` : ""} · klik kategori untuk memfilter tabel di bawah.
             </p>
           </div>
-          {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
+          <div className="flex items-center gap-5">
+            {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
+            <div className="text-right">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Total kasus</div>
+              <div className="font-display text-[28px] font-bold leading-none tabular-nums">{grand}</div>
+            </div>
+          </div>
         </div>
+
         <div className="overflow-x-auto">
-          <table className="sheet min-w-[860px]">
+          <table className="w-full min-w-[880px] text-left">
             <thead>
-              <tr>
-                <th className="w-[260px]">Kategori</th>
-                <th className="w-[110px] text-right">Jumlah Kasus</th>
-                <th className="w-[230px]">Status</th>
-                <th>Rangkuman</th>
+              <tr className="border-y border-zinc-800/80 bg-zinc-950/40 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                <th className="w-[27%] px-6 py-3 font-semibold">Kategori</th>
+                <th className="w-[9%] px-3 py-3 text-right font-semibold">Jumlah</th>
+                <th className="w-[22%] px-5 py-3 font-semibold">Status</th>
+                <th className="px-5 py-3 font-semibold">Rangkuman</th>
               </tr>
             </thead>
-            <tbody>
-              {rekap.map((r) => (
-                <tr key={r.category ?? NONE} className={r.total === 0 ? "opacity-50" : ""}>
-                  <td className="font-semibold">
-                    <Link
-                      href={filterHref({ category: r.category ?? NONE, status: undefined })}
-                      className={`hover:text-orange-400 ${activeCat === r.category && sp.category ? "text-orange-400" : ""}`}
-                    >
-                      {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
-                    </Link>
-                  </td>
-                  <td className="text-right text-base font-bold tabular-nums">{r.total}</td>
-                  <td>
-                    <div className="flex flex-wrap gap-1">
-                      {statusKeys
-                        .filter((k) => r.byStatus[k] > 0)
-                        .map((k) => (
-                          <Link key={k} href={filterHref({ category: r.category ?? NONE, status: k })} className={`badge ${VR_STATUSES[k].cls}`}>
-                            {VR_STATUSES[k].label} {r.byStatus[k]}
-                          </Link>
-                        ))}
-                    </div>
-                  </td>
-                  <td className="space-y-1.5 text-zinc-300">
-                    {r.rangkuman ? <p className="leading-relaxed">{r.rangkuman}</p> : <p className="text-zinc-500">Belum ada kasus.</p>}
-                    {r.category && (r.total > 0 || notes.get(r.category)) && (
-                      <CategoryNote category={r.category} note={notes.get(r.category) ?? ""} canWrite={canWrite} />
-                    )}
-                  </td>
-                </tr>
-              ))}
+            <tbody className="divide-y divide-zinc-800/70">
+              {rekap.filter((r) => r.total > 0).map((r) => {
+                const share = grand ? Math.round((r.total / grand) * 100) : 0;
+                const active = sp.category && activeCat === r.category;
+                return (
+                  <tr key={r.category ?? NONE} className={`align-top transition-colors hover:bg-zinc-800/30 ${r.total === 0 ? "opacity-45" : ""}`}>
+                    <td className="px-6 py-4">
+                      <Link
+                        href={filterHref({ category: r.category ?? NONE, status: undefined })}
+                        className={`text-[14px] font-semibold leading-snug hover:text-orange-400 ${active ? "text-orange-400" : "text-zinc-100"}`}
+                      >
+                        {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
+                      </Link>
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-800">
+                          <div className="h-full rounded-full bg-orange-500" style={{ width: `${share}%` }} />
+                        </div>
+                        <span className="text-[12px] tabular-nums text-zinc-500">{share}%</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 text-right">
+                      <span className="font-display text-[22px] font-bold leading-none tabular-nums">{r.total}</span>
+                    </td>
+                    <td className="px-5 py-4">
+                      {r.total > 0 ? (
+                        <>
+                          <div className="flex h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+                            {statusKeys
+                              .filter((k) => r.byStatus[k] > 0)
+                              .map((k) => (
+                                <div
+                                  key={k}
+                                  className={VR_STATUSES[k].bar}
+                                  style={{ width: `${(r.byStatus[k] / r.total) * 100}%` }}
+                                  title={`${VR_STATUSES[k].label}: ${r.byStatus[k]}`}
+                                />
+                              ))}
+                          </div>
+                          <div className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1">
+                            {statusKeys
+                              .filter((k) => r.byStatus[k] > 0)
+                              .map((k) => (
+                                <Link
+                                  key={k}
+                                  href={filterHref({ category: r.category ?? NONE, status: k })}
+                                  className="inline-flex items-center gap-1.5 text-[12px] text-zinc-400 hover:text-zinc-100"
+                                >
+                                  <span className={`h-2 w-2 rounded-full ${VR_STATUSES[k].bar}`} />
+                                  <span className="font-semibold tabular-nums text-zinc-200">{r.byStatus[k]}</span>
+                                  {VR_STATUSES[k].text}
+                                </Link>
+                              ))}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-[12px] text-zinc-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-4">
+                      {r.rangkuman ? (
+                        <p className="max-w-[68ch] text-[13.5px] leading-6 text-zinc-300">{r.rangkuman}</p>
+                      ) : (
+                        <p className="text-[13px] text-zinc-500">Belum ada kasus.</p>
+                      )}
+                      {r.category && (r.total > 0 || notes.get(r.category)) && (
+                        <div className="mt-1.5">
+                          <CategoryNote category={r.category} note={notes.get(r.category) ?? ""} canWrite={canWrite} />
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
-              <tr className="bg-zinc-800/50 font-bold">
-                <td className="border-r border-zinc-800 px-3 py-3 uppercase tracking-wider">Total</td>
-                <td className="border-r border-zinc-800 px-3 py-3 text-right text-base tabular-nums">{grand}</td>
-                <td className="border-r border-zinc-800 px-3 py-3">
-                  <div className="flex flex-wrap gap-1">
+              {rekap.some((r) => r.total === 0) && (
+                <tr className="border-t border-zinc-800/70">
+                  <td colSpan={4} className="px-6 py-3 text-[12px] text-zinc-500">
+                    Tanpa kasus di periode ini:{" "}
+                    {rekap
+                      .filter((r) => r.total === 0)
+                      .map((r) => r.category ?? "Belum dikategorikan")
+                      .join(" · ")}
+                  </td>
+                </tr>
+              )}
+              <tr className="border-t border-zinc-800 bg-zinc-950/40">
+                <td className="px-6 py-4 text-[12px] font-bold uppercase tracking-wider text-zinc-300">Total</td>
+                <td className="px-3 py-4 text-right">
+                  <span className="font-display text-[22px] font-bold leading-none tabular-nums">{grand}</span>
+                </td>
+                <td className="px-5 py-4">
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
                     {statusKeys
                       .filter((k) => totalByStatus[k] > 0)
                       .map((k) => (
-                        <span key={k} className={`badge ${VR_STATUSES[k].cls}`}>{VR_STATUSES[k].label} {totalByStatus[k]}</span>
+                        <span key={k} className="inline-flex items-center gap-1.5 text-[12px] text-zinc-400">
+                          <span className={`h-2 w-2 rounded-full ${VR_STATUSES[k].bar}`} />
+                          <span className="font-semibold tabular-nums text-zinc-200">{totalByStatus[k]}</span>
+                          {VR_STATUSES[k].text}
+                        </span>
                       ))}
                   </div>
                 </td>
-                <td className="px-3 py-3 font-medium text-zinc-400">
-                  {grand ? `Total baris kasus ${ddmmyy(allDates[0])} – ${ddmmyy(allDates[allDates.length - 1])}` : "-"}
+                <td className="px-5 py-4 text-[13px] text-zinc-400">
+                  {grand ? `Total baris kasus ${ddmmyy(allDates[0])} – ${ddmmyy(allDates[allDates.length - 1])}` : "—"}
                 </td>
               </tr>
             </tfoot>
@@ -204,7 +270,12 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
       {/* ---------------- TABEL KASUS (kolom sama dengan sheet) ---------------- */}
       <section className="card overflow-hidden">
         <form className="flex flex-wrap items-center gap-2 border-b border-zinc-800/80 p-4">
-          <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, insight…" className="input w-full" />
+          <div className="flex w-full flex-col gap-2 sm:flex-row">
+            <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, insight…" className="input flex-1" />
+            {canWrite && (
+              <Link href="/video-review/new" className="btn-primary shrink-0">+ Kasus baru</Link>
+            )}
+          </div>
           <select name="category" defaultValue={sp.category ?? ""} className="input w-auto">
             <option value="">Semua kategori</option>
             <option value={NONE}>Belum dikategorikan</option>

@@ -20,10 +20,11 @@ html.light {
 
 body {
   @apply bg-zinc-950 text-zinc-100 antialiased;
-  font-family: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  letter-spacing: -0.006em;
   background-image: var(--bg-glow);
   background-repeat: no-repeat;
-  word-spacing: 0.06em;
 }
 
 ::selection { background: rgb(249 115 22 / 0.3); }
@@ -62,7 +63,9 @@ body {
   .badge {
     @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset;
   }
-  .page-title { @apply text-2xl font-bold tracking-tight; }
+  .font-display { font-family: "Plus Jakarta Sans Variable", "Inter Variable", ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.015em; }
+  .page-title { @apply font-display text-[26px] font-bold leading-tight; }
+  .section-title { @apply font-display text-[17px] font-bold; }
   .page-sub { @apply mt-1 text-sm text-zinc-400; }
 
   /* Tabel gaya spreadsheet */

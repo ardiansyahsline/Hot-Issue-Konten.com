@@ -26,10 +26,14 @@ export function CategoryNote({ category, note, canWrite }: { category: string; n
   if (!editing) {
     return (
       <div className="text-xs">
-        {saved ? <p className="whitespace-pre-wrap text-zinc-300">📝 {saved}</p> : null}
+        {saved ? (
+          <p className="whitespace-pre-wrap rounded-lg border-l-2 border-orange-500/60 bg-orange-500/5 px-3 py-2 text-[13px] leading-6 text-zinc-300">
+            {saved}
+          </p>
+        ) : null}
         {canWrite && (
-          <button onClick={() => setEditing(true)} className="mt-1 text-zinc-500 hover:text-orange-400">
-            {saved ? "Edit catatan" : "+ Tambah catatan"}
+          <button onClick={() => setEditing(true)} className="mt-1 text-[12px] font-medium text-zinc-500 transition hover:text-orange-400">
+            {saved ? "Edit catatan" : "+ Catatan"}
           </button>
         )}
       </div>
