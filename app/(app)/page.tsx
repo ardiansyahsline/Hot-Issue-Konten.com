@@ -6,12 +6,17 @@ import { cleanSearch, isAutoHot, isHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
 import StatCard from "@/components/StatCard";
+import TopIssues, { topIssues } from "@/components/TopIssues";
+import type { VrSummaryRow } from "@/lib/videoReview";
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 const HOT_OR = `is_hot.eq.true,max_contact_reports_30d.gte.${HOT_THRESHOLD}`;
 
 type SP = Promise<Record<string, string | undefined>>;
+type Counts = { open: number; in_progress: number; urgent: number; hot: number; resolved_today: number };
+
+const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export default async function Dashboard({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
@@ -33,24 +38,35 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
     );
   }
 
-  const active = () => supabase.from("issue_list").select("id", { count: "exact", head: true }).neq("status", "resolved");
   // jam 00:00 WIB hari ini, dalam UTC
   const jkt = new Date(Date.now() + 7 * 3600 * 1000);
   const todayStartWib = new Date(
     Date.UTC(jkt.getUTCFullYear(), jkt.getUTCMonth(), jkt.getUTCDate()) - 7 * 3600 * 1000
   ).toISOString();
+  // Top 3 Video Review: 7 hari terakhir (termasuk hari ini, WIB) vs 7 hari sebelumnya
+  const DAY = 86400000;
+  const today = isoDay(jkt.getTime());
+  const weekFrom = isoDay(jkt.getTime() - 6 * DAY);
+  const prevFrom = isoDay(jkt.getTime() - 13 * DAY);
 
-  const [issuesRes, openC, progC, urgentC, hotC, resolvedTodayC, hotContactsRes] = await Promise.all([
+  /** Semua angka kartu dalam 1 panggilan (migration-06). Kalau belum dijalankan, pakai cara lama. */
+  async function loadCounts(): Promise<Counts> {
+    const { data, error } = await supabase.rpc("dashboard_counts", { p_hot_threshold: HOT_THRESHOLD, p_today_start: todayStartWib });
+    if (!error && data) return data as Counts;
+    const active = () => supabase.from("issue_list").select("id", { count: "exact", head: true }).neq("status", "resolved");
+    const [o, p, u, h, r] = await Promise.all([
+      supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "open"),
+      supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "in_progress"),
+      active().eq("priority", "urgent"),
+      active().or(HOT_OR),
+      supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "resolved").gte("resolved_at", todayStartWib),
+    ]);
+    return { open: o.count ?? 0, in_progress: p.count ?? 0, urgent: u.count ?? 0, hot: h.count ?? 0, resolved_today: r.count ?? 0 };
+  }
+
+  const [issuesRes, counts, hotContactsRes, vrRes] = await Promise.all([
     query,
-    supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "open"),
-    supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "in_progress"),
-    active().eq("priority", "urgent"),
-    active().or(HOT_OR),
-    supabase
-      .from("issues")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "resolved")
-      .gte("resolved_at", todayStartWib),
+    loadCounts(),
     supabase
       .from("contact_stats")
       .select("*")
@@ -58,7 +74,14 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .order("issue_count_30d", { ascending: false })
       .order("last_seen", { ascending: false })
       .limit(10),
+    supabase
+      .from("video_reviews")
+      .select("category, status, resolution, report_date")
+      .gte("report_date", prevFrom)
+      .lte("report_date", today)
+      .limit(5000),
   ]);
+  const top = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom);
 
   const issues = ((issuesRes.data ?? []) as IssueRow[]).sort((a, b) => {
     const h = Number(isHot(b)) - Number(isHot(a));
@@ -69,14 +92,14 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   });
   const hotContacts = (hotContactsRes.data ?? []) as ContactStat[];
 
-  const activeTotal = (openC.count ?? 0) + (progC.count ?? 0);
+  const activeTotal = counts.open + counts.in_progress;
   const ofActive = (n: number) => `${activeTotal ? Math.round((n / activeTotal) * 100) : 0}% dari issue aktif`;
   const stats = [
-    { label: "Hot aktif", value: hotC.count ?? 0, href: "/?hot=1", tone: "red", icon: "flame", footer: ofActive(hotC.count ?? 0) },
-    { label: "Urgent aktif", value: urgentC.count ?? 0, href: "/?priority=urgent", tone: "orange", icon: "alert", footer: ofActive(urgentC.count ?? 0) },
-    { label: "Open", value: openC.count ?? 0, href: "/?status=open", tone: "sky", icon: "inbox", footer: ofActive(openC.count ?? 0) },
-    { label: "In Progress", value: progC.count ?? 0, href: "/?status=in_progress", tone: "amber", icon: "clock", footer: ofActive(progC.count ?? 0) },
-    { label: "Resolved hari ini", value: resolvedTodayC.count ?? 0, href: "/?status=resolved", tone: "emerald", icon: "check", footer: "diselesaikan hari ini" },
+    { label: "Hot aktif", value: counts.hot, href: "/?hot=1", tone: "red", icon: "flame", footer: ofActive(counts.hot) },
+    { label: "Urgent aktif", value: counts.urgent, href: "/?priority=urgent", tone: "orange", icon: "alert", footer: ofActive(counts.urgent) },
+    { label: "Open", value: counts.open, href: "/?status=open", tone: "sky", icon: "inbox", footer: ofActive(counts.open) },
+    { label: "In Progress", value: counts.in_progress, href: "/?status=in_progress", tone: "amber", icon: "clock", footer: ofActive(counts.in_progress) },
+    { label: "Resolved hari ini", value: counts.resolved_today, href: "/?status=resolved", tone: "emerald", icon: "check", footer: "diselesaikan hari ini" },
   ] as const;
 
   return (
@@ -91,6 +114,8 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <h1 className="page-title">Dashboard Hot Issues</h1>
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
+
+      <TopIssues items={top} from={weekFrom} to={today} />
 
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => (

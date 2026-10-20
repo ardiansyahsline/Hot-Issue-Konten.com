@@ -57,7 +57,7 @@ const ICONS: Record<string, React.ReactNode> = {
 };
 
 // Warna tetap (tidak ikut dibalik di mode terang): [terang, utama]
-const HEX: Record<Tone, [string, string]> = {
+export const HEX: Record<Tone, [string, string]> = {
   amber: ["#fcd34d", "#f59e0b"],
   emerald: ["#6ee7b7", "#10b981"],
   red: ["#fca5a5", "#ef4444"],
@@ -68,7 +68,7 @@ const HEX: Record<Tone, [string, string]> = {
   zinc: ["#d4d4d8", "#71717a"],
 };
 
-const alpha = (hex: string, a: number) => {
+export const alpha = (hex: string, a: number) => {
   const h = hex.replace("#", "");
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 };

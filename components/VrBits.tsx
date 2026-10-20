@@ -31,3 +31,27 @@ export function VrLinks({ links, max }: { links: { id?: number; kind: VrLinkKind
     </div>
   );
 }
+
+/** Kolom Catatan: baris "Argumen clipper: …" diberi label redup supaya mudah dibedakan dari insight */
+export function VrNotes({ text, clamp = false }: { text: string | null; clamp?: boolean }) {
+  if (!text) return <span className="text-zinc-600">—</span>;
+  const lines = text.split("\n");
+  return (
+    <div className={clamp ? "line-clamp-4" : ""} title={clamp ? text : undefined}>
+      {lines.map((line, i) => {
+        const m = line.match(/^(argumen clipper:)\s*(.*)$/i);
+        return (
+          <p key={i} className="whitespace-pre-wrap">
+            {m ? (
+              <>
+                <span className="font-semibold text-zinc-500">Argumen clipper:</span> {m[2]}
+              </>
+            ) : (
+              line
+            )}
+          </p>
+        );
+      })}
+    </div>
+  );
+}

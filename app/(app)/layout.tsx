@@ -6,6 +6,7 @@ import { signOut } from "@/app/login/actions";
 import { ROLES, isRole } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
 import { getTheme } from "@/lib/theme";
+import ChatWidget from "@/components/chat/ChatWidgetLazy";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </header>
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6">{children}</main>
+      <ChatWidget meId={user.id} />
     </div>
   );
 }

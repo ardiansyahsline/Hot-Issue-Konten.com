@@ -62,6 +62,7 @@ export type VideoReviewRow = {
   resolution: string | null;
   insight: string | null;
   clipper_argument: string | null;
+  notes: string | null;
   source_key: string | null;
   created_by: string | null;
   updated_by: string | null;

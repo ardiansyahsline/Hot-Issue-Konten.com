@@ -10,10 +10,12 @@ import {
   VR_CATEGORIES,
   VR_STATUSES,
   categorize,
+  combineNotes,
   parseLinksText,
   sheetBaseKey,
   sheetCsvUrl,
   sheetToReviews,
+  statusFromSheet,
   type VrImportRow,
   type VrLinkInput,
 } from "@/lib/videoReview";
@@ -52,8 +54,7 @@ function parseForm(fd: FormData) {
       category: categoryRaw || categorize(explanation),
       status,
       resolution: txt(fd.get("resolution")),
-      insight: txt(fd.get("insight")),
-      clipper_argument: txt(fd.get("clipper_argument")),
+      notes: txt(fd.get("notes")),
     },
     links: parseLinksText(String(fd.get("links") ?? "")),
   } as const;
@@ -156,7 +157,11 @@ async function importRows(w: Writer, input: VrImportRow[]): Promise<ImportResult
     .map((r) => ({
       ...r,
       explanation: r.explanation.trim(),
-      status: r.status in VR_STATUSES ? r.status : "menunggu",
+      insight: r.insight?.trim() || null,
+      clipper_argument: r.clipper_argument?.trim() || null,
+      // aturan sama dengan sheetToReviews: Penyelesaian "belum ada respons" + Insight ada isi -> status dari Insight
+      status: statusFromSheet(r.resolution ?? null, r.insight ?? null),
+      notes: combineNotes(r.insight ?? null, r.clipper_argument ?? null),
       report_date: /^\d{4}-\d{2}-\d{2}$/.test(r.report_date ?? "") ? r.report_date : null,
       links: (Array.isArray(r.links) ? r.links : []).filter(
         (l: VrLinkInput) => l && ["email", "url", "other"].includes(l.kind) && String(l.value).trim()
@@ -174,13 +179,14 @@ async function importRows(w: Writer, input: VrImportRow[]): Promise<ImportResult
     resolution: string | null;
     insight: string | null;
     clipper_argument: string | null;
+    notes: string | null;
   };
   const existing = new Map<string, Existing>();
   let fetchErr: string | null = null;
   await inBatches(keys, 100, async (batch) => {
     const { data, error } = await w.supabase
       .from("video_reviews")
-      .select("id, source_key, category, status, resolution, insight, clipper_argument")
+      .select("id, source_key, category, status, resolution, insight, clipper_argument, notes")
       .in("source_key", batch);
     if (error) fetchErr = error.message;
     for (const e of (data ?? []) as Existing[]) existing.set(e.source_key, e);
@@ -214,6 +220,7 @@ async function importRows(w: Writer, input: VrImportRow[]): Promise<ImportResult
           resolution: r.resolution || null,
           insight: r.insight || null,
           clipper_argument: r.clipper_argument || null,
+          notes: r.notes,
           source_key: key,
         })),
         { onConflict: "source_key", ignoreDuplicates: true }
@@ -244,8 +251,15 @@ async function importRows(w: Writer, input: VrImportRow[]): Promise<ImportResult
       patch.resolution = r.resolution;
       patch.status = r.status;
     }
-    if (r.insight && r.insight !== e.insight) patch.insight = r.insight;
-    if (r.clipper_argument && r.clipper_argument !== e.clipper_argument) patch.clipper_argument = r.clipper_argument;
+    const insightChanged = !!r.insight && r.insight !== e.insight;
+    const argChanged = !!r.clipper_argument && r.clipper_argument !== e.clipper_argument;
+    if (insightChanged) patch.insight = r.insight!;
+    if (argChanged) patch.clipper_argument = r.clipper_argument!;
+    // Catatan ikut diperbarui hanya kalau Insight/Argumen di sheet berubah (atau Catatan masih kosong)
+    if ((insightChanged || argChanged || !e.notes) && r.notes && r.notes !== e.notes) patch.notes = r.notes;
+    // masih "menunggu" tapi Insight sudah berisi penyelesaian -> status ikut Insight
+    if ((insightChanged || e.status === "menunggu") && r.status !== "menunggu" && r.status !== e.status && !patch.status)
+      patch.status = r.status;
     if (!e.category) patch.category = categorize(r.explanation);
     const have = existingLinks.get(e.id) ?? new Set<string>();
     const newLinks = r.links.filter((l) => !have.has(l.value.trim().toLowerCase()));

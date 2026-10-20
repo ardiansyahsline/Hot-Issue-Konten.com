@@ -50,7 +50,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   if (sp.status) query = query.eq("status", sp.status);
   if (q) {
     query = query.or(
-      ["explanation", "resolution", "insight", "clipper_argument", "links_text"]
+      ["explanation", "resolution", "notes", "links_text"]
         .map((c) => `${c}.ilike."*${c === "links_text" ? q.toLowerCase() : q}*"`)
         .join(",")
     );
@@ -365,7 +365,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
       <section className="card overflow-hidden">
         <form className="flex flex-wrap items-center gap-2 border-b border-zinc-800/80 p-4">
           <input type="hidden" name="tab" value="daftar" />
-          <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, insight…" className="input w-full" />
+          <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, catatan…" className="input w-full" />
           <select name="category" defaultValue={sp.category ?? ""} className="input w-auto">
             <option value="">Semua kategori</option>
             <option value={NONE}>Belum dikategorikan</option>

@@ -5,7 +5,7 @@ import { canEditReviews } from "@/lib/roles";
 import { VR_STATUSES } from "@/lib/videoReview";
 import type { VideoReviewRow } from "@/lib/types";
 import { fmtDate, fmtDay } from "@/lib/utils";
-import { VrLinks, VrStatusBadge } from "@/components/VrBits";
+import { VrLinks, VrNotes, VrStatusBadge } from "@/components/VrBits";
 import VrCategorySelect from "@/components/VrCategorySelect";
 import { deleteReview, setReviewStatus } from "../actions";
 
@@ -51,8 +51,10 @@ export default async function ReviewDetail({ params }: { params: Promise<{ id: s
           {r.links.length ? <VrLinks links={r.links} /> : <span className="text-sm text-zinc-500">-</span>}
         </div>
         <Field label="Penyelesaian" value={r.resolution} />
-        <Field label="Insight" value={r.insight} />
-        <Field label="Argumen clipper" value={r.clipper_argument} />
+        <div>
+          <div className="label">Catatan</div>
+          <div className="text-sm text-zinc-200"><VrNotes text={r.notes} /></div>
+        </div>
 
         <div className="text-xs text-zinc-500">
           Dibuat {fmtDate(r.created_at)} oleh {r.created_by_name ?? "-"} · update {fmtDate(r.updated_at)} oleh {r.updated_by_name ?? "-"}

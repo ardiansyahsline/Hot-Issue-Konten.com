@@ -31,6 +31,7 @@ export type VrImportRow = {
   resolution: string | null;
   insight: string | null;
   clipper_argument: string | null;
+  notes: string | null; // Catatan = Insight + "Argumen clipper: …"
   status: VrStatus;
   category: string;
   links: VrLinkInput[];
@@ -87,6 +88,23 @@ export function statusFromResolution(text: string | null): VrStatus {
   if (/sudah diproses|selesai|dijelaskan|pembaruan|refresh/.test(t)) return "selesai";
   if (/diproses|masih/.test(t)) return "diproses";
   return "selesai";
+}
+
+/**
+ * Status final: dari Penyelesaian. Kalau Penyelesaian masih "belum ada respons" (menunggu)
+ * tapi Insight ada isinya, Insight biasanya berisi penyelesaiannya -> status dibaca dari Insight.
+ * Insight kosong = memang belum ada respons dari tim review.
+ */
+export function statusFromSheet(resolution: string | null, insight: string | null): VrStatus {
+  const s = statusFromResolution(resolution);
+  if (s === "menunggu" && (insight ?? "").trim()) return statusFromResolution(insight);
+  return s;
+}
+
+/** Gabungan kolom Catatan dari Insight + Argumen clipper (format sama dengan migration-06). */
+export function combineNotes(insight: string | null, argument: string | null): string | null {
+  const parts = [(insight ?? "").trim(), (argument ?? "").trim() ? `Argumen clipper: ${(argument ?? "").trim()}` : ""].filter(Boolean);
+  return parts.length ? parts.join("\n") : null;
 }
 
 /** "02/10/26" atau "02/10/2026" (dd/mm/yy) -> "2026-10-02" */
@@ -151,6 +169,7 @@ export function sheetToReviews(rows: string[][]): { reviews: VrImportRow[]; erro
         resolution: res || null,
         insight: insight || null,
         clipper_argument: arg || null,
+        notes: null,
         status: "menunggu",
         category: "Lainnya",
         links,
@@ -166,7 +185,8 @@ export function sheetToReviews(rows: string[][]): { reviews: VrImportRow[]; erro
   });
 
   for (const r of reviews) {
-    r.status = statusFromResolution(r.resolution);
+    r.status = statusFromSheet(r.resolution, r.insight);
+    r.notes = combineNotes(r.insight, r.clipper_argument);
     r.category = categorize(r.explanation);
     const seen = new Set<string>();
     r.links = r.links.filter((l) => {

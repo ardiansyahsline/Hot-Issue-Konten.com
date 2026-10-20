@@ -73,12 +73,8 @@ export default function VrForm({
           <textarea id="resolution" name="resolution" rows={2} defaultValue={review?.resolution ?? ""} placeholder="Contoh: Disetujui (Irsyad) / Belum ada respons" className="input" />
         </div>
         <div>
-          <label className="label" htmlFor="insight">Insight</label>
-          <textarea id="insight" name="insight" rows={3} defaultValue={review?.insight ?? ""} placeholder="Alasan / temuan dari reviewer" className="input" />
-        </div>
-        <div>
-          <label className="label" htmlFor="clipper_argument">Argumen clipper</label>
-          <textarea id="clipper_argument" name="clipper_argument" rows={3} defaultValue={review?.clipper_argument ?? ""} className="input" />
+          <label className="label" htmlFor="notes">Catatan</label>
+          <textarea id="notes" name="notes" rows={4} defaultValue={review?.notes ?? ""} placeholder={"Insight / temuan reviewer…\nArgumen clipper: (opsional)"} className="input" />
         </div>
       </div>
 

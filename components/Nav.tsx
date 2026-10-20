@@ -11,6 +11,7 @@ export default function Nav({ role }: { role: string | null }) {
     { href: "/issues/new", label: "+ Issue Baru", show: canWriteIssues(role) },
     { href: "/video-review", label: "Video Review", show: true },
     { href: "/catatan", label: "Catatan & Saran", show: true },
+    { href: "/chat", label: "Chat", show: true },
     { href: "/admin", label: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
 

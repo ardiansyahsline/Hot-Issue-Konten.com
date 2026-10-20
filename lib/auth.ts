@@ -1,13 +1,18 @@
 import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import { EMAIL_HEADER, UID_HEADER } from "@/lib/authHeaders";
 import { createClient } from "@/lib/supabase/server";
 import type { Profile } from "@/lib/types";
 import { canEditReviews, canWriteIssues, canWriteReviews } from "@/lib/roles";
 
 /** User yang login (id + email). Di-cache per request supaya tidak dipanggil berkali-kali. */
 export const getCurrentUser = cache(async () => {
-  const supabase = await createClient();
+  const [supabase, h] = await Promise.all([createClient(), headers()]);
+  // middleware sudah memverifikasi login di request ini -> tidak perlu cek ulang ke Supabase
+  const uid = h.get(UID_HEADER);
+  if (uid) return { supabase, user: { id: uid, email: decodeURIComponent(h.get(EMAIL_HEADER) ?? "") } };
   const { data } = await supabase.auth.getClaims();
   const claims = data?.claims;
   if (!claims?.sub) redirect("/login");

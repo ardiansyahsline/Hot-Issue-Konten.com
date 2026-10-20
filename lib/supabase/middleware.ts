@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { EMAIL_HEADER, UID_HEADER } from "@/lib/authHeaders";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -39,5 +40,18 @@ export async function updateSession(request: NextRequest) {
     url.search = "";
     return NextResponse.redirect(url);
   }
-  return response;
+
+  // Percepat: teruskan user yang SUDAH diverifikasi ke halaman lewat header internal,
+  // jadi server tidak perlu cek login ke Supabase untuk kedua kalinya.
+  // Header kiriman dari luar selalu dibuang dulu supaya tidak bisa dipalsukan.
+  const headers = new Headers(request.headers);
+  headers.delete(UID_HEADER);
+  headers.delete(EMAIL_HEADER);
+  if (user) {
+    headers.set(UID_HEADER, String(user.sub));
+    headers.set(EMAIL_HEADER, encodeURIComponent(String(user.email ?? "")));
+  }
+  const final = NextResponse.next({ request: { headers } });
+  response.cookies.getAll().forEach((c) => final.cookies.set(c));
+  return final;
 }

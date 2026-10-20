@@ -59,13 +59,9 @@ export default function VrQuickForm({ today }: { today: string }) {
           <label className="label" htmlFor="q_res">Penyelesaian</label>
           <textarea id="q_res" name="resolution" rows={3} placeholder="Disetujui (Irsyad)…" className="input" />
         </div>
-        <div>
-          <label className="label" htmlFor="q_ins">Insight</label>
-          <textarea id="q_ins" name="insight" rows={3} placeholder="Alasan / temuan reviewer…" className="input" />
-        </div>
-        <div>
-          <label className="label" htmlFor="q_arg">Argumen clipper</label>
-          <textarea id="q_arg" name="clipper_argument" rows={3} placeholder="Opsional…" className="input" />
+        <div className="md:col-span-2">
+          <label className="label" htmlFor="q_notes">Catatan</label>
+          <textarea id="q_notes" name="notes" rows={3} placeholder={"Insight / temuan reviewer…\nArgumen clipper: (opsional)"} className="input" />
         </div>
       </div>
       <div className="mt-5 flex flex-wrap items-center justify-end gap-3">

@@ -5,7 +5,7 @@ import { useActionState, useEffect, useState } from "react";
 import { VR_CATEGORIES, VR_STATUSES, ddmmyy } from "@/lib/videoReview";
 import type { VideoReviewRow } from "@/lib/types";
 import { updateReviewInline } from "@/app/(app)/video-review/actions";
-import { VrLinks, VrStatusBadge } from "./VrBits";
+import { VrLinks, VrNotes, VrStatusBadge } from "./VrBits";
 import VrCategorySelect from "./VrCategorySelect";
 import VrStatusSelect from "./VrStatusSelect";
 
@@ -19,7 +19,7 @@ function EditRow({ r, onDone }: { r: VideoReviewRow; onDone: () => void }) {
 
   return (
     <tr>
-      <td colSpan={9} className="p-2.5">
+      <td colSpan={8} className="p-2.5">
         <form action={action} className="rounded-2xl border-2 border-orange-400/70 bg-orange-500/5 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <span className="text-[13px] font-semibold">Edit kasus #{r.id}</span>
@@ -47,8 +47,7 @@ function EditRow({ r, onDone }: { r: VideoReviewRow; onDone: () => void }) {
           <div className="mt-2.5 grid gap-2.5 md:grid-cols-4">
             <textarea name="links" rows={3} defaultValue={r.links.map((l) => l.value).join("\n")} placeholder="Email / link, satu per baris" className="input font-mono text-xs" aria-label="Email / link" />
             <textarea name="resolution" rows={3} defaultValue={r.resolution ?? ""} placeholder="Penyelesaian" className="input text-[13px]" aria-label="Penyelesaian" />
-            <textarea name="insight" rows={3} defaultValue={r.insight ?? ""} placeholder="Insight" className="input text-[13px]" aria-label="Insight" />
-            <textarea name="clipper_argument" rows={3} defaultValue={r.clipper_argument ?? ""} placeholder="Argumen clipper" className="input text-[13px]" aria-label="Argumen clipper" />
+            <textarea name="notes" rows={3} defaultValue={r.notes ?? ""} placeholder="Catatan" className="input text-[13px] md:col-span-2" aria-label="Catatan" />
           </div>
         </form>
       </td>
@@ -76,11 +75,10 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
         <colgroup>
           <col style={{ width: 44 }} />
           <col style={{ width: 74 }} />
+          <col style={{ width: "16%" }} />
+          <col style={{ width: "18%" }} />
           <col style={{ width: "15%" }} />
-          <col style={{ width: "17%" }} />
-          <col style={{ width: "13%" }} />
-          <col style={{ width: "15%" }} />
-          <col style={{ width: "13%" }} />
+          <col style={{ width: "27%" }} />
           <col style={{ width: "16%" }} />
           <col style={{ width: 60 }} />
         </colgroup>
@@ -91,8 +89,7 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
             <th className="px-2.5 py-2.5">Penjelasan</th>
             <th className="px-2.5 py-2.5">Email/link</th>
             <th className="px-2.5 py-2.5">Penyelesaian</th>
-            <th className="px-2.5 py-2.5">Insight</th>
-            <th className="px-2.5 py-2.5">Argumen clipper</th>
+            <th className="px-2.5 py-2.5">Catatan</th>
             <th className="px-2.5 py-2.5">Kategori · Status</th>
             <th className="px-2.5 py-2.5" />
           </tr>
@@ -112,8 +109,7 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
                 </td>
                 <td className="overflow-hidden px-2.5 py-3">{r.links.length ? <VrLinks links={r.links} max={3} /> : <Empty />}</td>
                 <td className="px-2.5 py-3 leading-relaxed text-zinc-300"><Clamp text={r.resolution} /></td>
-                <td className="px-2.5 py-3 leading-relaxed text-zinc-400"><Clamp text={r.insight} /></td>
-                <td className="px-2.5 py-3 leading-relaxed text-zinc-400"><Clamp text={r.clipper_argument} /></td>
+                <td className="px-2.5 py-3 leading-relaxed text-zinc-400"><VrNotes text={r.notes} clamp /></td>
                 <td className="space-y-1.5 px-2.5 py-3">
                   {canWrite ? (
                     <>
@@ -156,6 +152,7 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
             <div className="text-xs text-zinc-400">{r.category ?? "—"}</div>
             {r.links.length > 0 && <VrLinks links={r.links} max={2} />}
             {r.resolution && <p className="text-zinc-300">{r.resolution}</p>}
+            {r.notes && <div className="text-xs text-zinc-400"><VrNotes text={r.notes} clamp /></div>}
             {canWrite && (
               <Link href={`/video-review/${r.id}/edit`} className="inline-block text-xs font-semibold text-orange-400">Edit</Link>
             )}
