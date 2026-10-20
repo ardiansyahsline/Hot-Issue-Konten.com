@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import IssueForm from "@/components/IssueForm";
-import { getCurrentUser, requireWriter } from "@/lib/auth";
+import { getCurrentUser, getProfile, requireWriter } from "@/lib/auth";
 import type { IssueRow } from "@/lib/types";
 import { updateIssue } from "../../actions";
 
@@ -10,9 +10,11 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
 
   await requireWriter("issues", `/issues/${id}`);
   const { supabase } = await getCurrentUser();
+  const profile = await getProfile();
+  const isAdmin = profile?.role === "admin";
   const [{ data: issue }, { data: profiles }] = await Promise.all([
     supabase.from("issue_list").select("*").eq("id", id).maybeSingle(),
-    supabase.from("profiles").select("id, full_name, email").order("full_name"),
+    isAdmin ? supabase.from("profiles").select("id, full_name, email").order("full_name") : Promise.resolve({ data: [] }),
   ]);
   if (!issue) notFound();
 
@@ -22,6 +24,7 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
       <IssueForm
         action={updateIssue.bind(null, id)}
         profiles={profiles ?? []}
+        isAdmin={isAdmin}
         issue={issue as IssueRow}
         issueId={id}
       />

@@ -15,6 +15,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **Catatan & Saran:** journal tim dengan kategori Fitur, Keluhan clipper, Brief campaign, dan Bug. Semua role bisa menulis dan memberi tanggapan. Progress (Baru / In Progress / Done / Rejected) beserta alasannya hanya bisa diubah oleh admin.
+- **Nama otomatis:** selain admin, tidak ada pilihan "siapa yang mencatat". PIC issue baru dan pencatat catatan otomatis diisi akun yang login. Admin tetap bisa memilih.
 - **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
 - **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
 - **Admin:** buat akun, ganti role lewat dropdown, reset password, dan hapus akun.
@@ -55,6 +57,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 **Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
+
+**Langkah 1d — Update 04 (Catatan & Saran + nama otomatis):** jalankan `supabase/migration-04-catatan-saran.sql`. Mulai update ini, selain admin, nama pencatat dan PIC otomatis diambil dari akun yang login (juga dikunci di database).
 
 ### Langkah 2 — Upload kode ke GitHub
 

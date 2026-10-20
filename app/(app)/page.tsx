@@ -195,7 +195,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
           <div className="card p-4">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">🔥 Kontak lagi hot</h2>
-              <Link href="/contacts" className="text-xs text-orange-400 hover:underline">Cek kontak</Link>
+              <Link href="/contacts" className="text-xs text-orange-400 hover:underline">Lihat semua</Link>
             </div>
             <p className="mt-1 text-xs text-zinc-500">
               Dilaporkan di ≥{HOT_THRESHOLD} issue dalam 30 hari terakhir.

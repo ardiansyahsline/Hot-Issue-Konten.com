@@ -3,7 +3,7 @@ export const ROLES = {
   cs: { label: "CS", desc: "Input & edit Hot Issues dan Video Review", cls: "text-sky-400" },
   video_review: { label: "Video Review", desc: "Input & edit Video Review dan Hot Issues", cls: "text-violet-400" },
   discord_mod: { label: "Discord Moderator", desc: "Input & edit Hot Issues, lihat Video Review", cls: "text-indigo-400" },
-  user: { label: "User", desc: "Hanya bisa melihat (read-only)", cls: "text-zinc-400" },
+  user: { label: "User", desc: "Lihat saja + bisa kirim Catatan & Saran", cls: "text-zinc-400" },
 } as const;
 
 export type Role = keyof typeof ROLES;

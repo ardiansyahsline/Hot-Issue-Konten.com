@@ -17,7 +17,11 @@ export default function IssueForm({
   issue,
   defaultPicId,
   issueId,
+  isAdmin = false,
+  currentUserName,
 }: {
+  isAdmin?: boolean;
+  currentUserName?: string | null;
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   profiles: Pick<Profile, "id" | "full_name" | "email">[];
   issue?: IssueRow;
@@ -118,12 +122,21 @@ export default function IssueForm({
           </div>
           <div>
             <label className="label" htmlFor="pic_id">PIC</label>
-            <select id="pic_id" name="pic_id" defaultValue={issue ? issue.pic_id ?? "" : defaultPicId ?? ""} className="input">
-              <option value="">— Belum ada —</option>
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>{p.full_name || p.email}</option>
-              ))}
-            </select>
+            {isAdmin ? (
+              <select id="pic_id" name="pic_id" defaultValue={issue ? issue.pic_id ?? "" : defaultPicId ?? ""} className="input">
+                <option value="">— Belum ada —</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.full_name || p.email}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="input flex items-center gap-2 text-zinc-300" title="PIC otomatis dari akun yang login">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold uppercase">
+                  {((issue ? issue.pic_name : currentUserName) ?? "?").slice(0, 1)}
+                </span>
+                {issue ? issue.pic_name ?? "Belum ada" : `${currentUserName ?? "Kamu"} (otomatis)`}
+              </div>
+            )}
           </div>
           <label className="flex items-center gap-2 self-end pb-2 text-sm">
             <input type="checkbox" name="is_hot" defaultChecked={issue?.is_hot} className="h-4 w-4 accent-red-500" />

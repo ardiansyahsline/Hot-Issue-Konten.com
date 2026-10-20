@@ -55,7 +55,7 @@ const NO_ACCESS = "Role kamu hanya bisa melihat (read-only). Minta admin ubah ro
 /** Context Supabase kalau user boleh input/edit Hot Issues, null kalau tidak */
 async function writer() {
   const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
-  return canWriteIssues(profile?.role) ? ctx : null;
+  return canWriteIssues(profile?.role) ? { ...ctx, isAdmin: profile?.role === "admin" } : null;
 }
 
 export async function createIssue(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -66,7 +66,9 @@ export async function createIssue(_prev: FormState, formData: FormData): Promise
   const w = await writer();
   if (!w) return { error: NO_ACCESS };
   const { supabase } = w;
-  const { data, error } = await supabase.from("issues").insert(parsed.data).select("id").single();
+  // selain admin: PIC otomatis = yang input (dropdown PIC hanya untuk admin)
+  const payload = w.isAdmin ? parsed.data : { ...parsed.data, pic_id: w.user.id };
+  const { data, error } = await supabase.from("issues").insert(payload).select("id").single();
   if (error || !data) return { error: `Gagal simpan issue: ${error?.message}` };
 
   if (contacts.length) {
@@ -88,7 +90,9 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
   const w = await writer();
   if (!w) return { error: NO_ACCESS };
   const { supabase } = w;
-  const { error } = await supabase.from("issues").update(parsed.data).eq("id", id);
+  // selain admin: PIC tidak diubah lewat form (pakai tombol "Saya yang pegang")
+  const { pic_id, ...rest } = parsed.data;
+  const { error } = await supabase.from("issues").update(w.isAdmin ? { ...rest, pic_id } : rest).eq("id", id);
   if (error) return { error: `Gagal update: ${error.message}` };
 
   // Sinkronkan kontak: hapus yang dibuang, tambah yang baru

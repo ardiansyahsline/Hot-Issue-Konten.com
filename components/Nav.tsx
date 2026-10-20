@@ -9,8 +9,8 @@ export default function Nav({ role }: { role: string | null }) {
   const links = [
     { href: "/", label: "Dashboard", show: true },
     { href: "/issues/new", label: "+ Issue Baru", show: canWriteIssues(role) },
-    { href: "/contacts", label: "Cek Kontak", show: true },
     { href: "/video-review", label: "Video Review", show: true },
+    { href: "/catatan", label: "Catatan & Saran", show: true },
     { href: "/admin", label: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
 
