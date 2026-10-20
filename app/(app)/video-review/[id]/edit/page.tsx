@@ -14,7 +14,7 @@ export default async function EditReviewPage({ params }: { params: Promise<{ id:
   if (!data) notFound();
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-4 text-xl font-semibold">Edit kasus #{id}</h1>
+      <h1 className="mb-4 page-title">Edit kasus #{id}</h1>
       <VrForm action={updateReview.bind(null, id)} review={data as VideoReviewRow} today={todayWib()} />
     </div>
   );

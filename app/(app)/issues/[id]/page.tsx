@@ -44,7 +44,7 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
           <PriorityBadge priority={issue.priority} />
           <span className="badge bg-zinc-800 text-zinc-300 ring-zinc-700">{issue.category}</span>
         </div>
-        <h1 className="mt-3 text-xl font-semibold">{issue.title}</h1>
+        <h1 className="mt-3 page-title">{issue.title}</h1>
         {issue.description && <p className="mt-3 whitespace-pre-wrap text-sm text-zinc-300">{issue.description}</p>}
 
         <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-4">

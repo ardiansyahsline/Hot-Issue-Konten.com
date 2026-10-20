@@ -153,3 +153,13 @@ npm run dev                  # buka http://localhost:3000
 | Menu Admin tidak muncul | Jalankan `jadikan-admin.sql`, lalu logout dan login lagi. |
 | Admin gagal buat akun | `SUPABASE_SERVICE_ROLE_KEY` belum di-set di Vercel. Tambahkan lalu redeploy. |
 | Build gagal di Vercel | Cek 2 env `NEXT_PUBLIC_…` sudah terisi, lalu redeploy. |
+
+## Peringatan "Dangerous" di Chrome
+
+Peringatan ini berasal dari **Google Safe Browsing**, bukan dari kode web. Halaman login di domain acak `*.vercel.app` yang membawa nama brand ("konten-com") sering salah dikira halaman phishing. Cara menghilangkannya:
+
+1. **Pakai link production, bukan link deployment.** Link seperti `hot-issue-konten-com-9ivi-j40r3h9p0-kontencom.vercel.app` adalah link versi tertentu. Gunakan link di Vercel → Project → **Domains**, misalnya `hot-issue-konten-com.vercel.app`.
+2. **(Paling ampuh) Pakai domain sendiri**, misalnya `cs.konten.com`: Vercel → Project → Settings → **Domains** → Add, lalu tambahkan record DNS (CNAME ke `cname.vercel-dns.com`) di pengelola DNS konten.com.
+3. **Laporkan salah deteksi ke Google:** buka https://safebrowsing.google.com/safebrowsing/report_error/, isi URL web-nya, lalu jelaskan bahwa ini tools internal milik Konten.com. Atau verifikasi domain di **Google Search Console**, buka menu **Security issues**, lalu klik **Request review**. Biasanya selesai dalam 1–3 hari.
+
+Dari sisi kode, web ini sudah diset `noindex` (tidak masuk Google), punya `robots.txt`, header keamanan, serta judul dan deskripsi yang jelas sebagai tools internal.

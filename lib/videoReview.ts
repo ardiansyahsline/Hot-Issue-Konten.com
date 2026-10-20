@@ -230,41 +230,60 @@ const tgl = (d: string) => {
 
 export function buildRangkuman(rows: VrSummaryRow[]): string {
   if (!rows.length) return "";
-  const n = (s: VrStatus) => rows.filter((r) => r.status === s).length;
+  const n = (st: VrStatus) => rows.filter((r) => r.status === st).length;
   const dates = rows.map((r) => r.report_date).sort();
   const first = dates[0];
   const last = dates[dates.length - 1];
+  const total = rows.length;
 
-  const parts: string[] = [];
-  parts.push(`${rows.length} kasus${first === last ? ` (${tgl(first)})` : ` (${tgl(first)} – ${tgl(last)})`}.`);
-
-  const statusText = [
-    [n("disetujui"), "disetujui"],
-    [n("ditolak"), "ditolak"],
-    [n("diproses"), "masih diproses"],
-    [n("menunggu"), "belum ada respons / menunggu"],
-    [n("selesai"), "selesai/info"],
-  ]
-    .filter(([c]) => (c as number) > 0)
-    .map(([c, t]) => `${c} ${t}`);
-  if (statusText.length) parts.push(statusText.join(", ") + ".");
-
-  // nama di dalam kurung pada kolom Penyelesaian, mis. "Disetujui (Irsyad)"
+  // nama dalam kurung di kolom Penyelesaian, mis. "Disetujui (Irsyad)"
   const names = new Map<string, number>();
   for (const r of rows) {
-    for (const m of (r.resolution ?? "").matchAll(/\(([A-Z][a-zA-Z]+)\)/g)) {
-      names.set(m[1], (names.get(m[1]) ?? 0) + 1);
-    }
+    for (const m of (r.resolution ?? "").matchAll(/\(([A-Z][a-zA-Z]+)\)/g)) names.set(m[1], (names.get(m[1]) ?? 0) + 1);
   }
-  const top = [...names.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-  if (top.length) parts.push(`Ditangani: ${top.map(([k, v]) => `${k} (${v})`).join(", ")}.`);
+  const top = [...names.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+  const who = top.length > 1 ? top.slice(0, -1).join(", ") + " & " + top[top.length - 1] : (top[0] ?? "");
+  const oleh = who ? ` (${who})` : "";
+
+  const parts: string[] = [];
+  parts.push(`Total ${total} kasus${first === last ? ` per ${tgl(first)}` : ` periode ${tgl(first)} – ${tgl(last)}`}.`);
+
+  const counts: [VrStatus, number, string][] = [
+    ["disetujui", n("disetujui"), "disetujui"],
+    ["ditolak", n("ditolak"), "ditolak"],
+    ["diproses", n("diproses"), "masih diproses"],
+    ["menunggu", n("menunggu"), "belum ada respons"],
+    ["selesai", n("selesai"), "selesai/info"],
+  ];
+  const nonZero = counts.filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
+  if (nonZero.length) {
+    const [mainKey, mainCount, mainText] = nonZero[0];
+    const lead =
+      mainCount === total
+        ? `Semua ${mainText}`
+        : mainCount > total / 2
+          ? `Sebagian besar ${mainText} (${mainCount})`
+          : `${mainCount} ${mainText}`;
+    const rest = nonZero.slice(1).map(([, c, t]) => `${c} ${t}`);
+    parts.push(`${lead}${mainKey === "disetujui" || mainKey === "ditolak" || mainKey === "selesai" ? oleh : ""}${rest.length ? "; " + rest.join(", ") : ""}.`);
+    if (who && !["disetujui", "ditolak", "selesai"].includes(mainKey)) parts.push(`Ditangani ${who}.`);
+  }
 
   const latest = rows.filter((r) => r.report_date === last);
   const latestWaiting = latest.filter((r) => r.status === "menunggu").length;
-  parts.push(
-    `Terbaru ${tgl(last)}: ${latest.length} kasus${latestWaiting ? `, ${latestWaiting} masih menunggu` : ""}.`
-  );
+  if (first !== last) {
+    parts.push(
+      `Kasus terbaru per ${tgl(last)}: ${latest.length} kasus${latestWaiting ? `, ${latestWaiting} masih belum ada respons` : ""}.`
+    );
+  }
   return parts.join(" ");
+}
+
+/** "2026-10-05" -> "05/10/26" (format seperti di sheet) */
+export function ddmmyy(d: string | null | undefined) {
+  if (!d) return "-";
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}/${y.slice(2)}`;
 }
 
 /** Kunci stabil baris sheet: tanggal + penjelasan + link pertama (+ urutan kalau kembar). Harus sama dengan migration-03. */

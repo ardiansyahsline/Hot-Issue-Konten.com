@@ -12,7 +12,7 @@ export default async function AdminPage() {
 
   return (
     <div className="space-y-5">
-      <h1 className="text-xl font-semibold">Admin — kelola akun</h1>
+      <h1 className="page-title">Admin — kelola akun</h1>
 
       {!hasServiceKey && (
         <div className="card border-amber-800 p-4 text-sm text-amber-300">

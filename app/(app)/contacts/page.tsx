@@ -103,7 +103,7 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-semibold">Cek kontak clipper</h1>
+        <h1 className="page-title">Cek kontak clipper</h1>
         <p className="text-sm text-zinc-400">
           Masukkan no HP, IG, Discord, atau email untuk lihat apakah clipper ini sudah pernah dilaporkan.
         </p>

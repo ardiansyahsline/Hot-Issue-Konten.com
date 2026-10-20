@@ -84,11 +84,16 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         </div>
       )}
 
+      <div>
+        <h1 className="page-title">Dashboard Hot Issues</h1>
+        <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
+      </div>
+
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {stats.map((s) => (
-          <Link key={s.label} href={s.href} className="card p-4 hover:border-zinc-600">
-            <div className="text-xs text-zinc-400">{s.label}</div>
-            <div className={`mt-1 text-2xl font-semibold ${s.cls}`}>{s.value}</div>
+          <Link key={s.label} href={s.href} className="card card-hover p-5">
+            <div className="text-xs font-semibold text-zinc-400">{s.label}</div>
+            <div className={`mt-2 text-3xl font-bold tracking-tight ${s.cls}`}>{s.value}</div>
           </Link>
         ))}
       </section>
@@ -148,7 +153,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                 <li key={i.id}>
                   <Link
                     href={`/issues/${i.id}`}
-                    className={`card block p-4 hover:border-zinc-600 ${
+                    className={`card card-hover block p-5 ${
                       isHot(i) ? "border-red-900/70 bg-red-950/20" : ""
                     }`}
                   >

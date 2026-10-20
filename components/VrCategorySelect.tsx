@@ -26,7 +26,7 @@ export default function VrCategorySelect({ id, category }: { id: number; categor
             } else setErr(null);
           });
         }}
-        className={`rounded-md border px-1.5 py-0.5 text-xs focus:outline-none ${
+        className={`w-full rounded-lg border px-2 py-1 text-xs font-medium focus:outline-none ${
           value ? "border-zinc-700 bg-zinc-800 text-zinc-200" : "border-amber-700/60 bg-amber-950/30 text-amber-300"
         }`}
         aria-label="Kategori"

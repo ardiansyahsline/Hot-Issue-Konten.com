@@ -13,7 +13,7 @@ export default function ThemeToggle({ initial }: { initial: "light" | "dark" }) 
         document.cookie = `theme=${next}; path=/; max-age=31536000; samesite=lax`;
         setTheme(next);
       }}
-      className="btn-ghost px-2.5 py-1 text-xs"
+      className="btn-ghost rounded-full px-3 py-1.5 text-xs"
       title={next === "light" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
       aria-label={next === "light" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
     >

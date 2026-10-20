@@ -2,23 +2,77 @@
 @tailwind components;
 @tailwind utilities;
 
-body { @apply bg-zinc-950 text-zinc-100 antialiased; }
+/* ---------- Token bayangan & latar (beda di mode gelap / terang) ---------- */
+:root {
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px rgb(0 0 0 / 0.5), 0 16px 40px -20px rgb(0 0 0 / 0.7);
+  --shadow-pop: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 8px 24px -8px rgb(0 0 0 / 0.6);
+  --shadow-primary: inset 0 1px 0 rgb(255 255 255 / 0.25), 0 8px 20px -8px rgb(234 88 12 / 0.7);
+  --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.13), transparent 70%);
+}
+html.light {
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.05), 0 12px 32px -14px rgb(16 24 40 / 0.14);
+  --shadow-pop: 0 8px 24px -8px rgb(16 24 40 / 0.18);
+  --shadow-primary: inset 0 1px 0 rgb(255 255 255 / 0.3), 0 8px 18px -8px rgb(234 88 12 / 0.55);
+  --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.09), transparent 70%);
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+  font-family: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  background-image: var(--bg-glow);
+  background-repeat: no-repeat;
+  word-spacing: 0.06em;
+}
+
+::selection { background: rgb(249 115 22 / 0.3); }
 
 @layer components {
-  .card { @apply rounded-xl border border-zinc-800 bg-zinc-900/60; }
-  .input {
-    @apply w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100
-      placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500;
+  .card {
+    @apply rounded-2xl border border-zinc-800/80 bg-zinc-900;
+    box-shadow: var(--shadow-card);
   }
-  .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-400; }
+  .card-hover { @apply transition duration-200 hover:-translate-y-0.5 hover:border-zinc-700; }
+  .input {
+    @apply w-full rounded-xl border border-zinc-700/80 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-100
+      transition placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none;
+    box-shadow: var(--shadow-sm);
+  }
+  .input:focus { box-shadow: 0 0 0 4px rgb(249 115 22 / 0.16); }
+  .label { @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-zinc-500; }
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium
-      transition disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold
+      transition duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
   }
   /* warna tombol utama tetap sama di mode terang & gelap */
-  .btn-primary { @apply btn text-white; background-color: #ea580c; }
-  .btn-primary:hover:not(:disabled) { background-color: #f97316; }
-  .btn-ghost { @apply btn border border-zinc-700 text-zinc-200 hover:bg-zinc-800; }
-  .btn-danger { @apply btn border border-red-900 text-red-300 hover:bg-red-950; }
-  .badge { @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset; }
+  .btn-primary {
+    @apply btn text-white;
+    background-image: linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%);
+    box-shadow: var(--shadow-primary);
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+  .btn-ghost {
+    @apply btn border border-zinc-700/80 bg-zinc-900 text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800;
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-danger {
+    @apply btn border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset;
+  }
+  .page-title { @apply text-2xl font-bold tracking-tight; }
+  .page-sub { @apply mt-1 text-sm text-zinc-400; }
+
+  /* Tabel gaya spreadsheet */
+  .sheet { @apply w-full border-separate border-spacing-0 text-[13px]; }
+  .sheet th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-r border-zinc-800 bg-zinc-800/70 px-3 py-2.5 text-left
+      text-[11px] font-bold uppercase tracking-wider text-zinc-400 backdrop-blur;
+  }
+  .sheet td { @apply border-b border-r border-zinc-800/80 px-3 py-2.5 align-top; }
+  .sheet tr > :last-child { @apply border-r-0; }
+  .sheet tbody tr { @apply transition-colors hover:bg-zinc-800/40; }
+  .sheet tbody tr:nth-child(even) { @apply bg-zinc-950/30; }
 }

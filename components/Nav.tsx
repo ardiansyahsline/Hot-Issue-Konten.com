@@ -15,16 +15,17 @@ export default function Nav({ role }: { role: string | null }) {
   ].filter((l) => l.show);
 
   return (
-    <nav className="flex flex-wrap gap-1">
+    <nav className="flex max-w-full gap-1 overflow-x-auto rounded-full border border-zinc-800/80 bg-zinc-900 p-1 [scrollbar-width:none]" style={{ boxShadow: "var(--shadow-sm)" }}>
       {links.map((l) => {
         const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
         return (
           <Link
             key={l.href}
             href={l.href}
-            className={`rounded-lg px-3 py-1.5 text-sm ${
-              active ? "bg-zinc-800 text-zinc-50" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+            className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+              active ? "bg-zinc-800 text-zinc-50" : "text-zinc-400 hover:text-zinc-100"
             }`}
+            style={active ? { boxShadow: "var(--shadow-pop)" } : undefined}
           >
             {l.label}
           </Link>

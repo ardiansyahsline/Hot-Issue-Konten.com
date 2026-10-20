@@ -18,7 +18,7 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-4 text-xl font-semibold">Edit issue #{id}</h1>
+      <h1 className="mb-4 page-title">Edit issue #{id}</h1>
       <IssueForm
         action={updateIssue.bind(null, id)}
         profiles={profiles ?? []}

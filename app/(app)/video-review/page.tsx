@@ -1,11 +1,19 @@
 import Link from "next/link";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { canWriteReviews } from "@/lib/roles";
-import { VR_CATEGORIES, VR_STATUSES, buildRangkuman, type VrStatus, type VrSummaryRow } from "@/lib/videoReview";
+import {
+  VR_CATEGORIES,
+  VR_STATUSES,
+  buildRangkuman,
+  ddmmyy,
+  type VrStatus,
+  type VrSummaryRow,
+} from "@/lib/videoReview";
 import type { VideoReviewRow } from "@/lib/types";
-import { cleanSearch, fmtDay } from "@/lib/utils";
+import { cleanSearch } from "@/lib/utils";
 import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import VrCategorySelect from "@/components/VrCategorySelect";
+import VrStatusSelect from "@/components/VrStatusSelect";
 import { AutoCategorizeButton, CategoryNote } from "@/components/VrRekapTools";
 
 type SP = Promise<Record<string, string | undefined>>;
@@ -20,13 +28,14 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   const from = isDate(sp.from) ? sp.from! : null;
   const to = isDate(sp.to) ? sp.to! : null;
   const q = cleanSearch(sp.q ?? "");
+  const sort = sp.sort === "asc" ? "asc" : "desc";
 
   let query = supabase
     .from("video_review_list")
     .select("*", { count: "exact" })
-    .order("report_date", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(300);
+    .order("report_date", { ascending: sort === "asc" })
+    .order("id", { ascending: sort === "asc" })
+    .limit(500);
   if (from) query = query.gte("report_date", from);
   if (to) query = query.lte("report_date", to);
   if (sp.category === NONE) query = query.is("category", null);
@@ -66,167 +75,218 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   const rows = (listRes.data ?? []) as VideoReviewRow[];
   const notes = new Map((notesRes.data ?? []).map((n) => [n.category as string, n.note as string]));
 
-  // susun rekap per kategori
+  // ---- rekap per kategori (seperti kolom Kategori / Jumlah Kasus / Rangkuman di sheet)
   const statusKeys = Object.keys(VR_STATUSES) as VrStatus[];
-  const cats = [...VR_CATEGORIES.map((c) => c as string | null), null];
-  for (const s of summary) if (s.category && !cats.includes(s.category)) cats.splice(cats.length - 1, 0, s.category);
-  const rekap = cats
-    .map((c) => {
-      const items = summary.filter((s) => s.category === c);
-      const byStatus = Object.fromEntries(statusKeys.map((k) => [k, items.filter((i) => i.status === k).length])) as Record<VrStatus, number>;
-      return { category: c, byStatus, total: items.length, rangkuman: buildRangkuman(items) };
-    })
-    .filter((r) => r.total > 0 || r.category !== null)
-    .sort((a, b) => b.total - a.total);
+  const cats: (string | null)[] = [...VR_CATEGORIES];
+  for (const s of summary) if (s.category && !cats.includes(s.category)) cats.push(s.category);
+  if (summary.some((s) => !s.category)) cats.push(null);
+  const rekap = cats.map((c) => {
+    const items = summary.filter((s) => s.category === c);
+    const byStatus = Object.fromEntries(statusKeys.map((k) => [k, items.filter((i) => i.status === k).length])) as Record<
+      VrStatus,
+      number
+    >;
+    return { category: c, byStatus, total: items.length, rangkuman: buildRangkuman(items) };
+  });
   const grand = summary.length;
   const uncategorized = summary.filter((s) => !s.category).length;
+  const allDates = summary.map((s) => s.report_date).sort();
+  const totalByStatus = Object.fromEntries(statusKeys.map((k) => [k, summary.filter((s) => s.status === k).length])) as Record<
+    VrStatus,
+    number
+  >;
 
   const filterHref = (patch: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const merged = { q: sp.q, from: sp.from, to: sp.to, category: sp.category, status: sp.status, ...patch };
+    const merged = { q: sp.q, from: sp.from, to: sp.to, category: sp.category, status: sp.status, sort: sp.sort, ...patch };
     for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
     const s = p.toString();
     return `/video-review${s ? `?${s}` : ""}`;
   };
+  const activeCat = sp.category === NONE ? null : sp.category;
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Video Review</h1>
-          <p className="text-sm text-zinc-400">Kasus review video dari WA / Discord: banding, rilis, saldo dibekukan, kesesuaian brief, dll.</p>
+          <h1 className="page-title">Video Review</h1>
+          <p className="page-sub">Log kasus review video dari WA / Discord — format sama dengan sheet “Video Review WA”.</p>
         </div>
         {canWrite && (
-          <div className="flex gap-2">
-            <Link href="/video-review/import" className="btn-ghost">Import dari Sheet</Link>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/video-review/import" className="btn-ghost">↻ Sync / Import Sheet</Link>
             <Link href="/video-review/new" className="btn-primary">+ Kasus baru</Link>
           </div>
         )}
       </div>
 
       {listRes.error && (
-        <div className="card border-red-900 p-4 text-sm text-red-300">
-          Gagal ambil data: {listRes.error.message}. Pastikan <b>migration-02-roles-video-review.sql</b> sudah dijalankan di Supabase.
+        <div className="card border-red-500/40 p-4 text-sm text-red-300">
+          Gagal ambil data: {listRes.error.message}. Pastikan file migration sudah dijalankan di Supabase.
         </div>
       )}
 
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">Rekap & rangkuman per kategori</h2>
-          <div className="flex flex-wrap items-center gap-3">
-            {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
-            <span className="text-xs text-zinc-500">
-              {from || to ? `${from ? fmtDay(from) : "awal"} – ${to ? fmtDay(to) : "sekarang"}` : "Semua tanggal"} · total {grand} kasus
-            </span>
+      {/* ---------------- REKAP: Kategori | Jumlah Kasus | Rangkuman ---------------- */}
+      <section className="card overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-5 py-4">
+          <div>
+            <h2 className="text-base font-bold tracking-tight">Rekap per kategori</h2>
+            <p className="text-xs text-zinc-500">
+              Dihitung otomatis dari data{from || to ? ` · ${from ? ddmmyy(from) : "awal"} – ${to ? ddmmyy(to) : "sekarang"}` : ""}. Klik kategori untuk filter tabel.
+            </p>
           </div>
+          {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {rekap.map((r) => (
-            <div key={r.category ?? NONE} className={`card space-y-2 p-4 ${r.total === 0 ? "opacity-50" : ""}`}>
-              <div className="flex items-start justify-between gap-3">
-                <Link href={filterHref({ category: r.category ?? NONE, status: undefined })} className="font-medium hover:underline">
-                  {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
-                </Link>
-                <span className="text-2xl font-semibold leading-none">{r.total}</span>
-              </div>
-              {r.total > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {statusKeys
-                    .filter((k) => r.byStatus[k] > 0)
-                    .map((k) => (
-                      <Link
-                        key={k}
-                        href={filterHref({ category: r.category ?? NONE, status: k })}
-                        className={`badge ${VR_STATUSES[k].cls} hover:brightness-125`}
-                      >
-                        {VR_STATUSES[k].label} {r.byStatus[k]}
-                      </Link>
-                    ))}
-                </div>
-              )}
-              {r.rangkuman && <p className="text-xs leading-relaxed text-zinc-400">{r.rangkuman}</p>}
-              {r.category && (
-                <CategoryNote category={r.category} note={notes.get(r.category) ?? ""} canWrite={canWrite} />
-              )}
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <table className="sheet min-w-[860px]">
+            <thead>
+              <tr>
+                <th className="w-[260px]">Kategori</th>
+                <th className="w-[110px] text-right">Jumlah Kasus</th>
+                <th className="w-[230px]">Status</th>
+                <th>Rangkuman</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rekap.map((r) => (
+                <tr key={r.category ?? NONE} className={r.total === 0 ? "opacity-50" : ""}>
+                  <td className="font-semibold">
+                    <Link
+                      href={filterHref({ category: r.category ?? NONE, status: undefined })}
+                      className={`hover:text-orange-400 ${activeCat === r.category && sp.category ? "text-orange-400" : ""}`}
+                    >
+                      {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
+                    </Link>
+                  </td>
+                  <td className="text-right text-base font-bold tabular-nums">{r.total}</td>
+                  <td>
+                    <div className="flex flex-wrap gap-1">
+                      {statusKeys
+                        .filter((k) => r.byStatus[k] > 0)
+                        .map((k) => (
+                          <Link key={k} href={filterHref({ category: r.category ?? NONE, status: k })} className={`badge ${VR_STATUSES[k].cls}`}>
+                            {VR_STATUSES[k].label} {r.byStatus[k]}
+                          </Link>
+                        ))}
+                    </div>
+                  </td>
+                  <td className="space-y-1.5 text-zinc-300">
+                    {r.rangkuman ? <p className="leading-relaxed">{r.rangkuman}</p> : <p className="text-zinc-500">Belum ada kasus.</p>}
+                    {r.category && (r.total > 0 || notes.get(r.category)) && (
+                      <CategoryNote category={r.category} note={notes.get(r.category) ?? ""} canWrite={canWrite} />
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-zinc-800/50 font-bold">
+                <td className="border-r border-zinc-800 px-3 py-3 uppercase tracking-wider">Total</td>
+                <td className="border-r border-zinc-800 px-3 py-3 text-right text-base tabular-nums">{grand}</td>
+                <td className="border-r border-zinc-800 px-3 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {statusKeys
+                      .filter((k) => totalByStatus[k] > 0)
+                      .map((k) => (
+                        <span key={k} className={`badge ${VR_STATUSES[k].cls}`}>{VR_STATUSES[k].label} {totalByStatus[k]}</span>
+                      ))}
+                  </div>
+                </td>
+                <td className="px-3 py-3 font-medium text-zinc-400">
+                  {grand ? `Total baris kasus ${ddmmyy(allDates[0])} – ${ddmmyy(allDates[allDates.length - 1])}` : "-"}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
       </section>
 
-      <form className="card grid gap-2 p-3 sm:grid-cols-6">
-        <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, insight..." className="input sm:col-span-6" />
-        <select name="category" defaultValue={sp.category ?? ""} className="input sm:col-span-2">
-          <option value="">Semua kategori</option>
-          <option value={NONE}>Belum dikategorikan</option>
-          {VR_CATEGORIES.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <select name="status" defaultValue={sp.status ?? ""} className="input sm:col-span-2">
-          <option value="">Semua status</option>
-          {statusKeys.map((k) => (
-            <option key={k} value={k}>{VR_STATUSES[k].label}</option>
-          ))}
-        </select>
-        <div className="flex gap-2 sm:col-span-2">
-          <input type="date" name="from" defaultValue={from ?? ""} className="input" aria-label="Dari tanggal" />
-          <input type="date" name="to" defaultValue={to ?? ""} className="input" aria-label="Sampai tanggal" />
-        </div>
-        <div className="flex justify-end gap-2 sm:col-span-6">
-          <Link href="/video-review" className="btn-ghost">Reset</Link>
-          <button className="btn-primary">Filter</button>
-        </div>
-      </form>
+      {/* ---------------- TABEL KASUS (kolom sama dengan sheet) ---------------- */}
+      <section className="card overflow-hidden">
+        <form className="flex flex-wrap items-center gap-2 border-b border-zinc-800/80 p-4">
+          <input name="q" defaultValue={sp.q ?? ""} placeholder="Cari penjelasan, email, link, insight…" className="input w-full" />
+          <select name="category" defaultValue={sp.category ?? ""} className="input w-auto">
+            <option value="">Semua kategori</option>
+            <option value={NONE}>Belum dikategorikan</option>
+            {VR_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select name="status" defaultValue={sp.status ?? ""} className="input w-auto">
+            <option value="">Semua status</option>
+            {statusKeys.map((k) => (
+              <option key={k} value={k}>{VR_STATUSES[k].label}</option>
+            ))}
+          </select>
+          <input type="date" name="from" defaultValue={from ?? ""} className="input w-auto" aria-label="Dari tanggal" />
+          <input type="date" name="to" defaultValue={to ?? ""} className="input w-auto" aria-label="Sampai tanggal" />
+          <select name="sort" defaultValue={sort} className="input w-auto" aria-label="Urutan">
+            <option value="desc">Terbaru dulu</option>
+            <option value="asc">Terlama dulu (urutan sheet)</option>
+          </select>
+          <div className="ml-auto flex gap-2">
+            <Link href="/video-review" className="btn-ghost">Reset</Link>
+            <button className="btn-primary">Terapkan</button>
+          </div>
+        </form>
 
-      <div className="text-xs text-zinc-500">
-        {listRes.count ?? rows.length} kasus{(listRes.count ?? 0) > rows.length ? ` (menampilkan ${rows.length} terbaru)` : ""}
-      </div>
+        <div className="flex items-center justify-between px-4 py-2.5 text-xs text-zinc-500">
+          <span>
+            {listRes.count ?? rows.length} kasus
+            {(listRes.count ?? 0) > rows.length ? ` · menampilkan ${rows.length}` : ""}
+          </span>
+          {canWrite && <span>Kategori & status bisa diubah langsung di tabel</span>}
+        </div>
 
-      {rows.length === 0 ? (
-        <div className="card p-8 text-center text-sm text-zinc-400">Belum ada kasus di filter ini.</div>
-      ) : (
-        <ul className="space-y-2">
-          {rows.map((r) => (
-            <li key={r.id} className="card p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-zinc-500">#{r.id}</span>
-                <span className="text-xs text-zinc-400">{fmtDay(r.report_date)}</span>
-                <VrStatusBadge status={r.status} />
-                {canWrite ? (
-                  <VrCategorySelect id={r.id} category={r.category} />
-                ) : (
-                  <span className="badge bg-zinc-800 text-zinc-300 ring-zinc-700">{r.category ?? "Belum dikategorikan"}</span>
-                )}
-                <Link href={`/video-review/${r.id}`} className="ml-auto text-xs text-orange-400 hover:underline">
-                  Detail →
-                </Link>
-              </div>
-              <Link href={`/video-review/${r.id}`} className="mt-2 block font-medium hover:underline">
-                {r.explanation}
-              </Link>
-              {r.links.length > 0 && (
-                <div className="mt-2">
-                  <VrLinks links={r.links} max={4} />
-                </div>
-              )}
-              <dl className="mt-2 grid gap-1 text-xs sm:grid-cols-[110px_1fr]">
-                {r.resolution && (
-                  <>
-                    <dt className="text-zinc-500">Penyelesaian</dt>
-                    <dd className="whitespace-pre-wrap text-zinc-300">{r.resolution}</dd>
-                  </>
-                )}
-                {r.insight && (
-                  <>
-                    <dt className="text-zinc-500">Insight</dt>
-                    <dd className="line-clamp-2 whitespace-pre-wrap text-zinc-400">{r.insight}</dd>
-                  </>
-                )}
-              </dl>
-            </li>
-          ))}
-        </ul>
-      )}
+        {rows.length === 0 ? (
+          <div className="p-10 text-center text-sm text-zinc-400">Belum ada kasus di filter ini.</div>
+        ) : (
+          <div className="max-h-[75vh] overflow-auto border-t border-zinc-800/80">
+            <table className="sheet min-w-[1572px] table-fixed">
+              <thead>
+                <tr>
+                  <th className="w-[52px] text-right">No</th>
+                  <th className="w-[100px]" title="Tanggal Report">Tgl Report</th>
+                  <th className="w-[220px]">Penjelasan</th>
+                  <th className="w-[230px]">Email/link</th>
+                  <th className="w-[200px]">Penyelesaian</th>
+                  <th className="w-[240px]">Insight</th>
+                  <th className="w-[200px]">Argumen clipper</th>
+                  <th className="w-[210px]">Kategori</th>
+                  <th className="w-[120px]">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.id}>
+                    <td className="text-right tabular-nums text-zinc-500">
+                      <Link href={`/video-review/${r.id}`} className="hover:text-orange-400" title={`Buka kasus #${r.id}`}>
+                        {sort === "asc" ? i + 1 : rows.length - i}
+                      </Link>
+                    </td>
+                    <td className="whitespace-nowrap tabular-nums">{ddmmyy(r.report_date)}</td>
+                    <td className="font-medium">
+                      <Link href={`/video-review/${r.id}`} className="hover:text-orange-400">{r.explanation}</Link>
+                    </td>
+                    <td>{r.links.length ? <VrLinks links={r.links} /> : <span className="text-zinc-600">-</span>}</td>
+                    <td className="whitespace-pre-wrap text-zinc-300">{r.resolution ?? <span className="text-zinc-600">-</span>}</td>
+                    <td className="whitespace-pre-wrap text-zinc-400">{r.insight ?? ""}</td>
+                    <td className="whitespace-pre-wrap text-zinc-400">{r.clipper_argument ?? ""}</td>
+                    <td>
+                      {canWrite ? (
+                        <VrCategorySelect id={r.id} category={r.category} />
+                      ) : (
+                        <span className="text-zinc-300">{r.category ?? "-"}</span>
+                      )}
+                    </td>
+                    <td>{canWrite ? <VrStatusSelect id={r.id} status={r.status} /> : <VrStatusBadge status={r.status} />}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

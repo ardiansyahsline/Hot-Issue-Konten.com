@@ -9,7 +9,7 @@ export default async function NewIssuePage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-4 text-xl font-semibold">Issue baru</h1>
+      <h1 className="mb-4 page-title">Issue baru</h1>
       <IssueForm action={createIssue} profiles={profiles ?? []} defaultPicId={user.id} />
     </div>
   );
