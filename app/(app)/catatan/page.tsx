@@ -5,6 +5,7 @@ import { cleanSearch, fmtDate, timeAgo } from "@/lib/utils";
 import { Avatar, SgCategoryBadge, SgStatusBadge } from "@/components/SgBits";
 import SgForm from "@/components/SgForm";
 import { createSuggestion } from "./actions";
+import StatCard, { type Tone } from "@/components/StatCard";
 
 type SP = Promise<Record<string, string | undefined>>;
 
@@ -50,6 +51,29 @@ export default async function CatatanPage({ searchParams }: { searchParams: SP }
           Gagal ambil data: {listRes.error.message}. Pastikan <b>migration-04-catatan-saran.sql</b> sudah dijalankan di Supabase.
         </div>
       )}
+
+      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {(
+          [
+            ["baru", "Baru", "sky", "sparkles"],
+            ["in_progress", "In Progress", "amber", "clock"],
+            ["done", "Done", "emerald", "check"],
+            ["rejected", "Rejected", "red", "x"],
+          ] as [SgStatus, string, Tone, "sparkles" | "clock" | "check" | "x"][]
+        ).map(([k, label, tone, icon]) => (
+          <StatCard
+            key={k}
+            label={label}
+            value={all.filter((a) => a.status === k).length}
+            unit="catatan"
+            tone={tone}
+            icon={icon}
+            href={href({ status: status === k ? undefined : k })}
+            active={status === k}
+            footer={`${all.length ? Math.round((all.filter((a) => a.status === k).length / all.length) * 100) : 0}% dari total`}
+          />
+        ))}
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <section className="space-y-4">
@@ -141,20 +165,7 @@ export default async function CatatanPage({ searchParams }: { searchParams: SP }
               compact
             />
           </div>
-          <div className="card p-5">
-            <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-zinc-500">Progress</h2>
-            <ul className="space-y-2">
-              {(Object.entries(SG_STATUSES) as [SgStatus, (typeof SG_STATUSES)[SgStatus]][]).map(([k, v]) => (
-                <li key={k}>
-                  <Link href={href({ status: k })} className="flex items-center justify-between text-[13.5px] text-zinc-300 hover:text-zinc-100">
-                    <span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${v.dot}`} />{v.label}</span>
-                    <span className="font-semibold tabular-nums">{all.filter((a) => a.status === k).length}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </aside>
+</aside>
       </div>
     </div>
   );

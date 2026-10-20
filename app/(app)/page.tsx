@@ -5,6 +5,7 @@ import type { ContactStat, IssueRow } from "@/lib/types";
 import { cleanSearch, isAutoHot, isHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
+import StatCard from "@/components/StatCard";
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -68,13 +69,15 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   });
   const hotContacts = (hotContactsRes.data ?? []) as ContactStat[];
 
+  const activeTotal = (openC.count ?? 0) + (progC.count ?? 0);
+  const ofActive = (n: number) => `${activeTotal ? Math.round((n / activeTotal) * 100) : 0}% dari issue aktif`;
   const stats = [
-    { label: "🔥 Hot aktif", value: hotC.count ?? 0, href: "/?hot=1", cls: "text-red-300" },
-    { label: "Urgent aktif", value: urgentC.count ?? 0, href: "/?priority=urgent", cls: "text-orange-300" },
-    { label: "Open", value: openC.count ?? 0, href: "/?status=open", cls: "text-sky-300" },
-    { label: "In Progress", value: progC.count ?? 0, href: "/?status=in_progress", cls: "text-amber-300" },
-    { label: "Resolved hari ini", value: resolvedTodayC.count ?? 0, href: "/?status=resolved", cls: "text-emerald-300" },
-  ];
+    { label: "Hot aktif", value: hotC.count ?? 0, href: "/?hot=1", tone: "red", icon: "flame", footer: ofActive(hotC.count ?? 0) },
+    { label: "Urgent aktif", value: urgentC.count ?? 0, href: "/?priority=urgent", tone: "orange", icon: "alert", footer: ofActive(urgentC.count ?? 0) },
+    { label: "Open", value: openC.count ?? 0, href: "/?status=open", tone: "sky", icon: "inbox", footer: ofActive(openC.count ?? 0) },
+    { label: "In Progress", value: progC.count ?? 0, href: "/?status=in_progress", tone: "amber", icon: "clock", footer: ofActive(progC.count ?? 0) },
+    { label: "Resolved hari ini", value: resolvedTodayC.count ?? 0, href: "/?status=resolved", tone: "emerald", icon: "check", footer: "diselesaikan hari ini" },
+  ] as const;
 
   return (
     <div className="space-y-6">
@@ -89,12 +92,9 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => (
-          <Link key={s.label} href={s.href} className="card card-hover p-5">
-            <div className="text-xs font-semibold text-zinc-400">{s.label}</div>
-            <div className={`mt-2 text-3xl font-bold tracking-tight ${s.cls}`}>{s.value}</div>
-          </Link>
+          <StatCard key={s.label} label={s.label} value={s.value} unit="issue" tone={s.tone} icon={s.icon} href={s.href} footer={s.footer} />
         ))}
       </section>
 

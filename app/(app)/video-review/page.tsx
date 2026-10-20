@@ -15,6 +15,7 @@ import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import VrCategorySelect from "@/components/VrCategorySelect";
 import VrStatusSelect from "@/components/VrStatusSelect";
 import { AutoCategorizeButton, CategoryNote } from "@/components/VrRekapTools";
+import StatCard, { type Tone } from "@/components/StatCard";
 
 type SP = Promise<Record<string, string | undefined>>;
 const NONE = "__none";
@@ -124,6 +125,31 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
           Gagal ambil data: {listRes.error.message}. Pastikan file migration sudah dijalankan di Supabase.
         </div>
       )}
+
+      {/* ---------------- KARTU STATUS ---------------- */}
+      <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {(
+          [
+            ["menunggu", "Menunggu respons", "amber", "play"],
+            ["diproses", "Diproses", "sky", "clock"],
+            ["disetujui", "Disetujui", "emerald", "check"],
+            ["ditolak", "Ditolak", "red", "x"],
+            ["selesai", "Selesai / Info", "violet", "info"],
+          ] as [VrStatus, string, Tone, "play" | "clock" | "check" | "x" | "info"][]
+        ).map(([k, label, tone, icon]) => (
+          <StatCard
+            key={k}
+            label={label}
+            value={totalByStatus[k]}
+            unit="kasus"
+            tone={tone}
+            icon={icon}
+            href={filterHref({ status: sp.status === k ? undefined : k })}
+            active={sp.status === k}
+            footer={`${grand ? Math.round((totalByStatus[k] / grand) * 100) : 0}% dari total`}
+          />
+        ))}
+      </section>
 
       {/* ---------------- REKAP: Kategori | Jumlah Kasus | Status | Rangkuman ---------------- */}
       <section className="card overflow-hidden">

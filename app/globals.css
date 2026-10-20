@@ -9,6 +9,7 @@
   --shadow-pop: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 8px 24px -8px rgb(0 0 0 / 0.6);
   --shadow-primary: inset 0 1px 0 rgb(255 255 255 / 0.25), 0 8px 20px -8px rgb(234 88 12 / 0.7);
   --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.13), transparent 70%);
+  --stat-k: 1;
 }
 html.light {
   --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.06);
@@ -16,6 +17,7 @@ html.light {
   --shadow-pop: 0 8px 24px -8px rgb(16 24 40 / 0.18);
   --shadow-primary: inset 0 1px 0 rgb(255 255 255 / 0.3), 0 8px 18px -8px rgb(234 88 12 / 0.55);
   --bg-glow: radial-gradient(1100px 520px at 50% -240px, rgb(249 115 22 / 0.09), transparent 70%);
+  --stat-k: 0.7;
 }
 
 body {
