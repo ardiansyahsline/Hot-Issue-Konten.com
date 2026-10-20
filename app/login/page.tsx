@@ -12,7 +12,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
           <Logo size={52} />
-          <h1 className="page-title mt-4">Hot Issues CS</h1>
+          <h1 className="page-title mt-4">CS Tracker</h1>
           <p className="mt-1 text-sm text-zinc-400">Tools internal tim Customer Service Konten.com</p>
         </div>
         <form action={action} className="card space-y-4 p-6 sm:p-7">

@@ -355,3 +355,42 @@ export async function saveCategoryNote(category: string, note: string): Promise<
   revalidatePath("/video-review");
   return { ok: "Disimpan" };
 }
+
+/** Simpan kasus baru dari tab "Input kasus" (tetap di halaman, form dikosongkan) */
+export async function createReviewInline(_prev: { error?: string; ok?: string } | undefined, fd: FormData): Promise<{ error?: string; ok?: string }> {
+  const parsed = parseForm(fd);
+  if ("error" in parsed) return { error: parsed.error };
+  const w = await writer();
+  if (!w) return { error: NO_ACCESS };
+  const { data, error } = await w.supabase.from("video_reviews").insert(parsed.data).select("id").single();
+  if (error || !data) return { error: `Gagal simpan: ${error?.message}` };
+  if (parsed.links.length) {
+    const { error: lErr } = await w.supabase
+      .from("video_review_links")
+      .insert(parsed.links.map((l) => ({ ...l, review_id: data.id })));
+    if (lErr) return { error: `Kasus tersimpan (#${data.id}) tapi link gagal: ${lErr.message}` };
+  }
+  revalidatePath("/video-review");
+  return { ok: `Kasus #${data.id} tersimpan (kategori: ${parsed.data.category}).` };
+}
+
+/** Edit langsung di baris tabel (tanpa pindah halaman) */
+export async function updateReviewInline(id: number, _prev: { error?: string; ok?: string } | undefined, fd: FormData): Promise<{ error?: string; ok?: string }> {
+  const parsed = parseForm(fd);
+  if ("error" in parsed) return { error: parsed.error };
+  const w = await writer();
+  if (!w) return { error: NO_ACCESS };
+  const { error } = await w.supabase.from("video_reviews").update(parsed.data).eq("id", id);
+  if (error) return { error: `Gagal update: ${error.message}` };
+  const { error: dErr } = await w.supabase.from("video_review_links").delete().eq("review_id", id);
+  if (dErr) return { error: `Gagal update link: ${dErr.message}` };
+  if (parsed.links.length) {
+    const { error: lErr } = await w.supabase
+      .from("video_review_links")
+      .insert(parsed.links.map((l) => ({ ...l, review_id: id })));
+    if (lErr) return { error: `Gagal simpan link: ${lErr.message}` };
+  }
+  revalidatePath("/video-review");
+  revalidatePath(`/video-review/${id}`);
+  return { ok: "Tersimpan" };
+}

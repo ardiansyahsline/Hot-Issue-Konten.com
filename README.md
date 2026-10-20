@@ -1,4 +1,4 @@
-# 🔥 Hot Issues CS — Konten.com
+# CS Tracker — Konten.com
 
 Web internal tim CS untuk mencatat hot issue clipper. Login email + password dengan 5 role, agent bisa buat & edit issue, input kontak clipper (No HP/WA, Instagram, Discord, Email), dan sistem otomatis menandai **HOT** kalau kontak yang sama dilaporkan berulang.
 

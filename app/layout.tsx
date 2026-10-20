@@ -5,10 +5,10 @@ import "./globals.css";
 import { getTheme } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "Hot Issues CS — Konten.com",
-  description: "Tools internal tim Customer Service Konten.com (PT Orova Genesis Group) untuk mencatat hot issue dan video review.",
+  title: "CS Tracker — Konten.com",
+  description: "CS Tracker — tools internal tim Customer Service Konten.com (PT Orova Genesis Group) untuk hot issue, video review, serta catatan & saran.",
   robots: { index: false, follow: false, nocache: true },
-  applicationName: "Hot Issues CS",
+  applicationName: "CS Tracker",
 };
 
 export const viewport: Viewport = {
