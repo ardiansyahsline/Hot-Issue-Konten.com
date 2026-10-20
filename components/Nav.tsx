@@ -23,7 +23,7 @@ export default function Nav({ role }: { role: string | null }) {
             key={l.href}
             href={l.href}
             className={`rounded-lg px-3 py-1.5 text-sm ${
-              active ? "bg-zinc-800 text-white" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+              active ? "bg-zinc-800 text-zinc-50" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
             }`}
           >
             {l.label}

@@ -3,11 +3,13 @@ import Nav from "@/components/Nav";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 import { ROLES, isRole } from "@/lib/roles";
+import ThemeToggle from "@/components/ThemeToggle";
+import { getTheme } from "@/lib/theme";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [{ user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const [{ user }, profile, theme] = await Promise.all([getCurrentUser(), getProfile(), getTheme()]);
   const name = profile?.full_name || user.email;
 
   return (
@@ -27,6 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                 <span className={`ml-1 text-xs ${ROLES[profile.role].cls}`}>({ROLES[profile.role].label})</span>
               )}
             </Link>
+            <ThemeToggle initial={theme} />
             <form action={signOut}>
               <button className="btn-ghost px-2.5 py-1 text-xs">Keluar</button>
             </form>

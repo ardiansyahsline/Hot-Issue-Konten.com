@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { canWriteReviews } from "@/lib/roles";
-import { VR_CATEGORIES, VR_STATUSES, type VrStatus } from "@/lib/videoReview";
+import { VR_CATEGORIES, VR_STATUSES, buildRangkuman, type VrStatus, type VrSummaryRow } from "@/lib/videoReview";
 import type { VideoReviewRow } from "@/lib/types";
 import { cleanSearch, fmtDay } from "@/lib/utils";
 import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import VrCategorySelect from "@/components/VrCategorySelect";
+import { AutoCategorizeButton, CategoryNote } from "@/components/VrRekapTools";
 
 type SP = Promise<Record<string, string | undefined>>;
 const NONE = "__none";
@@ -39,12 +40,31 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
     );
   }
 
-  const [listRes, sumRes] = await Promise.all([
+  // semua kasus di rentang tanggal (untuk rekap & rangkuman), diambil per 1000 baris
+  async function fetchSummaryRows() {
+    const out: VrSummaryRow[] = [];
+    for (let page = 0; page < 50; page++) {
+      let sq = supabase
+        .from("video_reviews")
+        .select("category, status, resolution, report_date")
+        .order("id")
+        .range(page * 1000, page * 1000 + 999);
+      if (from) sq = sq.gte("report_date", from);
+      if (to) sq = sq.lte("report_date", to);
+      const { data } = await sq;
+      out.push(...((data ?? []) as VrSummaryRow[]));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  }
+
+  const [listRes, summary, notesRes] = await Promise.all([
     query,
-    supabase.rpc("video_review_summary", { p_from: from, p_to: to }),
+    fetchSummaryRows(),
+    supabase.from("video_review_category_notes").select("category, note"),
   ]);
   const rows = (listRes.data ?? []) as VideoReviewRow[];
-  const summary = (sumRes.data ?? []) as { category: string | null; status: VrStatus; total: number }[];
+  const notes = new Map((notesRes.data ?? []).map((n) => [n.category as string, n.note as string]));
 
   // susun rekap per kategori
   const statusKeys = Object.keys(VR_STATUSES) as VrStatus[];
@@ -52,12 +72,14 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   for (const s of summary) if (s.category && !cats.includes(s.category)) cats.splice(cats.length - 1, 0, s.category);
   const rekap = cats
     .map((c) => {
-      const byStatus = Object.fromEntries(statusKeys.map((k) => [k, 0])) as Record<VrStatus, number>;
-      for (const s of summary) if (s.category === c) byStatus[s.status] = (byStatus[s.status] ?? 0) + s.total;
-      return { category: c, byStatus, total: statusKeys.reduce((a, k) => a + byStatus[k], 0) };
+      const items = summary.filter((s) => s.category === c);
+      const byStatus = Object.fromEntries(statusKeys.map((k) => [k, items.filter((i) => i.status === k).length])) as Record<VrStatus, number>;
+      return { category: c, byStatus, total: items.length, rangkuman: buildRangkuman(items) };
     })
-    .filter((r) => r.total > 0 || r.category !== null);
-  const grand = rekap.reduce((a, r) => a + r.total, 0);
+    .filter((r) => r.total > 0 || r.category !== null)
+    .sort((a, b) => b.total - a.total);
+  const grand = summary.length;
+  const uncategorized = summary.filter((s) => !s.category).length;
 
   const filterHref = (patch: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -88,47 +110,47 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
         </div>
       )}
 
-      <section className="card overflow-x-auto">
-        <div className="flex items-center justify-between p-4 pb-2">
-          <h2 className="font-semibold">Rekap per kategori</h2>
-          <span className="text-xs text-zinc-500">
-            {from || to ? `${from ? fmtDay(from) : "awal"} – ${to ? fmtDay(to) : "sekarang"}` : "Semua tanggal"} · total {grand}
-          </span>
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold">Rekap & rangkuman per kategori</h2>
+          <div className="flex flex-wrap items-center gap-3">
+            {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
+            <span className="text-xs text-zinc-500">
+              {from || to ? `${from ? fmtDay(from) : "awal"} – ${to ? fmtDay(to) : "sekarang"}` : "Semua tanggal"} · total {grand} kasus
+            </span>
+          </div>
         </div>
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-zinc-500">
-            <tr className="border-b border-zinc-800">
-              <th className="p-3 font-medium">Kategori</th>
-              <th className="p-3 text-right font-medium">Total</th>
-              {statusKeys.map((k) => (
-                <th key={k} className="p-3 text-right font-medium">{VR_STATUSES[k].label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-800">
-            {rekap.map((r) => (
-              <tr key={r.category ?? NONE} className={r.total === 0 ? "text-zinc-600" : ""}>
-                <td className="p-3">
-                  <Link href={filterHref({ category: r.category ?? NONE, status: undefined })} className="hover:underline">
-                    {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
-                  </Link>
-                </td>
-                <td className="p-3 text-right font-semibold">{r.total}</td>
-                {statusKeys.map((k) => (
-                  <td key={k} className="p-3 text-right">
-                    {r.byStatus[k] ? (
-                      <Link href={filterHref({ category: r.category ?? NONE, status: k })} className="hover:underline">
-                        {r.byStatus[k]}
+        <div className="grid gap-3 md:grid-cols-2">
+          {rekap.map((r) => (
+            <div key={r.category ?? NONE} className={`card space-y-2 p-4 ${r.total === 0 ? "opacity-50" : ""}`}>
+              <div className="flex items-start justify-between gap-3">
+                <Link href={filterHref({ category: r.category ?? NONE, status: undefined })} className="font-medium hover:underline">
+                  {r.category ?? <span className="text-amber-300">Belum dikategorikan</span>}
+                </Link>
+                <span className="text-2xl font-semibold leading-none">{r.total}</span>
+              </div>
+              {r.total > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {statusKeys
+                    .filter((k) => r.byStatus[k] > 0)
+                    .map((k) => (
+                      <Link
+                        key={k}
+                        href={filterHref({ category: r.category ?? NONE, status: k })}
+                        className={`badge ${VR_STATUSES[k].cls} hover:brightness-125`}
+                      >
+                        {VR_STATUSES[k].label} {r.byStatus[k]}
                       </Link>
-                    ) : (
-                      <span className="text-zinc-600">0</span>
-                    )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    ))}
+                </div>
+              )}
+              {r.rangkuman && <p className="text-xs leading-relaxed text-zinc-400">{r.rangkuman}</p>}
+              {r.category && (
+                <CategoryNote category={r.category} note={notes.get(r.category) ?? ""} canWrite={canWrite} />
+              )}
+            </div>
+          ))}
+        </div>
       </section>
 
       <form className="card grid gap-2 p-3 sm:grid-cols-6">

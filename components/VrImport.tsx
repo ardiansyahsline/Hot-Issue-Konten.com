@@ -1,13 +1,23 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useActionState, useState, useTransition } from "react";
 import Link from "next/link";
 import { parseCsv } from "@/lib/csv";
-import { VR_STATUSES, sheetToReviews, type VrImportRow } from "@/lib/videoReview";
-import { importReviews, type ImportResult } from "@/app/(app)/video-review/actions";
+import { DEFAULT_SHEET_URL, VR_STATUSES, sheetToReviews, type VrImportRow } from "@/lib/videoReview";
+import { importReviews, syncFromSheet, type ImportResult } from "@/app/(app)/video-review/actions";
 import { VrLinks, VrStatusBadge } from "./VrBits";
 
+function Result({ r }: { r: ImportResult }) {
+  if (!r) return null;
+  return (
+    <p className={`text-sm ${r.error ? "text-red-400" : "text-emerald-400"}`}>
+      {r.error ?? r.ok} {r.ok && <Link href="/video-review" className="underline">Lihat daftar →</Link>}
+    </p>
+  );
+}
+
 export default function VrImport() {
+  const [syncState, syncAction, syncing] = useActionState(syncFromSheet, undefined);
   const [rows, setRows] = useState<VrImportRow[] | null>(null);
   const [fileName, setFileName] = useState("");
   const [parseErr, setParseErr] = useState<string | null>(null);
@@ -20,33 +30,40 @@ export default function VrImport() {
     setRows(null);
     if (!f) return;
     setFileName(f.name);
-    const text = await f.text();
-    const { reviews, error } = sheetToReviews(parseCsv(text));
+    const { reviews, error } = sheetToReviews(parseCsv(await f.text()));
     if (error) setParseErr(error);
     else if (!reviews.length) setParseErr("Tidak ada kasus yang terbaca di file ini.");
     else setRows(reviews);
   }
 
-  const counts = rows
-    ? Object.keys(VR_STATUSES).map((k) => [k, rows.filter((r) => r.status === k).length] as const)
-    : [];
-  const noDate = rows?.filter((r) => !r.report_date).length ?? 0;
+  const counts = rows ? Object.keys(VR_STATUSES).map((k) => [k, rows.filter((r) => r.status === k).length] as const) : [];
 
   return (
     <div className="space-y-5">
+      <form action={syncAction} className="card space-y-3 p-5">
+        <h2 className="font-semibold">Cara 1 — Ambil langsung dari link Google Sheet</h2>
+        <p className="text-sm text-zinc-400">
+          Server membaca sheet langsung dari link. Kasus baru ditambahkan, kasus lama diperbarui kalau Penyelesaian / Insight /
+          Argumen berubah di sheet, dan kategori diisi otomatis. Bisa diklik berkali-kali tanpa bikin data dobel.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input name="url" defaultValue={DEFAULT_SHEET_URL} className="input min-w-0 flex-1 font-mono text-xs" aria-label="Link Google Sheet" />
+          <button disabled={syncing} className="btn-primary shrink-0">{syncing ? "Mengambil data..." : "Sync sekarang"}</button>
+        </div>
+        <p className="text-xs text-zinc-500">
+          Syarat: di Google Sheet klik <b>Share → General access → Anyone with the link (Viewer)</b>. Kalau sheet harus tetap
+          private, pakai Cara 2.
+        </p>
+        <Result r={syncState} />
+      </form>
+
       <div className="card space-y-3 p-5 text-sm text-zinc-300">
-        <h2 className="font-semibold text-zinc-100">Cara ambil file dari Google Sheet</h2>
+        <h2 className="font-semibold text-zinc-100">Cara 2 — Upload file CSV</h2>
         <ol className="list-decimal space-y-1 pl-5">
-          <li>Buka sheet <b>Video Review WA</b>, pastikan tab <b>Video Review</b> yang aktif.</li>
+          <li>Buka sheet <b>Video Review WA</b>, tab <b>Video Review</b>.</li>
           <li>Klik <b>File → Download → Comma-separated values (.csv)</b>.</li>
           <li>Pilih file .csv itu di bawah, cek preview, lalu klik <b>Import</b>.</li>
         </ol>
-        <p className="text-xs text-zinc-500">
-          Baris lanjutan (yang cuma berisi link/email tambahan) otomatis digabung ke kasus di atasnya. Kolom rekap di kanan
-          (Kategori, Jumlah Kasus, Rangkuman) diabaikan. Kategori per kasus dikosongkan dulu karena di sheet tidak ada per baris —
-          isi lewat dropdown di daftar Video Review. Status dibaca dari teks kolom Penyelesaian (teks aslinya tetap disimpan).
-          Import ulang file yang sama aman: kasus yang sudah ada dilewati.
-        </p>
         <input
           type="file"
           accept=".csv,text/csv"
@@ -67,8 +84,6 @@ export default function VrImport() {
                     {VR_STATUSES[k as keyof typeof VR_STATUSES].label}: <b className="text-zinc-200">{n}</b>
                   </span>
                 ))}
-                <span>· Link/email: <b className="text-zinc-200">{rows.reduce((a, r) => a + r.links.length, 0)}</b></span>
-                {noDate > 0 && <span className="text-amber-300">· {noDate} tanpa tanggal (pakai tanggal hari ini)</span>}
               </div>
             </div>
             <button
@@ -79,14 +94,7 @@ export default function VrImport() {
               {pending ? "Mengimport..." : `Import ${rows.length} kasus`}
             </button>
           </div>
-
-          {result && (
-            <p className={`text-sm ${result.error ? "text-red-400" : "text-emerald-400"}`}>
-              {result.error ?? result.ok}{" "}
-              {result.ok && <Link href="/video-review" className="underline">Lihat daftar →</Link>}
-            </p>
-          )}
-
+          <Result r={result} />
           <div className="max-h-[60vh] overflow-auto rounded-lg border border-zinc-800">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 bg-zinc-900 text-zinc-500">
@@ -94,6 +102,7 @@ export default function VrImport() {
                   <th className="p-2 font-medium">Baris</th>
                   <th className="p-2 font-medium">Tanggal</th>
                   <th className="p-2 font-medium">Penjelasan</th>
+                  <th className="p-2 font-medium">Kategori (otomatis)</th>
                   <th className="p-2 font-medium">Email/link</th>
                   <th className="p-2 font-medium">Penyelesaian</th>
                   <th className="p-2 font-medium">Status</th>
@@ -105,6 +114,7 @@ export default function VrImport() {
                     <td className="p-2 text-zinc-500">{r.source_row}</td>
                     <td className="whitespace-nowrap p-2">{r.report_date ?? "-"}</td>
                     <td className="p-2">{r.explanation}</td>
+                    <td className="p-2 text-zinc-400">{r.category}</td>
                     <td className="max-w-xs p-2"><VrLinks links={r.links} max={3} /></td>
                     <td className="p-2 text-zinc-400">{r.resolution ?? "-"}</td>
                     <td className="p-2"><VrStatusBadge status={r.status} /></td>

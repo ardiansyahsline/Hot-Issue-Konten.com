@@ -31,7 +31,7 @@ export default function VrCategorySelect({ id, category }: { id: number; categor
         }`}
         aria-label="Kategori"
       >
-        <option value="">— Belum dikategorikan —</option>
+        {!value && <option value="">— Belum dikategorikan —</option>}
         {VR_CATEGORIES.map((c) => (
           <option key={c} value={c}>{c}</option>
         ))}

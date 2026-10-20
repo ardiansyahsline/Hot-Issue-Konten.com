@@ -28,7 +28,7 @@ export default function VrForm({
           <div>
             <label className="label" htmlFor="category">Kategori</label>
             <select id="category" name="category" defaultValue={review?.category ?? ""} className="input">
-              <option value="">— Belum dikategorikan —</option>
+              <option value="">Otomatis (dari penjelasan)</option>
               {VR_CATEGORIES.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}

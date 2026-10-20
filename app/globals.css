@@ -2,7 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
 body { @apply bg-zinc-950 text-zinc-100 antialiased; }
 
 @layer components {
@@ -16,7 +15,9 @@ body { @apply bg-zinc-950 text-zinc-100 antialiased; }
     @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium
       transition disabled:cursor-not-allowed disabled:opacity-50;
   }
-  .btn-primary { @apply btn bg-orange-600 text-white hover:bg-orange-500; }
+  /* warna tombol utama tetap sama di mode terang & gelap */
+  .btn-primary { @apply btn text-white; background-color: #ea580c; }
+  .btn-primary:hover:not(:disabled) { background-color: #f97316; }
   .btn-ghost { @apply btn border border-zinc-700 text-zinc-200 hover:bg-zinc-800; }
   .btn-danger { @apply btn border border-red-900 text-red-300 hover:bg-red-950; }
   .badge { @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset; }

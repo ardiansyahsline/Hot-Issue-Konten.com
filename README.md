@@ -15,6 +15,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
 - **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
 - **Admin:** buat akun, ganti role lewat dropdown, reset password, dan hapus akun.
 - **Akun saya:** ganti nama dan password sendiri.
@@ -52,6 +53,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
    - **service_role / secret key**: RAHASIA, hanya untuk Vercel
 
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
+
+**Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
 
 ### Langkah 2 — Upload kode ke GitHub
 
@@ -105,8 +108,14 @@ Di Vercel buka **Project → Settings → Domains**, tambahkan misalnya `cs.kont
 
 ---
 
-## Import data dari sheet "Video Review WA"
+## Import / sync data dari sheet "Video Review WA"
 
+**Cara 1 — Sync langsung dari link (disarankan):**
+1. Di Google Sheet, klik **Share → General access → Anyone with the link → Viewer**.
+2. Di web, buka **Video Review → Import dari Sheet**, lalu klik **Sync sekarang** (link sheet sudah terisi otomatis).
+3. Kasus baru akan ditambahkan, dan kasus lama diperbarui kalau Penyelesaian, Insight, atau Argumen berubah di sheet. Klik berkali-kali pun data tidak akan dobel.
+
+**Cara 2 — Upload CSV (kalau sheet harus tetap private):**
 1. Di Google Sheet, buka tab **Video Review**, lalu klik **File → Download → Comma-separated values (.csv)**.
 2. Di web, buka **Video Review → Import dari Sheet**, lalu pilih file .csv itu.
 3. Cek preview, lalu klik **Import**.
@@ -114,9 +123,10 @@ Di Vercel buka **Project → Settings → Domains**, tambahkan misalnya `cs.kont
 Catatan:
 - Baris lanjutan yang cuma berisi link/email tambahan otomatis digabung ke kasus di atasnya.
 - Kolom rekap (Kategori / Jumlah Kasus / Rangkuman) diabaikan, karena sudah dihitung otomatis di web.
-- Kategori per kasus dikosongkan karena di sheet tidak ada per baris. Isi lewat dropdown di daftar.
+- Kategori diisi **otomatis** dari kata kunci di kolom Penjelasan (aturannya di `lib/videoReview.ts` → `VR_CATEGORY_RULES`). Kalau perlu, kategori bisa diganti lewat dropdown, dan pilihan manual tidak akan ditimpa saat sync.
+- **Rangkuman** per kategori disusun otomatis dari data: jumlah kasus, rentang tanggal, jumlah per status, siapa yang menangani (nama dalam kurung di kolom Penyelesaian), dan kasus terbaru. Tiap kategori juga bisa diberi catatan manual.
 - Status dibaca dari teks Penyelesaian ("Ditolak…" → Ditolak, "Disetujui/Sudah sesuai…" → Disetujui, "Belum ada respons"/kosong → Menunggu). Teks aslinya tetap disimpan dan status bisa diedit.
-- File yang sama aman di-import ulang, karena kasus yang sudah ada dilewati.
+- File yang sama aman di-import ulang. Kasus yang sudah ada tidak akan dobel, hanya diperbarui kalau isinya berubah.
 
 ## Jalankan di laptop (opsional)
 

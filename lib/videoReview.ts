@@ -32,6 +32,7 @@ export type VrImportRow = {
   insight: string | null;
   clipper_argument: string | null;
   status: VrStatus;
+  category: string;
   links: VrLinkInput[];
   source_row: number; // nomor baris di sheet (1-based)
 };
@@ -151,6 +152,7 @@ export function sheetToReviews(rows: string[][]): { reviews: VrImportRow[]; erro
         insight: insight || null,
         clipper_argument: arg || null,
         status: "menunggu",
+        category: "Lainnya",
         links,
         source_row: headerIdx + 2 + i,
       });
@@ -165,6 +167,7 @@ export function sheetToReviews(rows: string[][]): { reviews: VrImportRow[]; erro
 
   for (const r of reviews) {
     r.status = statusFromResolution(r.resolution);
+    r.category = categorize(r.explanation);
     const seen = new Set<string>();
     r.links = r.links.filter((l) => {
       const k = l.value.toLowerCase();
@@ -174,4 +177,98 @@ export function sheetToReviews(rows: string[][]): { reviews: VrImportRow[]; erro
     });
   }
   return { reviews };
+}
+
+// ---------------------------------------------------------------------------
+// AUTO-KATEGORI — dibaca dari teks Penjelasan. Urutan aturan penting (yang pertama cocok dipakai).
+// Ubah/tambah kata kunci di sini kalau ada pola baru.
+// ---------------------------------------------------------------------------
+export const VR_CATEGORY_RULES: { category: (typeof VR_CATEGORIES)[number]; pattern: RegExp }[] = [
+  { category: "Saldo dibekukan (cek/menanyakan)", pattern: /saldo|dibekukan|freeze|frozen/i },
+  { category: "Refresh views top clipper", pattern: /refresh/i },
+  { category: "Misskom info brief", pattern: /mis+kom/i },
+  { category: "Komplain", pattern: /komplain|complain|berbeda platform|beda platform/i },
+  {
+    category: "Review/rilis melewati estimasi waktu",
+    pattern: /melewati\s+(batas|estimasi)|lewat\s+(batas|estimasi)|tertunda|pending|belum\s+(di)?rilis|estimasi waktu/i,
+  },
+  { category: "Pengajuan banding", pattern: /banding|appeal/i },
+  {
+    category: "Kesesuaian video dengan brief",
+    pattern: /kesesuaian|sesuai brief|ketentuan brief|alasan (penolakan|reject|ditolak)|alasan.*tolak|\bcta\b|reject|ditolak|perubahan brief/i,
+  },
+  { category: "Permintaan review video", pattern: /review|tinjau/i },
+];
+
+export function categorize(explanation: string): (typeof VR_CATEGORIES)[number] {
+  for (const r of VR_CATEGORY_RULES) if (r.pattern.test(explanation)) return r.category;
+  return "Lainnya";
+}
+
+// Link default sheet "Video Review WA"
+export const DEFAULT_SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/1BeiuI4KH05E4MpmMom29tItugIaf5h6YoL_ofAoyBDg/edit?gid=0#gid=0";
+
+/** Ubah link Google Sheet biasa jadi link download CSV */
+export function sheetCsvUrl(url: string): string | null {
+  const id = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1];
+  if (!id) return null;
+  const gid = url.match(/[#?&]gid=(\d+)/)?.[1] ?? "0";
+  return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+}
+
+// ---------------------------------------------------------------------------
+// RANGKUMAN OTOMATIS per kategori — disusun dari data, tidak mengarang.
+// ---------------------------------------------------------------------------
+export type VrSummaryRow = { category: string | null; status: VrStatus; resolution: string | null; report_date: string };
+
+const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+const tgl = (d: string) => {
+  const [, m, day] = d.split("-").map(Number);
+  return `${day} ${BULAN[m - 1]}`;
+};
+
+export function buildRangkuman(rows: VrSummaryRow[]): string {
+  if (!rows.length) return "";
+  const n = (s: VrStatus) => rows.filter((r) => r.status === s).length;
+  const dates = rows.map((r) => r.report_date).sort();
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+
+  const parts: string[] = [];
+  parts.push(`${rows.length} kasus${first === last ? ` (${tgl(first)})` : ` (${tgl(first)} – ${tgl(last)})`}.`);
+
+  const statusText = [
+    [n("disetujui"), "disetujui"],
+    [n("ditolak"), "ditolak"],
+    [n("diproses"), "masih diproses"],
+    [n("menunggu"), "belum ada respons / menunggu"],
+    [n("selesai"), "selesai/info"],
+  ]
+    .filter(([c]) => (c as number) > 0)
+    .map(([c, t]) => `${c} ${t}`);
+  if (statusText.length) parts.push(statusText.join(", ") + ".");
+
+  // nama di dalam kurung pada kolom Penyelesaian, mis. "Disetujui (Irsyad)"
+  const names = new Map<string, number>();
+  for (const r of rows) {
+    for (const m of (r.resolution ?? "").matchAll(/\(([A-Z][a-zA-Z]+)\)/g)) {
+      names.set(m[1], (names.get(m[1]) ?? 0) + 1);
+    }
+  }
+  const top = [...names.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (top.length) parts.push(`Ditangani: ${top.map(([k, v]) => `${k} (${v})`).join(", ")}.`);
+
+  const latest = rows.filter((r) => r.report_date === last);
+  const latestWaiting = latest.filter((r) => r.status === "menunggu").length;
+  parts.push(
+    `Terbaru ${tgl(last)}: ${latest.length} kasus${latestWaiting ? `, ${latestWaiting} masih menunggu` : ""}.`
+  );
+  return parts.join(" ");
+}
+
+/** Kunci stabil baris sheet: tanggal + penjelasan + link pertama (+ urutan kalau kembar). Harus sama dengan migration-03. */
+export function sheetBaseKey(r: Pick<VrImportRow, "report_date" | "explanation" | "links">) {
+  const firstLink = r.links[0]?.value.trim().toLowerCase() ?? "";
+  return `${r.report_date ?? ""}|${r.explanation.trim().toLowerCase()}|${firstLink}`;
 }
