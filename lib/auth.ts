@@ -3,7 +3,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Profile } from "@/lib/types";
-import { canWriteIssues, canWriteReviews } from "@/lib/roles";
+import { canEditReviews, canWriteIssues, canWriteReviews } from "@/lib/roles";
 
 /** User yang login (id + email). Di-cache per request supaya tidak dipanggil berkali-kali. */
 export const getCurrentUser = cache(async () => {
@@ -29,9 +29,10 @@ export async function requireAdmin() {
 }
 
 /** Lempar balik ke halaman sebelumnya kalau role tidak punya akses tulis */
-export async function requireWriter(kind: "issues" | "reviews", fallback = "/") {
+export async function requireWriter(kind: "issues" | "reviews" | "reviews-edit", fallback = "/") {
   const profile = await getProfile();
-  const ok = kind === "issues" ? canWriteIssues(profile?.role) : canWriteReviews(profile?.role);
+  const ok =
+    kind === "issues" ? canWriteIssues(profile?.role) : kind === "reviews" ? canWriteReviews(profile?.role) : canEditReviews(profile?.role);
   if (!ok) redirect(fallback);
   return profile;
 }

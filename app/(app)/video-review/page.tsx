@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { canWriteReviews } from "@/lib/roles";
+import { canEditReviews, canWriteReviews } from "@/lib/roles";
 import {
   VR_CATEGORIES,
   VR_STATUSES,
@@ -28,6 +28,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   const sp = await searchParams;
   const [{ supabase }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const canWrite = canWriteReviews(profile?.role);
+  const canEdit = canEditReviews(profile?.role);
   const { user } = await getCurrentUser();
   const tab = sp.tab === "rekap" ? "rekap" : sp.tab === "daftar" || !canWrite ? "daftar" : "input";
 
@@ -176,7 +177,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
               <p className="border-t border-zinc-800/80 px-5 py-6 text-[13px] text-zinc-500">Belum ada. Kasus yang kamu simpan akan muncul di sini.</p>
             ) : (
               <div className="border-t border-zinc-800/80">
-                <VrTable rows={recent} canWrite={canWrite} numberFrom={recent.length} descending />
+                <VrTable rows={recent} canWrite={canEdit} numberFrom={recent.length} descending />
               </div>
             )}
           </section>
@@ -187,10 +188,19 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
       {tab === "rekap" && (
         <>
       {/* ---------------- KARTU STATUS ---------------- */}
-        <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <StatCard
+            label="Total kasus"
+            value={grand}
+            unit="kasus"
+            tone="orange"
+            icon="table"
+            href={filterHref({ tab: "daftar", status: undefined, category: undefined })}
+            footer={grand ? `${ddmmyy(allDates[0])} – ${ddmmyy(allDates[allDates.length - 1])}` : "Belum ada data"}
+          />
           {(
             [
-              ["menunggu", "Menunggu respons", "amber", "play"],
+              ["menunggu", "Menunggu", "amber", "play"],
               ["diproses", "Diproses", "sky", "clock"],
               ["disetujui", "Disetujui", "emerald", "check"],
               ["ditolak", "Ditolak", "red", "x"],
@@ -222,10 +232,6 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
             </div>
             <div className="flex items-center gap-5">
               {canWrite && uncategorized > 0 && <AutoCategorizeButton count={uncategorized} />}
-              <div className="text-right">
-                <div className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Total kasus</div>
-                <div className="font-display text-[28px] font-bold leading-none tabular-nums">{grand}</div>
-              </div>
             </div>
           </div>
   
@@ -389,12 +395,12 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
             {listRes.count ?? rows.length} kasus
             {(listRes.count ?? 0) > rows.length ? ` · menampilkan ${rows.length}` : ""}
           </span>
-          {canWrite && <span>Klik <b className="text-orange-400">Edit</b> untuk mengubah kasus langsung di baris</span>}
+          {canEdit && <span>Klik <b className="text-orange-400">Edit</b> untuk mengubah kasus langsung di baris</span>}
         </div>
         {rows.length === 0 ? (
           <div className="p-10 text-center text-sm text-zinc-400">Belum ada kasus di filter ini.</div>
         ) : (
-          <VrTable rows={rows} canWrite={canWrite} numberFrom={listRes.count ?? rows.length} descending={sort === "desc"} />
+          <VrTable rows={rows} canWrite={canEdit} numberFrom={listRes.count ?? rows.length} descending={sort === "desc"} />
         )}
       </section>
       )}

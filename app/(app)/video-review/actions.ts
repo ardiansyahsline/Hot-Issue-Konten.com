@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
-import { canWriteReviews } from "@/lib/roles";
+import { canEditReviews, canWriteReviews } from "@/lib/roles";
 import { parseCsv } from "@/lib/csv";
 import {
   VR_CATEGORIES,
@@ -21,11 +21,17 @@ import {
 export type VrFormState = { error?: string } | undefined;
 export type ImportResult = { ok?: string; error?: string } | undefined;
 
-const NO_ACCESS = "Role kamu tidak punya akses input Video Review.";
+const NO_ACCESS = "Role kamu tidak punya akses untuk ini di Video Review.";
 
 async function writer() {
   const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   return canWriteReviews(profile?.role) ? ctx : null;
+}
+
+/** Boleh edit kasus yang sudah ada (writer + Discord Moderator) */
+async function editor() {
+  const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  return canEditReviews(profile?.role) ? ctx : null;
 }
 
 const txt = (v: FormDataEntryValue | null) => String(v ?? "").trim() || null;
@@ -74,7 +80,7 @@ export async function createReview(_prev: VrFormState, fd: FormData): Promise<Vr
 export async function updateReview(id: number, _prev: VrFormState, fd: FormData): Promise<VrFormState> {
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
-  const w = await writer();
+  const w = await editor();
   if (!w) return { error: NO_ACCESS };
 
   const { error } = await w.supabase.from("video_reviews").update(parsed.data).eq("id", id);
@@ -96,7 +102,7 @@ export async function updateReview(id: number, _prev: VrFormState, fd: FormData)
 
 export async function setReviewCategory(id: number, category: string) {
   if (category && !(VR_CATEGORIES as readonly string[]).includes(category)) return { error: "Kategori tidak valid" };
-  const w = await writer();
+  const w = await editor();
   if (!w) return { error: NO_ACCESS };
   const { error } = await w.supabase.from("video_reviews").update({ category: category || null }).eq("id", id);
   if (error) return { error: error.message };
@@ -107,7 +113,7 @@ export async function setReviewCategory(id: number, category: string) {
 
 export async function setReviewStatus(id: number, status: string) {
   if (!(status in VR_STATUSES)) return;
-  const w = await writer();
+  const w = await editor();
   if (!w) return;
   await w.supabase.from("video_reviews").update({ status }).eq("id", id);
   revalidatePath("/video-review");
@@ -378,7 +384,7 @@ export async function createReviewInline(_prev: { error?: string; ok?: string } 
 export async function updateReviewInline(id: number, _prev: { error?: string; ok?: string } | undefined, fd: FormData): Promise<{ error?: string; ok?: string }> {
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
-  const w = await writer();
+  const w = await editor();
   if (!w) return { error: NO_ACCESS };
   const { error } = await w.supabase.from("video_reviews").update(parsed.data).eq("id", id);
   if (error) return { error: `Gagal update: ${error.message}` };

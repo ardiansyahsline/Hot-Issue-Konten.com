@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { canWriteReviews } from "@/lib/roles";
+import { canEditReviews } from "@/lib/roles";
 import { VR_STATUSES } from "@/lib/videoReview";
 import type { VideoReviewRow } from "@/lib/types";
 import { fmtDate, fmtDay } from "@/lib/utils";
@@ -19,7 +19,7 @@ export default async function ReviewDetail({ params }: { params: Promise<{ id: s
   ]);
   if (!data) notFound();
   const r = data as VideoReviewRow;
-  const canWrite = canWriteReviews(profile?.role);
+  const canWrite = canEditReviews(profile?.role);
   const isAdmin = profile?.role === "admin";
 
   const Field = ({ label, value }: { label: string; value: string | null }) => (

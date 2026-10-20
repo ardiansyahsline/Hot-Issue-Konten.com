@@ -47,6 +47,12 @@ const ICONS: Record<string, React.ReactNode> = {
       <path d="M12 11v5M12 8h.01" />
     </>
   ),
+  table: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M4 10h16M10 4v16" />
+    </>
+  ),
   sparkles: <path d="M12 3l1.8 4.7L18 9.5l-4.2 1.8L12 16l-1.8-4.7L6 9.5l4.2-1.8zM19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" />,
 };
 

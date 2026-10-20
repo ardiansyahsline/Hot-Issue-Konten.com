@@ -8,7 +8,7 @@ import { updateReview } from "../../actions";
 export default async function EditReviewPage({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
-  await requireWriter("reviews", `/video-review/${id}`);
+  await requireWriter("reviews-edit", `/video-review/${id}`);
   const { supabase } = await getCurrentUser();
   const { data } = await supabase.from("video_review_list").select("*").eq("id", id).maybeSingle();
   if (!data) notFound();

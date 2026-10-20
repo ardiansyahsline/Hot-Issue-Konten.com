@@ -29,7 +29,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 | Admin | Input & edit | Input & edit | ✅ |
 | CS | Input & edit | Input & edit | – |
 | Video Review | Input & edit | Input & edit | – |
-| Discord Moderator | Input & edit | Lihat saja | – |
+| Discord Moderator | Input & edit | Edit saja (tanpa input baru) | – |
 | User | Lihat saja | Lihat saja | – |
 
 ---
@@ -57,6 +57,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 **Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
+
+**Langkah 1e — Update 05 (Discord Moderator bisa edit Video Review):** jalankan `supabase/migration-05-discord-mod-edit-vr.sql`.
 
 **Langkah 1d — Update 04 (Catatan & Saran + nama otomatis):** jalankan `supabase/migration-04-catatan-saran.sql`. Mulai update ini, selain admin, nama pencatat dan PIC otomatis diambil dari akun yang login (juga dikunci di database).
 
