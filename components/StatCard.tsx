@@ -117,7 +117,7 @@ export default function StatCard({
       {footer && <div className="mt-3 text-[12px] text-zinc-500">{footer}</div>}
     </>
   );
-  const cls = "card relative block overflow-hidden py-5 pl-6 pr-5 transition duration-200 hover:-translate-y-0.5";
+  const cls = "card card-plain relative block overflow-hidden py-5 pl-6 pr-5 transition duration-200 hover:-translate-y-0.5";
   return href ? (
     <Link href={href} className={cls} style={style}>
       {body}
