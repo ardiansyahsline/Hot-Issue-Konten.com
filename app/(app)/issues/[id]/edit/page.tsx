@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import IssueForm from "@/components/IssueForm";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, requireWriter } from "@/lib/auth";
 import type { IssueRow } from "@/lib/types";
 import { updateIssue } from "../../actions";
 
@@ -8,6 +8,7 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
 
+  await requireWriter("issues", `/issues/${id}`);
   const { supabase } = await getCurrentUser();
   const [{ data: issue }, { data: profiles }] = await Promise.all([
     supabase.from("issue_list").select("*").eq("id", id).maybeSingle(),

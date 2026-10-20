@@ -1,6 +1,6 @@
 # 🔥 Hot Issues CS — Konten.com
 
-Web internal tim CS untuk mencatat hot issue clipper. Login email + password, semua agent bisa buat & edit issue, input kontak clipper (No HP/WA, Instagram, Discord, Email), dan sistem otomatis menandai **HOT** kalau kontak yang sama dilaporkan berulang.
+Web internal tim CS untuk mencatat hot issue clipper. Login email + password dengan 5 role, agent bisa buat & edit issue, input kontak clipper (No HP/WA, Instagram, Discord, Email), dan sistem otomatis menandai **HOT** kalau kontak yang sama dilaporkan berulang.
 
 **Stack:** Next.js 15 (di-host di Vercel) + Supabase (login + database). Semua pakai paket gratis.
 
@@ -14,8 +14,20 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password, se
 - **Peringatan saat input:** waktu mengetik kontak di form, langsung muncul info kalau kontak itu sudah ada di issue lain.
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
-- **Admin:** buat akun agent, ganti role, reset password, dan hapus akun.
+- **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
+- **Admin:** buat akun, ganti role lewat dropdown, reset password, dan hapus akun.
 - **Akun saya:** ganti nama dan password sendiri.
+
+## Hak akses per role
+
+| Role | Hot Issues | Video Review | Kelola user & hapus data |
+|---|---|---|---|
+| Admin | Input & edit | Input & edit | ✅ |
+| CS | Input & edit | Input & edit | – |
+| Video Review | Input & edit | Input & edit | – |
+| Discord Moderator | Input & edit | Lihat saja | – |
+| User | Lihat saja | Lihat saja | – |
 
 ---
 
@@ -38,6 +50,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password, se
    - **Project URL**: `https://xxxx.supabase.co`
    - **anon / publishable key**: aman untuk browser
    - **service_role / secret key**: RAHASIA, hanya untuk Vercel
+
+**Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 ### Langkah 2 — Upload kode ke GitHub
 
@@ -91,6 +105,19 @@ Di Vercel buka **Project → Settings → Domains**, tambahkan misalnya `cs.kont
 
 ---
 
+## Import data dari sheet "Video Review WA"
+
+1. Di Google Sheet, buka tab **Video Review**, lalu klik **File → Download → Comma-separated values (.csv)**.
+2. Di web, buka **Video Review → Import dari Sheet**, lalu pilih file .csv itu.
+3. Cek preview, lalu klik **Import**.
+
+Catatan:
+- Baris lanjutan yang cuma berisi link/email tambahan otomatis digabung ke kasus di atasnya.
+- Kolom rekap (Kategori / Jumlah Kasus / Rangkuman) diabaikan, karena sudah dihitung otomatis di web.
+- Kategori per kasus dikosongkan karena di sheet tidak ada per baris. Isi lewat dropdown di daftar.
+- Status dibaca dari teks Penyelesaian ("Ditolak…" → Ditolak, "Disetujui/Sudah sesuai…" → Disetujui, "Belum ada respons"/kosong → Menunggu). Teks aslinya tetap disimpan dan status bisa diedit.
+- File yang sama aman di-import ulang, karena kasus yang sudah ada dilewati.
+
 ## Jalankan di laptop (opsional)
 
 ```bash
@@ -101,9 +128,10 @@ npm run dev                  # buka http://localhost:3000
 
 ## Mengubah isi
 
-- **Daftar kategori:** `lib/constants.ts` → `CATEGORIES`
+- **Daftar kategori Hot Issues:** `lib/constants.ts` → `CATEGORIES`
+- **Daftar kategori Video Review:** `lib/videoReview.ts` → `VR_CATEGORIES`
+- **Hak akses role:** `lib/roles.ts` dan fungsi `can_write_issues()` / `can_write_reviews()` di migration-02
 - **Batas HOT:** env `NEXT_PUBLIC_HOT_THRESHOLD`. Window 30 hari ada di `supabase/schema.sql` (view `contact_stats`).
-- **Hak akses:** bagian *ROW LEVEL SECURITY* di `schema.sql`. Saat ini semua agent bisa lihat, buat, dan edit; yang bisa hapus issue hanya admin.
 
 ## Troubleshooting
 
@@ -111,6 +139,7 @@ npm run dev                  # buka http://localhost:3000
 |---|---|
 | "Email atau password salah" padahal benar | Pastikan user sudah **Auto Confirm** (di Supabase Users kolom "Last sign in" / "Confirmed"). |
 | Dashboard error "relation issue_list does not exist" | `schema.sql` belum di-run, atau di-run di project Supabase yang lain. |
+| Menu Video Review error "Gagal ambil data" | `migration-02-roles-video-review.sql` belum di-run. |
 | Menu Admin tidak muncul | Jalankan `jadikan-admin.sql`, lalu logout dan login lagi. |
 | Admin gagal buat akun | `SUPABASE_SERVICE_ROLE_KEY` belum di-set di Vercel. Tambahkan lalu redeploy. |
 | Build gagal di Vercel | Cek 2 env `NEXT_PUBLIC_…` sudah terisi, lalu redeploy. |

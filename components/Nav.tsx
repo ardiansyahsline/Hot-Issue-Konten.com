@@ -2,19 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { canWriteIssues } from "@/lib/roles";
 
-const links = [
-  { href: "/", label: "Dashboard" },
-  { href: "/issues/new", label: "+ Issue Baru" },
-  { href: "/contacts", label: "Cek Kontak" },
-];
-
-export default function Nav({ isAdmin }: { isAdmin: boolean }) {
+export default function Nav({ role }: { role: string | null }) {
   const path = usePathname();
-  const all = isAdmin ? [...links, { href: "/admin", label: "Admin" }] : links;
+  const links = [
+    { href: "/", label: "Dashboard", show: true },
+    { href: "/issues/new", label: "+ Issue Baru", show: canWriteIssues(role) },
+    { href: "/contacts", label: "Cek Kontak", show: true },
+    { href: "/video-review", label: "Video Review", show: true },
+    { href: "/admin", label: "Admin", show: role === "admin" },
+  ].filter((l) => l.show);
+
   return (
     <nav className="flex flex-wrap gap-1">
-      {all.map((l) => {
+      {links.map((l) => {
         const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
         return (
           <Link

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isRole } from "@/lib/roles";
 
 export type AdminState = { error?: string; ok?: string } | undefined;
 
@@ -11,7 +12,8 @@ export async function createUser(_prev: AdminState, formData: FormData): Promise
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   const full_name = String(formData.get("full_name") ?? "").trim();
-  const role = formData.get("role") === "admin" ? "admin" : "agent";
+  const roleRaw = formData.get("role");
+  const role = isRole(roleRaw) ? roleRaw : "user";
 
   if (!email || !full_name) return { error: "Nama dan email wajib diisi." };
   if (password.length < 8) return { error: "Password minimal 8 karakter." };
@@ -30,13 +32,16 @@ export async function createUser(_prev: AdminState, formData: FormData): Promise
   return { ok: `Akun ${email} berhasil dibuat. Kirim email + password ke agent.` };
 }
 
-export async function setRole(userId: string, role: "admin" | "agent") {
+export async function setRole(userId: string, role: string): Promise<AdminState> {
   const { user } = await requireAdmin();
-  if (userId === user.id) return; // jangan turunkan diri sendiri
+  if (!isRole(role)) return { error: "Role tidak valid" };
+  if (userId === user.id) return { error: "Tidak bisa ubah role sendiri" };
   const admin = createAdminClient();
+  const { error } = await admin.from("profiles").update({ role }).eq("id", userId);
+  if (error) return { error: error.message };
   await admin.auth.admin.updateUserById(userId, { app_metadata: { role } });
-  await admin.from("profiles").update({ role }).eq("id", userId);
   revalidatePath("/admin");
+  return { ok: "Role disimpan" };
 }
 
 export async function resetPassword(userId: string, _prev: AdminState, formData: FormData): Promise<AdminState> {

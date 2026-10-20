@@ -32,3 +32,17 @@ export function timeAgo(iso: string) {
 export function cleanSearch(q: string) {
   return q.replace(/[,()*%"\\]/g, " ").trim().slice(0, 100);
 }
+
+/** Tanggal hari ini (WIB) format YYYY-MM-DD */
+export function todayWib() {
+  return new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/** "2026-10-05" -> "05 Okt 2026" */
+export function fmtDay(d: string | null | undefined) {
+  if (!d) return "-";
+  const [y, m, day] = d.split("-").map(Number);
+  return new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(
+    new Date(Date.UTC(y, m - 1, day))
+  );
+}

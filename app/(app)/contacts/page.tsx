@@ -2,7 +2,8 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { HOT_THRESHOLD } from "@/lib/constants";
 import { CONTACT_TYPES, contactLink, displayContact, isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
-import type { ContactStat, IssueRow } from "@/lib/types";
+import type { ContactStat, IssueRow, VideoReviewRow } from "@/lib/types";
+import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import { cleanSearch, fmtDate, isAutoHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
@@ -67,6 +68,26 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
     }
   }
 
+  // Kasus Video Review yang email/link-nya mengandung kata yang dicari
+  let vrCases: VideoReviewRow[] = [];
+  const vrTerm = cleanSearch(q).toLowerCase().replace(/^@/, "");
+  if (vrTerm.length >= 4) {
+    const { data: vrLinks } = await supabase
+      .from("video_review_links")
+      .select("review_id")
+      .ilike("normalized", `%${vrTerm}%`)
+      .limit(100);
+    const ids = [...new Set((vrLinks ?? []).map((l) => l.review_id as number))];
+    if (ids.length) {
+      const { data } = await supabase
+        .from("video_review_list")
+        .select("*")
+        .in("id", ids)
+        .order("report_date", { ascending: false });
+      vrCases = (data ?? []) as VideoReviewRow[];
+    }
+  }
+
   // Tanpa pencarian: tampilkan semua kontak hot
   const { data: hotData } = q
     ? { data: null }
@@ -101,8 +122,29 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
 
       {q && matches.length === 0 && (
         <div className="card p-6 text-center text-sm text-zinc-400">
-          ✅ Kontak <span className="text-zinc-200">{q}</span> belum pernah dilaporkan.
+          ✅ Kontak <span className="text-zinc-200">{q}</span> belum pernah dilaporkan di Hot Issues.
         </div>
+      )}
+
+      {vrCases.length > 0 && (
+        <section className="card p-5">
+          <h2 className="font-semibold">🎬 Muncul di {vrCases.length} kasus Video Review</h2>
+          <ul className="mt-3 space-y-2">
+            {vrCases.map((v) => (
+              <li key={v.id} className="rounded-lg bg-zinc-950/60 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-zinc-500">#{v.id}</span>
+                    <VrStatusBadge status={v.status} />
+                    <span className="text-xs text-zinc-400">{v.category ?? "Belum dikategorikan"}</span>
+                    <span className="ml-auto text-xs text-zinc-500">{v.report_date}</span>
+                  </div>
+                  <Link href={`/video-review/${v.id}`} className="mt-1 block text-sm hover:underline">{v.explanation}</Link>
+                  {v.resolution && <div className="mt-1 text-xs text-zinc-400">{v.resolution}</div>}
+                  <div className="mt-2"><VrLinks links={v.links} max={3} /></div>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {partial && <p className="text-xs text-amber-300">Tidak ada yang persis sama — ini kontak yang mirip:</p>}

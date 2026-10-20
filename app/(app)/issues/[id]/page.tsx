@@ -6,6 +6,7 @@ import { CONTACT_TYPES, contactLink, displayContact } from "@/lib/contacts";
 import type { IssueRow } from "@/lib/types";
 import { fmtDate, isAutoHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
+import { canWriteIssues } from "@/lib/roles";
 import { addNote, deleteIssue, deleteNote, setStatus, takeIssue, toggleHot } from "../actions";
 
 type Note = { id: number; body: string; created_at: string; created_by: string | null; author: { full_name: string | null } | null };
@@ -28,6 +29,7 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
   const issue = data as IssueRow;
   const notes = (notesData ?? []) as unknown as Note[];
   const isAdmin = profile?.role === "admin";
+  const canWrite = canWriteIssues(profile?.role);
   const autoHot = isAutoHot(issue);
 
   return (
@@ -52,6 +54,7 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
           <div><dt className="label">Update terakhir</dt><dd>{fmtDate(issue.updated_at)} · {issue.updated_by_name ?? "-"}</dd></div>
         </dl>
 
+        {canWrite && (
         <div className="mt-5 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
           <Link href={`/issues/${id}/edit`} className="btn-primary">Edit</Link>
           {Object.entries(STATUSES)
@@ -75,12 +78,13 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
             </form>
           )}
         </div>
+        )}
       </div>
 
       <div className="card p-5">
         <h2 className="font-semibold">Kontak clipper</h2>
         {issue.contacts.length === 0 ? (
-          <p className="mt-2 text-sm text-zinc-400">Belum ada kontak. Tambahkan lewat Edit.</p>
+          <p className="mt-2 text-sm text-zinc-400">Belum ada kontak.</p>
         ) : (
           <ul className="mt-3 divide-y divide-zinc-800">
             {issue.contacts.map((c) => {
@@ -131,12 +135,14 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
             </li>
           ))}
         </ul>
+        {canWrite && (
         <form action={addNote.bind(null, id)} className="mt-4 space-y-2">
           <textarea name="body" rows={3} required placeholder="Tulis update / handover shift..." className="input" />
           <div className="flex justify-end">
             <button className="btn-primary">Tambah catatan</button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

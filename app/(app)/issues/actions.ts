@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getCurrentUser, requireAdmin } from "@/lib/auth";
+import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
+import { canWriteIssues } from "@/lib/roles";
 import { CATEGORIES, PRIORITIES, STATUSES } from "@/lib/constants";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
 
@@ -49,12 +50,22 @@ function parseContacts(formData: FormData): ContactInput[] {
   return out;
 }
 
+const NO_ACCESS = "Role kamu hanya bisa melihat (read-only). Minta admin ubah role kalau perlu input.";
+
+/** Context Supabase kalau user boleh input/edit Hot Issues, null kalau tidak */
+async function writer() {
+  const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  return canWriteIssues(profile?.role) ? ctx : null;
+}
+
 export async function createIssue(_prev: FormState, formData: FormData): Promise<FormState> {
   const parsed = parseIssue(formData);
   if ("error" in parsed) return { error: parsed.error };
   const contacts = parseContacts(formData);
 
-  const { supabase } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return { error: NO_ACCESS };
+  const { supabase } = w;
   const { data, error } = await supabase.from("issues").insert(parsed.data).select("id").single();
   if (error || !data) return { error: `Gagal simpan issue: ${error?.message}` };
 
@@ -74,7 +85,9 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
   if ("error" in parsed) return { error: parsed.error };
   const contacts = parseContacts(formData);
 
-  const { supabase } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return { error: NO_ACCESS };
+  const { supabase } = w;
   const { error } = await supabase.from("issues").update(parsed.data).eq("id", id);
   if (error) return { error: `Gagal update: ${error.message}` };
 
@@ -108,21 +121,27 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
 
 export async function setStatus(id: number, status: string) {
   if (!(status in STATUSES)) return;
-  const { supabase } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return;
+  const { supabase } = w;
   await supabase.from("issues").update({ status }).eq("id", id);
   revalidatePath(`/issues/${id}`);
   revalidatePath("/");
 }
 
 export async function toggleHot(id: number, isHot: boolean) {
-  const { supabase } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return;
+  const { supabase } = w;
   await supabase.from("issues").update({ is_hot: isHot }).eq("id", id);
   revalidatePath(`/issues/${id}`);
   revalidatePath("/");
 }
 
 export async function takeIssue(id: number) {
-  const { supabase, user } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return;
+  const { supabase, user } = w;
   await supabase.from("issues").update({ pic_id: user.id }).eq("id", id);
   revalidatePath(`/issues/${id}`);
   revalidatePath("/");
@@ -131,7 +150,9 @@ export async function takeIssue(id: number) {
 export async function addNote(id: number, formData: FormData) {
   const body = String(formData.get("body") ?? "").trim();
   if (!body) return;
-  const { supabase } = await getCurrentUser();
+  const w = await writer();
+  if (!w) return;
+  const { supabase } = w;
   await supabase.from("issue_notes").insert({ issue_id: id, body });
   // sentuh issue supaya "terakhir update" ikut berubah
   await supabase.from("issues").update({ updated_at: new Date().toISOString() }).eq("id", id);

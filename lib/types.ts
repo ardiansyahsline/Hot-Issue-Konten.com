@@ -1,5 +1,7 @@
 import type { ContactType } from "./contacts";
 import type { PriorityKey, StatusKey } from "./constants";
+import type { Role } from "./roles";
+import type { VrLinkKind, VrStatus } from "./videoReview";
 
 export type IssueContact = {
   id: number;
@@ -47,6 +49,26 @@ export type Profile = {
   id: string;
   email: string | null;
   full_name: string | null;
-  role: "admin" | "agent";
+  role: Role;
   created_at: string;
+};
+
+export type VideoReviewRow = {
+  id: number;
+  report_date: string;
+  explanation: string;
+  category: string | null;
+  status: VrStatus;
+  resolution: string | null;
+  insight: string | null;
+  clipper_argument: string | null;
+  source_key: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_name: string | null;
+  updated_by_name: string | null;
+  links: { id: number; kind: VrLinkKind; value: string }[];
+  links_text: string;
 };

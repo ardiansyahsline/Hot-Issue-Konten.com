@@ -1,8 +1,8 @@
 import { requireAdmin } from "@/lib/auth";
 import type { Profile } from "@/lib/types";
 import { fmtDate } from "@/lib/utils";
-import { setRole } from "./actions";
-import { CreateUserForm, DeleteUserButton, ResetPasswordForm } from "./AdminForms";
+import { ROLES, isRole } from "@/lib/roles";
+import { CreateUserForm, DeleteUserButton, ResetPasswordForm, RoleSelect } from "./AdminForms";
 
 export default async function AdminPage() {
   const { supabase, user } = await requireAdmin();
@@ -22,6 +22,17 @@ export default async function AdminPage() {
       )}
 
       <CreateUserForm />
+
+      <div className="card p-4 text-xs text-zinc-400">
+        <div className="mb-2 font-semibold text-zinc-300">Hak akses tiap role</div>
+        <ul className="grid gap-1 sm:grid-cols-2">
+          {Object.values(ROLES).map((r) => (
+            <li key={r.label}>
+              <span className={`font-medium ${r.cls}`}>{r.label}</span> — {r.desc}
+            </li>
+          ))}
+        </ul>
+      </div>
 
       <div className="card overflow-x-auto">
         <table className="w-full text-sm">
@@ -43,13 +54,9 @@ export default async function AdminPage() {
                   <td className="p-3 text-zinc-400">{p.email}</td>
                   <td className="p-3">
                     {self ? (
-                      <span className="text-orange-400">{p.role}</span>
+                      <span className="text-orange-400">{isRole(p.role) ? ROLES[p.role].label : p.role}</span>
                     ) : (
-                      <form action={setRole.bind(null, p.id, p.role === "admin" ? "agent" : "admin")}>
-                        <button className="btn-ghost px-2 py-1 text-xs" title="Klik untuk ganti role">
-                          {p.role} ⇄
-                        </button>
-                      </form>
+                      <RoleSelect userId={p.id} role={p.role} />
                     )}
                   </td>
                   <td className="p-3 text-zinc-400">{fmtDate(p.created_at)}</td>
