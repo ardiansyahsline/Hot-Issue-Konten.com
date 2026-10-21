@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState, useState } from "react";
 import { SG_CATEGORIES, type SgCategory, type SuggestionRow } from "@/lib/suggestions";
 import type { SgState } from "@/app/(app)/catatan/actions";
+import AttachmentPicker from "./attach/AttachmentPicker";
 
 export default function SgForm({
   action,
@@ -52,6 +53,11 @@ export default function SgForm({
       <div>
         <label className="label" htmlFor="body">Detail / catatan</label>
         <textarea id="body" name="body" rows={compact ? 3 : 6} defaultValue={suggestion?.body ?? ""} placeholder="Ceritakan konteksnya, contoh kasus, atau usulan solusinya…" className="input" />
+      </div>
+      <div>
+        <div className="label">Bukti / lampiran (opsional)</div>
+        <AttachmentPicker userId={currentUserId} compact={compact} pasteGlobal />
+        {suggestion && <p className="mt-1.5 text-[11.5px] text-zinc-500">Lampiran yang sudah ada bisa dilihat & dihapus di halaman detail.</p>}
       </div>
       {people && (
         <div>

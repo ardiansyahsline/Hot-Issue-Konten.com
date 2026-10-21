@@ -6,6 +6,7 @@ import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
 import { canWriteIssues } from "@/lib/roles";
 import { CATEGORIES, PRIORITIES, STATUSES } from "@/lib/constants";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
+import { attachmentPaths, parseAttachments, removeFiles, saveAttachments } from "@/lib/attachments.server";
 
 export type FormState = { error?: string } | undefined;
 
@@ -78,6 +79,9 @@ export async function createIssue(_prev: FormState, formData: FormData): Promise
     if (cErr) return { error: `Issue tersimpan (#${data.id}) tapi kontak gagal: ${cErr.message}` };
   }
 
+  const aErr = await saveAttachments(supabase, parseAttachments(formData, w.user.id), { kind: "issue", id: data.id });
+  if (aErr) return { error: `Issue tersimpan (#${data.id}) tapi lampiran gagal: ${aErr}` };
+
   revalidatePath("/");
   redirect(`/issues/${data.id}`);
 }
@@ -118,6 +122,9 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
     if (iErr) return { error: `Gagal tambah kontak: ${iErr.message}` };
   }
 
+  const aErr = await saveAttachments(supabase, parseAttachments(formData, w.user.id), { kind: "issue", id });
+  if (aErr) return { error: `Perubahan tersimpan tapi lampiran gagal: ${aErr}` };
+
   revalidatePath("/");
   revalidatePath(`/issues/${id}`);
   redirect(`/issues/${id}`);
@@ -152,12 +159,14 @@ export async function takeIssue(id: number) {
 }
 
 export async function addNote(id: number, formData: FormData) {
-  const body = String(formData.get("body") ?? "").trim();
-  if (!body) return;
   const w = await writer();
   if (!w) return;
   const { supabase } = w;
-  await supabase.from("issue_notes").insert({ issue_id: id, body });
+  const files = parseAttachments(formData, w.user.id);
+  const body = String(formData.get("body") ?? "").trim() || (files.length ? "📎 Lampiran bukti" : "");
+  if (!body) return;
+  const { data: note } = await supabase.from("issue_notes").insert({ issue_id: id, body }).select("id").single();
+  if (note && files.length) await saveAttachments(supabase, files, { kind: "issue_note", id: note.id });
   // sentuh issue supaya "terakhir update" ikut berubah
   await supabase.from("issues").update({ updated_at: new Date().toISOString() }).eq("id", id);
   revalidatePath(`/issues/${id}`);
@@ -166,13 +175,21 @@ export async function addNote(id: number, formData: FormData) {
 
 export async function deleteNote(issueId: number, noteId: number) {
   const { supabase } = await getCurrentUser();
-  await supabase.from("issue_notes").delete().eq("id", noteId);
+  const paths = await attachmentPaths(supabase, [{ column: "issue_note_id", ids: [noteId] }]);
+  const { data } = await supabase.from("issue_notes").delete().eq("id", noteId).select("id");
+  if (data?.length) await removeFiles(supabase, paths);
   revalidatePath(`/issues/${issueId}`);
 }
 
 export async function deleteIssue(id: number) {
   const { supabase } = await requireAdmin();
-  await supabase.from("issues").delete().eq("id", id);
+  const { data: notes } = await supabase.from("issue_notes").select("id").eq("issue_id", id);
+  const paths = await attachmentPaths(supabase, [
+    { column: "issue_id", ids: [id] },
+    { column: "issue_note_id", ids: (notes ?? []).map((n) => n.id as number) },
+  ]);
+  const { data } = await supabase.from("issues").delete().eq("id", id).select("id");
+  if (data?.length) await removeFiles(supabase, paths);
   revalidatePath("/");
   redirect("/");
 }

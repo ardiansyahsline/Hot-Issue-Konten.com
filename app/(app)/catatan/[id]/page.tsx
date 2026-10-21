@@ -6,25 +6,42 @@ import { fmtDate, timeAgo } from "@/lib/utils";
 import { Avatar, SgCategoryBadge, SgStatusBadge } from "@/components/SgBits";
 import SgProgressForm from "@/components/SgProgressForm";
 import { addComment, deleteComment, deleteSuggestion, setProgress } from "../actions";
+import { ATTACH_SELECT, signAttachments, type AttachmentRow } from "@/lib/attachments.server";
+import AttachmentsCard from "@/components/attach/AttachmentsCard";
+import AttachmentGallery from "@/components/attach/AttachmentGallery";
+import AttachmentPicker from "@/components/attach/AttachmentPicker";
 
-type Comment = { id: number; body: string; created_at: string; created_by: string | null; author: { full_name: string | null } | null };
+type Comment = {
+  id: number;
+  body: string;
+  created_at: string;
+  created_by: string | null;
+  author: { full_name: string | null } | null;
+  files: AttachmentRow[] | null;
+};
 
 export default async function CatatanDetail({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const { supabase, user } = await getCurrentUser();
-  const [{ data }, { data: cData }, profile] = await Promise.all([
+  const [{ data }, { data: cData }, profile, { data: filesData }] = await Promise.all([
     supabase.from("suggestion_list").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("suggestion_comments")
-      .select("id, body, created_at, created_by, author:profiles!suggestion_comments_created_by_fkey(full_name)")
+      .select(`id, body, created_at, created_by, author:profiles!suggestion_comments_created_by_fkey(full_name), files:attachments(${ATTACH_SELECT})`)
       .eq("suggestion_id", id)
       .order("created_at"),
     getProfile(),
+    supabase.from("attachments").select(ATTACH_SELECT).eq("suggestion_id", id).order("id"),
   ]);
   if (!data) notFound();
   const r = data as SuggestionRow;
   const comments = (cData ?? []) as unknown as Comment[];
+  const files = await signAttachments(supabase, [
+    ...((filesData ?? []) as unknown as AttachmentRow[]),
+    ...comments.flatMap((c) => (c.files ?? []).sort((a, b) => a.id - b.id)),
+  ]);
+  const page = `/catatan/${id}`;
   const isAdmin = profile?.role === "admin";
   const isOwner = r.created_by === user.id;
 
@@ -56,6 +73,16 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
           </div>
         )}
       </article>
+
+      <AttachmentsCard
+        items={files.filter((f) => !f.suggestion_comment_id)}
+        target={{ kind: "suggestion", id }}
+        page={page}
+        meId={user.id}
+        isAdmin={isAdmin}
+        canAdd={isOwner || isAdmin}
+        className="card p-6"
+      />
 
       <section className="card p-6">
         <div className="flex items-center justify-between">
@@ -102,12 +129,14 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
                   )}
                 </div>
                 <p className="mt-1 whitespace-pre-wrap text-[14px] leading-6 text-zinc-300">{c.body}</p>
+                <AttachmentGallery items={files.filter((f) => f.suggestion_comment_id === c.id)} meId={user.id} isAdmin={isAdmin} page={page} compact />
               </div>
             </li>
           ))}
         </ul>
         <form action={addComment.bind(null, id)} className="mt-5 space-y-2">
-          <textarea name="body" rows={3} required placeholder="Tulis tanggapan…" className="input" />
+          <textarea name="body" rows={3} placeholder="Tulis tanggapan…" className="input" />
+          <AttachmentPicker userId={user.id} compact clearOnReset />
           <div className="flex justify-end">
             <button className="btn-primary">Kirim tanggapan</button>
           </div>

@@ -7,6 +7,7 @@ import { CONTACT_TYPES, normalizeContact, type ContactType } from "@/lib/contact
 import { createClient } from "@/lib/supabase/client";
 import type { IssueRow, Profile } from "@/lib/types";
 import type { FormState } from "@/app/(app)/issues/actions";
+import AttachmentPicker from "./attach/AttachmentPicker";
 
 type Row = { key: number; type: ContactType; value: string };
 type Lookup = { count: number; count30d: number; open: number; norm: string } | null;
@@ -19,7 +20,9 @@ export default function IssueForm({
   issueId,
   isAdmin = false,
   currentUserName,
+  currentUserId,
 }: {
+  currentUserId: string;
   isAdmin?: boolean;
   currentUserName?: string | null;
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
@@ -206,6 +209,17 @@ export default function IssueForm({
         >
           + Tambah kontak
         </button>
+      </div>
+
+      <div className="card space-y-3 p-5">
+        <div>
+          <h2 className="font-semibold">Bukti / lampiran</h2>
+          <p className="text-xs text-zinc-500">
+            Screenshot chat, bukti transfer, PDF, Word, atau Excel. Maks 10 MB per file, sampai 10 file.
+            {issue && " Lampiran yang sudah ada bisa dilihat & dihapus di halaman detail issue."}
+          </p>
+        </div>
+        <AttachmentPicker userId={currentUserId} pasteGlobal />
       </div>
 
       {state?.error && <p className="text-sm text-red-400">{state.error}</p>}

@@ -14,7 +14,10 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Peringatan saat input:** waktu mengetik kontak di form, langsung muncul info kalau kontak itu sudah ada di issue lain.
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
+- **Top 3 issue Video Review** di Dashboard: 3 kategori kasus terbanyak 7 hari terakhir, tren dibanding minggu lalu, bar status, dan rangkuman otomatis.
+- **Chat:** room bersama (default `semua-cs`), room grup, dan pesan pribadi antar semua pengguna. Ada halaman Chat dan tombol chat melayang di semua halaman dengan jumlah pesan belum dibaca.
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **Lampiran bukti:** di form Hot Issue, Catatan & Saran, update issue, dan tanggapan bisa melampirkan gambar & dokumen (tarik-lepas, pilih file, atau **Ctrl+V** screenshot). Di halaman detail tampil sebagai galeri (klik untuk perbesar) + daftar dokumen dengan tombol Unduh, dan bisa ditambah lewat **+ Tambah**. File disimpan privat — hanya user yang login yang bisa membuka.
 - **Catatan & Saran:** journal tim dengan kategori Fitur, Keluhan clipper, Brief campaign, dan Bug. Semua role bisa menulis dan memberi tanggapan. Progress (Baru / In Progress / Done / Rejected) beserta alasannya hanya bisa diubah oleh admin.
 - **Nama otomatis:** selain admin, tidak ada pilihan "siapa yang mencatat". PIC issue baru dan pencatat catatan otomatis diisi akun yang login. Admin tetap bisa memilih.
 - **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
@@ -57,6 +60,10 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 **Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
+
+**Langkah 1g — Update 07 (lampiran bukti gambar & dokumen):** jalankan `supabase/migration-07-lampiran.sql`. Ini membuat bucket penyimpanan **privat** `lampiran` (maks 10 MB per file; JPG/PNG/WebP/GIF/HEIC, PDF, Word, Excel, PowerPoint, CSV, TXT) beserta aturan aksesnya. Cek di Supabase → **Storage** muncul bucket `lampiran`. Paket gratis Supabase dapat 1 GB storage; screenshot besar otomatis dikecilkan sebelum di-upload supaya hemat.
+
+**Langkah 1f — Update 06 (kolom Catatan, Top 3 issue, Chat, percepatan):** jalankan `supabase/migration-06-catatan-chat-speed.sql`. Isi Insight + Argumen clipper yang lama otomatis digabung ke kolom **Catatan** (data lama tidak dihapus), kasus yang Penyelesaiannya "belum ada respons" tapi Insight-nya berisi penyelesaian otomatis dibaca statusnya dari Insight, dan tabel Chat + Realtime disiapkan. Kalau setelah deploy chat belum muncul real-time, cek di Supabase → **Database → Publications → supabase_realtime** bahwa tabel `chat_messages` tercentang (tanpa ini chat tetap jalan, hanya update tiap beberapa detik).
 
 **Langkah 1e — Update 05 (Discord Moderator bisa edit Video Review):** jalankan `supabase/migration-05-discord-mod-edit-vr.sql`.
 
@@ -119,7 +126,7 @@ Di Vercel buka **Project → Settings → Domains**, tambahkan misalnya `cs.kont
 **Cara 1 — Sync langsung dari link (disarankan):**
 1. Di Google Sheet, klik **Share → General access → Anyone with the link → Viewer**.
 2. Di web, buka **Video Review → Import dari Sheet**, lalu klik **Sync sekarang** (link sheet sudah terisi otomatis).
-3. Kasus baru akan ditambahkan, dan kasus lama diperbarui kalau Penyelesaian, Insight, atau Argumen berubah di sheet. Klik berkali-kali pun data tidak akan dobel.
+3. Kasus baru akan ditambahkan, dan kasus lama diperbarui kalau Penyelesaian, Insight, atau Argumen berubah di sheet (Insight + Argumen masuk ke kolom **Catatan**). Kalau Penyelesaian masih "belum ada respons" tapi Insight sudah ada isinya, status dibaca dari Insight; Insight kosong berarti memang belum ada respons dari tim review. Klik berkali-kali pun data tidak akan dobel.
 
 **Cara 2 — Upload CSV (kalau sheet harus tetap private):**
 1. Di Google Sheet, buka tab **Video Review**, lalu klik **File → Download → Comma-separated values (.csv)**.

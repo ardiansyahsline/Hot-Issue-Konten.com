@@ -9,7 +9,7 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
   if (!Number.isInteger(id)) notFound();
 
   await requireWriter("issues", `/issues/${id}`);
-  const { supabase } = await getCurrentUser();
+  const { supabase, user } = await getCurrentUser();
   const profile = await getProfile();
   const isAdmin = profile?.role === "admin";
   const [{ data: issue }, { data: profiles }] = await Promise.all([
@@ -27,6 +27,7 @@ export default async function EditIssuePage({ params }: { params: Promise<{ id: 
         isAdmin={isAdmin}
         issue={issue as IssueRow}
         issueId={id}
+        currentUserId={user.id}
       />
     </div>
   );

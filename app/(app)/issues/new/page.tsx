@@ -18,6 +18,7 @@ export default async function NewIssuePage() {
         action={createIssue}
         profiles={profiles ?? []}
         defaultPicId={user.id}
+        currentUserId={user.id}
         isAdmin={isAdmin}
         currentUserName={profile?.full_name ?? user.email}
       />
