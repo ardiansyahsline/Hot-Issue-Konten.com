@@ -6,8 +6,10 @@ import { cleanSearch, isAutoHot, isHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
 import StatCard from "@/components/StatCard";
-import TopIssues, { topIssues } from "@/components/TopIssues";
-import type { VrSummaryRow } from "@/lib/videoReview";
+import { topIssues, vrSegments } from "@/components/TopIssues";
+import HotTop, { type HotRow } from "@/components/HotTop";
+import { buildRangkuman, type VrSummaryRow } from "@/lib/videoReview";
+import { agentRangkuman, topAgentIssues, type AgentIssueRow } from "@/lib/agentTop";
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -64,7 +66,10 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
     return { open: o.count ?? 0, in_progress: p.count ?? 0, urgent: u.count ?? 0, hot: h.count ?? 0, resolved_today: r.count ?? 0 };
   }
 
-  const [issuesRes, counts, hotContactsRes, vrRes] = await Promise.all([
+  // 00:00 WIB tanggal prevFrom (untuk ambil Hot Issue 14 hari terakhir)
+  const prevFromIso = new Date(new Date(`${prevFrom}T00:00:00Z`).getTime() - 7 * 3600 * 1000).toISOString();
+
+  const [issuesRes, counts, hotContactsRes, vrRes, agentRes] = await Promise.all([
     query,
     loadCounts(),
     supabase
@@ -80,8 +85,35 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .gte("report_date", prevFrom)
       .lte("report_date", today)
       .limit(5000),
+    supabase
+      .from("issue_list")
+      .select("category, status, is_hot, max_contact_reports_30d, pic_name, created_at")
+      .gte("created_at", prevFromIso)
+      .limit(5000),
   ]);
   const top = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom);
+  const agentTop = topAgentIssues((agentRes.data ?? []) as AgentIssueRow[], weekFrom, prevFrom);
+  const vrRows: HotRow[] = top.map((t) => ({
+    title: t.category,
+    count: t.count,
+    diff: t.count - t.prev,
+    href: `/video-review?tab=daftar&category=${encodeURIComponent(t.category)}&from=${weekFrom}&to=${today}`,
+    segments: vrSegments(t),
+  }));
+  const agentRows: HotRow[] = agentTop.map((t) => ({
+    title: t.category,
+    count: t.count,
+    diff: t.count - t.prev,
+    href: `/?status=all&category=${encodeURIComponent(t.category)}`,
+    segments: [
+      { key: "open", label: "open", bar: "bg-sky-400", count: t.rows.filter((r) => r.status === "open").length },
+      { key: "in_progress", label: "in progress", bar: "bg-amber-400", count: t.rows.filter((r) => r.status === "in_progress").length },
+      { key: "resolved", label: "resolved", bar: "bg-emerald-500", count: t.rows.filter((r) => r.status === "resolved").length },
+    ],
+  }));
+  const BLN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  const dd = (d: string) => `${Number(d.slice(8))} ${BLN[Number(d.slice(5, 7)) - 1]}`;
+  const range = `${dd(weekFrom)} – ${dd(today)} ${today.slice(0, 4)}`;
 
   const issues = ((issuesRes.data ?? []) as IssueRow[]).sort((a, b) => {
     const h = Number(isHot(b)) - Number(isHot(a));
@@ -115,7 +147,26 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
 
-      <TopIssues items={top} from={weekFrom} to={today} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <HotTop
+          title="Top 3 Video Review"
+          sub={`7 hari terakhir · ${range}`}
+          rows={vrRows}
+          unit="kasus"
+          summary={top[0] ? buildRangkuman(top[0].rows) : ""}
+          moreHref={`/video-review?tab=rekap&from=${weekFrom}&to=${today}`}
+          empty="Belum ada kasus Video Review dalam 7 hari terakhir."
+        />
+        <HotTop
+          title="Top 3 dari agent"
+          sub={`Hot Issue per kategori · ${range}`}
+          rows={agentRows}
+          unit="issue"
+          summary={agentTop[0] ? agentRangkuman(agentTop[0], HOT_THRESHOLD) : ""}
+          moreHref="/?status=all"
+          empty="Belum ada Hot Issue baru dalam 7 hari terakhir."
+        />
+      </div>
 
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => (

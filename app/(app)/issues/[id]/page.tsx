@@ -10,32 +10,30 @@ import { canWriteIssues } from "@/lib/roles";
 import { addNote, deleteIssue, deleteNote, setStatus, takeIssue, toggleHot } from "../actions";
 import { ATTACH_SELECT, signAttachments, type AttachmentRow } from "@/lib/attachments.server";
 import AttachmentsCard from "@/components/attach/AttachmentsCard";
-import AttachmentGallery from "@/components/attach/AttachmentGallery";
-import AttachmentPicker from "@/components/attach/AttachmentPicker";
+import CommentList from "@/components/comments/CommentList";
+import CommentComposer from "@/components/comments/CommentComposer";
+import Reactions from "@/components/emoji/Reactions";
+import { buildThread, nameMap, peopleMap, type CommentRow, type Person } from "@/lib/comments.server";
+import { summarize, type ReactionRow } from "@/lib/reactions";
 
-type Note = {
-  id: number;
-  body: string;
-  created_at: string;
-  created_by: string | null;
-  author: { full_name: string | null } | null;
-  files: AttachmentRow[] | null;
-};
+type Note = CommentRow & { files: AttachmentRow[] | null };
 
 export default async function IssueDetail({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
 
   const { supabase, user } = await getCurrentUser();
-  const [{ data }, { data: notesData }, profile, { data: filesData }] = await Promise.all([
+  const [{ data }, { data: notesData }, profile, { data: filesData }, { data: reactData }, { data: peopleData }] = await Promise.all([
     supabase.from("issue_list").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("issue_notes")
-      .select(`id, body, created_at, created_by, author:profiles!issue_notes_created_by_fkey(full_name), files:attachments(${ATTACH_SELECT})`)
+      .select(`id, body, created_at, created_by, parent_id, reactions(emoji, user_id), files:attachments(${ATTACH_SELECT})`)
       .eq("issue_id", id)
       .order("created_at", { ascending: true }),
     getProfile(),
     supabase.from("attachments").select(ATTACH_SELECT).eq("issue_id", id).order("id"),
+    supabase.from("reactions").select("emoji, user_id").eq("issue_id", id).order("id"),
+    supabase.from("profiles").select("id, full_name, role"),
   ]);
   if (!data) notFound();
   const issue = data as IssueRow;
@@ -47,6 +45,10 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
   ]);
   const issueFiles = files.filter((f) => !f.issue_note_id);
   const page = `/issues/${id}`;
+  const people = peopleMap(peopleData as Person[] | null);
+  const thread = buildThread(notes, files, "issue_note_id", people, user.id);
+  const issueReactions = summarize(reactData as ReactionRow[] | null, user.id, nameMap(people));
+  const commentCount = notes.length;
   const isAdmin = profile?.role === "admin";
   const canWrite = canWriteIssues(profile?.role);
   const autoHot = isAutoHot(issue);
@@ -72,6 +74,10 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
           <div><dt className="label">Dibuat</dt><dd>{fmtDate(issue.created_at)} · {issue.created_by_name ?? "-"}</dd></div>
           <div><dt className="label">Update terakhir</dt><dd>{fmtDate(issue.updated_at)} · {issue.updated_by_name ?? "-"}</dd></div>
         </dl>
+
+        <div className="mt-4">
+          <Reactions target={{ kind: "issue", id }} initial={issueReactions} page={page} showWho />
+        </div>
 
         {canWrite && (
         <div className="mt-5 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
@@ -144,35 +150,24 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
       </div>
 
       <div className="card p-5">
-        <h2 className="font-semibold">Catatan & update</h2>
-        <ul className="mt-3 space-y-3">
-          {notes.length === 0 && <li className="text-sm text-zinc-400">Belum ada catatan.</li>}
-          {notes.map((n) => (
-            <li key={n.id} className="rounded-lg bg-zinc-950/60 p-3">
-              <div className="flex items-center justify-between text-xs text-zinc-500">
-                <span>
-                  <span className="text-zinc-300">{n.author?.full_name ?? "-"}</span> · {fmtDate(n.created_at)} ({timeAgo(n.created_at)})
-                </span>
-                {(n.created_by === user.id || isAdmin) && (
-                  <form action={deleteNote.bind(null, id, n.id)}>
-                    <button className="text-zinc-500 hover:text-red-400">hapus</button>
-                  </form>
-                )}
-              </div>
-              <p className="mt-1 whitespace-pre-wrap text-sm">{n.body}</p>
-              <AttachmentGallery items={files.filter((f) => f.issue_note_id === n.id)} meId={user.id} isAdmin={isAdmin} page={page} compact />
-            </li>
-          ))}
-        </ul>
-        {canWrite && (
-        <form action={addNote.bind(null, id)} className="mt-4 space-y-2">
-          <textarea name="body" rows={3} placeholder="Tulis update / handover shift..." className="input" />
-          <AttachmentPicker userId={user.id} compact clearOnReset />
-          <div className="flex justify-end">
-            <button className="btn-primary">Tambah catatan</button>
-          </div>
-        </form>
-        )}
+        <h2 className="font-semibold">
+          Komentar &amp; update {commentCount > 0 && <span className="text-zinc-500">({commentCount})</span>}
+        </h2>
+        <div className="mt-4">
+          <CommentList
+            comments={thread}
+            kind="issue_note"
+            meId={user.id}
+            isAdmin={isAdmin}
+            page={page}
+            addAction={addNote.bind(null, id)}
+            deleteAction={deleteNote.bind(null, id)}
+            empty="Belum ada komentar. Semua tim bisa ikut komentar, kasih update, atau handover shift di sini."
+          />
+        </div>
+        <div className="mt-5 border-t border-zinc-800/80 pt-4">
+          <CommentComposer action={addNote.bind(null, id)} meId={user.id} placeholder="Tulis komentar / update / handover shift…" submitLabel="Kirim komentar" />
+        </div>
       </div>
     </div>
   );

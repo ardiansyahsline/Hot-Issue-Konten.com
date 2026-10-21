@@ -158,24 +158,30 @@ export async function takeIssue(id: number) {
   revalidatePath("/");
 }
 
+/** Komentar / update issue — semua role boleh (termasuk User). `parent_id` = balasan. */
 export async function addNote(id: number, formData: FormData) {
-  const w = await writer();
-  if (!w) return;
-  const { supabase } = w;
-  const files = parseAttachments(formData, w.user.id);
-  const body = String(formData.get("body") ?? "").trim() || (files.length ? "📎 Lampiran bukti" : "");
+  const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const files = parseAttachments(formData, user.id);
+  const body = String(formData.get("body") ?? "").trim().slice(0, 5000) || (files.length ? "📎 Lampiran bukti" : "");
   if (!body) return;
-  const { data: note } = await supabase.from("issue_notes").insert({ issue_id: id, body }).select("id").single();
+  // balasan selalu menempel ke komentar paling atas di issue yang sama
+  let parent_id: number | null = Number(formData.get("parent_id")) || null;
+  if (parent_id) {
+    const { data: p } = await supabase.from("issue_notes").select("id, parent_id, issue_id").eq("id", parent_id).maybeSingle();
+    parent_id = p && p.issue_id === id ? ((p.parent_id as number | null) ?? (p.id as number)) : null;
+  }
+  const { data: note } = await supabase.from("issue_notes").insert({ issue_id: id, body, parent_id }).select("id").single();
   if (note && files.length) await saveAttachments(supabase, files, { kind: "issue_note", id: note.id });
-  // sentuh issue supaya "terakhir update" ikut berubah
-  await supabase.from("issues").update({ updated_at: new Date().toISOString() }).eq("id", id);
+  // sentuh issue supaya "terakhir update" ikut berubah (hanya role yang boleh edit issue)
+  if (canWriteIssues(profile?.role)) await supabase.from("issues").update({ updated_at: new Date().toISOString() }).eq("id", id);
   revalidatePath(`/issues/${id}`);
   revalidatePath("/");
 }
 
 export async function deleteNote(issueId: number, noteId: number) {
   const { supabase } = await getCurrentUser();
-  const paths = await attachmentPaths(supabase, [{ column: "issue_note_id", ids: [noteId] }]);
+  const { data: replies } = await supabase.from("issue_notes").select("id").eq("parent_id", noteId);
+  const paths = await attachmentPaths(supabase, [{ column: "issue_note_id", ids: [noteId, ...(replies ?? []).map((r) => r.id as number)] }]);
   const { data } = await supabase.from("issue_notes").delete().eq("id", noteId).select("id");
   if (data?.length) await removeFiles(supabase, paths);
   revalidatePath(`/issues/${issueId}`);

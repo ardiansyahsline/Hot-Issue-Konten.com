@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import type { ReactionRow } from "@/lib/reactions";
 
 export type ChatRoom = {
   room_id: string;
@@ -44,6 +45,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   const [hasMore, setHasMore] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reactions, setReactions] = useState<Record<number, ReactionRow[]>>({});
 
   const roomRef = useRef(roomId);
   const visibleRef = useRef(visible);
@@ -139,6 +141,50 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     if (list.some((m) => m.sender_id !== meId) && visibleRef.current) await markRead(id);
   }, [supabase, appendMsgs, markRead, meId]);
 
+  // Reaksi emoji untuk pesan yang sedang tampil
+  const loadReactions = useCallback(async () => {
+    const ids = msgsRef.current.slice(-200).map((m) => m.id);
+    if (!ids.length) return;
+    const { data, error } = await supabase.from("reactions").select("chat_message_id, emoji, user_id").in("chat_message_id", ids).order("id");
+    if (error) return; // migration-08 belum dijalankan -> tanpa reaksi
+    const next: Record<number, ReactionRow[]> = {};
+    for (const r of (data ?? []) as { chat_message_id: number; emoji: string; user_id: string }[]) {
+      (next[r.chat_message_id] ??= []).push({ emoji: r.emoji, user_id: r.user_id });
+    }
+    setReactions(next);
+  }, [supabase]);
+
+  const lastMsgId = msgs.at(-1)?.id ?? 0;
+  useEffect(() => {
+    loadReactions();
+  }, [roomId, lastMsgId, msgs.length, loadReactions]);
+
+  const reactTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReactions = useCallback(() => {
+    if (reactTimer.current) clearTimeout(reactTimer.current);
+    reactTimer.current = setTimeout(loadReactions, 300);
+  }, [loadReactions]);
+
+  /** klik emoji di pesan: kasih / batal (langsung tampil, lalu disimpan) */
+  const toggleReaction = useCallback(
+    async (msgId: number, emoji: string) => {
+      const list = reactions[msgId] ?? [];
+      const mine = list.some((r) => r.emoji === emoji && r.user_id === meId);
+      setReactions((all) => ({
+        ...all,
+        [msgId]: mine ? list.filter((r) => !(r.emoji === emoji && r.user_id === meId)) : [...list, { emoji, user_id: meId }],
+      }));
+      const res = mine
+        ? await supabase.from("reactions").delete().eq("chat_message_id", msgId).eq("user_id", meId).eq("emoji", emoji)
+        : await supabase.from("reactions").insert({ chat_message_id: msgId, emoji });
+      if (res.error && !/duplicate/i.test(res.error.message)) {
+        setReactions((all) => ({ ...all, [msgId]: list }));
+        setError(/reactions/i.test(res.error.message) ? "Reaksi belum aktif. Admin perlu menjalankan migration-08." : res.error.message);
+      }
+    },
+    [reactions, supabase, meId]
+  );
+
   // Realtime: pesan baru langsung muncul
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -153,11 +199,12 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
         if (refreshTimer.current) clearTimeout(refreshTimer.current);
         refreshTimer.current = setTimeout(refreshRooms, 250);
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "reactions" }, () => scheduleReactions())
       .subscribe((status) => setLive(status === "SUBSCRIBED"));
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [supabase, meId, appendMsgs, markRead, refreshRooms]);
+  }, [supabase, meId, appendMsgs, markRead, refreshRooms, scheduleReactions]);
 
   // Cadangan kalau Realtime tidak tersambung: cek berkala (lebih jarang kalau Realtime aktif)
   useEffect(() => {
@@ -165,12 +212,13 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
       () => {
         if (document.hidden) return;
         if (!live) fetchNewer();
+        if (!live && visible) loadReactions();
         refreshRooms();
       },
       live ? 45000 : visible ? 5000 : 20000
     );
     return () => clearInterval(t);
-  }, [live, visible, fetchNewer, refreshRooms]);
+  }, [live, visible, fetchNewer, refreshRooms, loadReactions]);
 
   const loadOlder = useCallback(async () => {
     const id = roomRef.current;
@@ -237,5 +285,6 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   return {
     rooms, room, roomId, setRoomId, msgs, loadingMsgs, hasMore, loadOlder,
     people, peopleMap, send, openDm, createRoom, unreadTotal, live, error, setError,
+    reactions, toggleReaction,
   };
 }

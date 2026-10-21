@@ -87,6 +87,8 @@ function Widget({ meId }: { meId: string }) {
             hasMore={c.hasMore}
             onLoadOlder={c.loadOlder}
             onSend={c.send}
+            reactions={c.reactions}
+            onReact={c.toggleReaction}
             compact
             disabled={!c.roomId}
           />

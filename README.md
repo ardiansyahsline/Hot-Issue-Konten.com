@@ -14,9 +14,10 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Peringatan saat input:** waktu mengetik kontak di form, langsung muncul info kalau kontak itu sudah ada di issue lain.
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
-- **Top 3 issue Video Review** di Dashboard: 3 kategori kasus terbanyak 7 hari terakhir, tren dibanding minggu lalu, bar status, dan rangkuman otomatis.
+- **Top 3 issue (bergaya HOT)** di Dashboard, dua panel terpisah: **Video Review** (kategori kasus terbanyak) dan **dari agent** (kategori Hot Issue baru terbanyak), 7 hari terakhir, tren dibanding minggu lalu, bar status, dan rangkuman otomatis untuk #1.
 - **Chat:** room bersama (default `semua-cs`), room grup, dan pesan pribadi antar semua pengguna. Ada halaman Chat dan tombol chat melayang di semua halaman dengan jumlah pesan belum dibaca.
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **Komentar & reaksi:** semua role bisa komentar di Hot Issue dan Catatan & Saran, membalas komentar tertentu (menjorok), dan memberi reaksi emoji (👍 🙏 🔥 ✅ dan lainnya) di issue, catatan, komentar, serta pesan chat. Kolom ketik punya tombol 😊.
 - **Lampiran bukti:** di form Hot Issue, Catatan & Saran, update issue, dan tanggapan bisa melampirkan gambar & dokumen (tarik-lepas, pilih file, atau **Ctrl+V** screenshot). Di halaman detail tampil sebagai galeri (klik untuk perbesar) + daftar dokumen dengan tombol Unduh, dan bisa ditambah lewat **+ Tambah**. File disimpan privat — hanya user yang login yang bisa membuka.
 - **Catatan & Saran:** journal tim dengan kategori Fitur, Keluhan clipper, Brief campaign, dan Bug. Semua role bisa menulis dan memberi tanggapan. Progress (Baru / In Progress / Done / Rejected) beserta alasannya hanya bisa diubah oleh admin.
 - **Nama otomatis:** selain admin, tidak ada pilihan "siapa yang mencatat". PIC issue baru dan pencatat catatan otomatis diisi akun yang login. Admin tetap bisa memilih.
@@ -60,6 +61,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 **Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
+
+**Langkah 1h — Update 08 (komentar semua role, balas komentar, reaksi emoji):** jalankan `supabase/migration-08-komentar-reaksi.sql`. Semua role (termasuk User) jadi bisa komentar di Hot Issue, ada kolom balasan, dan tabel reaksi emoji untuk issue, catatan, komentar, dan pesan chat (ikut Realtime).
 
 **Langkah 1g — Update 07 (lampiran bukti gambar & dokumen):** jalankan `supabase/migration-07-lampiran.sql`. Ini membuat bucket penyimpanan **privat** `lampiran` (maks 10 MB per file; JPG/PNG/WebP/GIF/HEIC, PDF, Word, Excel, PowerPoint, CSV, TXT) beserta aturan aksesnya. Cek di Supabase → **Storage** muncul bucket `lampiran`. Paket gratis Supabase dapat 1 GB storage; screenshot besar otomatis dikecilkan sebelum di-upload supaya hemat.
 

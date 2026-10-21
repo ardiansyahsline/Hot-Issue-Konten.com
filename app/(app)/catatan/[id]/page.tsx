@@ -8,31 +8,29 @@ import SgProgressForm from "@/components/SgProgressForm";
 import { addComment, deleteComment, deleteSuggestion, setProgress } from "../actions";
 import { ATTACH_SELECT, signAttachments, type AttachmentRow } from "@/lib/attachments.server";
 import AttachmentsCard from "@/components/attach/AttachmentsCard";
-import AttachmentGallery from "@/components/attach/AttachmentGallery";
-import AttachmentPicker from "@/components/attach/AttachmentPicker";
+import CommentList from "@/components/comments/CommentList";
+import CommentComposer from "@/components/comments/CommentComposer";
+import Reactions from "@/components/emoji/Reactions";
+import { buildThread, nameMap, peopleMap, type CommentRow, type Person } from "@/lib/comments.server";
+import { summarize, type ReactionRow } from "@/lib/reactions";
 
-type Comment = {
-  id: number;
-  body: string;
-  created_at: string;
-  created_by: string | null;
-  author: { full_name: string | null } | null;
-  files: AttachmentRow[] | null;
-};
+type Comment = CommentRow & { files: AttachmentRow[] | null };
 
 export default async function CatatanDetail({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const { supabase, user } = await getCurrentUser();
-  const [{ data }, { data: cData }, profile, { data: filesData }] = await Promise.all([
+  const [{ data }, { data: cData }, profile, { data: filesData }, { data: reactData }, { data: peopleData }] = await Promise.all([
     supabase.from("suggestion_list").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("suggestion_comments")
-      .select(`id, body, created_at, created_by, author:profiles!suggestion_comments_created_by_fkey(full_name), files:attachments(${ATTACH_SELECT})`)
+      .select(`id, body, created_at, created_by, parent_id, reactions(emoji, user_id), files:attachments(${ATTACH_SELECT})`)
       .eq("suggestion_id", id)
       .order("created_at"),
     getProfile(),
     supabase.from("attachments").select(ATTACH_SELECT).eq("suggestion_id", id).order("id"),
+    supabase.from("reactions").select("emoji, user_id").eq("suggestion_id", id).order("id"),
+    supabase.from("profiles").select("id, full_name, role"),
   ]);
   if (!data) notFound();
   const r = data as SuggestionRow;
@@ -42,6 +40,9 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
     ...comments.flatMap((c) => (c.files ?? []).sort((a, b) => a.id - b.id)),
   ]);
   const page = `/catatan/${id}`;
+  const people = peopleMap(peopleData as Person[] | null);
+  const thread = buildThread(comments, files, "suggestion_comment_id", people, user.id);
+  const sgReactions = summarize(reactData as ReactionRow[] | null, user.id, nameMap(people));
   const isAdmin = profile?.role === "admin";
   const isOwner = r.created_by === user.id;
 
@@ -63,6 +64,10 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
         </div>
         <h1 className="page-title mt-5">{r.title}</h1>
         {r.body && <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-7 text-zinc-300">{r.body}</p>}
+
+        <div className="mt-5">
+          <Reactions target={{ kind: "suggestion", id }} initial={sgReactions} page={page} showWho />
+        </div>
 
         {(isOwner || isAdmin) && (
           <div className="mt-6 flex gap-2 border-t border-zinc-800/80 pt-4">
@@ -112,35 +117,24 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
       </section>
 
       <section className="card p-6">
-        <h2 className="section-title">Tanggapan</h2>
-        <ul className="mt-4 space-y-4">
-          {comments.length === 0 && <li className="text-[13.5px] text-zinc-500">Belum ada tanggapan.</li>}
-          {comments.map((c) => (
-            <li key={c.id} className="flex gap-3">
-              <Avatar name={c.author?.full_name ?? null} size={30} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-[12.5px]">
-                  <span className="font-semibold text-zinc-200">{c.author?.full_name ?? "-"}</span>
-                  <span className="text-zinc-500">{timeAgo(c.created_at)}</span>
-                  {(c.created_by === user.id || isAdmin) && (
-                    <form action={deleteComment.bind(null, id, c.id)} className="ml-auto">
-                      <button className="text-zinc-500 hover:text-red-400">hapus</button>
-                    </form>
-                  )}
-                </div>
-                <p className="mt-1 whitespace-pre-wrap text-[14px] leading-6 text-zinc-300">{c.body}</p>
-                <AttachmentGallery items={files.filter((f) => f.suggestion_comment_id === c.id)} meId={user.id} isAdmin={isAdmin} page={page} compact />
-              </div>
-            </li>
-          ))}
-        </ul>
-        <form action={addComment.bind(null, id)} className="mt-5 space-y-2">
-          <textarea name="body" rows={3} placeholder="Tulis tanggapan…" className="input" />
-          <AttachmentPicker userId={user.id} compact clearOnReset />
-          <div className="flex justify-end">
-            <button className="btn-primary">Kirim tanggapan</button>
-          </div>
-        </form>
+        <h2 className="section-title">
+          Tanggapan {comments.length > 0 && <span className="text-zinc-500">({comments.length})</span>}
+        </h2>
+        <div className="mt-4">
+          <CommentList
+            comments={thread}
+            kind="suggestion_comment"
+            meId={user.id}
+            isAdmin={isAdmin}
+            page={page}
+            addAction={addComment.bind(null, id)}
+            deleteAction={deleteComment.bind(null, id)}
+            empty="Belum ada tanggapan."
+          />
+        </div>
+        <div className="mt-5 border-t border-zinc-800/80 pt-4">
+          <CommentComposer action={addComment.bind(null, id)} meId={user.id} placeholder="Tulis tanggapan…" submitLabel="Kirim tanggapan" />
+        </div>
       </section>
     </div>
   );

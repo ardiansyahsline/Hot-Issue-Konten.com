@@ -66,12 +66,18 @@ export async function setProgress(id: number, _prev: SgState, fd: FormData): Pro
   return { ok: "Progress disimpan." };
 }
 
+/** Tanggapan — semua role boleh. `parent_id` = balasan ke tanggapan tertentu. */
 export async function addComment(id: number, fd: FormData) {
   const { supabase, user } = await getCurrentUser();
   const files = parseAttachments(fd, user.id);
-  const body = String(fd.get("body") ?? "").trim() || (files.length ? "📎 Lampiran bukti" : "");
+  const body = String(fd.get("body") ?? "").trim().slice(0, 5000) || (files.length ? "📎 Lampiran bukti" : "");
   if (!body) return;
-  const { data: c } = await supabase.from("suggestion_comments").insert({ suggestion_id: id, body }).select("id").single();
+  let parent_id: number | null = Number(fd.get("parent_id")) || null;
+  if (parent_id) {
+    const { data: p } = await supabase.from("suggestion_comments").select("id, parent_id, suggestion_id").eq("id", parent_id).maybeSingle();
+    parent_id = p && p.suggestion_id === id ? ((p.parent_id as number | null) ?? (p.id as number)) : null;
+  }
+  const { data: c } = await supabase.from("suggestion_comments").insert({ suggestion_id: id, body, parent_id }).select("id").single();
   if (c && files.length) await saveAttachments(supabase, files, { kind: "suggestion_comment", id: c.id });
   revalidatePath(`/catatan/${id}`);
   revalidatePath("/catatan");
@@ -79,7 +85,8 @@ export async function addComment(id: number, fd: FormData) {
 
 export async function deleteComment(id: number, commentId: number) {
   const { supabase } = await getCurrentUser();
-  const paths = await attachmentPaths(supabase, [{ column: "suggestion_comment_id", ids: [commentId] }]);
+  const { data: replies } = await supabase.from("suggestion_comments").select("id").eq("parent_id", commentId);
+  const paths = await attachmentPaths(supabase, [{ column: "suggestion_comment_id", ids: [commentId, ...(replies ?? []).map((r) => r.id as number)] }]);
   const { data } = await supabase.from("suggestion_comments").delete().eq("id", commentId).select("id");
   if (data?.length) await removeFiles(supabase, paths);
   revalidatePath(`/catatan/${id}`);

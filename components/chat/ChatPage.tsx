@@ -170,6 +170,8 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
               hasMore={c.hasMore}
               onLoadOlder={c.loadOlder}
               onSend={c.send}
+              reactions={c.reactions}
+              onReact={c.toggleReaction}
             />
           </>
         ) : (
