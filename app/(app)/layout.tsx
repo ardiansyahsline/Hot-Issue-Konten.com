@@ -10,6 +10,7 @@ import ChatWidget from "@/components/chat/ChatWidgetLazy";
 import UserAvatar from "@/components/UserAvatar";
 import Presence from "@/components/Presence";
 import NotifPrompt from "@/components/NotifPrompt";
+import SoundNotifier from "@/components/SoundNotifier";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <ChatWidget meId={user.id} />
       <Presence />
       <NotifPrompt />
+      <SoundNotifier meId={user.id} />
     </div>
   );
 }

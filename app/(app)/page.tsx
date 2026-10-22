@@ -26,10 +26,11 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   const sp = await searchParams;
   const { supabase, user } = await getCurrentUser();
 
-  const status = sp.status ?? "active";
+  // default: semua status — yang aktif di atas, yang sudah resolved tetap ikut ranking di bawahnya
+  const status = sp.status ?? "all";
   const q = cleanSearch(sp.q ?? "");
 
-  let query = supabase.from("issue_list").select("*").order("updated_at", { ascending: false }).limit(300);
+  let query = supabase.from("issue_list").select("*").order("updated_at", { ascending: false }).limit(500);
   if (status === "active") query = query.neq("status", "resolved");
   else if (status !== "all") query = query.eq("status", status);
   if (sp.category) query = query.eq("category", sp.category);
@@ -147,7 +148,10 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   const range = `${dd(weekFrom)} – ${dd(today)} ${today.slice(0, 4)}`;
 
   // peringkat: HOT dulu, lalu jumlah laporan terbanyak, prioritas, terakhir update
+  // (issue resolved selalu di bawah issue yang masih aktif)
   const issues = ((issuesRes.data ?? []) as IssueRow[]).sort((a, b) => {
+    const done = Number(a.status === "resolved") - Number(b.status === "resolved");
+    if (done) return done;
     const h = Number(isHot(b)) - Number(isHot(a));
     if (h) return h;
     const r = (b.report_count ?? 1) - (a.report_count ?? 1);
@@ -206,7 +210,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
             {vrAll.length === 0 ? (
               <div className="card p-8 text-center text-sm text-zinc-400">Belum ada kasus Video Review dalam 7 hari terakhir.</div>
             ) : (
-              <LoadMoreList>
+              <LoadMoreList panel header="Kategori dengan kasus terbanyak di atas · klik untuk lihat daftarnya">
                 {vrAll.map((t, idx) => {
                   const diff = t.count - t.prev;
                   const segs = vrSegments(t).filter((x) => x.count > 0);
@@ -214,7 +218,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                     <li key={t.category}>
                       <Link
                         href={`/video-review?tab=daftar&category=${encodeURIComponent(t.category)}&from=${weekFrom}&to=${today}`}
-                        className={`card card-flat card-hover flex items-center gap-4 p-4 ${idx < 3 ? "border-orange-900/50 bg-orange-950/10" : ""}`}
+                        className="flex items-center gap-4 px-5 py-4 transition hover:bg-zinc-800/40"
                       >
                         <RankBadge rank={idx + 1} />
                         <div className="min-w-0 flex-1">
@@ -255,8 +259,8 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
               className="input sm:col-span-6"
             />
             <select name="status" defaultValue={status} className="input sm:col-span-2">
-              <option value="active">Aktif (Open + In Progress)</option>
-              <option value="all">Semua status</option>
+              <option value="all">Semua status (aktif di atas)</option>
+              <option value="active">Aktif saja (Open + In Progress)</option>
               {Object.entries(STATUSES).map(([k, v]) => (
                 <option key={k} value={k}>{v.label}</option>
               ))}
@@ -287,22 +291,21 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
             </div>
           </form>
 
-          <div className="text-xs text-zinc-500">{issues.length} issue · diurutkan dari yang paling HOT &amp; paling banyak laporan</div>
-
           {issues.length === 0 ? (
             <div className="card p-8 text-center text-sm text-zinc-400">
               Belum ada issue di filter ini.{" "}
               <Link href="/issues/new" className="text-orange-400 hover:underline">Buat issue baru</Link>
             </div>
           ) : (
-            <LoadMoreList>
+            <LoadMoreList
+              panel
+              header={`${issues.length} issue · paling HOT & paling banyak laporan di atas${status === "all" ? " · yang sudah resolved tetap ikut ranking di bawah" : ""}`}
+            >
               {issues.map((i, idx) => (
                 <li key={i.id}>
                   <Link
                     href={`/issues/${i.id}`}
-                    className={`card card-flat card-hover block p-5 ${
-                      isHot(i) ? "border-red-900/70 bg-red-950/20" : ""
-                    }`}
+                    className={`block px-5 py-4 transition hover:bg-zinc-800/40 ${i.status === "resolved" ? "opacity-70 hover:opacity-100" : ""}`}
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <RankBadge rank={idx + 1} />
@@ -316,6 +319,9 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                         </span>
                       )}
                       {i.campaign && <span className="text-xs text-zinc-400">· {i.campaign}</span>}
+                      {i.status === "resolved" && i.resolved_at && (
+                        <span className="text-xs text-emerald-500">✓ selesai {timeAgo(i.resolved_at)}</span>
+                      )}
                     </div>
                     <div className="mt-2 font-medium">{i.title}</div>
                     {i.contacts.length > 0 && (

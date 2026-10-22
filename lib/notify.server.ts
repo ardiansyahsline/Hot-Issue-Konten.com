@@ -19,7 +19,8 @@ type Prefs = {
   email_issue: boolean; email_dm: boolean; email_mention: boolean;
 };
 const DEFAULT_PREFS: Prefs = { push_issue: true, push_dm: true, push_room: true, push_mention: true, email_issue: true, email_dm: true, email_mention: true };
-type Payload = { title: string; body: string; url: string; tag: string };
+/** kind = jenis bunyi yang diputar di aplikasi: chat | mention | issue */
+type Payload = { title: string; body: string; url: string; tag: string; kind?: "chat" | "mention" | "issue" };
 
 const log = (...a: unknown[]) => console.log("[notif]", ...a);
 
@@ -161,7 +162,7 @@ export async function notifyNewIssue(issueId: number, actorId: string, origin: s
   const pushed = await sendPush(
     db,
     others.filter((p) => prefs.get(p.id)!.push_issue).map((p) => p.id),
-    { title: `🔥 Hot Issue baru · ${issue.category}${urgent}`, body: `${issue.title}\noleh ${who}`, url, tag: `issue-${issue.id}` }
+    { title: `🔥 Hot Issue baru · ${issue.category}${urgent}`, body: `${issue.title}\noleh ${who}`, url, tag: `issue-${issue.id}`, kind: "issue" }
   );
   const emailed = await sendEmails(
     others
@@ -210,7 +211,7 @@ export async function notifyNewReport(reportId: number, actorId: string, origin:
     const pushed = await sendPush(
       db,
       others.filter((p) => prefs.get(p.id)!.push_issue).map((p) => p.id),
-      { title: `🔥 Topik jadi HOT · ${total} laporan`, body: `${issue.title}\nlaporan terbaru dari ${who}`, url, tag: `issue-${issue.id}` }
+      { title: `🔥 Topik jadi HOT · ${total} laporan`, body: `${issue.title}\nlaporan terbaru dari ${who}`, url, tag: `issue-${issue.id}`, kind: "issue" }
     );
     const emailed = await sendEmails(
       others
@@ -233,7 +234,7 @@ export async function notifyNewReport(reportId: number, actorId: string, origin:
   const pushed = await sendPush(
     db,
     owners.filter((id) => prefs.get(id)?.push_issue),
-    { title: `📣 Laporan ke-${total} · ${issue.category}`, body: `${issue.title}\n${who}${note ? `: ${note}` : ""}`, url, tag: `issue-${issue.id}` }
+    { title: `📣 Laporan ke-${total} · ${issue.category}`, body: `${issue.title}\n${who}${note ? `: ${note}` : ""}`, url, tag: `issue-${issue.id}`, kind: "issue" }
   );
   log(`laporan #${reportId}: push ${pushed}`);
 }
@@ -295,6 +296,7 @@ export async function notifyChat(messageId: number, origin: string) {
     pushed += await sendPush(db, ids, {
       title: kind === "mention" ? `@ ${senderName} menyebut ${tagWho} · #${room.name}` : `↩︎ ${senderName} membalas pesanmu · #${room.name}`,
       body: text.slice(0, 180),
+      kind: "mention",
       url,
       tag: `chat-${room.id}`,
     });
@@ -308,6 +310,7 @@ export async function notifyChat(messageId: number, origin: string) {
       body: text.slice(0, 180),
       url,
       tag: `chat-${room.id}`,
+      kind: "chat",
     }
   );
 
@@ -350,6 +353,6 @@ export async function notifySelfTest(userId: string, origin: string) {
   const db = admin();
   if (!db) return { error: "SUPABASE_SERVICE_ROLE_KEY belum di-set di Vercel." };
   if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return { error: "Kunci push (VAPID) belum di-set di Vercel." };
-  const n = await sendPush(db, [userId], { title: "✅ Notifikasi CS Tracker aktif", body: "Kamu akan dapat kabar issue baru & chat di sini.", url: `${appOrigin(origin)}/akun`, tag: "test" });
+  const n = await sendPush(db, [userId], { title: "✅ Notifikasi CS Tracker aktif", body: "Kamu akan dapat kabar issue baru & chat di sini.", url: `${appOrigin(origin)}/akun`, tag: "test", kind: "chat" });
   return n ? { ok: `Tes terkirim ke ${n} perangkat.` } : { error: "Belum ada perangkat yang terdaftar. Aktifkan notifikasi browser dulu." };
 }

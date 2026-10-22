@@ -2,6 +2,8 @@ import { getCurrentUser, getProfile } from "@/lib/auth";
 import { NameForm, PasswordForm } from "./AkunForms";
 import AvatarForm from "./AvatarForm";
 import NotificationSettings from "./NotificationSettings";
+import SoundSettings from "./SoundSettings";
+import { normalizeSoundPrefs } from "@/lib/sounds";
 
 export default async function AkunPage() {
   const [{ user, supabase }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
@@ -24,6 +26,7 @@ export default async function AkunPage() {
       <AvatarForm userId={user.id} name={profile?.full_name ?? user.email} url={profile?.avatar_url ?? null} />
       <NameForm name={profile?.full_name ?? ""} />
       <NotificationSettings initial={initial} email={user.email} />
+      <SoundSettings initial={normalizeSoundPrefs(prefs)} />
       <PasswordForm />
     </div>
   );

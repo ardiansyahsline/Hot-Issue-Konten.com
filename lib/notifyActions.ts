@@ -4,6 +4,7 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { notifyChat, notifySelfTest } from "@/lib/notify.server";
+import { normalizeSoundPrefs, type SoundPrefs } from "@/lib/sounds";
 
 async function originFromRequest() {
   const h = await headers();
@@ -83,4 +84,19 @@ export async function saveNotifPrefs(p: NotifPrefs) {
 export async function sendTestPush() {
   const { user } = await getCurrentUser();
   return notifySelfTest(user.id, await originFromRequest());
+}
+
+export async function saveSoundPrefs(p: SoundPrefs) {
+  const { supabase, user } = await getCurrentUser();
+  const s = normalizeSoundPrefs(p);
+  const { error } = await supabase
+    .from("notification_prefs")
+    .upsert({ user_id: user.id, ...s, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (error)
+    return {
+      error: /sound_|notification_prefs/.test(error.message)
+        ? "Pilihan bunyi belum bisa disimpan — admin perlu menjalankan migration-12-bunyi-notif.sql. Untuk sementara pilihanmu tersimpan di browser ini."
+        : error.message,
+    };
+  return { ok: "Bunyi disimpan." };
 }

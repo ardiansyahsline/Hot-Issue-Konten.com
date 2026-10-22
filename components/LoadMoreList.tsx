@@ -8,32 +8,47 @@ export default function LoadMoreList({
   initial = 3,
   step = 5,
   className = "space-y-2",
+  panel = false,
+  header,
 }: {
   children: React.ReactNode;
   initial?: number;
   step?: number;
   className?: string;
+  /** satu kartu ber-shadow di luar, isi rata dengan garis pemisah di dalam */
+  panel?: boolean;
+  header?: React.ReactNode;
 }) {
   const items = Children.toArray(children);
   const [shown, setShown] = useState(initial);
   const rest = items.length - shown;
+  const more = (rest > 0 || shown > initial) && (
+    <div className={`flex flex-wrap justify-center gap-2 ${panel ? "border-t border-zinc-800/80 px-4 py-3" : "pt-1"}`}>
+      {rest > 0 && (
+        <button type="button" onClick={() => setShown((s) => s + step)} className="btn-ghost">
+          Load more · {rest} lagi ↓
+        </button>
+      )}
+      {shown > initial && (
+        <button type="button" onClick={() => setShown(initial)} className="btn-ghost text-zinc-500">
+          Tampilkan top {initial} saja ↑
+        </button>
+      )}
+    </div>
+  );
+  if (panel) {
+    return (
+      <div className="card overflow-hidden p-0">
+        {header && <div className="border-b border-zinc-800/80 px-5 py-3 text-xs text-zinc-500">{header}</div>}
+        <ol className="divide-y divide-zinc-800/80">{items.slice(0, shown)}</ol>
+        {more}
+      </div>
+    );
+  }
   return (
     <>
       <ol className={className}>{items.slice(0, shown)}</ol>
-      {(rest > 0 || shown > initial) && (
-        <div className="flex flex-wrap justify-center gap-2 pt-1">
-          {rest > 0 && (
-            <button type="button" onClick={() => setShown((s) => s + step)} className="btn-ghost">
-              Load more · {rest} lagi ↓
-            </button>
-          )}
-          {shown > initial && (
-            <button type="button" onClick={() => setShown(initial)} className="btn-ghost text-zinc-500">
-              Tampilkan top {initial} saja ↑
-            </button>
-          )}
-        </div>
-      )}
+      {more}
     </>
   );
 }

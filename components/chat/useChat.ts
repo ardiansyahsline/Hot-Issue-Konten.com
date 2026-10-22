@@ -93,6 +93,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   visibleRef.current = visible;
   msgsRef.current = msgs;
 
+  const prevRoomsRef = useRef<ChatRoom[] | null>(null);
   const refreshRooms = useCallback(async () => {
     const { data, error } = await supabase.rpc("chat_overview");
     if (error) {
@@ -105,12 +106,29 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
       return;
     }
     setError(null);
-    setRooms((data ?? []) as ChatRoom[]);
+    const next = (data ?? []) as ChatRoom[];
+    // pesan baru dari orang lain (jumlah belum dibaca naik) -> bunyi notifikasi
+    const prev = prevRoomsRef.current;
+    if (prev) {
+      const before = new Map(prev.map((r) => [r.room_id, r]));
+      let kind: "chat" | "mention" | null = null;
+      for (const r of next) {
+        const o = before.get(r.room_id);
+        if ((r.unread || 0) > (o?.unread || 0)) {
+          if ((r.mentioned || 0) > (o?.mentioned || 0)) kind = "mention";
+          else kind = kind ?? "chat";
+        }
+      }
+      if (kind) window.dispatchEvent(new CustomEvent("cs-sound", { detail: { kind } }));
+    }
+    prevRoomsRef.current = next;
+    setRooms(next);
   }, [supabase]);
 
   const markRead = useCallback(
     async (id: string) => {
       setRooms((rs) => rs?.map((r) => (r.room_id === id ? { ...r, unread: 0 } : r)) ?? rs);
+      prevRoomsRef.current = prevRoomsRef.current?.map((r) => (r.room_id === id ? { ...r, unread: 0, mentioned: 0 } : r)) ?? null;
       await supabase.rpc("chat_mark_read", { p_room: id });
     },
     [supabase]
