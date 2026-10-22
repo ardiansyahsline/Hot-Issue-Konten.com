@@ -631,6 +631,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
           "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
           "Angka di JSON: TANPA pemisah ribuan, titik untuk desimal, skala sama dengan harga asli (saham BBRI Rp2.560 -> 2560; XAUUSD 4.022,46 -> 4022.46; PUMP 0,00461 -> 0.00461).",
+          "Di teks jawaban, harga yang angkanya bulat ditulis tanpa ,00 (4.025 bukan 4.025,00); desimal hanya kalau memang ada (4.027,41).",
           ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 atau 5.320 — JANGAN pakai angka di belakang koma (salah: 5.320,00)."] : []),
         ]
       : []),

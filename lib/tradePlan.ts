@@ -42,7 +42,8 @@ export function splitPlan(text: string): { text: string; plan: TradePlan | null 
 
 /** jumlah angka di belakang koma yang pas untuk harga ini */
 export const decimalsFor = (p: number) => (p >= 1000 ? 2 : p >= 1 ? 4 : Math.min(10, Math.max(4, 3 - Math.floor(Math.log10(p)) + 1)));
-export const fmtPrice = (p: number, d = decimalsFor(p)) => p.toLocaleString("id-ID", { minimumFractionDigits: d, maximumFractionDigits: d });
+/** angka nol di belakang koma tidak ditampilkan (4.025 bukan 4.025,00; 0,00505 bukan 0,0050500) */
+export const fmtPrice = (p: number, d = decimalsFor(p)) => p.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: d });
 export const pctFrom = (entry: number, p: number) => ((p - entry) / entry) * 100;
 export const rr = (plan: TradePlan) => Math.abs(plan.tp[plan.tp.length - 1] - plan.entry) / Math.abs(plan.entry - plan.sl);
 

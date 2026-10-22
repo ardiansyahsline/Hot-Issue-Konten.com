@@ -48,6 +48,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
     return stock && t !== "1w" ? "1d" : t;
   });
   const box = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const idx = symbol.startsWith("IDX:");
   // skala angka plan disamakan dengan harga chart (mis. 2,56 -> 2.560 untuk saham BEI)
   const plan = useMemo(() => rescalePlan(planIn, candles?.length ? candles[candles.length - 1].close : undefined, idx), [planIn, candles, idx]);
@@ -110,13 +111,20 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         autoscaleInfoProvider: (orig: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
           const r = orig();
           if (!r) return r;
-          return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, lo * 0.985), maxValue: Math.max(r.priceRange.maxValue, hi * 1.015) } };
+          // ruang tambahan sebanding dengan lebar trade plan (bukan % harga), biar kotak tidak gepeng
+          const pad = (hi - lo) * 0.12;
+          return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, lo - pad), maxValue: Math.max(r.priceRange.maxValue, hi + pad) } };
         },
       });
       series.setData(candles.map((c) => ({ ...c, time: c.time as import("lightweight-charts").UTCTimestamp })));
       // HP: tampilkan ±60 candle terakhir + ruang kotak posisi; layar lebar: semua candle
-      if (narrow) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - 60), to: candles.length - 1 + boxBars + 2 });
-      else chart.timeScale().fitContent();
+      // tampilan awal: fokus ke candle terbaru + kotak trade plan (skala harga ikut menyesuaikan), user bebas geser/zoom setelahnya
+      const fit = () => {
+        chart.priceScale("right").applyOptions({ autoScale: true });
+        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - (narrow ? 40 : 70)), to: candles.length - 1 + boxBars + 2 });
+      };
+      fit();
+      fitRef.current = fit;
       const lines: [number, string, string][] = [
         [plan.entry, "#3b82f6", "Entry"],
         [plan.sl, "#ef4444", "SL"],
@@ -202,6 +210,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       raf = requestAnimationFrame(loop);
       dispose = () => {
         alive = false;
+        fitRef.current = null;
         cancelAnimationFrame(raf);
         io.disconnect();
         chart.remove();
@@ -252,6 +261,16 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           </button>
         );
       })}
+      {!!candles?.length && !mismatch && (
+        <button
+          type="button"
+          onClick={() => fitRef.current?.()}
+          title="Kembalikan tampilan ke trade plan"
+          className="ml-auto shrink-0 rounded-md px-2 py-0.5 font-semibold text-zinc-400 hover:bg-zinc-800"
+        >
+          🎯 Fokus plan
+        </button>
+      )}
     </div>
   );
 
