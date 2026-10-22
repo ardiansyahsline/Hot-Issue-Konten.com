@@ -90,3 +90,27 @@ body {
   .sheet tbody tr { @apply transition-colors hover:bg-zinc-800/40; }
   .sheet tbody tr:nth-child(even) { @apply bg-zinc-950/30; }
 }
+
+/* ===== Karakter hero AI (animasi) ===== */
+@keyframes hero-bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6%) } }
+@keyframes hero-sway { 0%,100% { transform: rotate(-3deg) } 50% { transform: rotate(3deg) } }
+@keyframes hero-hop { 0%,70%,100% { transform: translateY(0) } 80% { transform: translateY(-11%) } 90% { transform: translateY(0) } }
+@keyframes hero-wiggle { 0%,100% { transform: rotate(0) } 25% { transform: rotate(-6deg) } 75% { transform: rotate(6deg) } }
+@keyframes hero-blink { 0%,92%,100% { transform: scaleY(1) } 95% { transform: scaleY(.1) } }
+@keyframes hero-wave { 0%,100% { transform: rotate(0) } 50% { transform: rotate(-28deg) } }
+@keyframes hero-point { 0%,60%,100% { transform: rotate(0) } 75% { transform: rotate(-40deg) } }
+@keyframes hero-spin { to { transform: rotate(360deg) } }
+@keyframes hero-talk { 0%,100% { transform: scaleY(1) } 50% { transform: scaleY(1.8) } }
+.hero-bob { animation: hero-bob 2.4s ease-in-out infinite; }
+.hero-sway { animation: hero-sway 3s ease-in-out infinite; transform-origin: 50% 100%; }
+.hero-hop { animation: hero-hop 2.2s ease-in-out infinite; }
+.hero-wiggle { animation: hero-wiggle 1.8s ease-in-out infinite; transform-origin: 50% 100%; }
+.hero-eye { animation: hero-blink 4s infinite; transform-box: fill-box; transform-origin: center; }
+.hero-arm-wave { animation: hero-wave 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: top center; }
+.hero-arm-point { animation: hero-point 2.6s ease-in-out infinite; transform-box: fill-box; transform-origin: top center; }
+.hero-prop-spin { animation: hero-spin 6s linear infinite; transform-box: fill-box; transform-origin: center; }
+.hero-talk .hero-mouth { animation: hero-talk .35s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.hero-still, .hero-still * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .hero-bob, .hero-sway, .hero-hop, .hero-wiggle, .hero-eye, .hero-arm-wave, .hero-arm-point, .hero-prop-spin, .hero-talk .hero-mouth { animation: none !important; }
+}

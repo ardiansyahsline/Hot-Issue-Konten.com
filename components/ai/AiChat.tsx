@@ -6,6 +6,9 @@ import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { SMART, SMART_HERO, heroColor, heroDesc, heroName, heroRole, isVisionModel } from "@/lib/aiModels";
 import Markdown from "./Markdown";
+import HeroArt from "./HeroArt";
+import HeroGallery from "./HeroGallery";
+import { personaOf } from "@/lib/aiPersona";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
 export type AiMsg = {
@@ -73,12 +76,8 @@ type HeroOpt = { hero: string; model: string; status: number; vision: boolean };
 
 function HeroAvatar({ hero, size = 28 }: { hero: string; size?: number }) {
   return (
-    <span
-      className="flex shrink-0 items-center justify-center rounded-lg font-display font-bold text-white"
-      style={{ width: size, height: size, background: heroColor(hero), fontSize: size * 0.44 }}
-      aria-hidden
-    >
-      {hero[0]}
+    <span className="flex shrink-0 items-end justify-center overflow-hidden rounded-lg" style={{ width: size, height: size, background: `${heroColor(hero)}22` }} aria-hidden>
+      <HeroArt hero={hero} size={size * 1.15} still />
     </span>
   );
 }
@@ -280,10 +279,12 @@ export default function AiChat({
   const [status, setStatus] = useState<Record<string, number>>({});
   const [visionList, setVisionList] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const heroOpts = useMemo(() => heroOptions(models, status, visionList), [models, status, visionList]);
   const [ready, setReady] = useState(!setupError);
   const [dataMode, setDataMode] = useState<"auto" | "off">("auto");
   const [webMode, setWebMode] = useState<"auto" | "off">("auto");
   const [webReady, setWebReady] = useState(false);
+  const [view, setView] = useState<"chat" | "chars">("chat");
   const [pending, setPending] = useState<Pending[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [zoom, setZoom] = useState<string | null>(null);
@@ -754,8 +755,21 @@ export default function AiChat({
           <button type="button" onClick={() => setSideOpen(true)} className="rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 md:hidden" aria-label="Daftar percakapan">
             ☰
           </button>
-          <span className="truncate font-semibold">{active?.title ?? "Chat baru"}</span>
-          {active && (
+          <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
+            {(["chat", "chars"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={`rounded-full px-2.5 py-1 ${view === v ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                aria-pressed={view === v}
+              >
+                {v === "chat" ? "💬 Chat" : "🎭 Karakter"}
+              </button>
+            ))}
+          </span>
+          <span className="truncate font-semibold">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
+          {active && view === "chat" && (
             <span className="ml-auto flex shrink-0 gap-3 text-[12px] text-zinc-500">
               <button type="button" onClick={() => { setSideOpen(true); setEditing(active.id); }} className="hover:text-zinc-200">
                 ✎ Ganti nama
@@ -770,12 +784,24 @@ export default function AiChat({
         {setupError && <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12.5px] text-amber-400">{setupError}</div>}
         {err && <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-[12.5px] text-red-400">{err}</div>}
 
-        {msgs.length === 0 && !loadingMsgs ? (
+        {view === "chars" ? (
+          <HeroGallery
+            opts={heroOpts}
+            value={model}
+            ready={ready}
+            onPick={(m) => {
+              pickModel(m);
+              setView("chat");
+              setTimeout(() => ta.current?.focus(), 50);
+            }}
+          />
+        ) : msgs.length === 0 && !loadingMsgs ? (
           <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-2xl text-[26px]" style={{ backgroundImage: "linear-gradient(160deg,#fb8a3c,#ea580c)" }}>
-              ✨
-            </span>
-            <h2 className="mt-4 font-display text-[22px] font-bold">Halo {firstName}, mau ngobrol apa?</h2>
+            <HeroArt hero={hero(model)} size={92} title={hero(model)} />
+            <h2 className="mt-2 font-display text-[22px] font-bold">Halo {firstName}, mau ngobrol apa?</h2>
+            <button type="button" onClick={() => setView("chars")} className="mt-1 text-[12px] font-semibold text-orange-400 hover:underline">
+              {hero(model)} · {personaOf(hero(model)).type} {personaOf(hero(model)).label} — ganti karakter 🎭
+            </button>
             <p className="mt-1 text-[13px] text-zinc-500">Tanya bebas, kirim screenshot / chart trading, atau tanya isi CS Tracker.</p>
             <div className="mt-5 grid w-full max-w-[600px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
               {SUGGEST.map((s) => (
@@ -834,7 +860,9 @@ export default function AiChat({
                       </div>
                     ) : (
                       <div key={m.id} className="flex gap-3">
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-[14px]">✨</span>
+                        <span className="flex h-9 w-9 shrink-0 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
+                          <HeroArt hero={hero(m.model ?? model)} size={42} talk={busy && m.id === lastAssistant?.id} still={!(busy && m.id === lastAssistant?.id)} />
+                        </span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                           {m.used_data && (
                             <span className="mb-1.5 mr-1.5 inline-block rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>
@@ -878,7 +906,7 @@ export default function AiChat({
                               )}
                               {m.model && (
                                 <span title={m.model}>
-                                  · ⚔️ {hero(m.model)}
+                                  · ⚔️ {hero(m.model)} <span className="text-zinc-600">({personaOf(hero(m.model)).type} {personaOf(hero(m.model)).label})</span>
                                   {m.switched && " (dialihkan otomatis — hero lain lagi sibuk / ada gambar)"}
                                 </span>
                               )}

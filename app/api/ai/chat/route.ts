@@ -5,6 +5,7 @@ import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { buildWebContext, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
+import { personaPrompt } from "@/lib/aiPersona";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -176,6 +177,8 @@ export async function POST(req: NextRequest) {
   };
   const messages: { role: string; content: string | { type: string; text?: string; image_url?: { url: string } }[] }[] = [
     { role: "system", content: systemPrompt(profile?.full_name || "anggota tim") },
+    // [1] = kepribadian hero yang sedang menjawab (diisi ulang tiap ganti hero)
+    { role: "system", content: "" },
   ];
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
@@ -238,6 +241,7 @@ export async function POST(req: NextRequest) {
     // koneksi ke server AI kadang putus sesaat -> coba ulang sekali sebelum menyerah
     for (let attempt = 0; attempt < 2 && !upstream && !slow; attempt++) {
       try {
+        messages[1] = { role: "system", content: personaPrompt(heroName(model)) };
         upstream = await fetch(`${cfg.base}/chat/completions`, {
           method: "POST",
           headers: aiHeaders(cfg.key),
