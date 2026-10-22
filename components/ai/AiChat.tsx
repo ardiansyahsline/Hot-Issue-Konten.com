@@ -102,6 +102,8 @@ function ModelPicker({
   vision,
   status,
   visionList,
+  loadError,
+  onReload,
 }: {
   value: string;
   onChange: (m: string) => void;
@@ -110,6 +112,8 @@ function ModelPicker({
   vision: { text: string | null; image: string | null };
   status: Record<string, number>;
   visionList: string[];
+  loadError: string | null;
+  onReload: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -223,7 +227,16 @@ function ModelPicker({
               </div>
             )}
             {!ready && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Server AI belum tersambung.</p>}
-            {ready && !opts.length && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Daftar hero belum terbaca — pakai Layla dulu.</p>}
+            {ready && !opts.length && (
+              <p className="px-2.5 py-2 text-[12px] text-zinc-500">
+                {loadError === "loading" ? "Memuat daftar hero…" : `Daftar hero belum terbaca${loadError ? ` (${loadError})` : ""} — pakai Layla dulu.`}{" "}
+                {loadError !== "loading" && (
+                  <button type="button" onClick={onReload} className="font-semibold text-orange-400 hover:underline">
+                    Muat ulang
+                  </button>
+                )}
+              </p>
+            )}
           </div>
           <p className="border-t border-zinc-800/80 px-2 pt-2 text-[10.5px] leading-snug text-zinc-500">
             Kalau hero pilihan lagi gagal / kuota habis, otomatis dijawab hero lain yang siap.
@@ -264,6 +277,7 @@ export default function AiChat({
   const [best, setBest] = useState<{ text: string | null; image: string | null }>({ text: null, image: null });
   const [status, setStatus] = useState<Record<string, number>>({});
   const [visionList, setVisionList] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(!setupError);
   const [dataMode, setDataMode] = useState<"auto" | "off">("auto");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -289,6 +303,12 @@ export default function AiChat({
       if (m) setModel(m);
       if (localStorage.getItem(DATA_KEY) === "off") setDataMode("off");
     } catch {}
+    loadModels(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // daftar hero; kalau gagal terbaca (server AI lambat) dicoba sekali lagi otomatis
+  const loadModels = (retry = false) => {
+    setLoadError("loading");
     fetch("/api/ai/models")
       .then((r) => r.json())
       .then((j) => {
@@ -297,9 +317,11 @@ export default function AiChat({
         setStatus(j.status ?? {});
         setVisionList(j.visionList ?? []);
         setReady(!!j.ready);
+        setLoadError(j.catalogError ?? null);
+        if (retry && j.ready && !(j.models ?? []).length) setTimeout(() => loadModels(false), 4000);
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => setLoadError("koneksi"));
+  };
   const pickModel = (m: string) => {
     setModel(m);
     try {
@@ -663,7 +685,7 @@ export default function AiChat({
         >
           📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
         </button>
-        <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} />
+        <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop

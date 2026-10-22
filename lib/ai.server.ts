@@ -1,6 +1,6 @@
 import "server-only";
 
-/** Pengaturan AI (OmniRoute atau server lain yang formatnya sama dengan OpenAI) */
+/** Pengaturan AI (server AI yang formatnya sama dengan OpenAI) */
 export function aiConfig() {
   const base = (process.env.OMNIROUTE_BASE_URL ?? "").trim().replace(/\/+$/, "");
   const key = (process.env.OMNIROUTE_API_KEY ?? "").trim();
@@ -20,28 +20,42 @@ export function aiHeaders(key: string): Record<string, string> {
 }
 
 let modelCache: { at: number; ids: string[]; vision: string[] } | null = null;
+let failCache: { at: number; error: string } | null = null;
 
-async function fetchIds(url: string, key: string): Promise<string[] | null> {
+async function fetchIds(url: string, key: string): Promise<{ ids: string[] | null; error: string }> {
   try {
-    const r = await fetch(url, { headers: aiHeaders(key), signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return null;
+    // server AI di laptop/rumah lewat terowongan bisa lambat -> beri waktu lebih lama
+    const r = await fetch(url, { headers: aiHeaders(key), signal: AbortSignal.timeout(25000), cache: "no-store" });
+    if (!r.ok) return { ids: null, error: `HTTP ${r.status}` };
     const j = await r.json();
-    return ((j?.data ?? []) as { id?: string }[]).map((m) => String(m.id ?? "")).filter(Boolean);
-  } catch {
-    return null;
+    return { ids: ((j?.data ?? []) as { id?: string }[]).map((m) => String(m.id ?? "")).filter(Boolean), error: "" };
+  } catch (e) {
+    const err = e as { name?: string; cause?: { code?: string }; message?: string };
+    return { ids: null, error: err?.name === "TimeoutError" ? "timeout 25 detik" : err?.cause?.code || err?.message || "gagal" };
   }
 }
 
-/** Katalog model dari OmniRoute (disimpan 10 menit di memori server): satu id per model + daftar yang bisa lihat gambar */
-export async function listCatalog(): Promise<{ ids: string[]; vision: string[] }> {
+/** Katalog model dari server AI (disimpan 10 menit di memori server): satu id per model + daftar yang bisa lihat gambar */
+export async function listCatalog(): Promise<{ ids: string[]; vision: string[]; error?: string }> {
   const cfg = aiConfig();
   if (!cfg.ok) return { ids: [], vision: [] };
   if (modelCache && Date.now() - modelCache.at < 600000) return modelCache;
+  // baru gagal < 1 menit lalu -> jangan bikin user nunggu lagi
+  if (failCache && Date.now() - failCache.at < 60000) return modelCache ?? { ids: [], vision: [], error: failCache.error };
   // ?prefix=alias = satu id per model (tanpa dobel), ?kind=chat = hanya model chat
-  const ids = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat`, cfg.key)) ?? (await fetchIds(`${cfg.base}/models`, cfg.key));
-  if (!ids) return modelCache ?? { ids: [], vision: [] };
-  const vision = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat&capability=vision`, cfg.key)) ?? [];
-  modelCache = { at: Date.now(), ids: [...new Set(ids)].sort((a, b) => a.localeCompare(b)), vision };
+  let res = await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat`, cfg.key);
+  if (!res.ids || !res.ids.length) {
+    const plain = await fetchIds(`${cfg.base}/models`, cfg.key);
+    if (plain.ids && plain.ids.length) res = plain;
+  }
+  if (!res.ids || !res.ids.length) {
+    failCache = { at: Date.now(), error: res.error || "daftar kosong" };
+    console.log("[ai] katalog model gagal:", failCache.error);
+    return modelCache ?? { ids: [], vision: [], error: failCache.error };
+  }
+  failCache = null;
+  const vision = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat&capability=vision`, cfg.key)).ids ?? [];
+  modelCache = { at: Date.now(), ids: [...new Set(res.ids)].sort((a, b) => a.localeCompare(b)), vision };
   return modelCache;
 }
 

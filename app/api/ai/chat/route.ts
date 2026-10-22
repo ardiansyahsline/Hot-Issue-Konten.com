@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { aiConfig, aiHeaders, healthMap, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
+import { aiConfig, aiHeaders, healthMap, healthRank, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -95,7 +95,9 @@ export async function POST(req: NextRequest) {
   const models = catalog.ids;
   setVisionCatalog(catalog.vision);
   const chosen = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
-  const ranked = hasImages ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(models)] : rankTextModels(models);
+  // katalog gagal terbaca (server AI lambat / putus sesaat) -> pakai model yang pernah terbukti jalan, bukan "auto"
+  const pool = models.length ? models : [...health.values()].filter((h) => healthRank(h) === 0).map((h) => h.model).filter(isChatModel);
+  const ranked = hasImages ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(pool)] : rankTextModels(pool);
   const hm = healthMap(ranked, health);
   const byHealth = ranked
     .map((m, i) => ({ m, i, h: (hm.get(m) ?? 1) + (coolingDown(m) ? 3 : 0) }))
@@ -132,6 +134,8 @@ export async function POST(req: NextRequest) {
     }
     candidates = ["auto"];
   }
+
+  const lastUserText = content || ([...hist].reverse().find((m) => m.role === "user")?.content ?? "");
 
   // 5) data CS Tracker (otomatis kalau pertanyaannya soal isi website / lanjutan dari jawaban yang memakai data)
   const prevAssistant = [...hist].reverse().find((m) => m.role === "assistant");
@@ -177,7 +181,7 @@ export async function POST(req: NextRequest) {
   for (const model of candidates) {
     let upstream: Response | null = null;
     let netErr: unknown = null;
-    // koneksi ke VPS kadang putus sesaat -> coba ulang sekali sebelum menyerah
+    // koneksi ke server AI kadang putus sesaat -> coba ulang sekali sebelum menyerah
     for (let attempt = 0; attempt < 2 && !upstream; attempt++) {
       try {
         upstream = await fetch(`${cfg.base}/chat/completions`, {
@@ -195,9 +199,9 @@ export async function POST(req: NextRequest) {
     if (!upstream) {
       // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
       const cause = (netErr as { cause?: { code?: string } })?.cause?.code;
-      console.log("[ai] VPS tidak bisa dihubungi:", cause ?? netErr);
+      console.log("[ai] server AI tidak bisa dihubungi:", cause ?? netErr);
       return saveError(
-        `Server AI di VPS tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena server AI di VPS mati (VPS restart / jendelanya tertutup). Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI di VPS.`
+        `Server AI tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena komputer server AI mati / sleep / tidak ada internet, atau jendela server AI tertutup. Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI-nya.`
       );
     }
     if (!upstream.ok || !upstream.body) {
@@ -216,6 +220,7 @@ export async function POST(req: NextRequest) {
     const events = sse(upstream.body);
     let first = "";
     let failed = "";
+    // baca dulu ±160 huruf pertama: kalau error / kosong / tiba-tiba pakai huruf Arab-Mandarin dll padahal user tidak -> ganti hero
     for (;;) {
       const { value, done } = await events.next();
       if (done) break;
@@ -223,10 +228,12 @@ export async function POST(req: NextRequest) {
         failed = value.error;
         break;
       }
-      if (value.piece) {
-        first = value.piece;
-        break;
-      }
+      if (value.piece) first += value.piece;
+      if (first.length >= 160) break;
+    }
+    if (first && wrongScript(first, lastUserText)) {
+      failed = "menjawab pakai bahasa/huruf asing";
+      first = "";
     }
     if (first) {
       opened = { model, events, first };
@@ -346,3 +353,12 @@ async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> 
 const cooldown = new Map<string, number>();
 const coolDown = (m: string) => cooldown.set(m, Date.now() + 15 * 60 * 1000);
 const coolingDown = (m: string) => (cooldown.get(m) ?? 0) > Date.now();
+
+/** huruf non-Latin yang sering "nyasar" (Arab, Mandarin/Jepang/Korea, Thai, Hindi, Kiril) */
+const FOREIGN = /[\u0600-\u06FF\u0750-\u077F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F\u0900-\u097F\u0400-\u04FF]/g;
+/** jawaban memakai huruf asing (≥3 huruf) padahal pesan user tidak memakainya */
+function wrongScript(answer: string, userText: string) {
+  const hits = answer.match(FOREIGN)?.length ?? 0;
+  if (hits < 3) return false;
+  return (userText.match(FOREIGN)?.length ?? 0) === 0;
+}
