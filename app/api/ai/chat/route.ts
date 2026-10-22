@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { buildWebContext, looksNeedWeb, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
+import { buildWebContext, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 
@@ -145,11 +145,26 @@ export async function POST(req: NextRequest) {
   // pertanyaan lanjutan ("yang itu siapa PIC-nya?") setelah jawaban yang memakai data -> tetap pakai data
   const followUp = !!prevAssistant?.used_data && lastText.length < 200 && /\b(itu|tadi|tersebut|yang mana|siapa|berapa|kenapa|kapan|detail|lanjut|lainnya|yang lain|nomor|#\d+)\b|\w+nya\b/i.test(lastText);
   const useData = body.data !== "off" && (looksAboutSite(lastText) || followUp);
-  // 5b) internet (Tavily) — otomatis kalau pertanyaannya soal hal terbaru / ada link
-  const useWeb = webConfig().ok && body.web !== "off" && looksNeedWeb(lastText);
+  // 5b) internet (Tavily): AI cepat "mikir dulu" perlu browsing atau tidak + kata kuncinya (pakai konteks percakapan),
+  //     lalu website mencari & membaca halamannya. Jalan bareng dengan pengambilan data CS Tracker.
+  const webOn = webConfig().ok && body.web !== "off";
+  const textRank = rankTextModels(pool);
+  const textHm = healthMap(textRank, health);
+  const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
+  const noWeb = { context: "", sources: [] as { title: string; url: string }[] };
   const [context, web] = await Promise.all([
     useData ? buildSiteContext(supabase).catch(() => "") : Promise.resolve(""),
-    useWeb ? buildWebContext(lastText) : Promise.resolve({ context: "", sources: [] as { title: string; url: string }[] }),
+    webOn
+      ? planWebSearch({
+          base: cfg.base,
+          headers: aiHeaders(cfg.key),
+          models: [...new Set([...planners, ...candidates.filter((m) => m !== "auto")])],
+          history: hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })),
+          question: lastText,
+        })
+          .then((plan) => (plan ? buildWebContext(plan) : noWeb))
+          .catch(() => noWeb)
+      : Promise.resolve(noWeb),
   ]);
 
   // 6) gambar -> data URL
@@ -421,3 +436,6 @@ function wrongScript(answer: string, userText: string) {
   if (hits < 3) return false;
   return (userText.match(FOREIGN)?.length ?? 0) === 0;
 }
+
+/** model penerjemah gambar saja tidak cocok jadi perencana pencarian */
+const isVisionOnlyRisk = (m: string) => /(^|\/)(llava|pixtral)|-vl-|vision/i.test(m);
