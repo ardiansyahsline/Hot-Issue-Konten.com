@@ -331,7 +331,7 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
           dropped++;
           continue;
         }
-        const body = r.raw_content ? clip(String(r.raw_content), 2500) : clip(String(r.content ?? ""), 1200);
+        const body = r.raw_content ? clip(String(r.raw_content), 1800) : clip(String(r.content ?? ""), 1000);
         add(r.url, clip(String(r.title || host(r.url)), 90), body, r.published_date);
         n++;
       }
@@ -371,7 +371,7 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
   // sumber terbaru di atas
   blocks.sort((a, b) => (b.date ? Date.parse(b.date) || 0 : 0) - (a.date ? Date.parse(a.date) || 0 : 0));
   sources.push(...liveSources);
-  const parts = blocks.slice(0, 12).map((b) => {
+  const parts = blocks.slice(0, 9).map((b) => {
     sources.push({ title: b.title, url: b.url });
     return `[${sources.length}] ${b.title} — ${b.url}${b.date ? ` (terbit ${b.date})` : ""}\n${b.text}`;
   });
@@ -394,7 +394,7 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
     ...liveBlock,
     ...idxNote,
     "",
-    clip(parts.join("\n\n"), 18000),
+    clip(parts.join("\n\n"), 12000),
   ].join("\n");
   return { context, sources, error: error || undefined };
 }

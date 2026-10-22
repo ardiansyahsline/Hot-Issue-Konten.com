@@ -89,7 +89,14 @@ export async function POST(req: NextRequest) {
   const lastText = lastUser?.content ?? content;
   // gambar hanya ikut dikirim kalau ada di 3 pesan user terakhir (maks 2 pesan bergambar)
   const userIdx = hist.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).slice(-3);
-  const imageTurns = new Set(userIdx.filter((i) => (hist[i].images?.length ?? 0) > 0).slice(-IMAGE_TURNS));
+  // gambar ikut dikirim hanya kalau pesan TERAKHIR membawa gambar, atau pesan terakhir jelas membahas gambar sebelumnya
+  // ("chart tadi", "gambar itu", "lihat lagi screenshotnya"). Pertanyaan baru tanpa gambar -> hero teks biasa (mis. Alucard).
+  const lastIdx = userIdx[userIdx.length - 1];
+  const lastHasImg = lastIdx !== undefined && (hist[lastIdx].images?.length ?? 0) > 0;
+  const refersToImage = /\b(gambar|foto|chart|grafik|screenshot|ss|tangkapan layar|image|picture|candle|lihat lagi|di atas)\w*\b/i.test(hist[lastIdx]?.content ?? "");
+  const imageTurns = new Set(
+    lastHasImg ? [lastIdx] : refersToImage ? userIdx.filter((i) => (hist[i].images?.length ?? 0) > 0).slice(-IMAGE_TURNS) : []
+  );
   const hasImages = imageTurns.size > 0;
 
   // 4) daftar calon model: pilihan user dulu, lalu cadangan terbaik.
@@ -191,6 +198,28 @@ export async function POST(req: NextRequest) {
   ];
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
+  // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413)
+  const trimContext = () => {
+    let changed = false;
+    for (const m of messages) {
+      if (m.role !== "system" || typeof m.content !== "string") continue;
+      if (m.content === context && context) {
+        m.content = context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "");
+        changed = true;
+      } else if (m.content === web.context && web.context.length > 6000) {
+        m.content = web.context.slice(0, 6000) + "\n… (hasil browsing diringkas)";
+        changed = true;
+      }
+    }
+    // riwayat panjang dipangkas: sisakan 6 pesan terakhir
+    const firstHist = messages.findIndex((m) => m.role !== "system");
+    if (firstHist > 0 && messages.length - firstHist > 6) {
+      messages.splice(firstHist, messages.length - firstHist - 6);
+      changed = true;
+    }
+    return changed;
+  };
+  let trimmed = false;
   for (const [i, m] of hist.entries()) {
     const imgs = m.images ?? [];
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
@@ -223,7 +252,8 @@ export async function POST(req: NextRequest) {
   // (kuota habis TIDAK dihitung: kuota gratis Gemini dll dihitung per model, model lain bisa masih ada jatah)
   const deadProv = new Set<string>();
   const PROVIDER_DOWN = /authenticat|authorization|invalid api key|api key not valid|missing api key|reconnect|decrypt|unauthori[sz]ed|forbidden/i;
-  for (const model of candidates) {
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const model = candidates[ci];
     if (providerOf(model) && deadProv.has(providerOf(model))) continue;
     const left = OPEN_DEADLINE - Date.now();
     if (left < 3000) {
@@ -289,8 +319,17 @@ export async function POST(req: NextRequest) {
         clearTimeout(timer);
         return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
       }
+      // permintaan terlalu besar untuk model ini -> ringkas konteks sekali lalu coba lagi model yang sama
+      if ((upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail)) && !trimmed && trimContext()) {
+        trimmed = true;
+        clearTimeout(timer);
+        upstreamAbort.signal.removeEventListener("abort", onAbort);
+        ci--; // ulangi model yang sama dengan konteks ringkas
+        continue;
+      }
       giveUp(`${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`);
-      await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
+      // terlalu besar / kuota habis itu sementara -> jangan dicap rusak
+      if (upstream.status !== 413 && upstream.status !== 429) await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
       continue;
     }
     // baca dulu ±160 huruf pertama: kalau error / kosong / tiba-tiba pakai huruf Arab-Mandarin dll padahal user tidak -> ganti hero

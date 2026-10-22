@@ -4,9 +4,14 @@ import { HOT_THRESHOLD, REPORT_HOT_THRESHOLD } from "@/lib/constants";
 
 type DB = Awaited<ReturnType<typeof createClient>>;
 
-/** pertanyaan yang kemungkinan butuh data CS Tracker */
+/**
+ * pertanyaan yang kemungkinan butuh data CS Tracker — hanya kata benda khas website ini.
+ * Kata umum (hari ini, rangkum, saran, terbanyak…) TIDAK cukup sendirian, supaya pertanyaan seperti
+ * "ada saran saham hari ini?" tidak ikut membawa data internal.
+ */
 const ABOUT_SITE =
-  /\b(issue|isu|hot|laporan|lapor|kasus|video ?review|vr|catatan|saran|dashboard|pic|clipper|campaign|banding|withdraw|payout|rekap|ringkas|rangkum|statistik|terbanyak|paling banyak|minggu ini|hari ini|kemarin|bulan ini|top ?\d|cs tracker|tim cs|agent|resolved|open|in progress|kategori|topik|bug|keluhan)\b/i;
+  /\b(hot ?issues?|isu|issue|laporan|lapor(an)? clipper|kasus|video ?review|vr|catatan|kotak saran|saran (tim|cs|clipper|user)|dashboard|pic|clipper|campaign|banding|withdraw|payout|cs tracker|tim cs|agent cs|resolved|keluhan|bug|topik issue|kategori issue)\b/i;
+
 export const looksAboutSite = (text: string) => ABOUT_SITE.test(text);
 
 /** buang kontak pribadi (no HP, email, @username, link) sebelum dikirim ke AI */
