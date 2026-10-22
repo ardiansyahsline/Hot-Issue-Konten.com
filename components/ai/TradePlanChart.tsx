@@ -125,17 +125,20 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       for (const [price, color, title] of lines) series.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title });
 
       // kotak posisi di kanan candle terakhir
-      const mk = (cls: string, bg: string) => {
+      // lapisan kotak posisi: seukuran area candle (tidak menimpa skala harga/waktu), isi yang keluar area dipotong
+      const layer = document.createElement("div");
+      layer.style.cssText = "position:absolute;left:0;top:0;overflow:hidden;pointer-events:none;z-index:3";
+      el.appendChild(layer);
+      const mk = (bg: string) => {
         const z = document.createElement("div");
-        z.className = cls;
-        z.style.cssText = `position:absolute;pointer-events:none;z-index:3;background:${bg}`;
-        el.appendChild(z);
+        z.style.cssText = `position:absolute;pointer-events:none;background:${bg}`;
+        layer.appendChild(z);
         return z;
       };
-      const risk = mk("", "rgba(239,68,68,.18)");
-      const reward = mk("", "rgba(34,197,94,.18)");
+      const risk = mk("rgba(239,68,68,.18)");
+      const reward = mk("rgba(34,197,94,.18)");
       const lbl = (bg: string) => {
-        const x = mk("", bg);
+        const x = mk(bg);
         x.style.cssText += ";z-index:4;color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap";
         return x;
       };
@@ -146,6 +149,11 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       lTarget.textContent = `Target ${fmtPrice(last, d)} (${pct(pctFrom(plan.entry, last))})`;
       lEntry.textContent = `${short ? "SHORT" : "LONG"} · R:R ${rr(plan).toLocaleString("id-ID", { maximumFractionDigits: 1 })}`;
       let alive = true;
+      let prevKey = "";
+      /**
+       * Hitung ulang posisi kotak dari harga entry/SL/TP setiap frame, jadi ikut nempel saat chart
+       * digeser, di-zoom, atau skala harganya berubah (bukan cuma saat rentang waktu berubah).
+       */
       const draw = () => {
         if (!alive) return;
         const ts = chart.timeScale();
@@ -154,36 +162,48 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         const x2 = ts.logicalToCoordinate((n + boxBars) as import("lightweight-charts").Logical);
         const y = (v: number) => series.priceToCoordinate(v);
         const [ye, ys, yt] = [y(plan.entry), y(plan.sl), y(last)];
-        if (x1 == null || x2 == null || ye == null || ys == null || yt == null) return;
-        const w = Math.max(40, x2 - x1);
+        const paneW = Math.max(0, el.clientWidth - chart.priceScale("right").width());
+        const paneH = Math.max(0, el.clientHeight - ts.height());
+        const key = [x1, x2, ye, ys, yt, paneW, paneH].map((v) => (v == null ? "x" : Math.round(v))).join(",");
+        if (key === prevKey) return;
+        prevKey = key;
+        Object.assign(layer.style, { width: `${paneW}px`, height: `${paneH}px` });
+        if (x1 == null || x2 == null || ye == null || ys == null || yt == null) {
+          layer.style.visibility = "hidden";
+          return;
+        }
+        layer.style.visibility = "visible";
+        const w = Math.max(24, x2 - x1);
         Object.assign(risk.style, { left: `${x1}px`, width: `${w}px`, top: `${Math.min(ye, ys)}px`, height: `${Math.abs(ys - ye)}px` });
         Object.assign(reward.style, { left: `${x1}px`, width: `${w}px`, top: `${Math.min(ye, yt)}px`, height: `${Math.abs(yt - ye)}px` });
-        // label di luar kotak: stop di sisi SL, target di sisi TP
-        // label jangan keluar dari area chart (sisakan ruang skala harga di kanan)
-        const scaleW = chart.priceScale("right").width();
-        const fit = (lb: HTMLDivElement) => `${Math.max(0, Math.min(x1, el.clientWidth - scaleW - lb.offsetWidth - 4))}px`;
-        // posisi awal tiap label, lalu digeser supaya tidak saling tumpuk (jarak minimal 22px)
+        // label hanya tampil kalau kotaknya kelihatan; nempel di sisi kiri kotak, tidak keluar area candle
+        const boxSeen = x1 + w > 0 && x1 < paneW;
+        const fit = (lb: HTMLDivElement) => `${Math.max(2, Math.min(x1, paneW - lb.offsetWidth - 4))}px`;
+        // posisi tiap label (stop di sisi SL, target di sisi TP), digeser supaya tidak saling tumpuk (jarak min 22px)
         const want: [HTMLDivElement, number][] = [
           [lStop, short ? ys - 20 : ys + 4],
           [lTarget, short ? yt + 4 : yt - 20],
           [lEntry, short ? ye + 4 : ye - 20],
         ];
         want.sort((a, b) => a[1] - b[1]);
-        const H = el.clientHeight - 30;
         for (let i = 1; i < want.length; i++) if (want[i][1] < want[i - 1][1] + 22) want[i][1] = want[i - 1][1] + 22;
-        // kalau terdorong keluar bawah, geser semua ke atas
-        const over = want[want.length - 1][1] - H;
-        if (over > 0) for (const w of want) w[1] -= over;
-        for (const [lb, top] of want) Object.assign(lb.style, { left: fit(lb), top: `${Math.max(2, top)}px` });
+        for (const [lb, top] of want) Object.assign(lb.style, { display: boxSeen ? "block" : "none", left: fit(lb), top: `${top}px` });
       };
-      chart.timeScale().subscribeVisibleLogicalRangeChange(draw);
-      const ro = new ResizeObserver(() => requestAnimationFrame(draw));
-      ro.observe(el);
-      requestAnimationFrame(draw);
+      // jalan tiap frame hanya selama chart kelihatan di layar (hemat baterai)
+      let seen = true;
+      let raf = 0;
+      const loop = () => {
+        if (!alive) return;
+        if (seen && !document.hidden) draw();
+        raf = requestAnimationFrame(loop);
+      };
+      const io = new IntersectionObserver((es) => (seen = es.some((e) => e.isIntersecting)));
+      io.observe(el);
+      raf = requestAnimationFrame(loop);
       dispose = () => {
         alive = false;
-        ro.disconnect();
-        chart.timeScale().unsubscribeVisibleLogicalRangeChange(draw);
+        cancelAnimationFrame(raf);
+        io.disconnect();
         chart.remove();
         el.innerHTML = "";
       };

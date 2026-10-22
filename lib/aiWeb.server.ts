@@ -63,6 +63,8 @@ export type WebPlan = {
   market: Market;
   fresh: Fresh;
   symbols: string[];
+  /** nama lengkap aset/emiten (mis. "Bank Syariah Indonesia") untuk menyaring artikel yang tidak nyambung */
+  names?: string[];
   by: "ai" | "aturan";
 };
 
@@ -76,8 +78,10 @@ const PLAN_PROMPT = (today: string) =>
     "Kata kunci: 1-3, spesifik & beda sudut, seperti analis googling (mis. 'BBCA laporan keuangan kuartal III 2026', 'target harga BBRI analis Oktober 2026'). Sertakan bulan & tahun sekarang untuk hal yang cepat berubah. Topik Indonesia pakai Bahasa Indonesia; crypto/forex/saham global pakai Bahasa Inggris.",
     "market: saham_id (saham BEI/IHSG), saham_global (saham luar negeri), crypto, forex (mata uang, emas XAU, komoditas), none.",
     "fresh: day (harga/berita hari ini), week (kondisi pasar terbaru), month (analisa/proyeksi), any (fakta umum).",
-    "symbols: kode aset yang ditanya (mis. BBCA, BTC, ETH, XAUUSD, USDIDR, EURUSD), maksimal 5.",
-    'Jawab HANYA JSON satu baris: {"search":true,"queries":["..."],"topic":"general|news|finance","market":"none","fresh":"week","symbols":[]}',
+    "symbols: kode aset yang ditanya (mis. BBCA, BTC, ETH, XAUUSD, USDIDR, EURUSD), maksimal 5. Kode 4 huruf seperti BRIS, BBRI, BBCA, GOTO = saham BEI (saham_id), kecuali user jelas menyebut saham luar.",
+    "names: nama lengkap aset/emiten dari symbols (mis. BRIS -> \"Bank Syariah Indonesia\", BBRI -> \"Bank Rakyat Indonesia\", BTC -> \"Bitcoin\", XAUUSD -> \"emas\").",
+    "Untuk saham, SETIAP kata kunci wajib memuat kode DAN nama emitennya supaya mesin pencari tidak salah tangkap (mis. 'saham BRIS Bank Syariah Indonesia analisa Oktober 2026', bukan cuma 'BRIS').",
+    'Jawab HANYA JSON satu baris: {"search":true,"queries":["..."],"topic":"general|news|finance","market":"none","fresh":"week","symbols":[],"names":[]}',
     'Kalau tidak perlu: {"search":false}',
   ].join("\n");
 
@@ -121,7 +125,7 @@ export async function planWebSearch(opts: {
       const text = String(j?.choices?.[0]?.message?.content ?? "");
       const m = text.match(/\{[\s\S]*\}/);
       if (!m) continue;
-      const plan = JSON.parse(m[0]) as { search?: boolean; queries?: unknown; topic?: string; market?: string; fresh?: string; symbols?: unknown; recent?: boolean };
+      const plan = JSON.parse(m[0]) as { search?: boolean; queries?: unknown; topic?: string; market?: string; fresh?: string; symbols?: unknown; names?: unknown; recent?: boolean };
       const queries = (Array.isArray(plan.queries) ? plan.queries : []).map((q) => clip(String(q).trim(), 200)).filter((q) => q.length >= 3).slice(0, 3);
       if (!plan.search && !urls.length) return null;
       if (!queries.length && !urls.length) return null;
@@ -129,7 +133,8 @@ export async function planWebSearch(opts: {
       const topic = market !== "none" ? "finance" : plan.topic === "news" || plan.topic === "finance" ? plan.topic : "general";
       const fresh = (["day", "week", "month", "any"].includes(String(plan.fresh)) ? plan.fresh : market !== "none" ? "week" : plan.recent ? "month" : "any") as Fresh;
       const symbols = (Array.isArray(plan.symbols) ? plan.symbols : []).map((s) => String(s).toUpperCase().replace(/[^A-Z0-9/.-]/g, "")).filter(Boolean).slice(0, 5);
-      return { queries, urls, topic, market, fresh, symbols, by: "ai" };
+      const names = (Array.isArray(plan.names) ? plan.names : []).map((s) => clip(String(s).trim(), 60)).filter((s) => s.length >= 3).slice(0, 5);
+      return { queries, urls, topic, market, fresh, symbols, names, by: "ai" };
     } catch {
       // coba model berikutnya / pakai aturan
     }
@@ -380,6 +385,45 @@ type Hit = { title?: string; url: string; content?: string; raw_content?: string
  * Cari tiap kata kunci (prioritas situs berkualitas, buang yang basi) + baca link yang ditempel + harga live.
  * Tidak pernah melempar error — kalau gagal, kembalikan catatan singkat supaya AI bilang terus terang.
  */
+/** nama lain kode forex/komoditas yang biasa dipakai di judul berita */
+const FX_WORDS: Record<string, string[]> = {
+  XAU: ["gold", "emas"], XAG: ["silver", "perak"], IDR: ["rupiah"], EUR: ["euro"], JPY: ["yen"], GBP: ["pound", "sterling"],
+  AUD: ["aussie", "australian dollar"], CHF: ["franc"], CNY: ["yuan"], SGD: ["singapore dollar", "dolar singapura"], WTI: ["oil", "minyak"],
+};
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Kata penanda aset yang ditanya. Artikel yang tidak menyebut satu pun dibuang
+ * (mis. tanya saham BRIS -> artikel Tesla / Bristol-Myers Squibb tidak dipakai).
+ */
+function relevanceTest(plan: WebPlan): ((text: string) => boolean) | null {
+  if (plan.market === "none" || !plan.symbols.length) return null;
+  const words = new Set<string>();
+  for (const raw of plan.symbols) {
+    const sym = raw.toUpperCase().replace(/^[A-Z_]+:/, "").replace(/\.(JK|US)$/, "");
+    const flat = sym.replace("/", "");
+    if (plan.market === "crypto") {
+      const base = flat.replace(/(USDT|USDC|USD|IDR)$/, "") || flat;
+      words.add(base);
+      if (CG_IDS[base]) words.add(CG_IDS[base].replace(/-\d+$/, "").replace(/-/g, " "));
+    } else if (plan.market === "forex") {
+      words.add(flat);
+      if (flat.length === 6) {
+        words.add(`${flat.slice(0, 3)}/${flat.slice(3)}`);
+        for (const c of [flat.slice(0, 3), flat.slice(3)]) if (c !== "USD") (FX_WORDS[c] ?? [c]).forEach((w) => words.add(w));
+      } else (FX_WORDS[flat.slice(0, 3)] ?? []).forEach((w) => words.add(w));
+    } else words.add(flat);
+  }
+  for (const n of plan.names ?? []) {
+    const clean = n.replace(/^(PT\.?\s+)/i, "").replace(/\s+(\(Persero\)\s*)?Tbk\.?$/i, "").trim();
+    if (clean.length >= 3) words.add(clean);
+  }
+  const list = [...words].filter((w) => w.length >= 2);
+  if (!list.length) return null;
+  const re = new RegExp(`(^|[^A-Za-z0-9])(${list.map(esc).join("|")})(?=$|[^A-Za-z0-9])`, "i");
+  return (text: string) => re.test(text);
+}
+
 export type StepFn = (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void;
 
 export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}): Promise<{ context: string; sources: Source[]; error?: string; chart?: string | null }> {
@@ -399,6 +443,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
   };
   const live: string[] = [];
   const liveSources: Source[] = [];
+  const relevant = relevanceTest(plan);
 
   const tasks: Promise<void>[] = [];
   if (plan.urls.length) {
@@ -432,6 +477,11 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
       let n = 0;
       for (const r of j?.results ?? []) {
         if (LOW_QUALITY.some((d) => host(r.url).endsWith(d)) || isStale(r, plan.fresh)) {
+          dropped++;
+          continue;
+        }
+        // artikel tidak menyebut aset yang ditanya -> buang (judul + awal isi)
+        if (relevant && !relevant(`${r.title ?? ""}\n${String(r.content ?? "").slice(0, 1500)}\n${String(r.raw_content ?? "").slice(0, 4000)}`)) {
           dropped++;
           continue;
         }
