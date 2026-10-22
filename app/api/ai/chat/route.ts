@@ -33,6 +33,7 @@ const err = (status: number, message: string, convId?: string | null) =>
  * Header: x-conversation-id (id percakapan), x-ai-model (model yang dipakai), x-ai-data ("1" kalau membaca data CS Tracker).
  */
 export async function POST(req: NextRequest) {
+  const t0 = Date.now();
   const cfg = aiConfig();
   if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu melengkapi pengaturan AI di Vercel.");
 
@@ -178,25 +179,55 @@ export async function POST(req: NextRequest) {
   req.signal.addEventListener("abort", () => upstreamAbort.abort());
   const failures: string[] = [];
   let opened: { model: string; events: AsyncGenerator<SseEvent>; first: string } | null = null;
+  // batas waktu: Vercel memutus di 60 detik (jadi "Gagal (504)"). Tiap hero diberi maks ±18 detik sampai mulai menjawab,
+  // dan setelah ±40 detik berhenti mencoba supaya pesan error yang jelas masih sempat terkirim.
+  const OPEN_DEADLINE = t0 + 40_000;
+  const FIRST_TOKEN_MS = 18_000;
+  let timedOut = false;
   for (const model of candidates) {
+    const left = OPEN_DEADLINE - Date.now();
+    if (left < 3000) {
+      timedOut = true;
+      break;
+    }
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    upstreamAbort.signal.addEventListener("abort", onAbort);
+    let slow = false;
+    const timer = setTimeout(() => {
+      slow = true;
+      ac.abort();
+    }, Math.min(FIRST_TOKEN_MS, left));
+    const giveUp = (why: string) => {
+      clearTimeout(timer);
+      upstreamAbort.signal.removeEventListener("abort", onAbort);
+      coolDown(model);
+      failures.push(`${model} (${why})`);
+    };
     let upstream: Response | null = null;
     let netErr: unknown = null;
     // koneksi ke server AI kadang putus sesaat -> coba ulang sekali sebelum menyerah
-    for (let attempt = 0; attempt < 2 && !upstream; attempt++) {
+    for (let attempt = 0; attempt < 2 && !upstream && !slow; attempt++) {
       try {
         upstream = await fetch(`${cfg.base}/chat/completions`, {
           method: "POST",
           headers: aiHeaders(cfg.key),
           body: JSON.stringify({ model, messages, stream: true }),
-          signal: upstreamAbort.signal,
+          signal: ac.signal,
         });
       } catch (e) {
         if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
         netErr = e;
-        if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+        if (attempt === 0 && !slow) await new Promise((r) => setTimeout(r, 1500));
       }
     }
+    if (!upstream && slow) {
+      giveUp("terlalu lama, tidak menjawab");
+      await markHealth(supabase, model, false, "timeout");
+      continue;
+    }
     if (!upstream) {
+      clearTimeout(timer);
       // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
       const cause = (netErr as { cause?: { code?: string } })?.cause?.code;
       console.log("[ai] server AI tidak bisa dihubungi:", cause ?? netErr);
@@ -213,39 +244,43 @@ export async function POST(req: NextRequest) {
       // 401 bisa dari kunci website ATAU dari provider (key provider salah / provider tanpa key).
       // Kalau daftar model barusan bisa dibaca pakai kunci yang sama, berarti kunci website benar -> lanjut hero lain.
       if (upstream.status === 401 && !catalog.ids.length) {
+        clearTimeout(timer);
         return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
       }
-      coolDown(model);
-      failures.push(`${model} (${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""})`);
+      giveUp(`${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`);
       await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
       continue;
     }
-    // baca sampai potongan jawaban pertama — kalau langsung error / kosong, anggap gagal
+    // baca dulu ±160 huruf pertama: kalau error / kosong / tiba-tiba pakai huruf Arab-Mandarin dll padahal user tidak -> ganti hero
     const events = sse(upstream.body);
     let first = "";
     let failed = "";
-    // baca dulu ±160 huruf pertama: kalau error / kosong / tiba-tiba pakai huruf Arab-Mandarin dll padahal user tidak -> ganti hero
-    for (;;) {
-      const { value, done } = await events.next();
-      if (done) break;
-      if (value.error) {
-        failed = value.error;
-        break;
+    try {
+      for (;;) {
+        const { value, done } = await events.next();
+        if (done) break;
+        if (value.error) {
+          failed = value.error;
+          break;
+        }
+        if (value.piece) first += value.piece;
+        if (first.length >= 160) break;
       }
-      if (value.piece) first += value.piece;
-      if (first.length >= 160) break;
+    } catch {
+      if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+      if (!first) failed = slow ? "terlalu lama, tidak menjawab" : "koneksi terputus";
     }
     if (first && wrongScript(first, lastUserText)) {
       failed = "menjawab pakai bahasa/huruf asing";
       first = "";
     }
     if (first) {
+      clearTimeout(timer);
       opened = { model, events, first };
       await markHealth(supabase, model, true);
       break;
     }
-    coolDown(model);
-    failures.push(`${model} (${failed ? failed.slice(0, 80) : "jawaban kosong"})`);
+    giveUp(failed || "jawaban kosong");
     await markHealth(supabase, model, false, failed || "jawaban kosong");
     try {
       await events.return(undefined);
@@ -254,7 +289,7 @@ export async function POST(req: NextRequest) {
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
     return saveError(
-      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => `- ${heroName(f.split(" ")[0])}: ${f}`).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
+      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 40 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => `- ${heroName(f.split(" ")[0])}: ${f}`).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
     );
   }
 
