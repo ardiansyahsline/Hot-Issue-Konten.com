@@ -3,6 +3,7 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/plus-jakarta-sans";
 import "./globals.css";
 import { getTheme } from "@/lib/theme";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const metadata: Metadata = {
   title: "CS Tracker — Konten.com",
@@ -22,7 +23,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const theme = await getTheme();
   return (
     <html lang="id" className={theme === "light" ? "light" : undefined}>
-      <body className="min-h-screen">{children}</body>
+      <body className="min-h-screen">
+        {children}
+        <SpeedInsights />
+      </body>
     </html>
   );
 }
