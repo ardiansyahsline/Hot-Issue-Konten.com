@@ -7,6 +7,9 @@ import { ROLES, isRole } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
 import { getTheme } from "@/lib/theme";
 import ChatWidget from "@/components/chat/ChatWidgetLazy";
+import UserAvatar from "@/components/UserAvatar";
+import Presence from "@/components/Presence";
+import NotifPrompt from "@/components/NotifPrompt";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               className="flex items-center gap-2 rounded-full border border-zinc-800/80 bg-zinc-900 py-1 pl-1 pr-3 transition hover:border-zinc-700"
               style={{ boxShadow: "var(--shadow-sm)" }}
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 text-xs font-bold uppercase text-zinc-200">
-                {(name ?? "?").slice(0, 1)}
-              </span>
+              <UserAvatar name={name} url={profile?.avatar_url} size={28} />
               <span className="leading-tight">
                 <span className="block max-w-[140px] truncate text-xs font-semibold">{name}</span>
                 {role && <span className={`block text-[10px] font-semibold ${role.cls}`}>{role.label}</span>}
@@ -52,6 +53,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </header>
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6">{children}</main>
       <ChatWidget meId={user.id} />
+      <Presence />
+      <NotifPrompt />
     </div>
   );
 }

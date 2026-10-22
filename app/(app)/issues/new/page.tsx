@@ -2,7 +2,8 @@ import IssueForm from "@/components/IssueForm";
 import { getCurrentUser, getProfile, requireWriter } from "@/lib/auth";
 import { createIssue } from "../actions";
 
-export default async function NewIssuePage() {
+export default async function NewIssuePage({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
+  const { category } = await searchParams;
   await requireWriter("issues");
   const { supabase, user } = await getCurrentUser();
   const profile = await getProfile();
@@ -19,6 +20,7 @@ export default async function NewIssuePage() {
         profiles={profiles ?? []}
         defaultPicId={user.id}
         currentUserId={user.id}
+        defaultCategory={category}
         isAdmin={isAdmin}
         currentUserName={profile?.full_name ?? user.email}
       />

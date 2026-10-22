@@ -21,8 +21,10 @@ export default function IssueForm({
   isAdmin = false,
   currentUserName,
   currentUserId,
+  defaultCategory,
 }: {
   currentUserId: string;
+  defaultCategory?: string;
   isAdmin?: boolean;
   currentUserName?: string | null;
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
@@ -97,7 +99,7 @@ export default function IssueForm({
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label className="label" htmlFor="category">Kategori</label>
-            <select id="category" name="category" defaultValue={issue?.category ?? CATEGORIES[0]} className="input">
+            <select id="category" name="category" defaultValue={issue?.category ?? ((CATEGORIES as readonly string[]).includes(defaultCategory ?? "") ? defaultCategory : CATEGORIES[0])} className="input">
               {CATEGORIES.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}

@@ -5,6 +5,7 @@ import { fmtDate, timeAgo } from "@/lib/utils";
 import AttachmentGallery from "@/components/attach/AttachmentGallery";
 import Reactions from "@/components/emoji/Reactions";
 import { ReplyToggle } from "./CommentComposer";
+import UserAvatar from "@/components/UserAvatar";
 
 export type CommentView = {
   id: number;
@@ -13,21 +14,11 @@ export type CommentView = {
   created_by: string | null;
   author_name: string | null;
   author_role: string | null;
+  author_avatar?: string | null;
   files: AttachmentView[];
   reactions: ReactionSummary[];
   replies: CommentView[];
 };
-
-function Avatar({ name, size }: { name: string | null; size: number }) {
-  return (
-    <span
-      className="inline-flex shrink-0 items-center justify-center rounded-full bg-zinc-800 font-semibold uppercase text-zinc-200"
-      style={{ width: size, height: size, fontSize: size * 0.4 }}
-    >
-      {(name ?? "?").trim().slice(0, 1)}
-    </span>
-  );
-}
 
 /**
  * Daftar komentar + balasan (menjorok), reaksi emoji, lampiran, dan tombol Balas / hapus.
@@ -60,7 +51,7 @@ export default function CommentList({
     const reactions = <Reactions target={{ kind, id: c.id }} initial={c.reactions} page={page} />;
     return (
       <div className="flex gap-3">
-        <Avatar name={c.author_name} size={c === root ? 32 : 26} />
+        <UserAvatar name={c.author_name} url={c.author_avatar} size={c === root ? 32 : 26} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 text-[12.5px]">
             <span className="font-semibold text-zinc-200">{c.author_name ?? "-"}</span>

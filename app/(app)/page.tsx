@@ -7,7 +7,7 @@ import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
 import StatCard from "@/components/StatCard";
 import { topIssues, vrSegments } from "@/components/TopIssues";
-import HotTop, { type HotRow } from "@/components/HotTop";
+import TopTabs, { type TopCardData } from "@/components/TopTabs";
 import { buildRangkuman, type VrSummaryRow } from "@/lib/videoReview";
 import { agentRangkuman, topAgentIssues, type AgentIssueRow } from "@/lib/agentTop";
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
@@ -93,14 +93,16 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   ]);
   const top = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom);
   const agentTop = topAgentIssues((agentRes.data ?? []) as AgentIssueRow[], weekFrom, prevFrom);
-  const vrRows: HotRow[] = top.map((t) => ({
+  const vrRows: TopCardData[] = top.map((t) => ({
+    summary: buildRangkuman(t.rows),
     title: t.category,
     count: t.count,
     diff: t.count - t.prev,
     href: `/video-review?tab=daftar&category=${encodeURIComponent(t.category)}&from=${weekFrom}&to=${today}`,
     segments: vrSegments(t),
   }));
-  const agentRows: HotRow[] = agentTop.map((t) => ({
+  const agentRows: TopCardData[] = agentTop.map((t) => ({
+    summary: agentRangkuman(t, HOT_THRESHOLD),
     title: t.category,
     count: t.count,
     diff: t.count - t.prev,
@@ -147,26 +149,13 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <HotTop
-          title="Top 3 Video Review"
-          sub={`7 hari terakhir · ${range}`}
-          rows={vrRows}
-          unit="kasus"
-          summary={top[0] ? buildRangkuman(top[0].rows) : ""}
-          moreHref={`/video-review?tab=rekap&from=${weekFrom}&to=${today}`}
-          empty="Belum ada kasus Video Review dalam 7 hari terakhir."
-        />
-        <HotTop
-          title="Top 3 dari agent"
-          sub={`Hot Issue per kategori · ${range}`}
-          rows={agentRows}
-          unit="issue"
-          summary={agentTop[0] ? agentRangkuman(agentTop[0], HOT_THRESHOLD) : ""}
-          moreHref="/?status=all"
-          empty="Belum ada Hot Issue baru dalam 7 hari terakhir."
-        />
-      </div>
+      <TopTabs
+        vr={vrRows}
+        agent={agentRows}
+        range={range}
+        vrMore={`/video-review?tab=report&view=compare`}
+        agentMore="/?status=all"
+      />
 
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => (

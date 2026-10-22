@@ -106,11 +106,13 @@ export function EmojiInsertButton({
   field,
   className = "",
   up = true,
+  alignRight = false,
 }: {
   onPick?: (e: string) => void;
   field?: string;
   className?: string;
   up?: boolean;
+  alignRight?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -146,7 +148,7 @@ export function EmojiInsertButton({
         <EmojiPanel
           onPick={insert}
           onClose={() => setOpen(false)}
-          className={`absolute left-0 ${up ? "bottom-full mb-2" : "top-full mt-2"}`}
+          className={`absolute ${alignRight ? "right-0" : "left-0"} ${up ? "bottom-full mb-2" : "top-full mt-2"}`}
         />
       )}
     </span>

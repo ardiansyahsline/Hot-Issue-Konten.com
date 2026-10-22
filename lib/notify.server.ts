@@ -1,0 +1,208 @@
+import "server-only";
+import webpush from "web-push";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isOnline } from "@/components/UserAvatar";
+
+/**
+ * Pengiriman notifikasi (push browser + email lewat Resend).
+ * Butuh env di Vercel:
+ *   SUPABASE_SERVICE_ROLE_KEY            (sudah ada untuk halaman Admin)
+ *   NEXT_PUBLIC_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY   -> push browser
+ *   RESEND_API_KEY, EMAIL_FROM           -> email
+ * Kalau salah satu belum diisi, jenis notifikasi itu dilewati saja (aplikasi tetap jalan).
+ */
+
+type Prefs = { push_issue: boolean; push_dm: boolean; push_room: boolean; email_issue: boolean; email_dm: boolean };
+const DEFAULT_PREFS: Prefs = { push_issue: true, push_dm: true, push_room: true, email_issue: true, email_dm: true };
+type Payload = { title: string; body: string; url: string; tag: string };
+
+const log = (...a: unknown[]) => console.log("[notif]", ...a);
+
+function admin() {
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    return createAdminClient();
+  } catch {
+    return null;
+  }
+}
+type Admin = NonNullable<ReturnType<typeof admin>>;
+
+export function appOrigin(fallback?: string) {
+  const env = process.env.APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "");
+  return (env || fallback || "").replace(/\/$/, "");
+}
+
+async function prefsFor(db: Admin, ids: string[]) {
+  const map = new Map<string, Prefs>(ids.map((id) => [id, { ...DEFAULT_PREFS }]));
+  if (!ids.length) return map;
+  const { data } = await db.from("notification_prefs").select("*").in("user_id", ids);
+  for (const p of (data ?? []) as (Prefs & { user_id: string })[]) map.set(p.user_id, { ...DEFAULT_PREFS, ...p });
+  return map;
+}
+
+async function sendPush(db: Admin, userIds: string[], payload: Payload) {
+  const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv || !userIds.length) return 0;
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || "mailto:admin@konten.com", pub, priv);
+  const { data: subs } = await db.from("push_subscriptions").select("id, user_id, endpoint, p256dh, auth").in("user_id", userIds);
+  const dead: number[] = [];
+  let sent = 0;
+  if (process.env.NOTIFY_DRY_RUN) {
+    log("push (dry run)", (subs ?? []).length, "langganan", payload.title);
+    return (subs ?? []).length;
+  }
+  await Promise.all(
+    (subs ?? []).map(async (s) => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), { TTL: 60 * 60 * 24 });
+        sent++;
+      } catch (e) {
+        const code = (e as { statusCode?: number }).statusCode;
+        if (code === 404 || code === 410) dead.push(s.id); // langganan kedaluwarsa / dicabut
+        else log("push gagal", code, (e as Error).message);
+      }
+    })
+  );
+  if (dead.length) await db.from("push_subscriptions").delete().in("id", dead);
+  return sent;
+}
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+function emailHtml(heading: string, lines: string[], cta: string, url: string) {
+  return `<!doctype html><html><body style="margin:0;background:#f4f4f5;font-family:Inter,Segoe UI,Arial,sans-serif">
+  <div style="max-width:520px;margin:24px auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e4e4e7">
+    <div style="padding:16px 24px;background:linear-gradient(110deg,#b91c1c,#ef4444 45%,#f97316 85%,#fbbf24);color:#fff;font-weight:700;font-size:15px">CS Tracker · Konten.com</div>
+    <div style="padding:24px">
+      <h2 style="margin:0 0 12px;font-size:18px;color:#18181b">${esc(heading)}</h2>
+      ${lines.map((l) => `<p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#3f3f46;white-space:pre-wrap">${esc(l)}</p>`).join("")}
+      <a href="${url}" style="display:inline-block;margin-top:12px;padding:10px 18px;border-radius:10px;background:#ea580c;color:#fff;text-decoration:none;font-weight:600;font-size:14px">${esc(cta)}</a>
+    </div>
+    <div style="padding:12px 24px;border-top:1px solid #f4f4f5;font-size:12px;color:#a1a1aa">Atur notifikasi di halaman Akun &rarr; Notifikasi.</div>
+  </div></body></html>`;
+}
+
+async function sendEmails(list: { to: string; subject: string; html: string }[]) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key || !list.length) return 0;
+  const from = process.env.EMAIL_FROM || "CS Tracker <onboarding@resend.dev>";
+  if (process.env.NOTIFY_DRY_RUN) {
+    log("email (dry run)", list.map((l) => `${l.to}: ${l.subject}`));
+    return list.length;
+  }
+  let sent = 0;
+  for (let i = 0; i < list.length; i += 100) {
+    const batch = list.slice(i, i + 100).map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html }));
+    const r = await fetch("https://api.resend.com/emails/batch", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(batch),
+    });
+    if (r.ok) sent += batch.length;
+    else log("email gagal", r.status, (await r.text()).slice(0, 300));
+  }
+  return sent;
+}
+
+/** Hot Issue baru -> semua orang (kecuali yang input) sesuai pengaturan masing-masing */
+export async function notifyNewIssue(issueId: number, actorId: string, origin: string) {
+  const db = admin();
+  if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
+  const { data: issue } = await db.from("issues").select("id, title, category, priority, description, created_by").eq("id", issueId).maybeSingle();
+  if (!issue) return;
+  const { data: people } = await db.from("profiles").select("id, email, full_name");
+  const actor = (people ?? []).find((p) => p.id === actorId);
+  const others = (people ?? []).filter((p) => p.id !== actorId);
+  const prefs = await prefsFor(db, others.map((p) => p.id));
+  const url = `${appOrigin(origin)}/issues/${issue.id}`;
+  const who = actor?.full_name || "Seseorang";
+  const urgent = issue.priority === "urgent" || issue.priority === "high" ? " ❗" : "";
+
+  const pushed = await sendPush(
+    db,
+    others.filter((p) => prefs.get(p.id)!.push_issue).map((p) => p.id),
+    { title: `🔥 Hot Issue baru · ${issue.category}${urgent}`, body: `${issue.title}\noleh ${who}`, url, tag: `issue-${issue.id}` }
+  );
+  const emailed = await sendEmails(
+    others
+      .filter((p) => p.email && prefs.get(p.id)!.email_issue)
+      .map((p) => ({
+        to: p.email as string,
+        subject: `[CS Tracker] Hot Issue baru: ${issue.title}`,
+        html: emailHtml(
+          issue.title,
+          [`Kategori: ${issue.category} · Prioritas: ${issue.priority}`, `Diinput oleh ${who}.`, ...(issue.description ? [String(issue.description).slice(0, 600)] : [])],
+          "Buka issue",
+          url
+        ),
+      }))
+  );
+  log(`issue #${issueId}: push ${pushed}, email ${emailed}`);
+}
+
+/** Pesan chat baru -> anggota room (push). Pesan pribadi + penerima offline -> email (maks 1 / 15 menit). */
+export async function notifyChat(messageId: number, origin: string) {
+  const db = admin();
+  if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
+  const { data: m } = await db.from("chat_messages").select("id, room_id, sender_id, body, created_at").eq("id", messageId).maybeSingle();
+  if (!m) return;
+  const [{ data: room }, { data: members }, { data: people }, { count: fileCount }] = await Promise.all([
+    db.from("chat_rooms").select("id, name, kind").eq("id", m.room_id).maybeSingle(),
+    db.from("chat_members").select("user_id, last_read_at, last_emailed_at").eq("room_id", m.room_id),
+    db.from("profiles").select("id, email, full_name, last_seen_at"),
+    db.from("attachments").select("id", { count: "exact", head: true }).eq("chat_message_id", m.id),
+  ]);
+  if (!room) return;
+  const sender = (people ?? []).find((p) => p.id === m.sender_id);
+  const senderName = sender?.full_name || "Seseorang";
+  const memberSet = new Set((members ?? []).map((x) => x.user_id));
+  const targets = (people ?? []).filter((p) => p.id !== m.sender_id && (room.kind === "public" || memberSet.has(p.id)));
+  const prefs = await prefsFor(db, targets.map((p) => p.id));
+  const direct = room.kind === "direct";
+  const text = m.body?.trim() || (fileCount ? `📎 ${fileCount} lampiran` : "");
+  const url = `${appOrigin(origin)}/chat?room=${room.id}`;
+
+  const pushed = await sendPush(
+    db,
+    targets.filter((p) => (direct ? prefs.get(p.id)!.push_dm : prefs.get(p.id)!.push_room)).map((p) => p.id),
+    {
+      title: direct ? `💬 ${senderName}` : `💬 ${senderName} · #${room.name}`,
+      body: text.slice(0, 180),
+      url,
+      tag: `chat-${room.id}`,
+    }
+  );
+
+  let emailed = 0;
+  if (direct) {
+    const now = Date.now();
+    const due = targets.filter((p) => {
+      const mem = (members ?? []).find((x) => x.user_id === p.id);
+      const recentlyEmailed = mem?.last_emailed_at && now - new Date(mem.last_emailed_at).getTime() < 15 * 60000;
+      const alreadyRead = mem?.last_read_at && mem.last_read_at >= m.created_at;
+      return p.email && prefs.get(p.id)!.email_dm && !isOnline(p.last_seen_at as string | null) && !recentlyEmailed && !alreadyRead;
+    });
+    emailed = await sendEmails(
+      due.map((p) => ({
+        to: p.email as string,
+        subject: `[CS Tracker] Pesan baru dari ${senderName}`,
+        html: emailHtml(`Pesan baru dari ${senderName}`, [text.slice(0, 1000) || "(lampiran)"], "Balas di CS Tracker", url),
+      }))
+    );
+    if (due.length && emailed) {
+      await db.from("chat_members").update({ last_emailed_at: new Date().toISOString() }).eq("room_id", room.id).in("user_id", due.map((p) => p.id));
+    }
+  }
+  log(`chat #${messageId}: push ${pushed}, email ${emailed}`);
+}
+
+/** Tes dari halaman Akun */
+export async function notifySelfTest(userId: string, origin: string) {
+  const db = admin();
+  if (!db) return { error: "SUPABASE_SERVICE_ROLE_KEY belum di-set di Vercel." };
+  if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return { error: "Kunci push (VAPID) belum di-set di Vercel." };
+  const n = await sendPush(db, [userId], { title: "✅ Notifikasi CS Tracker aktif", body: "Kamu akan dapat kabar issue baru & chat di sini.", url: `${appOrigin(origin)}/akun`, tag: "test" });
+  return n ? { ok: `Tes terkirim ke ${n} perangkat.` } : { error: "Belum ada perangkat yang terdaftar. Aktifkan notifikasi browser dulu." };
+}

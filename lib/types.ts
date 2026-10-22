@@ -51,6 +51,8 @@ export type Profile = {
   full_name: string | null;
   role: Role;
   created_at: string;
+  avatar_url?: string | null;
+  last_seen_at?: string | null;
 };
 
 export type VideoReviewRow = {

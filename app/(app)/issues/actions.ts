@@ -2,6 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
+import { headers } from "next/headers";
+import { notifyNewIssue } from "@/lib/notify.server";
 import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
 import { canWriteIssues } from "@/lib/roles";
 import { CATEGORIES, PRIORITIES, STATUSES } from "@/lib/constants";
@@ -78,6 +81,12 @@ export async function createIssue(_prev: FormState, formData: FormData): Promise
       .insert(contacts.map((c) => ({ ...c, issue_id: data.id })));
     if (cErr) return { error: `Issue tersimpan (#${data.id}) tapi kontak gagal: ${cErr.message}` };
   }
+
+  // notifikasi push + email ke tim (berjalan di belakang, tidak memperlambat simpan)
+  const h = await headers();
+  const origin = h.get("host") ? `${h.get("x-forwarded-proto") ?? "https"}://${h.get("x-forwarded-host") ?? h.get("host")}` : "";
+  const issueId = data.id as number;
+  after(() => notifyNewIssue(issueId, w.user.id, origin).catch((e) => console.log("[notif] error", e)));
 
   const aErr = await saveAttachments(supabase, parseAttachments(formData, w.user.id), { kind: "issue", id: data.id });
   if (aErr) return { error: `Issue tersimpan (#${data.id}) tapi lampiran gagal: ${aErr}` };

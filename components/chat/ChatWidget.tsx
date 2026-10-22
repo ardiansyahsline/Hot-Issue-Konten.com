@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import ChatThread from "./ChatThread";
 import { roomTitle, useChat } from "./useChat";
+import { notifyChatMessage } from "@/lib/notifyActions";
 
 /** Tombol chat melayang di pojok kanan bawah (semua halaman kecuali halaman Chat) */
 export default function ChatWidget({ meId }: { meId: string }) {
@@ -16,7 +17,9 @@ export default function ChatWidget({ meId }: { meId: string }) {
 function Widget({ meId }: { meId: string }) {
   const [open, setOpen] = useState(false);
   const [tabVisible, setTabVisible] = useState(true);
-  const c = useChat(meId, open && tabVisible);
+  const c = useChat(meId, open && tabVisible, null, (id) => {
+    notifyChatMessage(id).catch(() => {});
+  });
 
   useEffect(() => {
     const on = () => setTabVisible(!document.hidden);
@@ -89,6 +92,9 @@ function Widget({ meId }: { meId: string }) {
             onSend={c.send}
             reactions={c.reactions}
             onReact={c.toggleReaction}
+            files={c.files}
+            readers={c.readers}
+            direct={c.room?.kind === "direct"}
             compact
             disabled={!c.roomId}
           />

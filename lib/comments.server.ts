@@ -3,7 +3,7 @@ import type { AttachmentView } from "@/lib/attachments";
 import { summarize, type ReactionRow } from "@/lib/reactions";
 import type { CommentView } from "@/components/comments/CommentList";
 
-export type Person = { id: string; full_name: string | null; role: string | null };
+export type Person = { id: string; full_name: string | null; role: string | null; avatar_url?: string | null };
 export type CommentRow = {
   id: number;
   body: string;
@@ -29,6 +29,7 @@ export function buildThread(
     created_by: r.created_by,
     author_name: people.get(r.created_by ?? "")?.full_name ?? null,
     author_role: people.get(r.created_by ?? "")?.role ?? null,
+    author_avatar: people.get(r.created_by ?? "")?.avatar_url ?? null,
     files: files.filter((f) => f[fileKey] === r.id),
     reactions: summarize(r.reactions, meId, names),
     replies: [],

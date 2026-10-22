@@ -28,7 +28,7 @@ export default function SgForm({
       <input type="hidden" name="category" value={category} />
       <div>
         <div className="label">Kategori</div>
-        <div className={`grid grid-cols-2 gap-2 ${compact ? "" : "sm:grid-cols-4"}`}>
+        <div className={`grid grid-cols-2 gap-2 ${compact ? "" : "sm:grid-cols-3"}`}>
           {(Object.entries(SG_CATEGORIES) as [SgCategory, (typeof SG_CATEGORIES)[SgCategory]][]).map(([k, v]) => (
             <button
               type="button"
@@ -46,6 +46,10 @@ export default function SgForm({
           ))}
         </div>
       </div>
+      <p className="-mt-2 text-[12px] text-zinc-500">
+        Ada bug / error? Laporkan lewat{" "}
+        <Link href="/issues/new?category=Bug%20platform" className="font-semibold text-orange-400 hover:underline">Hot Issue (Bug platform)</Link>.
+      </p>
       <div>
         <label className="label" htmlFor="title">Judul</label>
         <input id="title" name="title" required defaultValue={suggestion?.title} placeholder="Ringkas, mis. “Clipper sering tanya kenapa views belum update”" className="input" />

@@ -30,7 +30,7 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
     getProfile(),
     supabase.from("attachments").select(ATTACH_SELECT).eq("suggestion_id", id).order("id"),
     supabase.from("reactions").select("emoji, user_id").eq("suggestion_id", id).order("id"),
-    supabase.from("profiles").select("id, full_name, role"),
+    supabase.from("profiles").select("*"),
   ]);
   if (!data) notFound();
   const r = data as SuggestionRow;

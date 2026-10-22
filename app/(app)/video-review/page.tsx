@@ -18,6 +18,7 @@ import { AutoCategorizeButton, CategoryNote } from "@/components/VrRekapTools";
 import StatCard, { type Tone } from "@/components/StatCard";
 import VrQuickForm from "@/components/VrQuickForm";
 import VrTable from "@/components/VrTable";
+import { ReportNav, VrCompare, VrVisual } from "@/components/VrReport";
 import { todayWib } from "@/lib/utils";
 
 type SP = Promise<Record<string, string | undefined>>;
@@ -30,7 +31,10 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   const canWrite = canWriteReviews(profile?.role);
   const canEdit = canEditReviews(profile?.role);
   const { user } = await getCurrentUser();
-  const tab = sp.tab === "rekap" ? "rekap" : sp.tab === "daftar" || !canWrite ? "daftar" : "input";
+  // "Report" (dulu "Rekap per kategori"): Detail | Visualisasi | Compare
+  const tab = sp.tab === "rekap" || sp.tab === "report" ? "rekap" : sp.tab === "daftar" || !canWrite ? "daftar" : "input";
+  const view = sp.view === "visual" ? "visual" : sp.view === "compare" ? "compare" : "detail";
+  const range = ["7", "30", "90", "all"].includes(sp.r ?? "") ? sp.r! : "30";
 
   const from = isDate(sp.from) ? sp.from! : null;
   const to = isDate(sp.to) ? sp.to! : null;
@@ -57,7 +61,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   }
 
   // semua kasus di rentang tanggal (untuk rekap & rangkuman), diambil per 1000 baris
-  async function fetchSummaryRows() {
+  async function fetchSummaryRows(useFilter = true) {
     const out: VrSummaryRow[] = [];
     for (let page = 0; page < 50; page++) {
       let sq = supabase
@@ -65,8 +69,8 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
         .select("category, status, resolution, report_date")
         .order("id")
         .range(page * 1000, page * 1000 + 999);
-      if (from) sq = sq.gte("report_date", from);
-      if (to) sq = sq.lte("report_date", to);
+      if (useFilter && from) sq = sq.gte("report_date", from);
+      if (useFilter && to) sq = sq.lte("report_date", to);
       const { data } = await sq;
       out.push(...((data ?? []) as VrSummaryRow[]));
       if (!data || data.length < 1000) break;
@@ -77,8 +81,8 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
   const empty = { data: [] as unknown[], count: 0, error: null };
   const [listRes, summary, notesRes, totalRes, recentRes] = await Promise.all([
     tab === "daftar" ? query : Promise.resolve(empty),
-    tab === "rekap" ? fetchSummaryRows() : Promise.resolve([] as VrSummaryRow[]),
-    tab === "rekap" ? supabase.from("video_review_category_notes").select("category, note") : Promise.resolve({ data: [] as { category: string; note: string }[] }),
+    tab === "rekap" ? fetchSummaryRows(view === "detail") : Promise.resolve([] as VrSummaryRow[]),
+    tab === "rekap" && view === "detail" ? supabase.from("video_review_category_notes").select("category, note") : Promise.resolve({ data: [] as { category: string; note: string }[] }),
     supabase.from("video_reviews").select("id", { count: "exact", head: true }),
     tab === "input"
       ? supabase.from("video_review_list").select("*").eq("created_by", user.id).order("created_at", { ascending: false }).limit(5)
@@ -145,16 +149,16 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
           [
             ...(canWrite ? [["input", "＋ Input kasus", null]] : []),
             ["daftar", "Daftar kasus", totalCases],
-            ["rekap", "Rekap per kategori", null],
+            ["report", "Report", null],
           ] as [string, string, number | null][]
         ).map(([key, label, count]) => (
           <Link
             key={key}
             href={`/video-review?tab=${key}`}
             className={`flex items-center gap-2 rounded-xl px-4 py-2 text-[14px] font-semibold transition ${
-              tab === key ? "text-white" : "text-zinc-400 hover:text-zinc-100"
+              tab === key || (key === "report" && tab === "rekap") ? "text-white" : "text-zinc-400 hover:text-zinc-100"
             }`}
-            style={tab === key ? { backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)", boxShadow: "var(--shadow-primary)" } : undefined}
+            style={tab === key || (key === "report" && tab === "rekap") ? { backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)", boxShadow: "var(--shadow-primary)" } : undefined}
           >
             {label}
             {count !== null && (
@@ -185,7 +189,10 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
       )}
 
       {/* ---------------- TAB: REKAP ---------------- */}
-      {tab === "rekap" && (
+      {tab === "rekap" && <ReportNav view={view} />}
+      {tab === "rekap" && view === "visual" && <VrVisual rows={summary} range={range} today={todayWib()} />}
+      {tab === "rekap" && view === "compare" && <VrCompare rows={summary} mode={sp.m === "persen" ? "persen" : "jumlah"} today={todayWib()} />}
+      {tab === "rekap" && view === "detail" && (
         <>
       {/* ---------------- KARTU STATUS ---------------- */}
         <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">

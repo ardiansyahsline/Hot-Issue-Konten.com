@@ -33,7 +33,7 @@ export default async function IssueDetail({ params }: { params: Promise<{ id: st
     getProfile(),
     supabase.from("attachments").select(ATTACH_SELECT).eq("issue_id", id).order("id"),
     supabase.from("reactions").select("emoji, user_id").eq("issue_id", id).order("id"),
-    supabase.from("profiles").select("id, full_name, role"),
+    supabase.from("profiles").select("*"),
   ]);
   if (!data) notFound();
   const issue = data as IssueRow;

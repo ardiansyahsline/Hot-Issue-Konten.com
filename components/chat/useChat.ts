@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { ReactionRow } from "@/lib/reactions";
+import { ATTACH_BUCKET, type AttachmentInput, type AttachmentView } from "@/lib/attachments";
 
 export type ChatRoom = {
   room_id: string;
@@ -17,7 +18,16 @@ export type ChatRoom = {
   member_count: number;
 };
 export type ChatMsg = { id: number; room_id: string; sender_id: string | null; body: string; created_at: string };
-export type ChatPerson = { id: string; full_name: string | null; email: string | null };
+export type ChatPerson = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  role?: string | null;
+  avatar_url?: string | null;
+  last_seen_at?: string | null;
+};
+export type ChatFile = AttachmentView & { chat_message_id: number };
+export type Reader = { user_id: string; last_read_at: string };
 
 const PAGE = 50;
 const COLS = "id, room_id, sender_id, body, created_at";
@@ -35,7 +45,7 @@ export function roomTitle(r: ChatRoom | undefined, people: Map<string, ChatPerso
  * Pesan baru masuk lewat Supabase Realtime; kalau Realtime tidak tersambung, otomatis cek berkala (polling).
  * `visible` = tampilan chat sedang terlihat (halaman Chat / widget terbuka) -> pesan langsung ditandai dibaca.
  */
-export function useChat(meId: string, visible: boolean, initialRoom?: string | null) {
+export function useChat(meId: string, visible: boolean, initialRoom?: string | null, onSent?: (messageId: number) => void) {
   const supabase = useMemo(() => createClient(), []);
   const [rooms, setRooms] = useState<ChatRoom[] | null>(null);
   const [people, setPeople] = useState<ChatPerson[]>([]);
@@ -46,6 +56,10 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reactions, setReactions] = useState<Record<number, ReactionRow[]>>({});
+  const [files, setFiles] = useState<Record<number, ChatFile[]>>({});
+  const [roomFiles, setRoomFiles] = useState<ChatFile[]>([]);
+  const [readers, setReaders] = useState<Reader[]>([]);
+  const signed = useRef(new Map<string, { url: string; at: number }>());
 
   const roomRef = useRef(roomId);
   const visibleRef = useRef(visible);
@@ -77,15 +91,17 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     [supabase]
   );
 
-  // daftar orang (sekali)
+  // daftar orang + status online (diperbarui tiap 30 detik)
+  const loadPeople = useCallback(async () => {
+    const { data } = await supabase.from("profiles").select("*").order("full_name");
+    if (data) setPeople(data as ChatPerson[]);
+  }, [supabase]);
   useEffect(() => {
-    supabase
-      .from("profiles")
-      .select("id, full_name, email")
-      .order("full_name")
-      .then(({ data }) => setPeople((data ?? []) as ChatPerson[]));
+    loadPeople();
     refreshRooms();
-  }, [supabase, refreshRooms]);
+    const t = setInterval(() => !document.hidden && loadPeople(), 30000);
+    return () => clearInterval(t);
+  }, [supabase, refreshRooms, loadPeople]);
 
   // pilih room pertama kalau belum ada yang dipilih
   useEffect(() => {
@@ -154,10 +170,86 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     setReactions(next);
   }, [supabase]);
 
+  /** link sementara untuk file (disimpan 50 menit supaya tidak minta ulang terus) */
+  const signPaths = useCallback(
+    async (paths: string[]) => {
+      const now = Date.now();
+      const need = [...new Set(paths)].filter((p) => !signed.current.has(p) || now - signed.current.get(p)!.at > 50 * 60000);
+      if (need.length) {
+        const { data } = await supabase.storage.from(ATTACH_BUCKET).createSignedUrls(need, 3600);
+        for (const d of data ?? []) if (d.path && d.signedUrl) signed.current.set(d.path, { url: d.signedUrl, at: now });
+      }
+      return (p: string) => signed.current.get(p)?.url ?? null;
+    },
+    [supabase]
+  );
+
+  type FileRow = { id: number; path: string; name: string; size: number; mime: string | null; created_by: string | null; created_at: string; chat_message_id: number };
+  const toViews = useCallback(
+    async (rows: FileRow[]): Promise<ChatFile[]> => {
+      const url = await signPaths(rows.map((r) => r.path));
+      return rows.map((r) => {
+        const u = url(r.path);
+        return {
+          id: r.id, name: r.name, size: Number(r.size), mime: r.mime, url: u,
+          downloadUrl: u ? `${u}${u.includes("?") ? "&" : "?"}download=${encodeURIComponent(r.name)}` : null,
+          created_by: r.created_by, created_by_name: null, created_at: r.created_at,
+          issue_note_id: null, suggestion_comment_id: null, chat_message_id: r.chat_message_id,
+        };
+      });
+    },
+    [signPaths]
+  );
+
+  // lampiran untuk pesan yang sedang tampil
+  const loadFiles = useCallback(async () => {
+    const ids = msgsRef.current.slice(-200).map((m) => m.id);
+    if (!ids.length) return setFiles({});
+    const { data, error } = await supabase
+      .from("attachments")
+      .select("id, path, name, size, mime, created_by, created_at, chat_message_id")
+      .in("chat_message_id", ids)
+      .order("id");
+    if (error) return; // migration-09 belum dijalankan
+    const views = await toViews((data ?? []) as FileRow[]);
+    const next: Record<number, ChatFile[]> = {};
+    for (const v of views) (next[v.chat_message_id] ??= []).push(v);
+    setFiles(next);
+  }, [supabase, toViews]);
+
+  // galeri "File di room ini" (12 terbaru)
+  const loadRoomFiles = useCallback(async () => {
+    const id = roomRef.current;
+    if (!id) return;
+    const { data, error } = await supabase
+      .from("attachments")
+      .select("id, path, name, size, mime, created_by, created_at, chat_message_id, chat_messages!inner(room_id)")
+      .eq("chat_messages.room_id", id)
+      .order("id", { ascending: false })
+      .limit(12);
+    if (error) return setRoomFiles([]);
+    setRoomFiles(await toViews((data ?? []) as unknown as FileRow[]));
+  }, [supabase, toViews]);
+
+  // siapa saja sudah membaca sampai kapan (untuk "Dilihat")
+  const loadReaders = useCallback(async () => {
+    const id = roomRef.current;
+    if (!id) return;
+    const { data } = await supabase.from("chat_members").select("user_id, last_read_at").eq("room_id", id);
+    setReaders((data ?? []) as Reader[]);
+  }, [supabase]);
+
   const lastMsgId = msgs.at(-1)?.id ?? 0;
   useEffect(() => {
     loadReactions();
-  }, [roomId, lastMsgId, msgs.length, loadReactions]);
+    loadFiles();
+    loadReaders();
+  }, [roomId, lastMsgId, msgs.length, loadReactions, loadFiles, loadReaders]);
+  useEffect(() => {
+    setRoomFiles([]);
+    setReaders([]);
+    loadRoomFiles();
+  }, [roomId, loadRoomFiles]);
 
   const reactTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleReactions = useCallback(() => {
@@ -213,12 +305,13 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
         if (document.hidden) return;
         if (!live) fetchNewer();
         if (!live && visible) loadReactions();
+        if (visible) loadReaders();
         refreshRooms();
       },
       live ? 45000 : visible ? 5000 : 20000
     );
     return () => clearInterval(t);
-  }, [live, visible, fetchNewer, refreshRooms, loadReactions]);
+  }, [live, visible, fetchNewer, refreshRooms, loadReactions, loadReaders]);
 
   const loadOlder = useCallback(async () => {
     const id = roomRef.current;
@@ -230,24 +323,44 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     setMsgs((prev) => [...older, ...prev]);
   }, [supabase]);
 
+  /** kirim teks dan/atau lampiran (file sudah ter-upload ke Storage) */
   const send = useCallback(
-    async (body: string) => {
-      const text = body.trim();
+    async (body: string, attach: AttachmentInput[] = []) => {
+      const text = body.trim().slice(0, 4000);
       const id = roomRef.current;
-      if (!text || !id) return false;
-      const { data, error } = await supabase.from("chat_messages").insert({ room_id: id, body: text.slice(0, 4000) }).select(COLS).single();
-      if (error || !data) {
-        setError(`Pesan gagal terkirim: ${error?.message ?? "coba lagi"}`);
+      if ((!text && !attach.length) || !id) return false;
+      let mid: number | null = null;
+      const rpc = await supabase.rpc("chat_send", { p_room: id, p_body: text, p_files: attach });
+      if (!rpc.error) mid = rpc.data as number;
+      else if (/chat_send|function/i.test(rpc.error.message) && !attach.length) {
+        // migration-09 belum dijalankan -> cara lama (teks saja)
+        const r = await supabase.from("chat_messages").insert({ room_id: id, body: text }).select("id").single();
+        if (r.error) return setError(`Pesan gagal terkirim: ${r.error.message}`), false;
+        mid = r.data.id as number;
+      } else {
+        setError(
+          /chat_send|function/i.test(rpc.error.message)
+            ? "Kirim lampiran di chat belum aktif. Admin perlu menjalankan migration-09."
+            : `Pesan gagal terkirim: ${rpc.error.message}`
+        );
         return false;
       }
+      const { data } = await supabase.from("chat_messages").select(COLS).eq("id", mid).single();
       setError(null);
-      appendMsgs([data as ChatMsg]);
-      setRooms((rs) =>
-        rs?.map((r) => (r.room_id === id ? { ...r, last_body: text, last_at: (data as ChatMsg).created_at, unread: 0 } : r)) ?? rs
-      );
+      if (data) {
+        appendMsgs([data as ChatMsg]);
+        setRooms((rs) =>
+          rs?.map((r) => (r.room_id === id ? { ...r, last_body: text || "📎 Lampiran", last_at: (data as ChatMsg).created_at, unread: 0 } : r)) ?? rs
+        );
+      }
+      if (attach.length) {
+        loadFiles();
+        loadRoomFiles();
+      }
+      onSent?.(mid!);
       return true;
     },
-    [supabase, appendMsgs]
+    [supabase, appendMsgs, loadFiles, loadRoomFiles, onSent]
   );
 
   const openDm = useCallback(
@@ -285,6 +398,6 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   return {
     rooms, room, roomId, setRoomId, msgs, loadingMsgs, hasMore, loadOlder,
     people, peopleMap, send, openDm, createRoom, unreadTotal, live, error, setError,
-    reactions, toggleReaction,
+    reactions, toggleReaction, files, roomFiles, readers,
   };
 }

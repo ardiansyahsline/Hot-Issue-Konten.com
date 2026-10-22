@@ -145,7 +145,7 @@ export default function AttachmentGallery({
   );
 }
 
-function Lightbox({
+export function Lightbox({
   images,
   index,
   onIndex,

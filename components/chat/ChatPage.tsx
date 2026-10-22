@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import ChatThread, { Avatar } from "./ChatThread";
-import { personName, roomTitle, useChat, type ChatRoom } from "./useChat";
+import ChatMembers, { sortByPresence } from "./ChatMembers";
+import { isOnline, lastSeenText } from "@/components/UserAvatar";
+import { notifyChatMessage } from "@/lib/notifyActions";
+import { personName, roomTitle, useChat, type ChatPerson, type ChatRoom } from "./useChat";
 
 function Badge({ n }: { n: number }) {
   if (!n) return null;
@@ -13,8 +16,8 @@ function Badge({ n }: { n: number }) {
   );
 }
 
-function RoomIcon({ room, name }: { room: ChatRoom; name: string }) {
-  if (room.kind === "direct") return <Avatar name={name} />;
+function RoomIcon({ room, name, person }: { room: ChatRoom; name: string; person?: ChatPerson }) {
+  if (room.kind === "direct") return <Avatar name={name} url={person?.avatar_url} online={isOnline(person?.last_seen_at)} />;
   return (
     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[13px] font-bold text-zinc-400">
       #
@@ -22,12 +25,13 @@ function RoomIcon({ room, name }: { room: ChatRoom; name: string }) {
   );
 }
 
-const roomSub = (r: ChatRoom) =>
-  r.kind === "public" ? "Room bersama · semua anggota" : r.kind === "group" ? `Room · ${r.member_count} anggota` : "Pesan pribadi";
 
 export default function ChatPage({ meId, initialRoom }: { meId: string; initialRoom?: string | null }) {
   const [visible, setVisible] = useState(true);
-  const c = useChat(meId, visible, initialRoom);
+  const c = useChat(meId, visible, initialRoom, (id) => {
+    notifyChatMessage(id).catch(() => {});
+  });
+  const [showMembers, setShowMembers] = useState(false);
   const [q, setQ] = useState("");
   const [panel, setPanel] = useState<"none" | "dm" | "room">("none");
   const [mobileList, setMobileList] = useState(!initialRoom);
@@ -58,6 +62,7 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
   const item = (r: ChatRoom) => {
     const title = roomTitle(r, c.peopleMap);
     const active = r.room_id === c.roomId;
+    const other = r.other_id ? c.peopleMap.get(r.other_id) : undefined;
     return (
       <button
         key={r.room_id}
@@ -66,16 +71,22 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
           active ? "bg-orange-500/10" : "hover:bg-zinc-800/50"
         }`}
       >
-        <RoomIcon room={r} name={title} />
+        <RoomIcon room={r} name={title} person={other} />
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-[13.5px] ${active ? "font-semibold text-orange-400" : r.unread ? "font-semibold" : ""}`}>
             {title}
           </span>
-          {r.last_body && (
-            <span className="block truncate text-[11.5px] text-zinc-500">
-              {r.kind !== "direct" && r.last_sender ? `${r.last_sender.split(" ")[0]}: ` : ""}
-              {r.last_body}
+          {r.kind === "direct" && !r.unread ? (
+            <span className={`block truncate text-[11.5px] ${isOnline(other?.last_seen_at) ? "text-emerald-500" : "text-zinc-500"}`}>
+              {lastSeenText(other?.last_seen_at)}
             </span>
+          ) : (
+            r.last_at && (
+              <span className="block truncate text-[11.5px] text-zinc-500">
+                {r.kind !== "direct" && r.last_sender ? `${r.last_sender.split(" ")[0]}: ` : ""}
+                {r.last_body || "📎 Lampiran"}
+              </span>
+            )
           )}
         </span>
         <Badge n={r.unread} />
@@ -83,9 +94,19 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
     );
   };
 
+  // anggota room aktif: room publik = semua orang, selain itu = anggota room
+  const memberIds = new Set(c.readers.map((r) => r.user_id));
+  const members: ChatPerson[] = !c.room
+    ? []
+    : c.room.kind === "public"
+      ? c.people
+      : c.people.filter((p) => memberIds.has(p.id) || p.id === c.room?.other_id || p.id === meId);
+  const onlineCount = members.filter((p) => isOnline(p.last_seen_at)).length;
+  const other = c.room?.kind === "direct" ? c.peopleMap.get(c.room.other_id ?? "") : undefined;
+
   return (
     <div
-      className="card grid overflow-hidden md:grid-cols-[300px_1fr]"
+      className="card relative grid overflow-hidden md:grid-cols-[280px_1fr] xl:grid-cols-[280px_1fr_250px]"
       style={{ height: "calc(100vh - 210px)", minHeight: 480 }}
     >
       {/* Sidebar: room & pesan pribadi */}
@@ -116,7 +137,7 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
                   onClick={() => c.openDm(p.id).then(() => setMobileList(false))}
                   className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-zinc-800/50"
                 >
-                  <Avatar name={personName(p)} />
+                  <Avatar name={personName(p)} url={p.avatar_url} online={isOnline(p.last_seen_at)} />
                   <span className="min-w-0 flex-1 truncate text-[13.5px]">{personName(p)}</span>
                   <span className="text-[11px] text-orange-400">Chat</span>
                 </button>
@@ -134,7 +155,7 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
                     onClick={() => c.openDm(p.id).then(() => { setPanel("none"); setMobileList(false); })}
                     className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-zinc-800/50"
                   >
-                    <Avatar name={personName(p)} size={24} />
+                    <Avatar name={personName(p)} size={24} url={p.avatar_url} online={isOnline(p.last_seen_at)} />
                     <span className="min-w-0 flex-1 truncate text-[13px]">{personName(p)}</span>
                   </button>
                 ))}
@@ -150,17 +171,47 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
           <>
             <header className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-3.5">
               <button onClick={() => setMobileList(true)} className="text-zinc-400 md:hidden" aria-label="Kembali">←</button>
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/10 text-[14px] font-bold text-orange-400">
-                {c.room.kind === "direct" ? roomTitle(c.room, c.peopleMap).slice(0, 1).toUpperCase() : "#"}
-              </span>
+              {c.room.kind === "direct" ? (
+                <Avatar name={roomTitle(c.room, c.peopleMap)} url={other?.avatar_url} online={isOnline(other?.last_seen_at)} size={34} />
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/10 text-[14px] font-bold text-orange-400">#</span>
+              )}
               <div className="min-w-0">
                 <div className="truncate text-[15px] font-semibold">{roomTitle(c.room, c.peopleMap)}</div>
                 <div className="text-[12px] text-zinc-500">
-                  {roomSub(c.room)}
-                  {!c.live && <span title="Realtime tidak tersambung, pesan dicek tiap beberapa detik"> · sinkron otomatis</span>}
+                  {c.room.kind === "direct" ? (
+                    <span className={isOnline(other?.last_seen_at) ? "text-emerald-500" : ""}>{lastSeenText(other?.last_seen_at)}</span>
+                  ) : (
+                    <>
+                      <span className="hidden sm:inline">{c.room.kind === "public" ? "Room bersama" : "Room"} · </span>
+                      {members.length} anggota · <span className="text-emerald-500">{onlineCount} online</span>
+                    </>
+                  )}
+                  {!c.live && <span className="hidden sm:inline" title="Realtime tidak tersambung, pesan dicek tiap beberapa detik"> · sinkron otomatis</span>}
                 </div>
               </div>
+              {c.room.kind !== "direct" && (
+                <button
+                  type="button"
+                  onClick={() => setShowMembers((v) => !v)}
+                  className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-zinc-800 py-1 pl-1 pr-3 text-[12.5px] font-semibold hover:border-zinc-700 xl:hidden"
+                >
+                  <span className="hidden -space-x-2 sm:flex">
+                    {sortByPresence(members).slice(0, 4).map((p) => (
+                      <Avatar key={p.id} name={personName(p)} url={p.avatar_url} size={24} />
+                    ))}
+                  </span>
+                  <span className="pl-2 sm:pl-0">
+                    {members.length} · <span className="text-emerald-500">{onlineCount} online</span> ▾
+                  </span>
+                </button>
+              )}
             </header>
+            {showMembers && (
+              <div className="absolute right-4 top-[64px] z-30 max-h-[70%] w-72 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-4 xl:hidden" style={{ boxShadow: "var(--shadow-pop)" }}>
+                <ChatMembers members={members} meId={meId} files={c.roomFiles} />
+              </div>
+            )}
             {c.error && <div className="border-b border-red-500/20 bg-red-500/10 px-5 py-2 text-xs text-red-400">{c.error}</div>}
             <ChatThread
               meId={meId}
@@ -172,6 +223,9 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
               onSend={c.send}
               reactions={c.reactions}
               onReact={c.toggleReaction}
+              files={c.files}
+              readers={c.readers}
+              direct={c.room.kind === "direct"}
             />
           </>
         ) : (
@@ -180,6 +234,11 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
           </div>
         )}
       </section>
+
+      {/* Panel kanan: anggota + file (layar lebar) */}
+      <aside className="hidden min-h-0 overflow-y-auto border-l border-zinc-800/80 p-4 xl:block">
+        {c.room ? <ChatMembers members={members} meId={meId} files={c.roomFiles} /> : null}
+      </aside>
     </div>
   );
 }

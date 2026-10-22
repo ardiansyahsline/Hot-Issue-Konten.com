@@ -14,12 +14,16 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Peringatan saat input:** waktu mengetik kontak di form, langsung muncul info kalau kontak itu sudah ada di issue lain.
 - **Cek Kontak:** cari no HP/IG/Discord/email untuk melihat riwayat issue clipper itu.
 - **Catatan per issue** untuk update dan handover shift.
-- **Top 3 issue (bergaya HOT)** di Dashboard, dua panel terpisah: **Video Review** (kategori kasus terbanyak) dan **dari agent** (kategori Hot Issue baru terbanyak), 7 hari terakhir, tren dibanding minggu lalu, bar status, dan rangkuman otomatis untuk #1.
+- **Top 3 issue** di Dashboard dengan tab **Video Review** / **Dari agent** (kategori kasus / Hot Issue baru terbanyak 7 hari terakhir), tren dibanding minggu lalu, bar status, dan rangkuman otomatis.
 - **Chat:** room bersama (default `semua-cs`), room grup, dan pesan pribadi antar semua pengguna. Ada halaman Chat dan tombol chat melayang di semua halaman dengan jumlah pesan belum dibaca.
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
+- **Report Video Review:** sub-menu **Detail** (rekap per kategori), **Visualisasi** (tren harian, status, per kategori; 7/30/90 hari/semua), dan **Compare** (tabel heatmap 3/7/14/30 hari/all time + perbandingan dengan periode sebelumnya).
+- **Chat:** kirim gambar & dokumen (📎, tarik-lepas, atau Ctrl+V) di room maupun pesan pribadi, daftar anggota dengan status **Online / Terakhir dilihat**, galeri file per room, dan keterangan **Dilihat** di pesan kamu.
+- **Foto profil:** upload di halaman Akun; tampil di menu atas, chat, dan komentar.
+- **Notifikasi:** pop-up browser (walau tab tertutup) untuk Hot Issue baru & chat, plus email untuk Hot Issue baru dan pesan pribadi saat penerima offline. Tiap orang bisa atur sendiri di Akun → Notifikasi.
 - **Komentar & reaksi:** semua role bisa komentar di Hot Issue dan Catatan & Saran, membalas komentar tertentu (menjorok), dan memberi reaksi emoji (👍 🙏 🔥 ✅ dan lainnya) di issue, catatan, komentar, serta pesan chat. Kolom ketik punya tombol 😊.
 - **Lampiran bukti:** di form Hot Issue, Catatan & Saran, update issue, dan tanggapan bisa melampirkan gambar & dokumen (tarik-lepas, pilih file, atau **Ctrl+V** screenshot). Di halaman detail tampil sebagai galeri (klik untuk perbesar) + daftar dokumen dengan tombol Unduh, dan bisa ditambah lewat **+ Tambah**. File disimpan privat — hanya user yang login yang bisa membuka.
-- **Catatan & Saran:** journal tim dengan kategori Fitur, Keluhan clipper, Brief campaign, dan Bug. Semua role bisa menulis dan memberi tanggapan. Progress (Baru / In Progress / Done / Rejected) beserta alasannya hanya bisa diubah oleh admin.
+- **Catatan & Saran:** journal tim dengan kategori Fitur, Keluhan clipper, dan Brief campaign (bug dilaporkan lewat Hot Issue kategori Bug platform). Semua role bisa menulis dan memberi tanggapan. Progress (Baru / In Progress / Done / Rejected) beserta alasannya hanya bisa diubah oleh admin.
 - **Nama otomatis:** selain admin, tidak ada pilihan "siapa yang mencatat". PIC issue baru dan pencatat catatan otomatis diisi akun yang login. Admin tetap bisa memilih.
 - **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
 - **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
@@ -33,7 +37,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 | Admin | Input & edit | Input & edit | ✅ |
 | CS | Input & edit | Input & edit | – |
 | Video Review | Input & edit | Input & edit | – |
-| Discord Moderator | Input & edit | Edit saja (tanpa input baru) | – |
+| Discord Moderator | Input & edit | Input & edit | – |
 | User | Lihat saja | Lihat saja | – |
 
 ---
@@ -61,6 +65,27 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 **Langkah 1b — Update 02 (role + Video Review):** di **SQL Editor**, buat query baru, paste semua isi `supabase/migration-02-roles-video-review.sql`, lalu **Run**. Akun lama yang role-nya "agent" otomatis jadi **CS**.
 
 **Langkah 1c — Update 03 (kategori otomatis, rangkuman, sync sheet):** jalankan `supabase/migration-03-kategori-rangkuman-sync.sql` dengan cara yang sama. Kasus yang kategorinya masih kosong langsung terisi otomatis. Tidak ada data yang dihapus.
+
+**Langkah 1i — Update 09 (Report, lampiran & status online di Chat, foto profil, notifikasi, Bug pindah ke Hot Issue):** jalankan `supabase/migration-09-report-chat-profil.sql`. Isinya:
+- Discord Moderator bisa input + edit Video Review.
+- Semua Catatan & Saran kategori **Bug** dipindah jadi Hot Issue kategori **Bug platform** (lampiran, tanggapan, dan reaksi ikut pindah), dan pilihan Bug di Catatan & Saran dihapus.
+- Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
+- Tabel notifikasi (langganan push browser & pengaturan per orang).
+
+**Langkah 1j — Notifikasi (push browser + email):** tambahkan env berikut di Vercel → Settings → Environment Variables, lalu **Redeploy**:
+
+| Nama | Isi |
+|---|---|
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | kunci publik push (dari file `notif.env` yang dikirim) |
+| `VAPID_PRIVATE_KEY` | kunci privat push (rahasia) |
+| `VAPID_SUBJECT` | `mailto:email-admin@domainmu` |
+| `RESEND_API_KEY` | API key dari resend.com (rahasia) |
+| `EMAIL_FROM` | mis. `CS Tracker <notif@orovagroup.id>` — domainnya harus sudah diverifikasi di Resend |
+| `APP_URL` | alamat web, mis. `https://cs-tracker.vercel.app` (untuk link di email/notifikasi) |
+
+`SUPABASE_SERVICE_ROLE_KEY` juga wajib ada (sudah dipakai halaman Admin). Kalau env push/email belum diisi, aplikasi tetap jalan — notifikasi jenis itu saja yang dilewati.
+Resend: daftar di resend.com → **Domains → Add Domain** → tambahkan record DNS yang diminta di pengelola domain → tunggu status *Verified* → **API Keys → Create**.
+Tiap orang menyalakan notifikasi browser di **Akun → Notifikasi → Aktifkan** (atau dari ajakan 🔔 yang muncul sekali). Di iPhone: buka web di Safari → Share → **Add to Home Screen**, lalu buka dari ikon itu dan aktifkan.
 
 **Langkah 1h — Update 08 (komentar semua role, balas komentar, reaksi emoji):** jalankan `supabase/migration-08-komentar-reaksi.sql`. Semua role (termasuk User) jadi bisa komentar di Hot Issue, ada kolom balasan, dan tabel reaksi emoji untuk issue, catatan, komentar, dan pesan chat (ikut Realtime).
 

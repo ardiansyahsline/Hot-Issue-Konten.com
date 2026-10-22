@@ -2,7 +2,6 @@ export const SG_CATEGORIES = {
   fitur: { label: "Fitur", desc: "Ide / permintaan fitur baru", icon: "✨", cls: "bg-violet-500/15 text-violet-300 ring-violet-500/30" },
   keluhan_clipper: { label: "Keluhan clipper", desc: "Keluhan yang sering datang dari clipper", icon: "💬", cls: "bg-sky-500/15 text-sky-300 ring-sky-500/30" },
   brief_campaign: { label: "Brief campaign", desc: "Masukan soal brief / aturan campaign", icon: "📋", cls: "bg-amber-500/15 text-amber-300 ring-amber-500/30" },
-  bug: { label: "Bug", desc: "Error / sesuatu yang tidak jalan", icon: "🐞", cls: "bg-red-500/15 text-red-300 ring-red-500/30" },
 } as const;
 export type SgCategory = keyof typeof SG_CATEGORIES;
 

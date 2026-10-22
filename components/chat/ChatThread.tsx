@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { personName, type ChatMsg, type ChatPerson } from "./useChat";
+import { personName, type ChatFile, type ChatMsg, type ChatPerson, type Reader } from "./useChat";
+import UserAvatar from "@/components/UserAvatar";
+import { DocIcon } from "@/components/attach/AttachmentPicker";
+import { Lightbox } from "@/components/attach/AttachmentGallery";
+import { useUploads } from "@/components/attach/useUploads";
+import { ATTACH_ACCEPT, fmtSize, isViewableImage, type AttachmentInput } from "@/lib/attachments";
 import { summarize, type ReactionRow } from "@/lib/reactions";
 import { ReactionPills } from "@/components/emoji/Reactions";
 import { EmojiInsertButton, EmojiPanel, QuickBar } from "@/components/emoji/EmojiPicker";
@@ -20,16 +25,44 @@ function dayLabel(iso: string) {
   return HARI(new Date(iso));
 }
 
-export function Avatar({ name, me = false, size = 28 }: { name: string; me?: boolean; size?: number }) {
+export function Avatar({ name, me = false, size = 28, url, online }: { name: string; me?: boolean; size?: number; url?: string | null; online?: boolean }) {
+  return <UserAvatar name={name} url={url} me={me} size={size} online={online} />;
+}
+
+/** Lampiran di dalam pesan: gambar (klik = perbesar) + dokumen */
+function MsgFiles({ list, mine, onOpen }: { list: ChatFile[]; mine: boolean; onOpen: (f: ChatFile) => void }) {
+  const imgs = list.filter((f) => isViewableImage(f.mime) && f.url);
+  const docs = list.filter((f) => !(isViewableImage(f.mime) && f.url));
   return (
-    <span
-      className={`flex shrink-0 items-center justify-center rounded-full text-[11px] font-bold uppercase ${
-        me ? "bg-orange-500/15 text-orange-400" : "bg-zinc-800 text-zinc-300"
-      }`}
-      style={{ width: size, height: size }}
-    >
-      {name.slice(0, 1)}
-    </span>
+    <div className={`flex flex-col gap-1.5 ${mine ? "items-end" : "items-start"}`}>
+      {imgs.length > 0 && (
+        <div className={`grid gap-1 ${imgs.length > 1 ? "grid-cols-2" : ""}`} style={{ width: imgs.length > 1 ? 260 : 240 }}>
+          {imgs.map((f) => (
+            <button key={f.id} type="button" onClick={() => onOpen(f)} className="overflow-hidden rounded-xl ring-1 ring-zinc-800" title={f.name}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={f.url!} alt={f.name} loading="lazy" className={`w-full object-cover ${imgs.length > 1 ? "aspect-square" : "max-h-72"}`} />
+            </button>
+          ))}
+        </div>
+      )}
+      {docs.map((f) => (
+        <div key={f.id} className="flex max-w-[280px] items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 px-3 py-2.5">
+          <DocIcon name={f.name} mime={f.mime} />
+          <div className="min-w-0">
+            <a href={f.url ?? undefined} target="_blank" rel="noreferrer" className="block truncate text-[13px] font-medium hover:text-orange-400">{f.name}</a>
+            <div className="text-[11.5px] text-zinc-500">
+              {fmtSize(f.size)}
+              {f.downloadUrl && (
+                <>
+                  {" · "}
+                  <a href={f.downloadUrl} className="font-semibold text-orange-400">Unduh</a>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -46,7 +79,14 @@ export default function ChatThread({
   disabled = false,
   reactions = {},
   onReact,
+  files = {},
+  readers = [],
+  direct = false,
 }: {
+  files?: Record<number, ChatFile[]>;
+  readers?: Reader[];
+  /** pesan pribadi: "Dilihat" tanpa angka */
+  direct?: boolean;
   reactions?: Record<number, ReactionRow[]>;
   onReact?: (msgId: number, emoji: string) => void;
   meId: string;
@@ -55,7 +95,7 @@ export default function ChatThread({
   loading: boolean;
   hasMore: boolean;
   onLoadOlder: () => void;
-  onSend: (body: string) => Promise<boolean>;
+  onSend: (body: string, files: AttachmentInput[]) => Promise<boolean>;
   compact?: boolean;
   disabled?: boolean;
 }) {
@@ -68,6 +108,24 @@ export default function ChatThread({
   const input = useRef<HTMLTextAreaElement>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const names = new Map([...people.values()].map((p) => [p.id, personName(p)]));
+  const up = useUploads(meId);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
+  const [viewer, setViewer] = useState<{ list: ChatFile[]; i: number } | null>(null);
+
+  /** orang lain yang sudah membaca sampai pesan ini */
+  const seenBy = (m: ChatMsg) =>
+    readers.filter((r) => r.user_id !== meId && r.user_id !== m.sender_id && r.last_read_at >= m.created_at).map((r) => names.get(r.user_id) ?? "Anggota");
+  const seenText = (m: ChatMsg) => {
+    const who = seenBy(m);
+    if (!who.length) return null;
+    return (
+      <span className="text-sky-400" title={`Dilihat oleh ${who.join(", ")}`}>
+        {direct ? "Dilihat" : `Dilihat ${who.length}`}
+      </span>
+    );
+  };
+  const lastMineId = [...msgs].reverse().find((m) => m.sender_id === meId)?.id;
 
   // klik di luar deretan emoji -> tutup
   useEffect(() => {
@@ -116,17 +174,42 @@ export default function ChatThread({
   }, [loading]);
 
   async function submit() {
-    if (!text.trim() || sending) return;
+    if ((!text.trim() && !up.done.length) || sending || up.uploading) return;
     setSending(true);
-    const ok = await onSend(text);
+    const ok = await onSend(text, up.done);
     setSending(false);
-    if (ok) setText("");
+    if (ok) {
+      setText("");
+      up.clear();
+    }
   }
 
   const pad = compact ? "px-4" : "px-5";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className={`relative flex min-h-0 flex-1 flex-col ${drag ? "ring-2 ring-inset ring-orange-500/60" : ""}`}
+      onDragOver={(e) => {
+        if (disabled || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDrag(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDrag(false);
+        up.addFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      {drag && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-orange-500/5 text-[14px] font-semibold text-orange-400">
+          Lepaskan file untuk dilampirkan
+        </div>
+      )}
+      {viewer && <Lightbox images={viewer.list} index={viewer.i} onIndex={(i) => setViewer((v) => (v ? { ...v, i } : v))} onClose={() => setViewer(null)} />}
       <div
         ref={box}
         onScroll={(e) => {
@@ -164,19 +247,17 @@ export default function ChatThread({
                 </div>
               )}
               <div className={`flex gap-2.5 ${mine ? "flex-row-reverse" : ""} ${grouped ? "mt-0.5" : "mt-3"}`}>
-                {grouped ? <span className="w-7 shrink-0" /> : <Avatar name={avatarName} me={mine} />}
+                {grouped ? <span className="w-7 shrink-0" /> : <Avatar name={avatarName} me={mine} url={people.get(m.sender_id ?? "")?.avatar_url} />}
                 <div className={`flex max-w-[78%] flex-col ${mine ? "items-end" : "items-start"}`}>
                   {!grouped && (
                     <span className="mb-1 text-[11px] text-zinc-500">
                       {name} · {JAM(m.created_at)}
+                      {mine && seenText(m) && <> · {seenText(m)}</>}
                     </span>
                   )}
                   <div className={`group relative flex items-center gap-1.5 ${mine ? "flex-row-reverse" : ""}`}>
                     <div
-                      className={`whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${
-                        mine ? "rounded-tr-md text-white" : "rounded-tl-md bg-zinc-800/70 text-zinc-100"
-                      }`}
-                      style={mine ? { backgroundImage: "linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%)", boxShadow: "var(--shadow-primary)" } : undefined}
+                      className={`flex flex-col gap-1.5 ${mine ? "items-end" : "items-start"}`}
                       title={grouped ? JAM(m.created_at) : undefined}
                       onTouchStart={() => {
                         if (!onReact) return;
@@ -185,7 +266,27 @@ export default function ChatThread({
                       onTouchEnd={() => pressTimer.current && clearTimeout(pressTimer.current)}
                       onTouchMove={() => pressTimer.current && clearTimeout(pressTimer.current)}
                     >
-                      {m.body}
+                      {(files[m.id]?.length ?? 0) > 0 && (
+                        <MsgFiles
+                          list={files[m.id]}
+                          mine={mine}
+                          onOpen={(f) => {
+                            const imgs = files[m.id].filter((x) => isViewableImage(x.mime) && x.url);
+                            setViewer({ list: imgs, i: Math.max(0, imgs.findIndex((x) => x.id === f.id)) });
+                          }}
+                        />
+                      )}
+                      {m.body && (
+                        <div
+                          className={`whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${
+                            mine ? "rounded-tr-md text-white" : "rounded-tl-md bg-zinc-800/70 text-zinc-100"
+                          }`}
+                          style={mine ? { backgroundImage: "linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%)", boxShadow: "var(--shadow-primary)" } : undefined}
+                        >
+                          {m.body}
+                        </div>
+                      )}
+                      {!m.body && !(files[m.id]?.length) && <span className="text-[12px] italic text-zinc-500">📎 Lampiran</span>}
                     </div>
                     {onReact && (
                       <button
@@ -220,6 +321,7 @@ export default function ChatThread({
                       <ReactionPills list={summarize(reactions[m.id], meId, names)} onToggle={(e) => onReact?.(m.id, e)} size="sm" />
                     </div>
                   )}
+                  {mine && grouped && m.id === lastMineId && seenText(m) && <span className="mt-0.5 text-[11px]">{seenText(m)}</span>}
                 </div>
               </div>
             </div>
@@ -232,33 +334,100 @@ export default function ChatThread({
           e.preventDefault();
           submit();
         }}
-        className={`flex items-end gap-2.5 border-t border-zinc-800/80 py-3 ${pad}`}
+        className={`border-t border-zinc-800/80 py-3 ${pad}`}
       >
-        <EmojiInsertButton onPick={insertEmoji} className="h-[42px] w-[42px] shrink-0 border border-zinc-700/80" />
-        <textarea
-          ref={input}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          rows={1}
-          maxLength={4000}
-          disabled={disabled}
-          placeholder={compact ? "Tulis pesan…" : "Tulis pesan… (Enter untuk kirim, Shift+Enter baris baru)"}
-          className="input max-h-32 min-h-[42px] resize-none"
-          aria-label="Tulis pesan"
-        />
-        <button disabled={disabled || sending || !text.trim()} className="btn-primary h-[42px] shrink-0 px-4" aria-label="Kirim">
-          {compact ? (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
-          ) : (
-            "Kirim"
-          )}
-        </button>
+        {/* lampiran yang akan dikirim */}
+        {(up.items.length > 0 || up.notice) && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {up.items.map((it) =>
+              it.preview ? (
+                <span key={it.key} className="relative h-14 w-14 overflow-hidden rounded-xl ring-1 ring-zinc-800" title={it.error ?? it.name}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={it.preview} alt={it.name} className={`h-full w-full object-cover ${it.status !== "done" ? "opacity-50" : ""}`} />
+                  {it.status === "uploading" && <span className="absolute inset-0 m-auto h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-orange-500" />}
+                  {it.status === "error" && <span className="absolute inset-x-0 bottom-0 bg-red-600/90 px-1 text-[9px] font-semibold text-white">{it.error}</span>}
+                  <button type="button" onClick={() => up.remove(it)} aria-label={`Hapus ${it.name}`} className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-950/85 text-[10px] text-white">✕</button>
+                </span>
+              ) : (
+                <span key={it.key} className={`flex h-14 max-w-[220px] items-center gap-2 rounded-xl border px-2.5 ${it.status === "error" ? "border-red-500/50" : "border-zinc-800"}`}>
+                  <DocIcon name={it.name} mime={it.mime} size={30} />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-medium">{it.name}</span>
+                    <span className={`block text-[10.5px] ${it.status === "error" ? "text-red-400" : "text-zinc-500"}`}>
+                      {it.status === "error" ? it.error : it.status === "uploading" ? "Mengupload…" : fmtSize(it.size)}
+                    </span>
+                  </span>
+                  <button type="button" onClick={() => up.remove(it)} aria-label={`Hapus ${it.name}`} className="text-[11px] text-zinc-500 hover:text-red-400">✕</button>
+                </span>
+              )
+            )}
+            {up.notice && <span className="self-center text-[11.5px] text-amber-400">{up.notice}</span>}
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={ATTACH_ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              up.addFiles(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => fileInput.current?.click()}
+            aria-label="Lampirkan file"
+            title="Lampirkan gambar / dokumen"
+            className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl border border-zinc-700/80 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m21.4 11.6-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
+            </svg>
+          </button>
+          {!compact && <EmojiInsertButton onPick={insertEmoji} className="h-[42px] w-[42px] shrink-0 border border-zinc-700/80" />}
+          <textarea
+            ref={input}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onPaste={(e) => {
+              const fl = Array.from(e.clipboardData?.files ?? []);
+              if (fl.length) {
+                e.preventDefault();
+                up.addFiles(fl);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            rows={1}
+            maxLength={4000}
+            disabled={disabled}
+            placeholder={compact ? "Tulis pesan…" : "Tulis pesan… (Enter kirim · Shift+Enter baris baru · Ctrl+V screenshot)"}
+            className="input max-h-32 min-h-[42px] resize-none"
+            aria-label="Tulis pesan"
+          />
+          {compact && <EmojiInsertButton onPick={insertEmoji} alignRight className="h-[42px] w-9 shrink-0" />}
+          <button
+            disabled={disabled || sending || up.uploading > 0 || (!text.trim() && !up.done.length)}
+            className="btn-primary h-[42px] shrink-0 px-4"
+            aria-label="Kirim"
+          >
+            {compact ? (
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
+            ) : up.uploading ? (
+              "Upload…"
+            ) : (
+              "Kirim"
+            )}
+          </button>
+        </div>
       </form>
     </div>
   );
