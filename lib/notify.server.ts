@@ -181,6 +181,64 @@ export async function notifyNewIssue(issueId: number, actorId: string, origin: s
 }
 
 /**
+ * Laporan clipper baru di topik yang sudah ada:
+ *  - push ke PIC + pembuat topik (sesuai pengaturan "Hot Issue baru")
+ *  - kalau laporan ini membuat topik tembus batas HOT -> push + email ke semua (seperti Hot Issue baru)
+ */
+export async function notifyNewReport(reportId: number, actorId: string, origin: string) {
+  const db = admin();
+  if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
+  const { data: rep } = await db.from("issue_reports").select("id, issue_id, note").eq("id", reportId).maybeSingle();
+  if (!rep) return;
+  const [{ data: issue }, { count }, { data: people }] = await Promise.all([
+    db.from("issues").select("id, title, category, pic_id, created_by, is_hot, status").eq("id", rep.issue_id).maybeSingle(),
+    db.from("issue_reports").select("id", { count: "exact", head: true }).eq("issue_id", rep.issue_id),
+    db.from("profiles").select("id, email, full_name"),
+  ]);
+  if (!issue) return;
+  const total = 1 + (count ?? 0);
+  const threshold = Math.max(2, Number(process.env.NEXT_PUBLIC_REPORT_HOT_THRESHOLD) || 3);
+  const becameHot = total === threshold && !issue.is_hot && issue.status !== "resolved";
+  const actor = (people ?? []).find((p) => p.id === actorId);
+  const who = actor?.full_name || "Seseorang";
+  const url = `${appOrigin(origin)}/issues/${issue.id}#laporan`;
+  const others = (people ?? []).filter((p) => p.id !== actorId);
+  const prefs = await prefsFor(db, others.map((p) => p.id));
+  const note = String(rep.note ?? "").slice(0, 140);
+
+  if (becameHot) {
+    const pushed = await sendPush(
+      db,
+      others.filter((p) => prefs.get(p.id)!.push_issue).map((p) => p.id),
+      { title: `🔥 Topik jadi HOT · ${total} laporan`, body: `${issue.title}\nlaporan terbaru dari ${who}`, url, tag: `issue-${issue.id}` }
+    );
+    const emailed = await sendEmails(
+      others
+        .filter((p) => p.email && prefs.get(p.id)!.email_issue)
+        .map((p) => ({
+          to: p.email as string,
+          subject: `[CS Tracker] 🔥 Topik jadi HOT (${total} laporan): ${issue.title}`,
+          html: emailHtml(
+            issue.title,
+            [`Kategori: ${issue.category}`, `Sudah ${total} laporan clipper untuk kasus yang sama. Laporan terbaru dari ${who}.`, ...(note ? [note] : [])],
+            "Buka topik",
+            url
+          ),
+        }))
+    );
+    return log(`laporan #${reportId}: topik #${issue.id} jadi HOT · push ${pushed}, email ${emailed}`);
+  }
+
+  const owners = [...new Set([issue.pic_id, issue.created_by].filter((x): x is string => !!x && x !== actorId))];
+  const pushed = await sendPush(
+    db,
+    owners.filter((id) => prefs.get(id)?.push_issue),
+    { title: `📣 Laporan ke-${total} · ${issue.category}`, body: `${issue.title}\n${who}${note ? `: ${note}` : ""}`, url, tag: `issue-${issue.id}` }
+  );
+  log(`laporan #${reportId}: push ${pushed}`);
+}
+
+/**
  * Pesan chat baru:
  *  - yang di-mention / dibalas pesannya -> push khusus "@ … menyebut kamu" (walau notifikasi room dimatikan)
  *    + email kalau sedang offline (maks 1 email / 15 menit per room)

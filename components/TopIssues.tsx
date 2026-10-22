@@ -17,7 +17,7 @@ export type TopIssue = {
 };
 
 /** Hitung 3 kategori kasus Video Review terbanyak dalam 7 hari (dibanding 7 hari sebelumnya). */
-export function topIssues(rows: VrSummaryRow[], from: string, prevFrom: string): TopIssue[] {
+export function topIssues(rows: VrSummaryRow[], from: string, prevFrom: string, limit = 3): TopIssue[] {
   const cur = new Map<string, VrSummaryRow[]>();
   const prev = new Map<string, number>();
   for (const r of rows) {
@@ -32,7 +32,7 @@ export function topIssues(rows: VrSummaryRow[], from: string, prevFrom: string):
   return [...cur.entries()]
     .map(([category, list]) => ({ category, count: list.length, prev: prev.get(category) ?? 0, rows: list }))
     .sort((a, b) => b.count - a.count || a.prev - b.prev || a.category.localeCompare(b.category))
-    .slice(0, 3);
+    .slice(0, limit);
 }
 
 function Trend({ diff }: { diff: number }) {

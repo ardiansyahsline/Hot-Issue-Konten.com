@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { TopCard, type Segment } from "./TopIssues";
+import { useDashTab } from "./DashTab";
 import type { Tone } from "./StatCard";
 
 export type TopCardData = {
@@ -18,7 +18,6 @@ const TONES: Record<"vr" | "agent", Tone[]> = {
   vr: ["orange", "red", "violet"],
   agent: ["sky", "indigo", "emerald"],
 };
-const KEY = "cs-top-tab";
 
 /** Dashboard: Top 3 issue 7 hari terakhir, satu bagian dengan tab Video Review / Dari agent */
 export default function TopTabs({
@@ -34,18 +33,7 @@ export default function TopTabs({
   vrMore: string;
   agentMore: string;
 }) {
-  const [tab, setTab] = useState<"vr" | "agent">("vr");
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(KEY) === "agent") setTab("agent");
-    } catch {}
-  }, []);
-  const pick = (t: "vr" | "agent") => {
-    setTab(t);
-    try {
-      localStorage.setItem(KEY, t);
-    } catch {}
-  };
+  const { tab, setTab: pick } = useDashTab();
   const items = tab === "vr" ? vr : agent;
 
   return (
@@ -94,7 +82,7 @@ export default function TopTabs({
               tone={TONES[tab][i]}
               title={t.title}
               count={t.count}
-              unit={tab === "vr" ? "kasus" : "issue"}
+              unit={tab === "vr" ? "kasus" : "laporan"}
               diff={t.diff}
               segments={t.segments}
               summary={t.summary}

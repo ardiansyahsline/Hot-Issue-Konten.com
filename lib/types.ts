@@ -10,6 +10,8 @@ export type IssueContact = {
   normalized_value: string;
   issue_count: number;
   issue_count_30d: number;
+  /** kontak dari laporan tambahan (null = laporan awal) */
+  report_id?: number | null;
 };
 
 export type IssueRow = {
@@ -33,6 +35,9 @@ export type IssueRow = {
   contacts: IssueContact[];
   contacts_text: string;
   max_contact_reports_30d: number;
+  /** laporan awal + laporan tambahan (migration-11) */
+  report_count?: number;
+  last_report_at?: string;
 };
 
 export type ContactStat = {

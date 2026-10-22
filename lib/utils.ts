@@ -1,11 +1,22 @@
-import { HOT_THRESHOLD } from "./constants";
+import { HOT_THRESHOLD, REPORT_HOT_THRESHOLD } from "./constants";
 import type { IssueRow } from "./types";
 
-export function isAutoHot(issue: Pick<IssueRow, "max_contact_reports_30d">) {
-  return issue.max_contact_reports_30d >= HOT_THRESHOLD;
+type HotFields = Pick<IssueRow, "max_contact_reports_30d" | "report_count">;
+
+/** HOT otomatis: kontak yang sama di banyak issue, ATAU topiknya sudah banyak laporan */
+export function isAutoHot(issue: HotFields) {
+  return issue.max_contact_reports_30d >= HOT_THRESHOLD || (issue.report_count ?? 1) >= REPORT_HOT_THRESHOLD;
 }
 
-export function isHot(issue: Pick<IssueRow, "is_hot" | "max_contact_reports_30d" | "status">) {
+/** tingkat panas topik dari jumlah laporan: 1 = baru, 2 = mulai ramai, 3 = HOT, 4 = membara */
+export function heatLevel(reports: number) {
+  if (reports >= REPORT_HOT_THRESHOLD * 3) return 4;
+  if (reports >= REPORT_HOT_THRESHOLD + 2) return 3;
+  if (reports >= REPORT_HOT_THRESHOLD) return 2;
+  return reports >= 2 ? 1 : 0;
+}
+
+export function isHot(issue: Pick<IssueRow, "is_hot" | "status"> & HotFields) {
   return issue.status !== "resolved" && (issue.is_hot || isAutoHot(issue));
 }
 

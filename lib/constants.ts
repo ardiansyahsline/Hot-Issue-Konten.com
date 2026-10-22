@@ -25,4 +25,6 @@ export const PRIORITIES = {
 export type StatusKey = keyof typeof STATUSES;
 export type PriorityKey = keyof typeof PRIORITIES;
 
+/** Topik Hot Issue otomatis HOT kalau jumlah laporannya (laporan awal + tambahan) mencapai angka ini */
+export const REPORT_HOT_THRESHOLD = Math.max(2, Number(process.env.NEXT_PUBLIC_REPORT_HOT_THRESHOLD) || 3);
 export const HOT_THRESHOLD = Math.max(1, Number(process.env.NEXT_PUBLIC_HOT_THRESHOLD) || 2);

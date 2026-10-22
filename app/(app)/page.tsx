@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
-import { CATEGORIES, HOT_THRESHOLD, PRIORITIES, STATUSES } from "@/lib/constants";
+import { CATEGORIES, HOT_THRESHOLD, PRIORITIES, REPORT_HOT_THRESHOLD, STATUSES } from "@/lib/constants";
 import type { ContactStat, IssueRow } from "@/lib/types";
 import { cleanSearch, isAutoHot, isHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
@@ -11,9 +11,11 @@ import TopTabs, { type TopCardData } from "@/components/TopTabs";
 import { buildRangkuman, type VrSummaryRow } from "@/lib/videoReview";
 import { agentRangkuman, topAgentIssues, type AgentIssueRow } from "@/lib/agentTop";
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
+import { DashTabProvider, TabOnly } from "@/components/DashTab";
+import LoadMoreList, { RankBadge } from "@/components/LoadMoreList";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
-const HOT_OR = `is_hot.eq.true,max_contact_reports_30d.gte.${HOT_THRESHOLD}`;
+const HOT_OR = `is_hot.eq.true,max_contact_reports_30d.gte.${HOT_THRESHOLD},report_count.gte.${REPORT_HOT_THRESHOLD}`;
 
 type SP = Promise<Record<string, string | undefined>>;
 type Counts = { open: number; in_progress: number; urgent: number; hot: number; resolved_today: number };
@@ -53,7 +55,11 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
 
   /** Semua angka kartu dalam 1 panggilan (migration-06). Kalau belum dijalankan, pakai cara lama. */
   async function loadCounts(): Promise<Counts> {
-    const { data, error } = await supabase.rpc("dashboard_counts", { p_hot_threshold: HOT_THRESHOLD, p_today_start: todayStartWib });
+    const { data, error } = await supabase.rpc("dashboard_counts", {
+      p_hot_threshold: HOT_THRESHOLD,
+      p_today_start: todayStartWib,
+      p_report_threshold: REPORT_HOT_THRESHOLD,
+    });
     if (!error && data) return data as Counts;
     const active = () => supabase.from("issue_list").select("id", { count: "exact", head: true }).neq("status", "resolved");
     const [o, p, u, h, r] = await Promise.all([
@@ -87,12 +93,35 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .limit(5000),
     supabase
       .from("issue_list")
-      .select("category, status, is_hot, max_contact_reports_30d, pic_name, created_at")
+      .select("id, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
       .gte("created_at", prevFromIso)
       .limit(5000),
   ]);
-  const top = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom);
-  const agentTop = topAgentIssues((agentRes.data ?? []) as AgentIssueRow[], weekFrom, prevFrom);
+
+  // laporan tambahan (migration-11) ikut dihitung: tiap laporan = 1, dengan kategori / status topiknya
+  const agentRows0 = (agentRes.data ?? []) as AgentIssueRow[];
+  const { data: repData } = await supabase.from("issue_reports").select("issue_id, created_at").gte("created_at", prevFromIso).limit(5000);
+  const reps = (repData ?? []) as { issue_id: number; created_at: string }[];
+  const topicById = new Map(agentRows0.map((r) => [r.id, r]));
+  const missing = [...new Set(reps.map((r) => r.issue_id))].filter((id) => !topicById.has(id));
+  if (missing.length) {
+    const { data: more } = await supabase
+      .from("issue_list")
+      .select("id, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
+      .in("id", missing.slice(0, 500));
+    for (const r of (more ?? []) as AgentIssueRow[]) topicById.set(r.id, r);
+  }
+  const agentAll: AgentIssueRow[] = [
+    ...agentRows0,
+    ...reps.flatMap((r) => {
+      const t = topicById.get(r.issue_id);
+      return t ? [{ ...t, created_at: r.created_at }] : [];
+    }),
+  ];
+
+  const vrAll = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom, 100);
+  const top = vrAll.slice(0, 3);
+  const agentTop = topAgentIssues(agentAll, weekFrom, prevFrom);
   const vrRows: TopCardData[] = top.map((t) => ({
     summary: buildRangkuman(t.rows),
     title: t.category,
@@ -102,7 +131,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
     segments: vrSegments(t),
   }));
   const agentRows: TopCardData[] = agentTop.map((t) => ({
-    summary: agentRangkuman(t, HOT_THRESHOLD),
+    summary: agentRangkuman(t, HOT_THRESHOLD, REPORT_HOT_THRESHOLD),
     title: t.category,
     count: t.count,
     diff: t.count - t.prev,
@@ -117,9 +146,12 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   const dd = (d: string) => `${Number(d.slice(8))} ${BLN[Number(d.slice(5, 7)) - 1]}`;
   const range = `${dd(weekFrom)} – ${dd(today)} ${today.slice(0, 4)}`;
 
+  // peringkat: HOT dulu, lalu jumlah laporan terbanyak, prioritas, terakhir update
   const issues = ((issuesRes.data ?? []) as IssueRow[]).sort((a, b) => {
     const h = Number(isHot(b)) - Number(isHot(a));
     if (h) return h;
+    const r = (b.report_count ?? 1) - (a.report_count ?? 1);
+    if (r) return r;
     const p = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
     if (p) return p;
     return b.updated_at.localeCompare(a.updated_at);
@@ -149,6 +181,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
 
+      <DashTabProvider>
       <TopTabs
         vr={vrRows}
         agent={agentRows}
@@ -165,6 +198,55 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
 
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <section className="space-y-3">
+          <TabOnly when="vr">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="font-semibold">Ranking kasus Video Review · 7 hari terakhir</h2>
+              <Link href="/video-review?tab=report&view=compare" className="text-xs text-orange-400 hover:underline">Lihat report →</Link>
+            </div>
+            {vrAll.length === 0 ? (
+              <div className="card p-8 text-center text-sm text-zinc-400">Belum ada kasus Video Review dalam 7 hari terakhir.</div>
+            ) : (
+              <LoadMoreList>
+                {vrAll.map((t, idx) => {
+                  const diff = t.count - t.prev;
+                  const segs = vrSegments(t).filter((x) => x.count > 0);
+                  return (
+                    <li key={t.category}>
+                      <Link
+                        href={`/video-review?tab=daftar&category=${encodeURIComponent(t.category)}&from=${weekFrom}&to=${today}`}
+                        className={`card card-flat card-hover flex items-center gap-4 p-4 ${idx < 3 ? "border-orange-900/50 bg-orange-950/10" : ""}`}
+                      >
+                        <RankBadge rank={idx + 1} />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium">{t.category}</div>
+                          <div className="mt-2 flex h-1.5 max-w-sm overflow-hidden rounded-full bg-zinc-800">
+                            {segs.map((x) => (
+                              <span key={x.key} className={x.bar} style={{ width: `${(x.count / Math.max(1, t.count)) * 100}%` }} />
+                            ))}
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-x-3 text-[11.5px] text-zinc-500">
+                            {segs.map((x) => (
+                              <span key={x.key}><b className="font-semibold text-zinc-300">{x.count}</b> {x.label}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <div className="font-display text-[20px] font-bold tabular-nums">
+                            {t.count} <span className="text-[12px] font-medium text-zinc-500">kasus</span>
+                          </div>
+                          <div className={`text-[12px] font-semibold ${diff > 0 ? "text-red-400" : diff < 0 ? "text-emerald-500" : "text-zinc-500"}`}>
+                            {diff > 0 ? `▲ ${diff}` : diff < 0 ? `▼ ${-diff}` : "="} vs minggu lalu
+                          </div>
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </LoadMoreList>
+            )}
+          </TabOnly>
+
+          <TabOnly when="agent">
           <form className="card grid gap-2 p-3 sm:grid-cols-6">
             <input
               name="q"
@@ -205,7 +287,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
             </div>
           </form>
 
-          <div className="text-xs text-zinc-500">{issues.length} issue</div>
+          <div className="text-xs text-zinc-500">{issues.length} issue · diurutkan dari yang paling HOT &amp; paling banyak laporan</div>
 
           {issues.length === 0 ? (
             <div className="card p-8 text-center text-sm text-zinc-400">
@@ -213,8 +295,8 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
               <Link href="/issues/new" className="text-orange-400 hover:underline">Buat issue baru</Link>
             </div>
           ) : (
-            <ul className="space-y-2">
-              {issues.map((i) => (
+            <LoadMoreList>
+              {issues.map((i, idx) => (
                 <li key={i.id}>
                   <Link
                     href={`/issues/${i.id}`}
@@ -223,11 +305,16 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                     }`}
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-zinc-500">#{i.id}</span>
+                      <RankBadge rank={idx + 1} />
                       {i.status !== "resolved" && <HotBadge manual={i.is_hot} auto={isAutoHot(i)} />}
                       <StatusBadge status={i.status} />
                       <PriorityBadge priority={i.priority} />
                       <span className="badge bg-zinc-800 text-zinc-300 ring-zinc-700">{i.category}</span>
+                      {(i.report_count ?? 1) > 1 && (
+                        <span className={`badge ${(i.report_count ?? 1) >= REPORT_HOT_THRESHOLD ? "bg-red-500/10 text-red-400 ring-red-500/30" : "bg-amber-500/10 text-amber-400 ring-amber-500/30"}`}>
+                          📣 {i.report_count} laporan
+                        </span>
+                      )}
                       {i.campaign && <span className="text-xs text-zinc-400">· {i.campaign}</span>}
                     </div>
                     <div className="mt-2 font-medium">{i.title}</div>
@@ -252,8 +339,9 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
                   </Link>
                 </li>
               ))}
-            </ul>
+            </LoadMoreList>
           )}
+          </TabOnly>
         </section>
 
         <aside className="space-y-3">
@@ -282,6 +370,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
           </div>
         </aside>
       </div>
+      </DashTabProvider>
     </div>
   );
 }

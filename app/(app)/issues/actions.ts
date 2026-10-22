@@ -109,15 +109,17 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
   if (error) return { error: `Gagal update: ${error.message}` };
 
   // Sinkronkan kontak: hapus yang dibuang, tambah yang baru
-  const { data: existing } = await supabase
+  // (kontak dari laporan tambahan tidak ikut di form edit — jangan dihapus)
+  const { data: all } = await supabase
     .from("issue_contacts")
-    .select("id, type, normalized_value")
+    .select("*")
     .eq("issue_id", id);
+  const existing = (all ?? []).filter((e) => !e.report_id) as { id: number; type: string; normalized_value: string }[];
 
   const wanted = new Map(contacts.map((c) => [`${c.type}:${normalizeContact(c.type, c.value)}`, c]));
-  const have = new Map((existing ?? []).map((e) => [`${e.type}:${e.normalized_value}`, e]));
+  const have = new Map((all ?? []).map((e) => [`${e.type}:${e.normalized_value}`, e]));
 
-  const toDelete = (existing ?? []).filter((e) => !wanted.has(`${e.type}:${e.normalized_value}`)).map((e) => e.id);
+  const toDelete = existing.filter((e) => !wanted.has(`${e.type}:${e.normalized_value}`)).map((e) => e.id);
   const toInsert = contacts.filter((c) => !have.has(`${c.type}:${normalizeContact(c.type, c.value)}`));
 
   if (toDelete.length) {
@@ -198,10 +200,14 @@ export async function deleteNote(issueId: number, noteId: number) {
 
 export async function deleteIssue(id: number) {
   const { supabase } = await requireAdmin();
-  const { data: notes } = await supabase.from("issue_notes").select("id").eq("issue_id", id);
+  const [{ data: notes }, { data: reports }] = await Promise.all([
+    supabase.from("issue_notes").select("id").eq("issue_id", id),
+    supabase.from("issue_reports").select("id").eq("issue_id", id),
+  ]);
   const paths = await attachmentPaths(supabase, [
     { column: "issue_id", ids: [id] },
     { column: "issue_note_id", ids: (notes ?? []).map((n) => n.id as number) },
+    { column: "issue_report_id", ids: (reports ?? []).map((n) => n.id as number) },
   ]);
   const { data } = await supabase.from("issues").delete().eq("id", id).select("id");
   if (data?.length) await removeFiles(supabase, paths);

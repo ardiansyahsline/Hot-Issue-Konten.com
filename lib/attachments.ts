@@ -69,6 +69,7 @@ export type AttachmentView = {
   created_at: string;
   issue_note_id: number | null;
   suggestion_comment_id: number | null;
+  issue_report_id?: number | null;
 };
 
 /** tempat lampiran menempel */
@@ -76,11 +77,13 @@ export type AttachTarget =
   | { kind: "issue"; id: number }
   | { kind: "issue_note"; id: number }
   | { kind: "suggestion"; id: number }
-  | { kind: "suggestion_comment"; id: number };
+  | { kind: "suggestion_comment"; id: number }
+  | { kind: "issue_report"; id: number };
 
 export const TARGET_COLUMN = {
   issue: "issue_id",
   issue_note: "issue_note_id",
   suggestion: "suggestion_id",
   suggestion_comment: "suggestion_comment_id",
+  issue_report: "issue_report_id",
 } as const;

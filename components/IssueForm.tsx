@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { IssueRow, Profile } from "@/lib/types";
 import type { FormState } from "@/app/(app)/issues/actions";
 import AttachmentPicker from "./attach/AttachmentPicker";
+import SimilarTopics from "./SimilarTopics";
 
 type Row = { key: number; type: ContactType; value: string };
 type Lookup = { count: number; count30d: number; open: number; norm: string } | null;
@@ -34,12 +35,15 @@ export default function IssueForm({
   issueId?: number;
 }) {
   const [state, formAction, pending] = useActionState(action, undefined);
+  // kontak dari laporan tambahan dikelola di halaman detail, bukan di form ini
+  const ownContacts = (issue?.contacts ?? []).filter((c) => !c.report_id);
   const [rows, setRows] = useState<Row[]>(
-    issue?.contacts.length
-      ? issue.contacts.map((c, i) => ({ key: i, type: c.type, value: c.value }))
+    ownContacts.length
+      ? ownContacts.map((c, i) => ({ key: i, type: c.type, value: c.value }))
       : [{ key: 0, type: "phone", value: "" }]
   );
   const [lookups, setLookups] = useState<Record<number, Lookup>>({});
+  const [title, setTitle] = useState("");
 
   const update = (key: number, patch: Partial<Row>) => {
     setRows((r) => r.map((x) => (x.key === key ? { ...x, ...patch } : x)));
@@ -83,7 +87,9 @@ export default function IssueForm({
             defaultValue={issue?.title}
             placeholder="Contoh: Withdraw pending > 3 hari, clipper komplain di WA & Discord"
             className="input"
+            onChange={issue ? undefined : (e) => setTitle(e.target.value)}
           />
+          {!issue && <SimilarTopics title={title} />}
         </div>
         <div>
           <label className="label" htmlFor="description">Deskripsi / kronologi</label>
