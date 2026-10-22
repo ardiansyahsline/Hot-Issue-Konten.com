@@ -19,22 +19,101 @@ export function aiHeaders(key: string): Record<string, string> {
   return { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) };
 }
 
-let modelCache: { at: number; ids: string[] } | null = null;
+let modelCache: { at: number; ids: string[]; vision: string[] } | null = null;
 
-/** Daftar model dari OmniRoute (disimpan 10 menit di memori server) */
-export async function listModels(): Promise<string[]> {
-  const cfg = aiConfig();
-  if (!cfg.ok) return [];
-  if (modelCache && Date.now() - modelCache.at < 600000) return modelCache.ids;
+async function fetchIds(url: string, key: string): Promise<string[] | null> {
   try {
-    const r = await fetch(`${cfg.base}/models`, { headers: aiHeaders(cfg.key), signal: AbortSignal.timeout(8000) });
+    const r = await fetch(url, { headers: aiHeaders(key), signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
     const j = await r.json();
-    const ids = ((j?.data ?? []) as { id?: string }[]).map((m) => String(m.id ?? "")).filter(Boolean);
-    modelCache = { at: Date.now(), ids: [...new Set(ids)].sort((a, b) => a.localeCompare(b)) };
+    return ((j?.data ?? []) as { id?: string }[]).map((m) => String(m.id ?? "")).filter(Boolean);
   } catch {
-    return modelCache?.ids ?? [];
+    return null;
   }
-  return modelCache.ids;
+}
+
+/** Katalog model dari OmniRoute (disimpan 10 menit di memori server): satu id per model + daftar yang bisa lihat gambar */
+export async function listCatalog(): Promise<{ ids: string[]; vision: string[] }> {
+  const cfg = aiConfig();
+  if (!cfg.ok) return { ids: [], vision: [] };
+  if (modelCache && Date.now() - modelCache.at < 600000) return modelCache;
+  // ?prefix=alias = satu id per model (tanpa dobel), ?kind=chat = hanya model chat
+  const ids = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat`, cfg.key)) ?? (await fetchIds(`${cfg.base}/models`, cfg.key));
+  if (!ids) return modelCache ?? { ids: [], vision: [] };
+  const vision = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat&capability=vision`, cfg.key)) ?? [];
+  modelCache = { at: Date.now(), ids: [...new Set(ids)].sort((a, b) => a.localeCompare(b)), vision };
+  return modelCache;
+}
+
+export async function listModels(): Promise<string[]> {
+  return (await listCatalog()).ids;
+}
+
+export type Health = { model: string; ok_at: string | null; fail_at: string | null; fail_count: number; last_error: string | null };
+
+type DB = { from: (t: string) => any }; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** catatan model yang pernah berhasil / gagal (migration-15). Kalau tabel belum ada -> kosong. */
+export async function loadHealth(db: DB): Promise<Map<string, Health>> {
+  try {
+    const { data, error } = await db.from("ai_model_health").select("model, ok_at, fail_at, fail_count, last_error").limit(2000);
+    if (error) return new Map();
+    return new Map(((data ?? []) as Health[]).map((h) => [h.model, h]));
+  } catch {
+    return new Map();
+  }
+}
+
+export async function markHealth(db: DB, model: string, ok: boolean, errText?: string) {
+  if (!model || model === "auto") return;
+  const now = new Date().toISOString();
+  try {
+    if (ok) await db.from("ai_model_health").upsert({ model, ok_at: now, fail_count: 0, updated_at: now }, { onConflict: "model" });
+    else {
+      const { data } = await db.from("ai_model_health").select("fail_count").eq("model", model).maybeSingle();
+      await db
+        .from("ai_model_health")
+        .upsert({ model, fail_at: now, fail_count: (data?.fail_count ?? 0) + 1, last_error: (errText ?? "").slice(0, 300), updated_at: now }, { onConflict: "model" });
+    }
+  } catch {
+    // tabel belum ada -> abaikan
+  }
+}
+
+const H = 3600 * 1000;
+/** 0 = terbukti jalan, 1 = belum pernah dicoba, 2 = baru gagal */
+/**
+ * Status tiap model, ikut memperhitungkan provider-nya: kalau model lain dari provider yang sama
+ * pernah jalan -> dianggap siap dicoba duluan; kalau provider itu baru gagal semua -> taruh belakang.
+ */
+export function healthMap(models: string[], health: Map<string, Health>): Map<string, 0 | 1 | 2> {
+  const prov = (m: string) => (m.includes("/") ? m.split("/")[0].toLowerCase() : "");
+  const provOk = new Set<string>();
+  const provFail = new Set<string>();
+  for (const [m, h] of health) {
+    const r = healthRank(h);
+    if (r === 0) provOk.add(prov(m));
+    if (r === 2) provFail.add(prov(m));
+  }
+  const out = new Map<string, 0 | 1 | 2>();
+  for (const m of models) {
+    let r = healthRank(health.get(m));
+    if (r === 1 && prov(m)) {
+      if (provOk.has(prov(m))) r = 0;
+      else if (provFail.has(prov(m))) r = 2;
+    }
+    out.set(m, r);
+  }
+  return out;
+}
+
+export function healthRank(h: Health | undefined): 0 | 1 | 2 {
+  if (!h) return 1;
+  const ok = h.ok_at ? Date.parse(h.ok_at) : 0;
+  const fail = h.fail_at ? Date.parse(h.fail_at) : 0;
+  if (fail > ok && Date.now() - fail < 24 * H) return 2; // gagal dalam 24 jam terakhir -> dicoba paling akhir
+  if (ok > fail && Date.now() - ok < 7 * 24 * H) return 0;
+  return 1;
 }
 
 export function systemPrompt(name: string) {
