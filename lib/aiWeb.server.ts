@@ -205,7 +205,7 @@ const fmt = (n: number, cur: string) =>
   `${cur === "IDR" ? "Rp" : cur === "USD" ? "$" : ""}${n.toLocaleString("id-ID", { maximumFractionDigits: n < 1 ? 6 : 2 })}${cur !== "IDR" && cur !== "USD" ? ` ${cur}` : ""}`;
 const wib = (d: Date) => new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Jakarta" }).format(d) + " WIB";
 
-async function cryptoQuotes(symbols: string[]): Promise<{ lines: string[]; source?: Source }> {
+async function cryptoQuotes(symbols: string[]): Promise<{ lines: string[]; source?: Source; ids?: Map<string, string> }> {
   const syms = symbols.map((s) => s.replace(/(USDT|USD|IDR|\/.*)$/, "")).filter(Boolean);
   if (!syms.length) syms.push("BTC");
   const demo = (process.env.COINGECKO_API_KEY ?? "").trim();
@@ -238,7 +238,7 @@ async function cryptoQuotes(symbols: string[]): Promise<{ lines: string[]; sourc
     const at = p.last_updated_at ? `, per ${wib(new Date(p.last_updated_at * 1000))}` : "";
     lines.push(`- ${sym}: ${fmt(p.usd, "USD")}${p.idr ? ` ≈ ${fmt(p.idr, "IDR")}` : ""}${ch}${at}`);
   }
-  return { lines, source: lines.length ? { title: "CoinGecko — harga crypto live", url: "https://www.coingecko.com/" } : undefined };
+  return { lines, source: lines.length ? { title: "CoinGecko — harga crypto live", url: "https://www.coingecko.com/" } : undefined, ids };
 }
 
 async function forexQuotes(symbols: string[]): Promise<{ lines: string[]; source?: Source }> {
@@ -272,6 +272,85 @@ async function forexQuotes(symbols: string[]): Promise<{ lines: string[]; source
   return { lines, source: lines.length ? { title: "Twelve Data — kurs live", url: "https://twelvedata.com/" } : undefined };
 }
 
+/** angka harga yang enak dibaca untuk koin murah maupun mahal */
+const px = (n: number) => (n >= 100 ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : n >= 1 ? n.toFixed(4) : n.toPrecision(4));
+
+/**
+ * Riwayat harga 30 hari dari CoinGecko (gratis): candle harian + ringkasan (tertinggi/terendah, perubahan, rata-rata,
+ * titik balik terakhir) supaya AI menganalisa support/resistance dari angka asli, bukan menebak.
+ */
+async function cryptoHistory(sym: string, id: string): Promise<string[]> {
+  const demo = (process.env.COINGECKO_API_KEY ?? "").trim();
+  const headers: Record<string, string> = demo ? { "x-cg-demo-api-key": demo } : {};
+  const cg = (process.env.COINGECKO_BASE_URL ?? "https://api.coingecko.com").trim().replace(/\/+$/, "");
+  const r = await fetch(`${cg}/api/v3/coins/${encodeURIComponent(id)}/ohlc?vs_currency=usd&days=30`, { headers, signal: AbortSignal.timeout(7000), cache: "no-store" });
+  if (!r.ok) return [];
+  const raw = (await r.json()) as [number, number, number, number, number][];
+  if (!Array.isArray(raw) || raw.length < 4) return [];
+  // gabung jadi candle harian (tanggal WIB)
+  const day = new Map<string, { o: number; h: number; l: number; c: number }>();
+  const key = (t: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date(t));
+  for (const [t, o, h, l, c] of raw) {
+    const k = key(t);
+    const d = day.get(k);
+    if (!d) day.set(k, { o, h, l, c });
+    else {
+      d.h = Math.max(d.h, h);
+      d.l = Math.min(d.l, l);
+      d.c = c;
+    }
+  }
+  const days = [...day.entries()].slice(-30);
+  const closes = days.map(([, d]) => d.c);
+  const last = closes[closes.length - 1];
+  const hi30 = Math.max(...days.map(([, d]) => d.h));
+  const lo30 = Math.min(...days.map(([, d]) => d.l));
+  const w = days.slice(-7);
+  const hi7 = Math.max(...w.map(([, d]) => d.h));
+  const lo7 = Math.min(...w.map(([, d]) => d.l));
+  const ma = (n: number) => closes.slice(-n).reduce((a, b) => a + b, 0) / Math.min(n, closes.length);
+  const chg = (n: number) => (closes.length > n ? ((last - closes[closes.length - 1 - n]) / closes[closes.length - 1 - n]) * 100 : NaN);
+  // titik balik sederhana (puncak/lembah lokal 2 hari kiri-kanan)
+  const swings: string[] = [];
+  for (let i = 2; i < days.length - 2; i++) {
+    const [k, d] = days[i];
+    const around = [days[i - 2][1], days[i - 1][1], days[i + 1][1], days[i + 2][1]];
+    if (around.every((x) => d.h >= x.h)) swings.push(`puncak ${px(d.h)} (${k})`);
+    if (around.every((x) => d.l <= x.l)) swings.push(`lembah ${px(d.l)} (${k})`);
+  }
+  const pct = (v: number) => (Number.isNaN(v) ? "-" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  return [
+    `RIWAYAT HARGA ${sym}/USD 30 HARI (CoinGecko, candle harian WIB, dihitung dari data asli):`,
+    `- Terakhir ${px(last)} · 7 hari ${pct(chg(7))} · 30 hari ${pct(chg(days.length - 1))}`,
+    `- Tertinggi/terendah 7 hari: ${px(hi7)} / ${px(lo7)} · 30 hari: ${px(hi30)} / ${px(lo30)}`,
+    `- Rata-rata penutupan 7 hari ${px(ma(7))} · 20 hari ${px(ma(20))} (harga ${last >= ma(20) ? "DI ATAS" : "DI BAWAH"} rata-rata 20 hari)`,
+    swings.length ? `- Titik balik terakhir: ${swings.slice(-6).join("; ")}` : "",
+    "- Candle harian (tanggal: open/high/low/close):",
+    ...days.slice(-14).map(([k, d]) => `  ${k}: ${px(d.o)}/${px(d.h)}/${px(d.l)}/${px(d.c)}`),
+    "Gunakan angka ini untuk support/resistance & tren. Jangan menyebut level yang tidak didukung data ini atau sumber lain.",
+  ].filter(Boolean);
+}
+
+/** simbol chart TradingView untuk aset yang ditanya (widget chart live di jawaban) */
+export function chartSymbol(plan: Pick<WebPlan, "market" | "symbols">): string | null {
+  const raw = (plan.symbols[0] ?? "").toUpperCase().replace(/[^A-Z0-9/]/g, "");
+  if (!raw || plan.market === "none") return null;
+  const flat = raw.replace("/", "");
+  switch (plan.market) {
+    case "crypto": {
+      const base = flat.replace(/(USDT|USDC|USD|IDR)$/, "") || flat;
+      return `${base}USDT`;
+    }
+    case "forex":
+      if (/^(XAU|XAG)/.test(flat) || flat === "GOLD") return `OANDA:${flat === "GOLD" ? "XAUUSD" : flat.length === 3 ? `${flat}USD` : flat}`;
+      return flat.includes("IDR") ? `FX_IDC:${flat}` : `FX:${flat}`;
+    case "saham_id":
+      return `IDX:${flat.replace(/\.JK$/, "")}`;
+    default:
+      return flat;
+  }
+}
+
 /* ---------- jalankan rencana ---------- */
 
 type Hit = { title?: string; url: string; content?: string; raw_content?: string | null; published_date?: string };
@@ -280,7 +359,7 @@ type Hit = { title?: string; url: string; content?: string; raw_content?: string
  * Cari tiap kata kunci (prioritas situs berkualitas, buang yang basi) + baca link yang ditempel + harga live.
  * Tidak pernah melempar error — kalau gagal, kembalikan catatan singkat supaya AI bilang terus terang.
  */
-export async function buildWebContext(plan: WebPlan): Promise<{ context: string; sources: Source[]; error?: string }> {
+export async function buildWebContext(plan: WebPlan): Promise<{ context: string; sources: Source[]; error?: string; chart?: string | null }> {
   const cfg = webConfig();
   if (!cfg.ok) return { context: "", sources: [] };
   const sources: Source[] = [];
@@ -349,23 +428,30 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
   plan.queries.forEach((q, i) => tasks.push(search(q, i)));
 
   const quotes = plan.market === "crypto" ? cryptoQuotes : plan.market === "forex" ? forexQuotes : null;
+  const history: string[] = [];
   if (quotes) {
     tasks.push(
       quotes(plan.symbols)
-        .then((q) => {
+        .then(async (q) => {
           live.push(...q.lines);
           if (q.source) liveSources.push(q.source);
+          // crypto: riwayat 30 hari dari aset pertama
+          const ids = (q as { ids?: Map<string, string> }).ids;
+          const first = ids ? [...ids.entries()][0] : undefined;
+          if (first) history.push(...(await cryptoHistory(first[0], first[1]).catch(() => [])));
         })
         .catch(() => {})
     );
   }
   await Promise.all(tasks);
 
-  if (!blocks.length && !live.length) {
+  const chart = chartSymbol(plan);
+  if (!blocks.length && !live.length && !history.length) {
     return {
       context: `PENCARIAN INTERNET: sudah dicoba tapi gagal / tidak ada hasil yang cukup baru${error ? ` (${error})` : ""}. Bilang terus terang bahwa data terbaru tidak ditemukan; jangan mengarang info terbaru.`,
       sources: [],
       error: error || "tidak ada hasil",
+      chart,
     };
   }
   // sumber terbaru di atas
@@ -392,11 +478,13 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
     ...(dropped ? [`- (${dropped} hasil lama / kualitas rendah sudah dibuang otomatis.)`] : []),
     "",
     ...liveBlock,
+    ...(history.length ? ["", ...history] : []),
+    ...(chart ? [`(Website menampilkan chart live ${chart} di atas jawabanmu — boleh rujuk "lihat chart di atas", tapi analisamu harus dari angka di sini.)`] : []),
     ...idxNote,
     "",
     clip(parts.join("\n\n"), 12000),
   ].join("\n");
-  return { context, sources, error: error || undefined };
+  return { context, sources, error: error || undefined, chart };
 }
 
 /** daftar sumber yang ditempel di akhir jawaban (ikut tersimpan di riwayat chat) */

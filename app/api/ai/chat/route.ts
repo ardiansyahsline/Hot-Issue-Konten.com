@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
   const textRank = rankTextModels(pool);
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
-  const noWeb = { context: "", sources: [] as { title: string; url: string }[] };
+  const noWeb: { context: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
   const [context, web] = await Promise.all([
     useData ? buildSiteContext(supabase).catch(() => "") : Promise.resolve(""),
     webOn
@@ -396,7 +396,8 @@ export async function POST(req: NextRequest) {
             controller.enqueue(enc.encode(e));
           }
         }
-        const foot = sourcesFooter(web.sources);
+        // chart live (TradingView) ditandai di akhir jawaban supaya tetap tampil saat riwayat dibuka lagi
+        const foot = sourcesFooter(web.sources) + (web.chart ? `\n\n[[chart:${web.chart}]]` : "");
         if (foot && full.trim()) {
           full += foot;
           controller.enqueue(enc.encode(foot));
@@ -441,6 +442,7 @@ export async function POST(req: NextRequest) {
       "x-ai-persona": encodeURIComponent(personaHero),
       "x-ai-data": useData ? "1" : "0",
       "x-ai-web": web.sources.length ? "1" : "0",
+      ...(web.chart ? { "x-ai-chart": encodeURIComponent(web.chart) } : {}),
       "x-ai-fallback": failures.length ? "1" : "0",
     },
   });

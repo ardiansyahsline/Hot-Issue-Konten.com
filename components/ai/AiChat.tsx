@@ -8,6 +8,7 @@ import { SMART, SMART_HERO, heroColor, heroDesc, heroName, heroRole, isVisionMod
 import Markdown from "./Markdown";
 import HeroArt from "./HeroArt";
 import HeroGallery from "./HeroGallery";
+import TradingChart, { splitChart } from "./TradingChart";
 import { personaOf } from "@/lib/aiPersona";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -22,6 +23,7 @@ export type AiMsg = {
   used_data?: boolean | null;
   used_web?: boolean;
   persona?: string | null;
+  chart?: string | null;
   /** model diganti otomatis (mis. karena ada gambar) */
   switched?: boolean;
 };
@@ -477,8 +479,9 @@ export default function AiChat({
       const usedData = res.headers.get("x-ai-data") === "1";
       const usedWeb = res.headers.get("x-ai-web") === "1";
       const persona = decodeURIComponent(res.headers.get("x-ai-persona") ?? "") || null;
+      const chart = decodeURIComponent(res.headers.get("x-ai-chart") ?? "") || null;
       const switched = !!used && ((model !== SMART && used !== model) || res.headers.get("x-ai-fallback") === "1");
-      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, persona, switched } : x)));
+      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, persona, chart, switched } : x)));
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let text = "";
@@ -878,7 +881,16 @@ export default function AiChat({
                             m.error ? (
                               <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-red-400">{m.content.replace(/^⚠️\s*/, "⚠️ ")}</div>
                             ) : (
-                              <Markdown text={m.content} />
+                              (() => {
+                                const sc = splitChart(m.content);
+                                const chart = sc.chart || m.chart;
+                                return (
+                                  <>
+                                    {chart && <TradingChart symbol={chart} />}
+                                    <Markdown text={sc.text} />
+                                  </>
+                                );
+                              })()
                             )
                           ) : (
                             <span className="inline-flex gap-1 py-2" aria-label="AI sedang mengetik">
@@ -893,7 +905,7 @@ export default function AiChat({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    navigator.clipboard?.writeText(m.content).then(() => {
+                                    navigator.clipboard?.writeText(splitChart(m.content).text).then(() => {
                                       setCopied(m.id);
                                       setTimeout(() => setCopied(null), 1500);
                                     })
