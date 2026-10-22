@@ -198,6 +198,20 @@ export async function POST(req: NextRequest) {
   ];
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
+  // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
+  const tradeIntent =
+    /\b(trade ?plan|tradeplan|analisa|analisis|analyze|setup|signal|sinyal|entry|entri|stop ?loss|\bsl\b|take ?profit|\btp\d?\b|target|beli di|jual di|masuk di|buy|sell|long|short|kapan (beli|jual|masuk)|harga berapa|di harga berapa|layak beli|worth)\b/i.test(lastText);
+  if (tradeIntent && web.chart) {
+    messages.push({
+      role: "system",
+      content: [
+        `USER MEMINTA ANALISA / TRADE PLAN untuk ${web.chart}.`,
+        "WAJIB beri trade plan dengan ANGKA KONKRET: arah (long/short atau wait & see dengan level pemicunya), entry (boleh area), stop loss, TP1, TP2, timeframe, dan alasan singkat berdasarkan data.",
+        "Patokan harga: pakai harga live / candle kalau ada; kalau tidak ada, pakai harga paling baru dari hasil browsing dan sebut tanggalnya ('per 23 Okt'). JANGAN minta user memberikan harga, JANGAN menjawab hanya dengan persentase.",
+        "Tutup jawaban dengan blok ```tradeplan berisi JSON (symbol, side, entry, sl, tp[], timeframe) — website menggambarnya di chart. Untuk entry berupa area, isi entry dengan titik tengah area.",
+      ].join("\n"),
+    });
+  }
   // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413)
   const trimContext = () => {
     let changed = false;

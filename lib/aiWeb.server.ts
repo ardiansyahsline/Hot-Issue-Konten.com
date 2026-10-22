@@ -1,4 +1,5 @@
 import "server-only";
+import { hasStockData, stockCandles, stockCode, stockQuote, summarizeDaily } from "./stockData.server";
 
 /**
  * "Cari di Internet" untuk tab AI.
@@ -443,8 +444,64 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
   };
   plan.queries.forEach((q, i) => tasks.push(search(q, i)));
 
-  const quotes = plan.market === "crypto" ? cryptoQuotes : plan.market === "forex" ? forexQuotes : null;
+  // saham: kalau tidak ada key data saham -> cari khusus harga penutupan terbaru (ringkasan mesin pencari + berita pasar)
+  const priceNotes: string[] = [];
   const history: string[] = [];
+  const stock = (plan.market === "saham_id" || plan.market === "saham_global") && plan.symbols[0];
+  const stockMarket = plan.market === "saham_id" || plan.market === "saham_global" ? plan.market : null;
+  let stockLive = false;
+  if (stock && stockMarket && hasStockData()) {
+    // harga & candle asli (EODHD / Google Finance) -> pencarian harga lewat berita tidak perlu
+    const code = stockCode(plan.symbols[0]);
+    tasks.push(
+      Promise.all([stockQuote(code, stockMarket), stockCandles(code, stockMarket)])
+        .then(([q, candles]) => {
+          if (q) {
+            stockLive = true;
+            const ch = q.changeP !== undefined ? ` (${q.changeP >= 0 ? "+" : ""}${q.changeP.toFixed(2)}% hari ini)` : "";
+            live.push(`- ${code}: ${q.price.toLocaleString("id-ID")}${stockMarket === "saham_id" ? " rupiah" : ""}${ch}${q.at ? `, per ${q.at}` : ""}`);
+            liveSources.push(q.source);
+          }
+          if (candles.length) {
+            stockLive = true;
+            history.push(...summarizeDaily(code, candles, "EODHD"));
+          }
+        })
+        .catch(() => {})
+    );
+  }
+  if (stock && !hasStockData()) {
+    const sym = plan.symbols[0].replace(/^IDX:|\.JK$/g, "");
+    const month = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
+    const q = plan.market === "saham_id" ? `harga saham ${sym} hari ini penutupan ${month}` : `${sym} stock price today close`;
+    tasks.push(
+      tavily(
+        "search",
+        cfg.key,
+        {
+          query: q,
+          search_depth: "basic",
+          max_results: 5,
+          topic: plan.market === "saham_id" ? "general" : "finance",
+          time_range: "week",
+          include_answer: "basic",
+          ...(plan.market === "saham_id" ? { country: "indonesia", include_domains: DOMAINS.saham_id } : {}),
+          exclude_domains: LOW_QUALITY,
+        },
+        12000
+      )
+        .then((j: { answer?: string; results?: Hit[] }) => {
+          if (j?.answer) priceNotes.push(`- Ringkasan mesin pencari: ${clip(String(j.answer), 500)}`);
+          for (const r of j?.results ?? []) {
+            if (LOW_QUALITY.some((d) => host(r.url).endsWith(d)) || isStale(r, "week")) continue;
+            add(r.url, clip(String(r.title || host(r.url)), 90), clip(String(r.content ?? ""), 900), r.published_date);
+          }
+        })
+        .catch(() => {})
+    );
+  }
+
+  const quotes = plan.market === "crypto" ? cryptoQuotes : plan.market === "forex" ? forexQuotes : null;
   if (quotes) {
     tasks.push(
       quotes(plan.symbols)
@@ -481,8 +538,12 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
     ? [`DATA HARGA LIVE (diambil ${wib(new Date())}, sumber [1]${liveSources.length > 1 ? `-[${liveSources.length}]` : ""}) — pakai ini untuk harga sekarang, lebih baru dari artikel:`, ...live]
     : [];
   const idxNote =
-    plan.market === "saham_id"
-      ? ["CATATAN: harga saham BEI live tidak tersedia di sini. Untuk harga, pakai artikel paling baru & SEBUT tanggalnya; sarankan cek harga live di aplikasi sekuritas / idx.co.id."]
+    (plan.market === "saham_id" || plan.market === "saham_global") && !stockLive
+      ? [
+          `HARGA SAHAM TERBARU (dari pencarian, bukan data live):`,
+          ...(priceNotes.length ? priceNotes : ["- (ringkasan harga tidak ditemukan — ambil harga dari artikel paling baru di bawah)"]),
+          "Pakai harga paling baru yang ada (sebut tanggal & sumbernya) sebagai patokan; boleh juga patokan dari level yang disebut artikel/analis. Ingatkan singkat untuk cek harga live di aplikasi sekuritas sebelum eksekusi.",
+        ]
       : [];
   const context = [
     `HASIL BROWSING INTERNET (barusan dicarikan untukmu${plan.queries.length ? `, kata kunci: ${plan.queries.map((q) => `"${q}"`).join(", ")}` : ""}):`,

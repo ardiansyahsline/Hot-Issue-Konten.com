@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { coinId } from "@/lib/aiWeb.server";
+import { stockCandles, stockCode } from "@/lib/stockData.server";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ const cache = new Map<string, { at: number; body: unknown }>();
  * Data candle untuk chart trade plan.
  * - crypto (mis. PUMPUSDT): CoinGecko, candle 4 jam selama 30 hari (gratis)
  * - forex/emas (OANDA:XAUUSD, FX:EURUSD, FX_IDC:USDIDR): Twelve Data harian 120 hari — kalau TWELVEDATA_API_KEY diisi
- * - saham (IDX:BBCA, dll): belum ada sumber gratis -> candles kosong (website pakai chart live TradingView)
+ * - saham BEI (IDX:BBCA) & saham luar (AAPL): EODHD harian (kalau EODHD_API_KEY diisi), kalau tidak -> kosong (chart live TradingView)
  */
 export async function GET(req: NextRequest) {
   await getCurrentUser();
@@ -22,7 +23,14 @@ export async function GET(req: NextRequest) {
 
   let body: { candles: Candle[]; interval?: string; source?: string } = { candles: [] };
   try {
-    if (!symbol.includes(":")) {
+    if (symbol.startsWith("IDX:")) {
+      const candles = await stockCandles(stockCode(symbol), "saham_id");
+      body = { candles: candles.slice(-150), interval: "1D", source: "EODHD" };
+    } else if (!symbol.includes(":") && !/USDT$/.test(symbol)) {
+      // saham luar negeri (chart symbol polos, mis. AAPL)
+      const candles = await stockCandles(stockCode(symbol), "saham_global");
+      body = { candles: candles.slice(-150), interval: "1D", source: "EODHD" };
+    } else if (!symbol.includes(":")) {
       // crypto
       const id = await coinId(symbol);
       if (id) {
