@@ -42,11 +42,20 @@ export async function listCatalog(): Promise<{ ids: string[]; vision: string[]; 
   if (modelCache && Date.now() - modelCache.at < 600000) return modelCache;
   // baru gagal < 1 menit lalu -> jangan bikin user nunggu lagi
   if (failCache && Date.now() - failCache.at < 60000) return modelCache ?? { ids: [], vision: [], error: failCache.error };
-  // ?prefix=alias = satu id per model (tanpa dobel), ?kind=chat = hanya model chat
-  let res = await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat`, cfg.key);
+  // ?prefix=alias = satu id per model (tanpa dobel), ?kind=chat = hanya model chat,
+  // ?configuredOnly=true = hanya provider yang sudah disambungkan (versi baru). Kalau tidak didukung -> daftar biasa.
+  const Q = "prefix=alias&kind=chat";
+  let configured = true;
+  let res = await fetchIds(`${cfg.base}/models?${Q}&configuredOnly=true`, cfg.key);
+  if (!res.ids || !res.ids.length) {
+    configured = false;
+    const all = await fetchIds(`${cfg.base}/models?${Q}`, cfg.key);
+    res = all.ids && all.ids.length ? all : { ids: res.ids, error: all.error || res.error };
+  }
   if (!res.ids || !res.ids.length) {
     const plain = await fetchIds(`${cfg.base}/models`, cfg.key);
     if (plain.ids && plain.ids.length) res = plain;
+    else res = { ids: res.ids, error: res.error || plain.error };
   }
   if (!res.ids || !res.ids.length) {
     failCache = { at: Date.now(), error: res.error || "daftar kosong" };
@@ -54,7 +63,7 @@ export async function listCatalog(): Promise<{ ids: string[]; vision: string[]; 
     return modelCache ?? { ids: [], vision: [], error: failCache.error };
   }
   failCache = null;
-  const vision = (await fetchIds(`${cfg.base}/models?prefix=alias&kind=chat&capability=vision`, cfg.key)).ids ?? [];
+  const vision = (await fetchIds(`${cfg.base}/models?${Q}&capability=vision${configured ? "&configuredOnly=true" : ""}`, cfg.key)).ids ?? [];
   modelCache = { at: Date.now(), ids: [...new Set(res.ids)].sort((a, b) => a.localeCompare(b)), vision };
   return modelCache;
 }

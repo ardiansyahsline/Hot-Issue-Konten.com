@@ -13,7 +13,7 @@ const BEST_TEXT = [/claude[^/]*(opus|sonnet)/i, /claude/i, /gemini[^/]*flash(?!-
 const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /claude/i, /gemma-?[34]/i, /llama-4/i];
 
 /** agen coding / akun IDE / login web — bukan untuk chat biasa (sering error kalau dipanggil dari aplikasi lain) */
-const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
+const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|(^|[/:])no-?think(ing)?[/:]|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
 
 export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id);
 let visionSet: Set<string> | null = null;

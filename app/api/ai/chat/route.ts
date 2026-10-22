@@ -254,7 +254,7 @@ export async function POST(req: NextRequest) {
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
     return saveError(
-      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba: ${candidates.map((m) => `${heroName(m)} (${m})`).join(", ")}. Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI.`
+      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => `- ${heroName(f.split(" ")[0])}: ${f}`).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
     );
   }
 
