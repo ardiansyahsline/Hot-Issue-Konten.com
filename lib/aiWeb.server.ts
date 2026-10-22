@@ -350,9 +350,13 @@ async function cryptoHistory(sym: string, id: string): Promise<string[]> {
 
 /** simbol chart TradingView untuk aset yang ditanya (widget chart live di jawaban) */
 export function chartSymbol(plan: Pick<WebPlan, "market" | "symbols">): string | null {
-  const raw = (plan.symbols[0] ?? "").toUpperCase().replace(/[^A-Z0-9/]/g, "");
+  const raw0 = (plan.symbols[0] ?? "").toUpperCase().trim();
+  // IDX:BBRI / BBRI.JK / BBRI:IDX -> saham BEI walau AI salah tebak pasarnya
+  const jk = /^IDX:|\.JK$|:IDX$/.test(raw0);
+  const raw = raw0.replace(/^IDX:|\.JK$|:IDX$/g, "").replace(/[^A-Z0-9/]/g, "");
   if (!raw || plan.market === "none") return null;
   const flat = raw.replace("/", "");
+  if (jk) return `IDX:${flat}`;
   switch (plan.market) {
     case "crypto": {
       const base = flat.replace(/(USDT|USDC|USD|IDR)$/, "") || flat;
@@ -362,7 +366,7 @@ export function chartSymbol(plan: Pick<WebPlan, "market" | "symbols">): string |
       if (/^(XAU|XAG)/.test(flat) || flat === "GOLD") return `OANDA:${flat === "GOLD" ? "XAUUSD" : flat.length === 3 ? `${flat}USD` : flat}`;
       return flat.includes("IDR") ? `FX_IDC:${flat}` : `FX:${flat}`;
     case "saham_id":
-      return `IDX:${flat.replace(/\.JK$/, "")}`;
+      return `IDX:${flat}`;
     default:
       return flat;
   }
@@ -376,7 +380,9 @@ type Hit = { title?: string; url: string; content?: string; raw_content?: string
  * Cari tiap kata kunci (prioritas situs berkualitas, buang yang basi) + baca link yang ditempel + harga live.
  * Tidak pernah melempar error — kalau gagal, kembalikan catatan singkat supaya AI bilang terus terang.
  */
-export async function buildWebContext(plan: WebPlan): Promise<{ context: string; sources: Source[]; error?: string; chart?: string | null }> {
+export type StepFn = (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void;
+
+export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}): Promise<{ context: string; sources: Source[]; error?: string; chart?: string | null }> {
   const cfg = webConfig();
   if (!cfg.ok) return { context: "", sources: [] };
   const sources: Source[] = [];
@@ -396,8 +402,10 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
 
   const tasks: Promise<void>[] = [];
   if (plan.urls.length) {
+    onStep("read", "run", { id: "read", n: plan.urls.length });
     tasks.push(
       tavily("extract", cfg.key, { urls: plan.urls, extract_depth: "basic", format: "text" }, 15000)
+        .finally(() => onStep("read", "done", { id: "read" }))
         .then((j) => {
           for (const r of (j?.results ?? []) as { url: string; raw_content?: string }[]) add(r.url, host(r.url), clip(String(r.raw_content ?? ""), 7000));
           for (const f of (j?.failed_results ?? []) as { url: string; error?: string }[]) add(f.url, host(f.url), `(halaman gagal dibuka: ${f.error ?? "tidak bisa diakses"})`);
@@ -442,7 +450,12 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
       error = error || String((e as Error)?.message ?? e);
     }
   };
-  plan.queries.forEach((q, i) => tasks.push(search(q, i)));
+  plan.queries.forEach((q, i) => {
+    onStep("search", "run", { id: `q${i}`, q });
+    const before = () => blocks.length;
+    const b0 = before();
+    tasks.push(search(q, i).finally(() => onStep("search", "done", { id: `q${i}`, q, n: Math.max(0, blocks.length - b0) })));
+  });
 
   // saham: kalau tidak ada key data saham -> cari khusus harga penutupan terbaru (ringkasan mesin pencari + berita pasar)
   const priceNotes: string[] = [];
@@ -453,8 +466,10 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
   if (stock && stockMarket && hasStockData()) {
     // harga & candle asli (EODHD / Google Finance) -> pencarian harga lewat berita tidak perlu
     const code = stockCode(plan.symbols[0]);
+    onStep("price", "run", { id: "price", sym: code });
     tasks.push(
       Promise.all([stockQuote(code, stockMarket), stockCandles(code, stockMarket)])
+        .finally(() => onStep("price", "done", { id: "price", sym: code, src: "EODHD" }))
         .then(([q, candles]) => {
           if (q) {
             stockLive = true;
@@ -503,8 +518,11 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
 
   const quotes = plan.market === "crypto" ? cryptoQuotes : plan.market === "forex" ? forexQuotes : null;
   if (quotes) {
+    const sym = (plan.symbols[0] ?? "").replace(/(USDT|USD)$/, "");
+    onStep("price", "run", { id: "price", sym });
     tasks.push(
       quotes(plan.symbols)
+        .finally(() => onStep("price", "done", { id: "price", sym, src: plan.market === "crypto" ? "CoinGecko" : "Twelve Data" }))
         .then(async (q) => {
           live.push(...q.lines);
           if (q.source) liveSources.push(q.source);
@@ -563,7 +581,7 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
           "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
           "Angka di JSON: TANPA pemisah ribuan, titik untuk desimal, skala sama dengan harga asli (saham BBRI Rp2.560 -> 2560; XAUUSD 4.022,46 -> 4022.46; PUMP 0,00461 -> 0.00461).",
-          ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 (tanpa desimal)."] : []),
+          ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 atau 5.320 — JANGAN pakai angka di belakang koma (salah: 5.320,00)."] : []),
         ]
       : []),
     ...idxNote,

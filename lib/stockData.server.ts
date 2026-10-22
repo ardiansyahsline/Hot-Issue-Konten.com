@@ -28,13 +28,13 @@ export const stockCode = (sym: string) => sym.toUpperCase().replace(/^[A-Z_]+:/,
 const eodSymbol = (code: string, market: "saham_id" | "saham_global") => `${code}.${market === "saham_id" ? "JK" : "US"}`;
 
 /** candle harian ±1 tahun dari EODHD (cache 6 jam) */
-export async function stockCandles(code: string, market: "saham_id" | "saham_global"): Promise<Candle[]> {
+export async function stockCandles(code: string, market: "saham_id" | "saham_global", period: "d" | "w" = "d"): Promise<Candle[]> {
   const key = eodKey();
   if (!key || !code) return [];
   const sym = eodSymbol(code, market);
-  return cached(`eod:${sym}`, 6 * 3600_000, async () => {
-    const from = new Date(Date.now() - 200 * 86400_000).toISOString().slice(0, 10);
-    const r = await fetch(`${eodBase()}/api/eod/${encodeURIComponent(sym)}?api_token=${encodeURIComponent(key)}&fmt=json&from=${from}`, {
+  return cached(`eod:${sym}:${period}`, 6 * 3600_000, async () => {
+    const from = new Date(Date.now() - (period === "w" ? 365 : 200) * 86400_000).toISOString().slice(0, 10);
+    const r = await fetch(`${eodBase()}/api/eod/${encodeURIComponent(sym)}?api_token=${encodeURIComponent(key)}&fmt=json&period=${period}&from=${from}`, {
       signal: AbortSignal.timeout(9000),
       cache: "no-store",
     });

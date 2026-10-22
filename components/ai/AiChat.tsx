@@ -10,10 +10,13 @@ import HeroArt from "./HeroArt";
 import HeroGallery from "./HeroGallery";
 import TradingChart, { splitChart } from "./TradingChart";
 import TradePlanChart from "./TradePlanChart";
+import ThinkingSteps from "./ThinkingSteps";
 import { splitPlan } from "@/lib/tradePlan";
 import { personaOf } from "@/lib/aiPersona";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
+export type AiStep = { id: string; k: string; s: "run" | "done" | "skip"; q?: string; n?: number; sym?: string; src?: string; to?: string; plan?: boolean };
+
 export type AiMsg = {
   id: number | string;
   role: "user" | "assistant";
@@ -26,6 +29,9 @@ export type AiMsg = {
   used_web?: boolean;
   persona?: string | null;
   chart?: string | null;
+  steps?: AiStep[];
+  startedAt?: number;
+  doneAt?: number;
   /** model diganti otomatis (mis. karena ada gambar) */
   switched?: boolean;
 };
@@ -477,22 +483,72 @@ export default function AiChat({
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Gagal (${res.status})`);
       }
-      const used = decodeURIComponent(res.headers.get("x-ai-model") ?? "");
-      const usedData = res.headers.get("x-ai-data") === "1";
-      const usedWeb = res.headers.get("x-ai-web") === "1";
-      const persona = decodeURIComponent(res.headers.get("x-ai-persona") ?? "") || null;
-      const chart = decodeURIComponent(res.headers.get("x-ai-chart") ?? "") || null;
-      const switched = !!used && ((model !== SMART && used !== model) || res.headers.get("x-ai-fallback") === "1");
-      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, persona, chart, switched } : x)));
+      // aliran jawaban = teks biasa + bingkai kontrol "\u001e{json}\n" (langkah proses, info hero/model, error)
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let text = "";
+      let buf = "";
+      let failMsg = "";
+      const patch = (f: (x: AiMsg) => AiMsg) => setMsgs((m) => m.map((x) => (x.id === tempId ? f(x) : x)));
+      patch((x) => ({ ...x, steps: [], startedAt: Date.now() }));
+      const onFrame = (f: Record<string, unknown>) => {
+        if (f.t === "step") {
+          const st = f as unknown as AiStep & { id?: string };
+          const id = st.id || st.k;
+          patch((x) => {
+            const steps = [...(x.steps ?? [])];
+            const i = steps.findIndex((y) => y.id === id);
+            const next = { ...(i >= 0 ? steps[i] : {}), ...st, id } as AiStep;
+            if (i >= 0) steps[i] = next;
+            else steps.push(next);
+            // hero yang (akan) menjawab -> kalimat proses & avatar ikut karakternya
+            const h = (f as { hero?: unknown }).hero;
+            return { ...x, steps, ...(typeof h === "string" && h ? { persona: h } : {}) };
+          });
+        } else if (f.t === "meta") {
+          const used = String(f.model ?? "");
+          const switched = !!used && ((model !== SMART && used !== model) || !!f.fallback);
+          patch((x) => ({
+            ...x,
+            model: used || x.model,
+            used_data: !!f.data,
+            used_web: !!f.web,
+            persona: (f.persona as string) || null,
+            chart: (f.chart as string) || null,
+            switched,
+            doneAt: Date.now(),
+          }));
+        } else if (f.t === "error") failMsg = String(f.message ?? "Gagal");
+      };
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        text += dec.decode(value, { stream: true });
+        buf += dec.decode(value, { stream: true });
+        // pisahkan bingkai kontrol dari teks jawaban
+        for (;;) {
+          const i = buf.indexOf("\u001e");
+          if (i < 0) {
+            text += buf;
+            buf = "";
+            break;
+          }
+          text += buf.slice(0, i);
+          const nl = buf.indexOf("\n", i);
+          if (nl < 0) {
+            buf = buf.slice(i);
+            break;
+          }
+          try {
+            onFrame(JSON.parse(buf.slice(i + 1, nl)));
+          } catch {}
+          buf = buf.slice(nl + 1);
+        }
         const t = text;
-        setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, content: t } : x)));
+        patch((x) => ({ ...x, content: t }));
+      }
+      if (failMsg) {
+        patch((x) => ({ ...x, content: `⚠️ ${failMsg}`, error: true }));
+        return;
       }
       if (!text.trim()) setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, content: "Tidak ada jawaban dari model. Coba hero/model lain atau ulangi.", error: true } : x)));
     } catch (e) {
@@ -890,6 +946,9 @@ export default function AiChat({
                                 const streaming = busy && m.id === lastAssistant?.id;
                                 return (
                                   <>
+                                    {!!m.steps?.length && (
+                                      <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps} live={false} startedAt={m.startedAt} doneAt={m.doneAt} />
+                                    )}
                                     {chart && sp.plan && !streaming ? (
                                       <TradePlanChart symbol={chart} plan={sp.plan} persona={m.persona || hero(m.model)} />
                                     ) : chart ? (
@@ -901,11 +960,7 @@ export default function AiChat({
                               })()
                             )
                           ) : (
-                            <span className="inline-flex gap-1 py-2" aria-label="AI sedang mengetik">
-                              {[0, 1, 2].map((i) => (
-                                <span key={i} className="h-2 w-2 animate-bounce rounded-full bg-orange-400" style={{ animationDelay: `${i * 0.15}s` }} />
-                              ))}
-                            </span>
+                            <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps ?? []} live startedAt={m.startedAt} />
                           )}
                           {m.content && !(busy && m.id === lastAssistant?.id) && (
                             <div className="mt-2 flex flex-wrap items-center gap-3 text-[12px] text-zinc-500">

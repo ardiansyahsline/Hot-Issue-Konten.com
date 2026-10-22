@@ -32,8 +32,9 @@ const err = (status: number, message: string, convId?: string | null) =>
   NextResponse.json({ error: message }, { status, headers: convId ? { "x-conversation-id": convId } : undefined });
 
 /**
- * Kirim pesan ke AI. Jawaban dialirkan (streaming) sebagai teks biasa.
- * Header: x-conversation-id (id percakapan), x-ai-model (model yang dipakai), x-ai-data ("1" kalau membaca data CS Tracker).
+ * Kirim pesan ke AI. Jawaban dialirkan (streaming) sebagai teks biasa, diselingi bingkai kontrol "\u001e{json}\n":
+ * {t:"step"} langkah proses (tampilan "lagi mikir"), {t:"meta"} hero/model yang dipakai, {t:"error"} pesan gagal.
+ * Header: x-conversation-id.
  */
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
@@ -99,6 +100,49 @@ export async function POST(req: NextRequest) {
   );
   const hasImages = imageTurns.size > 0;
 
+  // ===== mulai streaming: langkah proses (untuk tampilan "lagi mikir") + jawaban =====
+  // Format: teks jawaban biasa, diselingi bingkai kontrol "\u001e{json}\n" (langkah, info model, error).
+  const enc = new TextEncoder();
+  const upstreamAbort = new AbortController();
+  req.signal.addEventListener("abort", () => upstreamAbort.abort());
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const emit = (obj: Record<string, unknown>) => {
+        try {
+          controller.enqueue(enc.encode(`\u001e${JSON.stringify(obj)}\n`));
+        } catch {}
+      };
+      const step = (k: string, s: "run" | "done" | "skip", extra: Record<string, unknown> = {}) => emit({ t: "step", k, s, ...extra });
+      try {
+        await pipeline(controller, emit, step);
+      } catch (e) {
+        console.log("[ai] pipeline error:", e);
+        emit({ t: "error", message: "Terjadi kesalahan di server AI. Coba lagi sebentar." });
+      } finally {
+        try {
+          controller.close();
+        } catch {}
+      }
+    },
+    cancel() {
+      upstreamAbort.abort();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      "x-conversation-id": convId!,
+    },
+  });
+
+  async function pipeline(
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    emit: (o: Record<string, unknown>) => void,
+    step: (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void
+  ) {
+  step("understand", "run");
   // 4) daftar calon model: pilihan user dulu, lalu cadangan terbaik.
   //    Katalog OmniRoute berisi juga provider yang BELUM disambungkan, jadi urutannya:
   //    model yang terbukti jalan -> belum pernah dicoba -> yang baru gagal; dan tiap hero/provider cukup dicoba sekali.
@@ -150,10 +194,12 @@ export async function POST(req: NextRequest) {
     if (hasImages) {
       const msg = "Hero yang bisa melihat gambar belum ada. Sambungkan Gemini (API key gratis dari aistudio.google.com/apikey) di dashboard server AI → Providers.";
       await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: chosen });
-      return err(422, msg, convId);
+      emit({ t: "error", message: msg });
+      return;
     }
     candidates = ["auto"];
   }
+  step("understand", "done", { hero: chosenHero ?? heroName(candidates[0] === "auto" ? SMART : candidates[0]) });
 
   const lastUserText = content || ([...hist].reverse().find((m) => m.role === "user")?.content ?? "");
 
@@ -169,8 +215,14 @@ export async function POST(req: NextRequest) {
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
   const noWeb: { context: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
+  if (useData) step("data", "run");
+  if (webOn) step("decide", "run");
   const [context, web] = await Promise.all([
-    useData ? buildSiteContext(supabase).catch(() => "") : Promise.resolve(""),
+    useData
+      ? buildSiteContext(supabase)
+          .catch(() => "")
+          .finally(() => step("data", "done"))
+      : Promise.resolve(""),
     webOn
       ? planWebSearch({
           base: cfg.base,
@@ -179,7 +231,10 @@ export async function POST(req: NextRequest) {
           history: hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })),
           question: lastText,
         })
-          .then((plan) => (plan ? buildWebContext(plan) : noWeb))
+          .then((plan) => {
+            step("decide", plan ? "done" : "skip");
+            return plan ? buildWebContext(plan, (k, st, extra) => step(k, st, extra)) : noWeb;
+          })
           .catch(() => noWeb)
       : Promise.resolve(noWeb),
   ]);
@@ -247,14 +302,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const saveError = async (msg: string, status = 502) => {
+  const saveError = async (msg: string) => {
     await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: candidates[0] });
-    return err(status, msg, convId);
+    emit({ t: "error", message: msg });
   };
 
   // 7) panggil OmniRoute; kalau model error / kosong sebelum menjawab -> coba calon berikutnya
-  const upstreamAbort = new AbortController();
-  req.signal.addEventListener("abort", () => upstreamAbort.abort());
+  step("write", "run", { plan: tradeIntent && !!web.chart, hero: chosenHero ?? heroName(candidates[0]) });
+  let lastSwitch = "";
   const failures: string[] = [];
   let opened: { model: string; events: AsyncGenerator<SseEvent>; first: string } | null = null;
   // batas waktu: Vercel memutus di 60 detik (jadi "Gagal (504)"). Tiap hero diberi maks ±18 detik sampai mulai menjawab,
@@ -287,6 +342,12 @@ export async function POST(req: NextRequest) {
       upstreamAbort.signal.removeEventListener("abort", onAbort);
       coolDown(model);
       failures.push(`${model} (${why})`);
+      // kasih tahu tampilan: mesin ini gagal, coba yang berikutnya
+      const nextHero = candidates[ci + 1] ? heroName(candidates[ci + 1]) : "";
+      if (nextHero && nextHero !== lastSwitch) {
+        lastSwitch = nextHero;
+        step("switch", "done", { from: heroName(model), to: nextHero, hero: chosenHero ?? nextHero });
+      }
       if (providerOf(model) && PROVIDER_DOWN.test(why)) deadProv.add(providerOf(model));
     };
     let upstream: Response | null = null;
@@ -302,7 +363,7 @@ export async function POST(req: NextRequest) {
           signal: ac.signal,
         });
       } catch (e) {
-        if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+        if (upstreamAbort.signal.aborted) return;
         netErr = e;
         if (attempt === 0 && !slow) await new Promise((r) => setTimeout(r, 1500));
       }
@@ -317,9 +378,9 @@ export async function POST(req: NextRequest) {
       // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
       const cause = (netErr as { cause?: { code?: string } })?.cause?.code;
       console.log("[ai] server AI tidak bisa dihubungi:", cause ?? netErr);
-      return saveError(
+      return void (await saveError(
         `Server AI tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena komputer server AI mati / sleep / tidak ada internet, atau jendela server AI tertutup. Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI-nya.`
-      );
+      ));
     }
     if (!upstream.ok || !upstream.body) {
       let detail = "";
@@ -331,7 +392,7 @@ export async function POST(req: NextRequest) {
       // Kalau daftar model barusan bisa dibaca pakai kunci yang sama, berarti kunci website benar -> lanjut hero lain.
       if (upstream.status === 401 && !catalog.ids.length) {
         clearTimeout(timer);
-        return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
+        return void (await saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys."));
       }
       // permintaan terlalu besar untuk model ini -> ringkas konteks sekali lalu coba lagi model yang sama
       if ((upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail)) && !trimmed && trimContext()) {
@@ -362,7 +423,7 @@ export async function POST(req: NextRequest) {
         if (first.length >= 160) break;
       }
     } catch {
-      if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+      if (upstreamAbort.signal.aborted) return;
       if (!first) failed = slow ? "terlalu lama, tidak menjawab" : "koneksi terputus";
     }
     if (first && wrongScript(first, lastUserText)) {
@@ -383,83 +444,68 @@ export async function POST(req: NextRequest) {
   }
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
-    return saveError(
+    return void (await saveError(
       `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 40 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
-    );
+    ));
   }
 
   // 8) alirkan ke browser sambil dikumpulkan, lalu simpan jawaban lengkap
-  const enc = new TextEncoder();
   const usedModel = opened.model;
   const personaHero = chosenHero ?? heroName(usedModel);
+  step("write", "done");
+  emit({
+    t: "meta",
+    model: usedModel,
+    persona: personaHero,
+    data: useData,
+    web: web.sources.length > 0,
+    chart: web.chart ?? null,
+    fallback: failures.length > 0,
+  });
   let full = "";
   const { events, first } = opened;
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        full += first;
-        controller.enqueue(enc.encode(first));
-        for await (const ev of events) {
-          if (ev.piece) {
-            full += ev.piece;
-            controller.enqueue(enc.encode(ev.piece));
-          }
-          if (ev.error) {
-            const e = `\n\n⚠️ Jawaban terpotong: ${ev.error}`;
-            full += e;
-            controller.enqueue(enc.encode(e));
-          }
-        }
-        // chart live (TradingView) ditandai di akhir jawaban supaya tetap tampil saat riwayat dibuka lagi
-        const foot = sourcesFooter(web.sources) + (web.chart ? `\n\n[[chart:${web.chart}]]` : "");
-        if (foot && full.trim()) {
-          full += foot;
-          controller.enqueue(enc.encode(foot));
-        }
-      } catch {
-        // dihentikan user / koneksi putus — simpan yang sudah ada
-      } finally {
-        if (full.trim()) {
-          const row = { conversation_id: convId, role: "assistant", content: full.slice(0, 100000), model: usedModel, used_data: useData, persona: personaHero };
-          let { error } = await supabase.from("ai_messages").insert(row);
-          // kolom baru belum ada (migration-16 / -14 belum dijalankan) -> simpan tanpa kolom itu
-          if (error && /persona/.test(error.message)) {
-            const { persona: _p, ...noPersona } = row;
-            ({ error } = await supabase.from("ai_messages").insert(noPersona));
-            if (error && /used_data/.test(error.message)) {
-              const { used_data: _u, ...old } = noPersona;
-              await supabase.from("ai_messages").insert(old);
-            }
-          } else if (error && /used_data/.test(error.message)) {
-            const { used_data: _u, ...old } = row;
-            await supabase.from("ai_messages").insert(old);
-          }
-        }
-        await supabase.from("ai_conversations").update({ updated_at: new Date().toISOString(), model: usedModel }).eq("id", convId);
-        try {
-          controller.close();
-        } catch {}
+  try {
+    full += first;
+    controller.enqueue(enc.encode(first));
+    for await (const ev of events) {
+      if (ev.piece) {
+        full += ev.piece;
+        controller.enqueue(enc.encode(ev.piece));
       }
-    },
-    cancel() {
-      upstreamAbort.abort();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "X-Accel-Buffering": "no",
-      "x-conversation-id": convId!,
-      "x-ai-model": encodeURIComponent(usedModel),
-      "x-ai-persona": encodeURIComponent(personaHero),
-      "x-ai-data": useData ? "1" : "0",
-      "x-ai-web": web.sources.length ? "1" : "0",
-      ...(web.chart ? { "x-ai-chart": encodeURIComponent(web.chart) } : {}),
-      "x-ai-fallback": failures.length ? "1" : "0",
-    },
-  });
+      if (ev.error) {
+        const e = `\n\n⚠️ Jawaban terpotong: ${ev.error}`;
+        full += e;
+        controller.enqueue(enc.encode(e));
+      }
+    }
+    // chart live (TradingView) ditandai di akhir jawaban supaya tetap tampil saat riwayat dibuka lagi
+    const foot = sourcesFooter(web.sources) + (web.chart ? `\n\n[[chart:${web.chart}]]` : "");
+    if (foot && full.trim()) {
+      full += foot;
+      controller.enqueue(enc.encode(foot));
+    }
+  } catch {
+    // dihentikan user / koneksi putus — simpan yang sudah ada
+  } finally {
+    if (full.trim()) {
+      const row = { conversation_id: convId, role: "assistant", content: full.slice(0, 100000), model: usedModel, used_data: useData, persona: personaHero };
+      let { error } = await supabase.from("ai_messages").insert(row);
+      // kolom baru belum ada (migration-16 / -14 belum dijalankan) -> simpan tanpa kolom itu
+      if (error && /persona/.test(error.message)) {
+        const { persona: _p, ...noPersona } = row;
+        ({ error } = await supabase.from("ai_messages").insert(noPersona));
+        if (error && /used_data/.test(error.message)) {
+          const { used_data: _u, ...old } = noPersona;
+          await supabase.from("ai_messages").insert(old);
+        }
+      } else if (error && /used_data/.test(error.message)) {
+        const { used_data: _u, ...old } = row;
+        await supabase.from("ai_messages").insert(old);
+      }
+    }
+    await supabase.from("ai_conversations").update({ updated_at: new Date().toISOString(), model: usedModel }).eq("id", convId);
+  }
+  }
 }
 
 type SseEvent = { piece?: string; error?: string };

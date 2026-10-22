@@ -238,3 +238,78 @@ export function personaPrompt(hero: string) {
     "PENTING: gaya hanya mengatur CARA bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. Kalau user minta jawaban panjang/format tertentu, ikuti permintaan user.",
   ].join("\n");
 }
+
+/* ---------- kalimat "lagi mikir" per karakter ---------- */
+
+/** kalimat pembuka saat hero mulai memproses (per tipe) */
+const INTRO: Record<string, string> = {
+  ENTJ: "Data dulu. Keputusan kemudian.",
+  INTJ: "Biar kususun strateginya.",
+  INTP: "Hmm, menarik… kita urai pelan-pelan.",
+  ENTP: "Oke, mari kita uji ide ini.",
+  INFJ: "Aku pahami dulu tujuanmu, ya.",
+  INFP: "Sebentar, aku rangkai pelan-pelan ✨",
+  ENFJ: "Tenang, kita kerjakan bareng!",
+  ENFP: "Waaah seru! Bentar aku kepoin dulu ya~ 🔍",
+  ISTJ: "Diperiksa satu per satu.",
+  ISFJ: "Pelan-pelan ya, aku cek dulu semuanya.",
+  ESTJ: "Oke, kita urutkan prioritasnya.",
+  ESFJ: "Siap, aku bantu siapin ya 😊",
+  ISTP: "Sebentar. Dicek.",
+  ISFP: "Santai, lagi kuproses…",
+  ESTP: "Gas! Langsung kuambil datanya.",
+  ESFP: "Cussss, bentar yaa 😆",
+};
+
+type StepInfo = { k: string; q?: string; n?: number; sym?: string; src?: string; to?: string; plan?: boolean };
+
+/** label langkah proses dengan gaya kelompok kepribadian */
+const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
+  NT: (e) =>
+    ({
+      understand: "Bedah pertanyaannya",
+      data: "Tarik data CS Tracker",
+      decide: "Tentukan data yang dibutuhkan",
+      search: `Cari data: "${e.q ?? ""}"`,
+      read: "Baca link yang kamu kirim",
+      price: `Ambil harga & candle ${e.sym ?? ""}`,
+      write: e.plan ? "Hitung trade plan & susun jawaban" : "Susun jawaban",
+      switch: `Mesin lagi sibuk — minta bantuan ${e.to ?? "hero lain"}`,
+    })[e.k] ?? e.k,
+  NF: (e) =>
+    ({
+      understand: "Pahami maksudmu dulu ✨",
+      data: "Lihat catatan tim di CS Tracker",
+      decide: "Mikir perlu cari info apa",
+      search: `Kepoin internet: "${e.q ?? ""}"`,
+      read: "Baca link darimu",
+      price: `Intip harga terbaru ${e.sym ?? ""}`,
+      write: e.plan ? "Racik trade plan & rangkai jawaban" : "Rangkai jawaban",
+      switch: `Lagi capek, ${e.to ?? "teman"} bantuin sebentar ya`,
+    })[e.k] ?? e.k,
+  SJ: (e) =>
+    ({
+      understand: "Cek ulang pertanyaan",
+      data: "Buka data CS Tracker",
+      decide: "Siapkan daftar yang perlu dicek",
+      search: `Telusuri sumber: "${e.q ?? ""}"`,
+      read: "Periksa isi link",
+      price: `Catat harga & candle ${e.sym ?? ""}`,
+      write: e.plan ? "Hitung trade plan & tulis jawaban rapi" : "Tulis jawaban rapi",
+      switch: `Pindah tugas ke ${e.to ?? "hero lain"} dulu`,
+    })[e.k] ?? e.k,
+  SP: (e) =>
+    ({
+      understand: "Tangkap intinya",
+      data: "Ambil data CS Tracker",
+      decide: "Langsung tentuin langkah",
+      search: `Gas cari: "${e.q ?? ""}"`,
+      read: "Sikat isi link",
+      price: `Ambil harga ${e.sym ?? ""}`,
+      write: e.plan ? "Bikin trade plan & langsung tulis" : "Langsung tulis jawabannya",
+      switch: `Oper ke ${e.to ?? "hero lain"} dulu`,
+    })[e.k] ?? e.k,
+};
+
+export const personaIntro = (hero: string) => INTRO[personaOf(hero).type] ?? "Sebentar ya…";
+export const stepLabel = (hero: string, e: StepInfo, done = false) => STEP_WORDS[personaOf(hero).group](e, done);

@@ -6,6 +6,27 @@ import TradingChart from "./TradingChart";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
 
+const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"] as const;
+type TF = (typeof TFS)[number];
+const tfLabel = (t: string) => t.toUpperCase().replace("M", "m");
+/** "4H", "H4", "15 menit", "daily", "1D", "mingguan" -> kode timeframe */
+function normTf(raw?: string): TF {
+  const s = (raw ?? "").toLowerCase().replace(/\s+/g, "");
+  if (!s) return "1d";
+  if (/^(1w|w1|week|weekly|mingguan|1minggu)/.test(s)) return "1w";
+  if (/^(1d|d1|d|day|daily|harian|1hari)$/.test(s)) return "1d";
+  const m = s.match(/^(\d+)(m|min|menit|h|hour|jam)$/) || s.match(/^(m|h)(\d+)$/)?.slice(0).reverse();
+  if (m) {
+    const n = Number(/^\d+$/.test(m[1]) ? m[1] : m[2]);
+    const u = /^\d+$/.test(m[1]) ? m[2] : m[1];
+    const t = `${n}${/^(h|hour|jam)$/.test(u) ? "h" : "m"}`;
+    if ((TFS as readonly string[]).includes(t)) return t as TF;
+  }
+  return "1d";
+}
+/** saham (BEI / luar negeri) = bukan forex & bukan crypto */
+export const isStockSymbol = (sym: string) => !/^(OANDA|FX|FX_IDC|BINANCE|OKX):/.test(sym) && !/USDT?$/.test(sym);
+
 const pct = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%`;
 const pairName = (sym: string) => {
   const s = sym.includes(":") ? sym.split(":")[1] : sym;
@@ -20,12 +41,18 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [meta, setMeta] = useState<{ interval?: string; source?: string }>({});
   const [live, setLive] = useState(false);
+  const stock = isStockSymbol(symbol);
+  // saham: hanya 1D / 1W (data intraday saham berbayar)
+  const [tf, setTf] = useState<TF>(() => {
+    const t = normTf(planIn.timeframe);
+    return stock && t !== "1w" ? "1d" : t;
+  });
   const box = useRef<HTMLDivElement>(null);
   const idx = symbol.startsWith("IDX:");
   // skala angka plan disamakan dengan harga chart (mis. 2,56 -> 2.560 untuk saham BEI)
   const plan = useMemo(() => rescalePlan(planIn, candles?.length ? candles[candles.length - 1].close : undefined, idx), [planIn, candles, idx]);
-  // saham BEI: rupiah bulat (2.900), lainnya sesuai besar harga
-  const d = idx && plan.entry >= 50 ? 0 : decimalsFor(plan.entry);
+  // saham BEI (atau saham berharga ribuan): rupiah bulat tanpa koma (5.320); saham luar < 1.000 tetap sen; lainnya sesuai besar harga
+  const d = stock && ((idx && plan.entry >= 50) || plan.entry >= 1000) ? 0 : decimalsFor(plan.entry);
   // angka plan tetap jauh dari harga chart (mis. plan untuk aset lain) -> jangan digambar di candle
   const refPrice = candles?.length ? candles[candles.length - 1].close : 0;
   const mismatch = !!refPrice && Math.abs(Math.log(plan.entry / refPrice)) > Math.log(3);
@@ -34,7 +61,8 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
 
   useEffect(() => {
     let off = false;
-    fetch(`/api/ai/ohlc?symbol=${encodeURIComponent(symbol)}`)
+    setCandles(null);
+    fetch(`/api/ai/ohlc?symbol=${encodeURIComponent(symbol)}&tf=${tf}`)
       .then((r) => r.json())
       .then((j) => {
         if (off) return;
@@ -45,7 +73,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
     return () => {
       off = true;
     };
-  }, [symbol]);
+  }, [symbol, tf]);
 
   useEffect(() => {
     const el = box.current;
@@ -65,7 +93,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         layout: { background: { color: "transparent" }, textColor: ink, fontSize: 11, attributionLogo: true },
         grid: { vertLines: { color: gridC }, horzLines: { color: gridC } },
         rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } },
-        timeScale: { borderVisible: false, rightOffset: boxBars + 2, timeVisible: meta.interval !== "1D" },
+        timeScale: { borderVisible: false, rightOffset: boxBars + 2, timeVisible: !/^1[DW]$/.test(meta.interval ?? "1D") },
         localization: { locale: "id-ID", priceFormatter: (p: number) => fmtPrice(p, d) },
         crosshair: { mode: 0 },
       });
@@ -117,7 +145,9 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       lStop.textContent = `Stop ${fmtPrice(plan.sl, d)} (${pct(pctFrom(plan.entry, plan.sl))})`;
       lTarget.textContent = `Target ${fmtPrice(last, d)} (${pct(pctFrom(plan.entry, last))})`;
       lEntry.textContent = `${short ? "SHORT" : "LONG"} · R:R ${rr(plan).toLocaleString("id-ID", { maximumFractionDigits: 1 })}`;
+      let alive = true;
       const draw = () => {
+        if (!alive) return;
         const ts = chart.timeScale();
         const n = candles.length - 1;
         const x1 = ts.logicalToCoordinate(n as import("lightweight-charts").Logical);
@@ -151,7 +181,9 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       ro.observe(el);
       requestAnimationFrame(draw);
       dispose = () => {
+        alive = false;
         ro.disconnect();
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(draw);
         chart.remove();
         el.innerHTML = "";
       };
@@ -166,7 +198,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
     <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-3 py-2 text-[12.5px]">
       <b>
         {pairName(symbol)}
-        {plan.timeframe ? ` · ${plan.timeframe}` : meta.interval ? ` · ${meta.interval}` : ""}
+        {meta.interval ? ` · ${meta.interval}` : ` · ${tfLabel(tf)}`}
       </b>
       <span className={`rounded-full px-2 py-0.5 text-[11px] font-extrabold ${short ? "bg-red-500/15 text-red-400" : "bg-emerald-500/15 text-emerald-400"}`}>{short ? "SHORT" : "LONG"}</span>
       <span className="text-zinc-500">
@@ -178,6 +210,28 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           {live ? "📐 Trade plan" : "📈 Chart live"}
         </button>
       )}
+    </div>
+  );
+
+  const tfBar = !live && (
+    <div className="flex gap-1 overflow-x-auto border-b border-zinc-800 px-3 py-1.5 text-[11.5px]">
+      {TFS.map((t) => {
+        const off = stock && t !== "1d" && t !== "1w";
+        return (
+          <button
+            key={t}
+            type="button"
+            disabled={off}
+            onClick={() => setTf(t)}
+            title={off ? "Timeframe di bawah harian untuk saham belum tersedia (data intraday saham berbayar)" : undefined}
+            className={`shrink-0 rounded-md px-2 py-0.5 font-semibold ${
+              t === tf ? "bg-orange-500/20 text-orange-400" : off ? "cursor-not-allowed text-zinc-700" : "text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            {tfLabel(t)}
+          </button>
+        );
+      })}
     </div>
   );
 
@@ -233,6 +287,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
   return (
     <div className="my-2 overflow-hidden rounded-xl border border-zinc-800">
       {head}
+      {tfBar}
       {candles === null ? (
         <div className="flex h-[380px] items-center justify-center text-[12px] text-zinc-500">Memuat chart…</div>
       ) : candles.length && !live && !mismatch ? (
