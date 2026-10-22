@@ -15,7 +15,25 @@ const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, 
 /** agen coding / akun IDE / login web — bukan untuk chat biasa (sering error kalau dipanggil dari aplikasi lain) */
 const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|(^|[/:])no-?think(ing)?[/:]|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
 
-export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id);
+/**
+ * Provider yang TIDAK pakai API key resmi: tanpa login (noauth), butuh program CLI di komputer, jembatan agent,
+ * atau cookie website (berisiko melanggar aturan provider). Ditulis id + alias pendeknya (daftar resmi server AI).
+ * Model dari provider ini selalu gagal / tidak cocok untuk website, jadi tidak pernah dipilih.
+ */
+const BLOCKED_PROVIDERS = new Set(
+  (
+    "auto aihorde horde auggie aug chipotle pepper cloudflare-playground cfp codex-app-server cxa devin-cli-agentic dva " +
+    "duckduckgo-web ddgw felo-web felo opencode oc theoldllm tllm uncloseai unc veoaifree-web veo-free zcode zc devin-cli dv agy " +
+    "gh github xai-oauth xao adapta-web adp-web adobe-firefly firefly blackbox-web bb-web chatgpt-web cgpt-web chatgpt-web-codex cgpt-codex " +
+    "claude-web cw conol-web cnl copilot-m365-web m365copilot copilot-web copilot deepseek-web ds-web doubao-web db gemini-business gembiz " +
+    "gemini-web gweb grok-web gw hailuo-web huggingchat hyperagent ha inner-ai in-ai kimi-web lmarena lma microsoft-designer-web msdesigner " +
+    "muse-spark-web ms-web notion-web nw perplexity-web pplx-web poe-web poe promptql pql qwen-web t3-web t3chat tencent-aistudio-web tasw " +
+    "tinycms-web tcw v0-vercel-web venice-web ven yuanbao-web ybw zai-web zw zenmux-free zmf"
+  ).split(/\s+/)
+);
+const blockedProvider = (id: string) => id.includes("/") && BLOCKED_PROVIDERS.has(id.split("/")[0].toLowerCase());
+
+export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id);
 let visionSet: Set<string> | null = null;
 /** daftar model yang menurut katalog OmniRoute bisa membaca gambar (lebih akurat dari tebakan nama) */
 export function setVisionCatalog(ids: string[] | null) {
