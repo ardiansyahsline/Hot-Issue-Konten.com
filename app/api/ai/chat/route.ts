@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { aiConfig, aiHeaders, listModels, systemPrompt } from "@/lib/ai.server";
+import { aiConfig, aiHeaders, healthMap, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { SMART, heroName, isChatModel, isVisionModel, rankTextModels, rankVisionModels } from "@/lib/aiModels";
+import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ const HISTORY = 40; // pesan terakhir yang dikirim ke AI sebagai konteks
 const MAX_INPUT = 20000;
 const MAX_IMAGES = 4;
 const IMAGE_TURNS = 2; // gambar dari 2 pesan terakhir saja yang ikut dikirim ulang
-const MAX_TRIES = 4; // maksimal model yang dicoba bergantian kalau error
+const MAX_TRIES = 6; // maksimal model yang dicoba bergantian kalau error
 
 type Body = {
   conversationId?: string | null;
@@ -34,7 +34,7 @@ const err = (status: number, message: string, convId?: string | null) =>
  */
 export async function POST(req: NextRequest) {
   const cfg = aiConfig();
-  if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu mengisi OMNIROUTE_BASE_URL dan OMNIROUTE_API_KEY di Vercel.");
+  if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu melengkapi pengaturan AI di Vercel.");
 
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   let body: Body;
@@ -88,22 +88,45 @@ export async function POST(req: NextRequest) {
   const imageTurns = new Set(userIdx.filter((i) => (hist[i].images?.length ?? 0) > 0).slice(-IMAGE_TURNS));
   const hasImages = imageTurns.size > 0;
 
-  // 4) daftar calon model: pilihan user dulu, lalu cadangan terbaik (kalau satu error, otomatis coba berikutnya)
-  const models = await listModels();
+  // 4) daftar calon model: pilihan user dulu, lalu cadangan terbaik.
+  //    Katalog OmniRoute berisi juga provider yang BELUM disambungkan, jadi urutannya:
+  //    model yang terbukti jalan -> belum pernah dicoba -> yang baru gagal; dan tiap hero/provider cukup dicoba sekali.
+  const [catalog, health] = await Promise.all([listCatalog(), loadHealth(supabase)]);
+  const models = catalog.ids;
+  setVisionCatalog(catalog.vision);
   const chosen = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
-  const ranked = hasImages
-    ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(models)]
-    : rankTextModels(models);
-  const fresh = (m: string) => !coolingDown(m);
+  const ranked = hasImages ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(models)] : rankTextModels(models);
+  const hm = healthMap(ranked, health);
+  const byHealth = ranked
+    .map((m, i) => ({ m, i, h: (hm.get(m) ?? 1) + (coolingDown(m) ? 3 : 0) }))
+    .sort((a, b) => a.h - b.h || a.i - b.i)
+    .map((x) => x.m);
   let candidates: string[] = [];
   if (chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen))) {
     candidates.push(chosen);
   }
-  candidates.push(...ranked.filter(fresh), ...ranked.filter((m) => !fresh(m)));
+  // putaran 1: satu model per hero & per provider (biar 6 percobaan tidak habis di model sejenis)
+  const seenHero = new Set(candidates.map((m) => heroName(m)));
+  const seenProv = new Set(candidates.map((m) => providerOf(m)));
+  for (const m of byHealth) {
+    if (candidates.length >= MAX_TRIES) break;
+    const hero = heroName(m);
+    const prov = providerOf(m);
+    const proven = hm.get(m) === 0;
+    if (!proven && (seenHero.has(hero) || (prov && seenProv.has(prov)))) continue;
+    candidates.push(m);
+    seenHero.add(hero);
+    if (prov) seenProv.add(prov);
+  }
+  // putaran 2: isi sisa slot
+  for (const m of byHealth) {
+    if (candidates.length >= MAX_TRIES) break;
+    if (!candidates.includes(m)) candidates.push(m);
+  }
   candidates = [...new Set(candidates)].slice(0, MAX_TRIES);
   if (!candidates.length) {
     if (hasImages) {
-      const msg = "Hero yang bisa melihat gambar belum ada. Sambungkan Gemini (API key gratis dari aistudio.google.com/apikey) di dashboard OmniRoute → Providers.";
+      const msg = "Hero yang bisa melihat gambar belum ada. Sambungkan Gemini (API key gratis dari aistudio.google.com/apikey) di dashboard server AI → Providers.";
       await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: chosen });
       return err(422, msg, convId);
     }
@@ -152,18 +175,30 @@ export async function POST(req: NextRequest) {
   const failures: string[] = [];
   let opened: { model: string; events: AsyncGenerator<SseEvent>; first: string } | null = null;
   for (const model of candidates) {
-    let upstream: Response;
-    try {
-      upstream = await fetch(`${cfg.base}/chat/completions`, {
-        method: "POST",
-        headers: aiHeaders(cfg.key),
-        body: JSON.stringify({ model, messages, stream: true }),
-        signal: upstreamAbort.signal,
-      });
-    } catch (e) {
-      if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+    let upstream: Response | null = null;
+    let netErr: unknown = null;
+    // koneksi ke VPS kadang putus sesaat -> coba ulang sekali sebelum menyerah
+    for (let attempt = 0; attempt < 2 && !upstream; attempt++) {
+      try {
+        upstream = await fetch(`${cfg.base}/chat/completions`, {
+          method: "POST",
+          headers: aiHeaders(cfg.key),
+          body: JSON.stringify({ model, messages, stream: true }),
+          signal: upstreamAbort.signal,
+        });
+      } catch (e) {
+        if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+        netErr = e;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    if (!upstream) {
       // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
-      return saveError(`Server AI (VPS) tidak bisa dihubungi (${e instanceof Error ? e.message : "error"}). Pastikan jendela OmniRoute & Caddy di VPS masih terbuka.`);
+      const cause = (netErr as { cause?: { code?: string } })?.cause?.code;
+      console.log("[ai] VPS tidak bisa dihubungi:", cause ?? netErr);
+      return saveError(
+        `Server AI di VPS tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena server AI di VPS mati (VPS restart / jendelanya tertutup). Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI di VPS.`
+      );
     }
     if (!upstream.ok || !upstream.body) {
       let detail = "";
@@ -171,9 +206,10 @@ export async function POST(req: NextRequest) {
         const t = await upstream.text();
         detail = (JSON.parse(t)?.error?.message as string) || t;
       } catch {}
-      if (upstream.status === 401) return saveError("API key OmniRoute ditolak. Cek OMNIROUTE_API_KEY di Vercel sama dengan key di dashboard OmniRoute → API Keys.");
+      if (upstream.status === 401) return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
       coolDown(model);
       failures.push(`${model} (${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""})`);
+      await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
       continue;
     }
     // baca sampai potongan jawaban pertama — kalau langsung error / kosong, anggap gagal
@@ -194,10 +230,12 @@ export async function POST(req: NextRequest) {
     }
     if (first) {
       opened = { model, events, first };
+      await markHealth(supabase, model, true);
       break;
     }
     coolDown(model);
     failures.push(`${model} (${failed ? failed.slice(0, 80) : "jawaban kosong"})`);
+    await markHealth(supabase, model, false, failed || "jawaban kosong");
     try {
       await events.return(undefined);
     } catch {}
@@ -205,7 +243,7 @@ export async function POST(req: NextRequest) {
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
     return saveError(
-      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba: ${candidates.map((m) => heroName(m)).join(", ")}`
+      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba: ${candidates.map((m) => `${heroName(m)} (${m})`).join(", ")}. Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI.`
     );
   }
 

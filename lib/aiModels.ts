@@ -13,10 +13,18 @@ const BEST_TEXT = [/claude[^/]*(opus|sonnet)/i, /claude/i, /gemini[^/]*flash(?!-
 const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /claude/i, /gemma-?[34]/i, /llama-4/i];
 
 /** agen coding / akun IDE / login web — bukan untuk chat biasa (sering error kalau dipanggil dari aplikasi lain) */
-const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
+const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
 
 export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id);
-export const isVisionModel = (id: string) => VISION.test(id);
+let visionSet: Set<string> | null = null;
+/** daftar model yang menurut katalog OmniRoute bisa membaca gambar (lebih akurat dari tebakan nama) */
+export function setVisionCatalog(ids: string[] | null) {
+  visionSet = ids && ids.length ? new Set(ids) : null;
+}
+export const isVisionModel = (id: string) => (visionSet ? visionSet.has(id) || VISION.test(id) : VISION.test(id));
+
+/** provider dari id model, mis. "groq/openai/gpt-oss-120b" -> "groq" */
+export const providerOf = (id: string) => (id.includes("/") ? id.split("/")[0].toLowerCase() : "");
 
 /** semua model yang cocok, diurutkan dari yang terbaik (dipakai untuk cadangan kalau satu error) */
 function rank(models: string[], order: RegExp[], filter: (m: string) => boolean = () => true): string[] {
@@ -113,7 +121,7 @@ const DESC: [RegExp, string][] = [
   [/command|cohere/i, "Ringkas dokumen & tanya-jawab"],
   [/phi-?\d/i, "Kecil & cepat"],
   [/gpt-|o\d-|openai/i, "Serba bisa ala ChatGPT"],
-  [/^auto$/i, "OmniRoute yang milih sendiri — hasil bisa beda-beda"],
+  [/^auto$/i, "Server AI yang milih sendiri — hasil bisa beda-beda"],
 ];
 
 /** keterangan singkat: hero ini jago apa */
@@ -121,4 +129,23 @@ export function heroDesc(id: string | null | undefined): string {
   if (!id || id === SMART) return "Paling umum — otomatis pilih yang terbaik; pindah ke yang bisa lihat gambar kalau ada gambar";
   for (const [re, d] of DESC) if (re.test(id)) return d;
   return isVisionModel(id) ? "Bisa lihat gambar" : "Model teks umum";
+}
+
+// ---------- role hero (sesuai role di Mobile Legends) ----------
+const ROLE: Record<string, string> = {
+  Layla: "Marksman", Lesley: "Marksman", Miya: "Marksman", Granger: "Marksman", Beatrix: "Marksman", Bruno: "Marksman", Clint: "Marksman",
+  Gord: "Mage", Harith: "Mage", Pharsa: "Mage", Nana: "Mage", Kagura: "Mage", Lunox: "Mage", Valir: "Mage", Yve: "Mage", Eudora: "Mage", Aurora: "Mage", Esmeralda: "Mage",
+  Tigreal: "Tank", Johnson: "Tank", Atlas: "Tank", Franco: "Tank", Lolita: "Tank", Minotaur: "Tank", Khufra: "Tank",
+  Saber: "Assassin", Gusion: "Assassin", Hayabusa: "Assassin", Harley: "Assassin", Fanny: "Assassin", Karina: "Assassin", Selena: "Assassin", Ling: "Assassin",
+  Zilong: "Fighter", Alucard: "Fighter", Chou: "Fighter", Balmond: "Fighter", Sun: "Fighter", Alpha: "Fighter", Hilda: "Fighter", Freya: "Fighter", Martis: "Fighter", Kaja: "Fighter", "Yu Zhong": "Fighter",
+  Estes: "Support", Rafaela: "Support", Angela: "Support",
+};
+export const heroRole = (hero: string) => ROLE[hero.replace(/ \d+$/, "")] ?? "";
+
+/** warna avatar tiap hero (huruf depan) */
+export function heroColor(hero: string) {
+  const c = ["#f97316", "#8b5cf6", "#0ea5e9", "#22c55e", "#ef4444", "#ec4899", "#eab308", "#6366f1", "#14b8a6", "#f43f5e"];
+  let h = 0;
+  for (const ch of hero) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return hero === SMART_HERO ? "#ea580c" : c[h % c.length];
 }

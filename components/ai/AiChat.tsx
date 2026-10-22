@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
 import { ATTACH_BUCKET } from "@/lib/attachments";
-import { SMART, SMART_HERO, heroDesc, heroName, heroNames, isVisionModel } from "@/lib/aiModels";
+import { SMART, SMART_HERO, heroColor, heroDesc, heroName, heroRole, isVisionModel } from "@/lib/aiModels";
 import Markdown from "./Markdown";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -67,88 +67,167 @@ async function shrink(file: File): Promise<Blob> {
   }
 }
 
+type HeroOpt = { hero: string; model: string; status: number; vision: boolean };
+
+function HeroAvatar({ hero, size = 28 }: { hero: string; size?: number }) {
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center rounded-lg font-display font-bold text-white"
+      style={{ width: size, height: size, background: heroColor(hero), fontSize: size * 0.44 }}
+      aria-hidden
+    >
+      {hero[0]}
+    </span>
+  );
+}
+
+/** satu pilihan per hero (varian terbaik), dikelompokkan: siap dipakai / belum dicoba / belum tersambung */
+function heroOptions(models: string[], status: Record<string, number>, visionList: string[]): HeroOpt[] {
+  const best = new Map<string, HeroOpt>();
+  for (const m of models) {
+    const hero = heroName(m);
+    const opt = { hero, model: m, status: status[m] ?? 1, vision: visionList.includes(m) || isVisionModel(m) };
+    const cur = best.get(hero);
+    // models sudah urut dari server (siap dulu, lalu urutan katalog) -> yang pertama per hero dipakai, kecuali ada yang statusnya lebih baik
+    if (!cur || opt.status < cur.status) best.set(hero, opt);
+  }
+  return [...best.values()];
+}
+
 function ModelPicker({
   value,
   onChange,
   models,
-  heroes,
   ready,
   vision,
+  status,
+  visionList,
 }: {
   value: string;
   onChange: (m: string) => void;
   models: string[];
-  heroes: Map<string, string>;
   ready: boolean;
   vision: { text: string | null; image: string | null };
+  status: Record<string, number>;
+  visionList: string[];
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [showOff, setShowOff] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", esc);
+    };
   }, [open]);
-  const label = (m: string) => (m === SMART ? SMART_HERO : heroes.get(m) ?? heroName(m));
-  const list = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const all = [SMART, ...models];
-    return (s ? all.filter((m) => m.toLowerCase().includes(s) || label(m).toLowerCase().includes(s)) : all).slice(0, 80);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models, q, heroes]);
+  const opts = useMemo(() => heroOptions(models, status, visionList), [models, status, visionList]);
+  const s = q.trim().toLowerCase();
+  const match = (o: HeroOpt) => !s || o.hero.toLowerCase().includes(s) || heroRole(o.hero).toLowerCase().includes(s) || heroDesc(o.model).toLowerCase().includes(s);
+  const ready0 = opts.filter((o) => o.status === 0 && match(o));
+  const untried = opts.filter((o) => o.status === 1 && match(o));
+  const off = opts.filter((o) => o.status === 2 && match(o));
+  const current = value === SMART ? SMART_HERO : heroName(value);
+  const pick = (m: string) => {
+    onChange(m);
+    setOpen(false);
+    setQ("");
+  };
+  const Row = ({ o }: { o: HeroOpt }) => (
+    <button
+      type="button"
+      onClick={() => pick(o.model)}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} ${o.status === 2 ? "opacity-60" : ""}`}
+    >
+      <HeroAvatar hero={o.hero} />
+      <span className="min-w-0 flex-1">
+        <span className={`block text-[13px] font-semibold ${current === o.hero && value !== SMART ? "text-orange-400" : "text-zinc-200"}`}>
+          {o.hero}
+          {heroRole(o.hero) && <span className="ml-1.5 text-[10.5px] font-medium text-zinc-500">{heroRole(o.hero)}</span>}
+        </span>
+        <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(o.model)}</span>
+      </span>
+      {o.vision && (
+        <span className="shrink-0 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400" title="Bisa lihat gambar">
+          👁
+        </span>
+      )}
+    </button>
+  );
+  const Group = ({ title, list }: { title: string; list: HeroOpt[] }) =>
+    list.length ? (
+      <div>
+        <div className="px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">{title}</div>
+        {list.map((o) => (
+          <Row key={o.hero} o={o} />
+        ))}
+      </div>
+    ) : null;
+
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="max-w-[200px] truncate rounded-full border border-zinc-800 px-3 py-1 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
-        title={`${label(value)}: ${heroDesc(value)}${value === SMART ? "" : ` (${value})`}`}
-        aria-label="Pilih model"
+        className="flex max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-800 py-0.5 pl-0.5 pr-2.5 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
+        title={`${current}: ${heroDesc(value)}`}
+        aria-label="Pilih hero"
       >
-        ⚔️ {label(value)}
-        {value === SMART ? " · otomatis" : ""} ▾
+        <HeroAvatar hero={current} size={22} />
+        <span className="truncate">
+          {current}
+          {value === SMART ? " · otomatis" : ""}
+        </span>
+        ▾
       </button>
       {open && (
         <div
-          className="absolute bottom-full left-0 z-40 mb-2 w-[340px] max-w-[85vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-2"
+          className="absolute bottom-full left-0 z-40 mb-2 w-[360px] max-w-[88vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-2 text-left"
           style={{ boxShadow: "var(--shadow-pop), 0 18px 40px -16px rgba(0,0,0,.35)" }}
+          role="listbox"
+          aria-label="Daftar hero"
         >
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / model…" className="input mb-2 py-1.5 text-[13px]" />
-          <div className="max-h-72 overflow-y-auto">
-            {list.map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => {
-                  onChange(m);
-                  setOpen(false);
-                  setQ("");
-                }}
-                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left ${m === value ? "bg-orange-500/10" : "hover:bg-zinc-800"}`}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className={`block truncate text-[13px] font-semibold ${m === value ? "text-orange-400" : "text-zinc-200"}`}>
-                    {label(m)}
-                    {m === SMART && " · otomatis"}
-                  </span>
-                  <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(m)}</span>
-                  <span className="block truncate text-[10.5px] text-zinc-500">
-                    {m === SMART
-                      ? `sekarang: chat ${vision.text ? label(vision.text) : "-"} · gambar ${vision.image ? label(vision.image) : "belum ada"}`
-                      : m}
-                  </span>
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / role / keahlian…" className="input mb-1 py-1.5 text-[13px]" />
+          <div className="max-h-[22rem] overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => pick(SMART)}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${value === SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"}`}
+            >
+              <HeroAvatar hero={SMART_HERO} />
+              <span className="min-w-0 flex-1">
+                <span className={`block text-[13px] font-semibold ${value === SMART ? "text-orange-400" : "text-zinc-200"}`}>
+                  Layla · otomatis <span className="ml-1 text-[10.5px] font-medium text-zinc-500">disarankan</span>
                 </span>
-                {m !== SMART && isVisionModel(m) && (
-                  <span className="shrink-0 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400" title="Bisa membaca gambar">
-                    👁 gambar
+                <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(SMART)}</span>
+                {(vision.text || vision.image) && (
+                  <span className="block text-[10.5px] text-zinc-500">
+                    sekarang: chat {vision.text ? heroName(vision.text) : "-"} · gambar {vision.image ? heroName(vision.image) : "belum ada"}
                   </span>
                 )}
-              </button>
-            ))}
+              </span>
+            </button>
+            <Group title="Siap dipakai" list={ready0} />
+            <Group title="Belum dicoba" list={untried} />
+            {off.length > 0 && (
+              <div>
+                <button type="button" onClick={() => setShowOff((v) => !v)} className="w-full px-2 pb-1 pt-2 text-left text-[11.5px] font-semibold text-zinc-500 hover:text-zinc-300">
+                  {showOff ? "▾" : "▸"} {off.length} hero belum tersambung / lagi gagal
+                </button>
+                {showOff && off.map((o) => <Row key={o.hero} o={o} />)}
+              </div>
+            )}
             {!ready && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Server AI belum tersambung.</p>}
+            {ready && !opts.length && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Daftar hero belum terbaca — pakai Layla dulu.</p>}
           </div>
+          <p className="border-t border-zinc-800/80 px-2 pt-2 text-[10.5px] leading-snug text-zinc-500">
+            Kalau hero pilihan lagi gagal / kuota habis, otomatis dijawab hero lain yang siap.
+          </p>
         </div>
       )}
     </div>
@@ -183,6 +262,8 @@ export default function AiChat({
   const [model, setModel] = useState(defaultModel === "auto" ? SMART : defaultModel || SMART);
   const [models, setModels] = useState<string[]>([]);
   const [best, setBest] = useState<{ text: string | null; image: string | null }>({ text: null, image: null });
+  const [status, setStatus] = useState<Record<string, number>>({});
+  const [visionList, setVisionList] = useState<string[]>([]);
   const [ready, setReady] = useState(!setupError);
   const [dataMode, setDataMode] = useState<"auto" | "off">("auto");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -199,8 +280,7 @@ export default function AiChat({
   const stick = useRef(true);
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const heroes = useMemo(() => heroNames(models), [models]);
-  const hero = (id: string | null | undefined) => (id ? heroes.get(id) ?? heroName(id) : SMART_HERO);
+  const hero = (id: string | null | undefined) => (id ? heroName(id) : SMART_HERO);
 
   // pilihan model & mode data tersimpan di browser
   useEffect(() => {
@@ -214,6 +294,8 @@ export default function AiChat({
       .then((j) => {
         setModels(j.models ?? []);
         setBest({ text: j.bestText ?? null, image: j.bestVision ?? null });
+        setStatus(j.status ?? {});
+        setVisionList(j.visionList ?? []);
         setReady(!!j.ready);
       })
       .catch(() => {});
@@ -581,7 +663,7 @@ export default function AiChat({
         >
           📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
         </button>
-        <ModelPicker value={model} onChange={pickModel} models={models} heroes={heroes} ready={ready} vision={best} />
+        <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop

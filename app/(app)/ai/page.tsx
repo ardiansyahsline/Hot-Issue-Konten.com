@@ -31,7 +31,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
             ? "Tab AI belum aktif — admin perlu menjalankan supabase/migration-13-ai-chat.sql."
             : error.message
           : !cfg.ok
-            ? "AI belum disambungkan — admin perlu mengisi OMNIROUTE_BASE_URL dan OMNIROUTE_API_KEY di Vercel lalu Redeploy."
+            ? "AI belum disambungkan — admin perlu melengkapi pengaturan AI (alamat & kunci server AI) di Vercel lalu Redeploy."
             : null
       }
       defaultModel={cfg.model}
