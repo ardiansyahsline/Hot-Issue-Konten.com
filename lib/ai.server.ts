@@ -116,15 +116,15 @@ export function healthMap(models: string[], health: Map<string, Health>): Map<st
   for (const [m, h] of health) {
     const r = healthRank(h);
     if (r === 0) provOk.add(prov(m));
-    if (r === 2) provFail.add(prov(m));
+    // satu model "tidak ditemukan" bukan berarti providernya rusak — hanya error kunci/izin yang menular ke model lain
+    if (r === 2 && /authenticat|authorization|api key|unauthori|forbidden|decrypt|reconnect|401|403/i.test(h.last_error ?? "")) provFail.add(prov(m));
   }
   const out = new Map<string, 0 | 1 | 2>();
   for (const m of models) {
     let r = healthRank(health.get(m));
-    if (r === 1 && prov(m)) {
-      if (provOk.has(prov(m))) r = 0;
-      else if (provFail.has(prov(m))) r = 2;
-    }
+    // provider lain yang jalan TIDAK membuat model ini dianggap siap (katalog NVIDIA dll berisi model yang tidak aktif
+    // untuk akun kita) — hanya error kunci/izin provider yang menular ke model lain dari provider itu.
+    if (r === 1 && prov(m) && provFail.has(prov(m)) && !provOk.has(prov(m))) r = 2;
     out.set(m, r);
   }
   return out;

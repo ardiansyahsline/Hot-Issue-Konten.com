@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
 import { ATTACH_BUCKET } from "@/lib/attachments";
-import { SMART, SMART_HERO, heroColor, heroDesc, heroName, heroRole, isVisionModel } from "@/lib/aiModels";
+import { SMART, SMART_HERO, heroColor, heroDesc, heroName, heroRole, isVisionModel, variantScore } from "@/lib/aiModels";
 import Markdown from "./Markdown";
 import HeroArt from "./HeroArt";
 import HeroGallery from "./HeroGallery";
@@ -21,6 +21,7 @@ export type AiMsg = {
   images?: string[] | null;
   used_data?: boolean | null;
   used_web?: boolean;
+  persona?: string | null;
   /** model diganti otomatis (mis. karena ada gambar) */
   switched?: boolean;
 };
@@ -90,7 +91,7 @@ function heroOptions(models: string[], status: Record<string, number>, visionLis
     const opt = { hero, model: m, status: status[m] ?? 1, vision: visionList.includes(m) || isVisionModel(m) };
     const cur = best.get(hero);
     // models sudah urut dari server (siap dulu, lalu urutan katalog) -> yang pertama per hero dipakai, kecuali ada yang statusnya lebih baik
-    if (!cur || opt.status < cur.status) best.set(hero, opt);
+    if (!cur || opt.status < cur.status || (opt.status === cur.status && variantScore(m) > variantScore(cur.model))) best.set(hero, opt);
   }
   return [...best.values()];
 }
@@ -418,7 +419,8 @@ export default function AiChat({
       setErr(null);
       setLoadingMsgs(true);
       stick.current = true;
-      let r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", id).order("id");
+      let r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", id).order("id");
+      if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", id).order("id")) as typeof r;
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", id).order("id")) as typeof r;
       setMsgs((r.data ?? []) as AiMsg[]);
       setLoadingMsgs(false);
@@ -474,8 +476,9 @@ export default function AiChat({
       const used = decodeURIComponent(res.headers.get("x-ai-model") ?? "");
       const usedData = res.headers.get("x-ai-data") === "1";
       const usedWeb = res.headers.get("x-ai-web") === "1";
+      const persona = decodeURIComponent(res.headers.get("x-ai-persona") ?? "") || null;
       const switched = !!used && ((model !== SMART && used !== model) || res.headers.get("x-ai-fallback") === "1");
-      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, switched } : x)));
+      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, persona, switched } : x)));
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let text = "";
@@ -789,6 +792,7 @@ export default function AiChat({
             opts={heroOpts}
             value={model}
             ready={ready}
+            onChecked={() => loadModels(false)}
             onPick={(m) => {
               pickModel(m);
               setView("chat");
@@ -861,7 +865,7 @@ export default function AiChat({
                     ) : (
                       <div key={m.id} className="flex gap-3">
                         <span className="flex h-9 w-9 shrink-0 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
-                          <HeroArt hero={hero(m.model ?? model)} size={42} talk={busy && m.id === lastAssistant?.id} still={!(busy && m.id === lastAssistant?.id)} />
+                          <HeroArt hero={m.persona || hero(m.model ?? model)} size={42} talk={busy && m.id === lastAssistant?.id} still={!(busy && m.id === lastAssistant?.id)} />
                         </span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                           {m.used_data && (
@@ -904,12 +908,21 @@ export default function AiChat({
                                   ↻ Ulangi
                                 </button>
                               )}
-                              {m.model && (
-                                <span title={m.model}>
-                                  · ⚔️ {hero(m.model)} <span className="text-zinc-600">({personaOf(hero(m.model)).type} {personaOf(hero(m.model)).label})</span>
-                                  {m.switched && " (dialihkan otomatis — hero lain lagi sibuk / ada gambar)"}
-                                </span>
-                              )}
+                              {m.model && (() => {
+                                const ph = m.persona || hero(m.model);
+                                const engine = hero(m.model);
+                                const pp = personaOf(ph);
+                                return (
+                                  <span>
+                                    · ⚔️ {ph} <span className="text-zinc-600">({pp.type} {pp.label})</span>
+                                    {engine !== ph && (
+                                      <span className="text-zinc-500" title={`${ph} lagi gagal / kuota habis, jadi jawaban ini dibantu ${engine} — gaya jawab tetap ${ph}.`}>
+                                        {" "}· ↪ dibantu {engine}
+                                      </span>
+                                    )}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>

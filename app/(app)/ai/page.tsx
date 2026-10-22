@@ -9,6 +9,8 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const loadMsgs = async () => {
     if (!c) return { data: [] };
+    const p = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", c).order("id");
+    if (!p.error) return p;
     const r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", c).order("id");
     // migration-14 belum dijalankan -> tanpa kolom gambar
     return r.error ? await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", c).order("id") : r;

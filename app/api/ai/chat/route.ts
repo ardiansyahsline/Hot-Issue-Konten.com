@@ -3,7 +3,7 @@ import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { buildWebContext, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
-import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
+import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
 
@@ -108,8 +108,17 @@ export async function POST(req: NextRequest) {
     .sort((a, b) => a.h - b.h || a.i - b.i)
     .map((x) => x.m);
   let candidates: string[] = [];
+  // hero pilihan user: karakternya dipertahankan walaupun mesinnya dialihkan
+  const chosenHero = chosen !== SMART && chosen !== "auto" ? heroName(chosen) : null;
   if (chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen))) {
     candidates.push(chosen);
+  }
+  // varian lain dari hero yang sama dicoba dulu (mis. DeepSeek versi lain) sebelum pindah ke hero lain
+  if (chosenHero) {
+    const same = sameHeroVariants(byHealth, chosenHero)
+      .filter((m) => m !== chosen && !coolingDown(m))
+      .slice(0, 2);
+    candidates.push(...same);
   }
   // putaran 1: satu model per hero & per provider (biar 6 percobaan tidak habis di model sejenis)
   const seenHero = new Set(candidates.map((m) => heroName(m)));
@@ -241,7 +250,7 @@ export async function POST(req: NextRequest) {
     // koneksi ke server AI kadang putus sesaat -> coba ulang sekali sebelum menyerah
     for (let attempt = 0; attempt < 2 && !upstream && !slow; attempt++) {
       try {
-        messages[1] = { role: "system", content: personaPrompt(heroName(model)) };
+        messages[1] = { role: "system", content: personaPrompt(chosenHero ?? heroName(model)) };
         upstream = await fetch(`${cfg.base}/chat/completions`, {
           method: "POST",
           headers: aiHeaders(cfg.key),
@@ -322,13 +331,14 @@ export async function POST(req: NextRequest) {
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
     return saveError(
-      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 40 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => `- ${heroName(f.split(" ")[0])}: ${f}`).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
+      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 40 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
     );
   }
 
   // 8) alirkan ke browser sambil dikumpulkan, lalu simpan jawaban lengkap
   const enc = new TextEncoder();
   const usedModel = opened.model;
+  const personaHero = chosenHero ?? heroName(usedModel);
   let full = "";
   const { events, first } = opened;
   const stream = new ReadableStream<Uint8Array>({
@@ -356,9 +366,17 @@ export async function POST(req: NextRequest) {
         // dihentikan user / koneksi putus — simpan yang sudah ada
       } finally {
         if (full.trim()) {
-          const row = { conversation_id: convId, role: "assistant", content: full.slice(0, 100000), model: usedModel, used_data: useData };
-          const { error } = await supabase.from("ai_messages").insert(row);
-          if (error && /used_data/.test(error.message)) {
+          const row = { conversation_id: convId, role: "assistant", content: full.slice(0, 100000), model: usedModel, used_data: useData, persona: personaHero };
+          let { error } = await supabase.from("ai_messages").insert(row);
+          // kolom baru belum ada (migration-16 / -14 belum dijalankan) -> simpan tanpa kolom itu
+          if (error && /persona/.test(error.message)) {
+            const { persona: _p, ...noPersona } = row;
+            ({ error } = await supabase.from("ai_messages").insert(noPersona));
+            if (error && /used_data/.test(error.message)) {
+              const { used_data: _u, ...old } = noPersona;
+              await supabase.from("ai_messages").insert(old);
+            }
+          } else if (error && /used_data/.test(error.message)) {
             const { used_data: _u, ...old } = row;
             await supabase.from("ai_messages").insert(old);
           }
@@ -381,6 +399,7 @@ export async function POST(req: NextRequest) {
       "X-Accel-Buffering": "no",
       "x-conversation-id": convId!,
       "x-ai-model": encodeURIComponent(usedModel),
+      "x-ai-persona": encodeURIComponent(personaHero),
       "x-ai-data": useData ? "1" : "0",
       "x-ai-web": web.sources.length ? "1" : "0",
       "x-ai-fallback": failures.length ? "1" : "0",

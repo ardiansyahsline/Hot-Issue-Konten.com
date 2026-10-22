@@ -90,6 +90,24 @@ const POOL = ["Balmond", "Bruno", "Clint", "Eudora", "Franco", "Hayabusa", "Kari
 
 export const SMART_HERO = "Layla";
 
+/**
+ * Skor varian dalam satu keluarga model: versi lebih baru & ukuran lebih besar = lebih tinggi.
+ * Varian khusus/lama (coder, distill, guard, base) ditaruh paling belakang.
+ */
+export function variantScore(id: string): number {
+  const name = (id.split("/").pop() ?? id).toLowerCase();
+  const sizes = [...name.matchAll(/(\d+(?:\.\d+)?)b\b/g)].map((m) => Number(m[1]));
+  const size = sizes.length ? Math.max(...sizes) : 0;
+  const ver = Number(name.replace(/\d+(?:\.\d+)?b\b/g, " ").match(/(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  let score = ver * 100 + Math.min(size, 1000) / 10;
+  if (/coder|distill|guard|\bbase\b|instruct-v0|-v0\./.test(name)) score -= 1000;
+  if (/(^|-)(lite|mini|nano|tiny|small)(-|$)/.test(name)) score -= 30;
+  return score;
+}
+/** varian lain dari hero yang sama, urut dari yang terbaik */
+export const sameHeroVariants = (models: string[], hero: string) =>
+  models.filter((m) => heroName(m) === hero).sort((a, b) => variantScore(b) - variantScore(a));
+
 /** nama hero untuk satu model (tanpa jaminan unik) */
 export function heroName(id: string | null | undefined): string {
   if (!id) return SMART_HERO;

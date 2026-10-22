@@ -14,8 +14,39 @@ const STATUS = [
 ];
 
 /** Tab 🎭 Karakter: semua hero + kepribadiannya, bisa langsung dipilih untuk ngobrol */
-export default function HeroGallery({ opts, value, onPick, ready }: { opts: Opt[]; value: string; onPick: (model: string) => void; ready: boolean }) {
+type Check = { hero: string; ok: boolean; tried: number; reason?: string };
+
+export default function HeroGallery({
+  opts,
+  value,
+  onPick,
+  ready,
+  onChecked,
+}: {
+  opts: Opt[];
+  value: string;
+  onPick: (model: string) => void;
+  ready: boolean;
+  onChecked: () => void;
+}) {
   const [group, setGroup] = useState<Group | "all">("all");
+  const [checking, setChecking] = useState(false);
+  const [check, setCheck] = useState<{ results: Check[]; error?: string } | null>(null);
+  const runCheck = async () => {
+    setChecking(true);
+    setCheck(null);
+    try {
+      const r = await fetch("/api/ai/check", { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      setCheck(r.ok ? { results: j.results ?? [] } : { results: [], error: j.error || `Gagal (${r.status})` });
+      onChecked();
+    } catch {
+      setCheck({ results: [], error: "Koneksi gagal" });
+    } finally {
+      setChecking(false);
+    }
+  };
+  const checkOf = (hero: string) => check?.results.find((c) => c.hero === hero);
   const [q, setQ] = useState("");
   const list = useMemo(() => {
     const all: Opt[] = [{ hero: SMART_HERO, model: SMART, status: 0, vision: true }, ...[...opts].sort((a, b) => a.status - b.status || a.hero.localeCompare(b.hero))];
@@ -59,6 +90,27 @@ export default function HeroGallery({ opts, value, onPick, ready }: { opts: Opt[
           ))}
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / tipe / sifat…" className="input ml-auto w-full py-1.5 text-[12.5px] sm:w-56" />
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 px-3 py-2 text-[12px]">
+          <button
+            type="button"
+            onClick={runCheck}
+            disabled={checking || !ready}
+            className="rounded-lg bg-orange-500 px-3 py-1.5 font-bold text-white disabled:opacity-60"
+          >
+            {checking ? "⏳ Mengecek semua hero… (±30 detik)" : "🩺 Cek semua hero"}
+          </button>
+          {!check && !checking && <span className="text-zinc-500">Tes cepat tiap hero (1 pesan pendek) supaya yang dipilih pasti bisa jawab.</span>}
+          {check?.error && <span className="text-red-400">{check.error}</span>}
+          {check && !check.error && (
+            <span className="text-zinc-400">
+              ✅ <b className="text-emerald-400">{check.results.filter((c) => c.ok).length}</b> hero siap · ❌{" "}
+              <b className="text-red-400">{check.results.filter((c) => !c.ok).length}</b> gagal
+              {check.results.some((c) => !c.ok) && (
+                <span className="text-zinc-500"> — yang gagal ditaruh di bawah & tidak dipilih otomatis</span>
+              )}
+            </span>
+          )}
+        </div>
         {!ready && <p className="mt-4 text-[13px] text-zinc-500">Server AI belum tersambung.</p>}
 
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -83,7 +135,14 @@ export default function HeroGallery({ opts, value, onPick, ready }: { opts: Opt[
                       {o.vision && <span className="ml-1.5 text-sky-400">👁 bisa lihat gambar</span>}
                     </div>
                   </div>
-                  {!auto && <span className={`shrink-0 text-[10.5px] font-semibold ${STATUS[o.status]?.cls ?? ""}`}>{STATUS[o.status]?.text}</span>}
+                  {!auto && (
+                    <span
+                      className={`shrink-0 text-right text-[10.5px] font-semibold ${checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "text-emerald-400" : "text-red-400") : (STATUS[o.status]?.cls ?? "")}`}
+                      title={checkOf(o.hero)?.reason}
+                    >
+                      {checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "✅ Lulus cek" : "❌ Gagal cek") : STATUS[o.status]?.text}
+                    </span>
+                  )}
                 </div>
                 <span className="w-fit rounded-full px-2.5 py-0.5 text-[11.5px] font-bold" style={{ background: g.soft, color: g.color }}>
                   {g.icon} {p.type} · {p.label}
