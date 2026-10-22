@@ -6,16 +6,21 @@ export const metadata = { title: "AI · CS Tracker" };
 
 export default async function AiPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
   const { c } = await searchParams;
-  const [{ supabase }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const loadMsgs = async () => {
+    if (!c) return { data: [] };
+    const r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", c).order("id");
+    // migration-14 belum dijalankan -> tanpa kolom gambar
+    return r.error ? await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", c).order("id") : r;
+  };
   const [{ data: convs, error }, msgsRes] = await Promise.all([
     supabase.from("ai_conversations").select("id, title, model, updated_at").order("updated_at", { ascending: false }).limit(300),
-    c
-      ? supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", c).order("id")
-      : Promise.resolve({ data: [] }),
+    loadMsgs(),
   ]);
   const cfg = aiConfig();
   return (
     <AiChat
+      meId={user.id}
       firstName={(profile?.full_name ?? "").split(" ")[0] || "kamu"}
       initialConvs={(convs ?? []) as AiConv[]}
       initialId={c && (convs ?? []).some((x) => x.id === c) ? c : null}

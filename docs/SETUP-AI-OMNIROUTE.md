@@ -112,3 +112,16 @@ curl https://ai.domainmu.com/v1/models -H "Authorization: Bearer API_KEY_OMNIROU
 - Vercel Hobby membatasi satu jawaban maksimal ±60 detik — jawaban yang sangat panjang bisa terpotong.
 - Kuota & aturan pemakaian mengikuti provider yang kamu sambungkan di OmniRoute.
 - Update OmniRoute: `cd ~/omniroute && docker compose -f docker-compose.selfhost.yml pull && docker compose -f docker-compose.selfhost.yml up -d`.
+
+## Model yang disarankan (nama hero di CS Tracker)
+
+| Hero | Model | Provider (gratis) | Catatan |
+|---|---|---|---|
+| Lesley | Gemini Flash (non-lite) | Google AI Studio | Bisa baca gambar; dipakai otomatis untuk gambar & chart |
+| Miya | Gemini Flash-Lite | Google AI Studio | Lebih ringan, bisa baca gambar |
+| Gord | GPT-OSS 120B | Groq | Teks, pintar & cepat |
+| Tigreal | Llama 3.3 70B | Groq | Teks, stabil |
+| Kagura / Alucard | Kimi / DeepSeek | (kalau disambungkan) | Teks |
+| Yve | Claude | Anthropic API (berbayar) | Terbaik untuk teks & gambar; butuh saldo |
+
+Model khusus suara, filter, embedding, dan model bahasa Arab (allam) disembunyikan dari daftar.

@@ -3,19 +3,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
+import { ATTACH_BUCKET } from "@/lib/attachments";
+import { SMART, SMART_HERO, heroName, heroNames, isVisionModel } from "@/lib/aiModels";
 import Markdown from "./Markdown";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
-export type AiMsg = { id: number | string; role: "user" | "assistant"; content: string; model?: string | null; error?: boolean; created_at?: string };
+export type AiMsg = {
+  id: number | string;
+  role: "user" | "assistant";
+  content: string;
+  model?: string | null;
+  error?: boolean;
+  created_at?: string;
+  images?: string[] | null;
+  used_data?: boolean | null;
+  /** model diganti otomatis (mis. karena ada gambar) */
+  switched?: boolean;
+};
+type Pending = { key: string; preview: string; status: "uploading" | "done" | "error"; path?: string };
 
-const SUGGEST = [
-  ["✍️", "Bikin caption campaign", "Bikinin 3 ide caption TikTok yang santai untuk campaign film, kasih hashtag juga"],
-  ["📊", "Bantu rumus Excel", "Gimana rumus Excel buat hitung total lembur per orang dari tabel jam masuk & jam pulang?"],
-  ["🌐", "Terjemahin teks", "Terjemahkan teks berikut ke bahasa Inggris yang natural:\n\n"],
-  ["💡", "Brainstorm ide konten", "Kasih 10 ide konten pendek yang lagi relevan buat clipper di Indonesia"],
-] as const;
+const TRADING_PROMPT = "Analisa chart trading ini: tren, support/resistance, pola candlestick, indikator yang terlihat, dan skenario bullish/bearish.";
+const SUGGEST: { icon: string; label: string; prompt: string; pick?: boolean; send?: boolean }[] = [
+  { icon: "📈", label: "Analisa chart trading", prompt: TRADING_PROMPT, pick: true },
+  { icon: "📊", label: "Rangkum Hot Issue minggu ini", prompt: "Rangkum Hot Issue minggu ini: topik paling banyak laporan, yang masih open, dan siapa PIC-nya.", send: true },
+  { icon: "🎬", label: "Kasus Video Review terbanyak", prompt: "Kategori kasus Video Review apa yang paling banyak 7 hari terakhir? Bandingkan dengan 30 hari terakhir.", send: true },
+  { icon: "🖼️", label: "Jelaskan isi screenshot", prompt: "Tolong jelaskan isi screenshot ini.", pick: true },
+  { icon: "✍️", label: "Bikin caption campaign", prompt: "Bikinin 3 ide caption TikTok yang santai untuk campaign film, kasih hashtag juga", send: true },
+  { icon: "🌐", label: "Terjemahin teks", prompt: "Terjemahkan teks berikut ke bahasa Inggris yang natural:\n\n" },
+];
 
-const MODEL_KEY = "cs-ai-model";
+const MODEL_KEY = "cs-ai-model-v2";
+const DATA_KEY = "cs-ai-data";
+const MAX_IMAGES = 4;
 
 function group(iso: string) {
   const d = new Date(iso);
@@ -29,7 +48,40 @@ function group(iso: string) {
   return "Lebih lama";
 }
 
-function ModelPicker({ value, onChange, models, ready }: { value: string; onChange: (m: string) => void; models: string[]; ready: boolean }) {
+/** Kecilkan gambar (maks 1600px, JPEG) supaya cepat dikirim ke AI */
+async function shrink(file: File): Promise<Blob> {
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * scale);
+    c.height = Math.round(bmp.height * scale);
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/jpeg", 0.86));
+    return blob ?? file;
+  } catch {
+    return file;
+  }
+}
+
+function ModelPicker({
+  value,
+  onChange,
+  models,
+  heroes,
+  ready,
+  vision,
+}: {
+  value: string;
+  onChange: (m: string) => void;
+  models: string[];
+  heroes: Map<string, string>;
+  ready: boolean;
+  vision: { text: string | null; image: string | null };
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef<HTMLDivElement>(null);
@@ -39,28 +91,32 @@ function ModelPicker({ value, onChange, models, ready }: { value: string; onChan
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
+  const label = (m: string) => (m === SMART ? SMART_HERO : heroes.get(m) ?? heroName(m));
   const list = useMemo(() => {
-    const all = ["auto", ...models.filter((m) => m !== "auto")];
     const s = q.trim().toLowerCase();
-    return (s ? all.filter((m) => m.toLowerCase().includes(s)) : all).slice(0, 80);
-  }, [models, q]);
+    const all = [SMART, ...models];
+    return (s ? all.filter((m) => m.toLowerCase().includes(s) || label(m).toLowerCase().includes(s)) : all).slice(0, 80);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models, q, heroes]);
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="max-w-[220px] truncate rounded-full border border-zinc-800 px-3 py-1 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
-        title="Pilih model"
+        className="max-w-[200px] truncate rounded-full border border-zinc-800 px-3 py-1 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
+        title={value === SMART ? "Pilih otomatis model terbaik" : value}
+        aria-label="Pilih model"
       >
-        ✨ {value} ▾
+        ⚔️ {label(value)}
+        {value === SMART ? " · otomatis" : ""} ▾
       </button>
       {open && (
         <div
-          className="absolute bottom-full left-0 z-40 mb-2 w-72 rounded-2xl border border-zinc-800 bg-zinc-900 p-2"
+          className="absolute bottom-full left-0 z-40 mb-2 w-80 max-w-[85vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-2"
           style={{ boxShadow: "var(--shadow-pop), 0 18px 40px -16px rgba(0,0,0,.35)" }}
         >
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari model…" className="input mb-2 py-1.5 text-[13px]" />
-          <div className="max-h-64 overflow-y-auto">
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / model…" className="input mb-2 py-1.5 text-[13px]" />
+          <div className="max-h-72 overflow-y-auto">
             {list.map((m) => (
               <button
                 key={m}
@@ -70,13 +126,27 @@ function ModelPicker({ value, onChange, models, ready }: { value: string; onChan
                   setOpen(false);
                   setQ("");
                 }}
-                className={`block w-full truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] ${m === value ? "bg-orange-500/10 font-semibold text-orange-400" : "text-zinc-300 hover:bg-zinc-800"}`}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left ${m === value ? "bg-orange-500/10" : "hover:bg-zinc-800"}`}
               >
-                {m === "auto" ? "auto — pilih otomatis yang tersedia" : m}
+                <span className="min-w-0 flex-1">
+                  <span className={`block truncate text-[13px] font-semibold ${m === value ? "text-orange-400" : "text-zinc-200"}`}>
+                    {label(m)}
+                    {m === SMART && " — pilih otomatis"}
+                  </span>
+                  <span className="block truncate text-[11px] text-zinc-500">
+                    {m === SMART
+                      ? `chat: ${vision.text ? label(vision.text) : "-"} · gambar: ${vision.image ? label(vision.image) : "belum ada"}`
+                      : m}
+                  </span>
+                </span>
+                {m !== SMART && isVisionModel(m) && (
+                  <span className="shrink-0 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400" title="Bisa membaca gambar">
+                    👁 gambar
+                  </span>
+                )}
               </button>
             ))}
             {!ready && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Server AI belum tersambung.</p>}
-            {ready && models.length === 0 && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Daftar model belum terbaca — pakai “auto”.</p>}
           </div>
         </div>
       )}
@@ -85,6 +155,7 @@ function ModelPicker({ value, onChange, models, ready }: { value: string; onChan
 }
 
 export default function AiChat({
+  meId,
   firstName,
   initialConvs,
   initialId,
@@ -92,6 +163,7 @@ export default function AiChat({
   setupError,
   defaultModel,
 }: {
+  meId: string;
   firstName: string;
   initialConvs: AiConv[];
   initialId: string | null;
@@ -107,29 +179,40 @@ export default function AiChat({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState(defaultModel);
+  const [model, setModel] = useState(defaultModel === "auto" ? SMART : defaultModel || SMART);
   const [models, setModels] = useState<string[]>([]);
+  const [best, setBest] = useState<{ text: string | null; image: string | null }>({ text: null, image: null });
   const [ready, setReady] = useState(!setupError);
+  const [dataMode, setDataMode] = useState<"auto" | "off">("auto");
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [zoom, setZoom] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [sideOpen, setSideOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | number | null>(null);
+  const [drag, setDrag] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const heroes = useMemo(() => heroNames(models), [models]);
+  const hero = (id: string | null | undefined) => (id ? heroes.get(id) ?? heroName(id) : SMART_HERO);
 
-  // model pilihan tersimpan di browser
+  // pilihan model & mode data tersimpan di browser
   useEffect(() => {
     try {
       const m = localStorage.getItem(MODEL_KEY);
       if (m) setModel(m);
+      if (localStorage.getItem(DATA_KEY) === "off") setDataMode("off");
     } catch {}
     fetch("/api/ai/models")
       .then((r) => r.json())
       .then((j) => {
         setModels(j.models ?? []);
+        setBest({ text: j.bestText ?? null, image: j.bestVision ?? null });
         setReady(!!j.ready);
       })
       .catch(() => {});
@@ -140,6 +223,27 @@ export default function AiChat({
       localStorage.setItem(MODEL_KEY, m);
     } catch {}
   };
+  const toggleData = () => {
+    const next = dataMode === "auto" ? "off" : "auto";
+    setDataMode(next);
+    try {
+      localStorage.setItem(DATA_KEY, next);
+    } catch {}
+  };
+
+  // link sementara untuk gambar di percakapan (bucket privat)
+  useEffect(() => {
+    const need = [...new Set(msgs.flatMap((m) => m.images ?? []))].filter((p) => !urls[p]);
+    if (!need.length) return;
+    supabase.storage
+      .from(ATTACH_BUCKET)
+      .createSignedUrls(need, 3600)
+      .then(({ data }) => {
+        const add: Record<string, string> = {};
+        for (const d of data ?? []) if (d.path && d.signedUrl) add[d.path] = d.signedUrl;
+        if (Object.keys(add).length) setUrls((u) => ({ ...u, ...add }));
+      });
+  }, [msgs, urls, supabase]);
 
   // gulir ke bawah saat ada isi baru (kecuali user sedang menggulir ke atas)
   useEffect(() => {
@@ -159,10 +263,32 @@ export default function AiChat({
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [input]);
 
-  const setUrl = (id: string | null) => {
-    const url = id ? `/ai?c=${id}` : "/ai";
-    window.history.replaceState(null, "", url);
-  };
+  // ---- gambar ----
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      const imgs = files.filter((f) => f.type.startsWith("image/"));
+      if (!imgs.length) return;
+      const room = MAX_IMAGES - pending.length;
+      if (room <= 0) return setErr(`Maksimal ${MAX_IMAGES} gambar per pesan.`);
+      setErr(null);
+      for (const f of imgs.slice(0, room)) {
+        const key = crypto.randomUUID();
+        const preview = URL.createObjectURL(f);
+        setPending((p) => [...p, { key, preview, status: "uploading" }]);
+        const blob = await shrink(f);
+        const path = `${meId}/ai/${key}.${blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : blob.type === "image/gif" ? "gif" : "jpg"}`;
+        // kirim sebagai ArrayBuffer + contentType (sama seperti upload lampiran lain)
+        const { error } = await supabase.storage.from(ATTACH_BUCKET).upload(path, await blob.arrayBuffer(), { contentType: blob.type || "image/jpeg", upsert: false });
+        setPending((p) => p.map((x) => (x.key === key ? { ...x, status: error ? "error" : "done", path: error ? undefined : path } : x)));
+        if (error) setErr(`Gambar gagal di-upload: ${error.message}`);
+        else setUrls((u) => ({ ...u, [path]: preview }));
+      }
+    },
+    [pending.length, meId, supabase]
+  );
+  const uploading = pending.some((p) => p.status === "uploading");
+
+  const setUrl = (id: string | null) => window.history.replaceState(null, "", id ? `/ai?c=${id}` : "/ai");
 
   const openConv = useCallback(
     async (id: string) => {
@@ -173,8 +299,9 @@ export default function AiChat({
       setErr(null);
       setLoadingMsgs(true);
       stick.current = true;
-      const { data } = await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", id).order("id");
-      setMsgs((data ?? []) as AiMsg[]);
+      let r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", id).order("id");
+      if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", id).order("id")) as typeof r;
+      setMsgs((r.data ?? []) as AiMsg[]);
       setLoadingMsgs(false);
     },
     [supabase, busy]
@@ -190,7 +317,7 @@ export default function AiChat({
     setTimeout(() => ta.current?.focus(), 50);
   };
 
-  const run = async (content: string, regenerate = false) => {
+  const run = async (content: string, regenerate = false, images: string[] = []) => {
     if (busy || setupError) return;
     setErr(null);
     setBusy(true);
@@ -201,8 +328,8 @@ export default function AiChat({
       if (regenerate) {
         const last = base[base.length - 1];
         if (last?.role === "assistant") base = base.slice(0, -1);
-      } else base = [...base, { id: `u${Date.now()}`, role: "user", content }];
-      return [...base, { id: tempId, role: "assistant", content: "", model }];
+      } else base = [...base, { id: `u${Date.now()}`, role: "user", content, images }];
+      return [...base, { id: tempId, role: "assistant", content: "", model: model === SMART ? null : model }];
     });
     const ac = new AbortController();
     abortRef.current = ac;
@@ -211,7 +338,7 @@ export default function AiChat({
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: activeId, content, model, regenerate }),
+        body: JSON.stringify({ conversationId: activeId, content, model, regenerate, images, data: dataMode }),
         signal: ac.signal,
       });
       const newId = res.headers.get("x-conversation-id");
@@ -219,12 +346,16 @@ export default function AiChat({
         convId = newId;
         setActiveId(newId);
         setUrl(newId);
-        setConvs((cs) => [{ id: newId, title: content.replace(/\s+/g, " ").slice(0, 60) || "Chat baru", model, updated_at: new Date().toISOString() }, ...cs]);
+        setConvs((cs) => [{ id: newId, title: (content || "Gambar").replace(/\s+/g, " ").slice(0, 60), model, updated_at: new Date().toISOString() }, ...cs]);
       }
       if (!res.ok || !res.body) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `Gagal (${res.status})`);
       }
+      const used = decodeURIComponent(res.headers.get("x-ai-model") ?? "");
+      const usedData = res.headers.get("x-ai-data") === "1";
+      const switched = !!used && model !== SMART && used !== model;
+      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, switched } : x)));
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let text = "";
@@ -235,7 +366,7 @@ export default function AiChat({
         const t = text;
         setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, content: t } : x)));
       }
-      if (!text.trim()) setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, content: "_(Tidak ada jawaban dari model. Coba model lain atau ulangi.)_", error: true } : x)));
+      if (!text.trim()) setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, content: "Tidak ada jawaban dari model. Coba hero/model lain atau ulangi.", error: true } : x)));
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         const msg = e instanceof Error ? e.message : "Gagal menghubungi AI";
@@ -256,9 +387,11 @@ export default function AiChat({
 
   const send = () => {
     const t = input.trim();
-    if (!t || busy) return;
+    const imgs = pending.filter((p) => p.status === "done" && p.path).map((p) => p.path!);
+    if ((!t && !imgs.length) || busy || uploading) return;
     setInput("");
-    run(t);
+    setPending([]);
+    run(t, false, imgs);
   };
 
   const rename = async (id: string, title: string) => {
@@ -346,7 +479,7 @@ export default function AiChat({
           </div>
         ))}
       </div>
-      <div className="mt-2 border-t border-zinc-800/80 pt-2 text-[11.5px] text-zinc-500">🔒 Percakapan hanya bisa dilihat kamu sendiri</div>
+      <div className="mt-2 border-t border-zinc-800/80 pt-2 text-[11.5px] text-zinc-500">🔒 Percakapan & gambar hanya bisa dilihat kamu sendiri</div>
     </div>
   );
 
@@ -356,13 +489,63 @@ export default function AiChat({
         e.preventDefault();
         send();
       }}
-      className="rounded-2xl border border-zinc-800 bg-zinc-900 p-2.5"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDrag(true);
+        }
+      }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDrag(false);
+        addFiles(Array.from(e.dataTransfer.files));
+      }}
+      className={`rounded-2xl border bg-zinc-900 p-2.5 transition ${drag ? "border-orange-500" : "border-zinc-800"}`}
       style={{ boxShadow: "var(--shadow-card)" }}
     >
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          addFiles(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
+      {pending.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2 px-1">
+          {pending.map((p) => (
+            <span key={p.key} className="relative h-16 w-16 overflow-hidden rounded-lg ring-1 ring-zinc-800">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={p.preview} alt="Lampiran" className={`h-full w-full object-cover ${p.status !== "done" ? "opacity-50" : ""}`} />
+              {p.status === "uploading" && <span className="absolute inset-0 m-auto h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-orange-500" />}
+              {p.status === "error" && <span className="absolute inset-x-0 bottom-0 bg-red-600/90 text-center text-[9px] font-semibold text-white">gagal</span>}
+              <button
+                type="button"
+                onClick={() => setPending((x) => x.filter((y) => y.key !== p.key))}
+                className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-950/85 text-[10px] text-white"
+                aria-label="Hapus gambar"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <textarea
         ref={ta}
         value={input}
         onChange={(e) => setInput(e.target.value)}
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith("image/"));
+          if (files.length) {
+            e.preventDefault();
+            addFiles(files);
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
@@ -370,14 +553,34 @@ export default function AiChat({
           }
         }}
         rows={1}
-        placeholder={setupError ? "AI belum tersambung" : "Tanya apa aja… (Enter kirim · Shift+Enter baris baru)"}
+        placeholder={setupError ? "AI belum tersambung" : "Tanya apa aja… (Ctrl+V buat tempel screenshot)"}
         disabled={!!setupError}
         className="block max-h-[220px] w-full resize-none bg-transparent px-2 py-1.5 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-500"
         aria-label="Tulis pesan ke AI"
       />
-      <div className="mt-1 flex items-center gap-2">
-        <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} />
-        <span className="hidden text-[11.5px] text-zinc-500 sm:inline">via OmniRoute</span>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={!!setupError}
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 text-[15px] hover:border-zinc-600 disabled:opacity-40"
+          title="Lampirkan gambar (maks 4)"
+          aria-label="Lampirkan gambar"
+        >
+          📎
+        </button>
+        <button
+          type="button"
+          onClick={toggleData}
+          className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
+            dataMode === "auto" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" : "border-zinc-800 text-zinc-500"
+          }`}
+          title={dataMode === "auto" ? "AI otomatis membaca data CS Tracker kalau pertanyaannya soal issue / laporan / video review / catatan. Klik untuk mematikan." : "AI tidak membaca data CS Tracker. Klik untuk menyalakan."}
+          aria-pressed={dataMode === "auto"}
+        >
+          📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
+        </button>
+        <ModelPicker value={model} onChange={pickModel} models={models} heroes={heroes} ready={ready} vision={best} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop
@@ -385,7 +588,7 @@ export default function AiChat({
         ) : (
           <button
             type="submit"
-            disabled={!input.trim() || !!setupError}
+            disabled={(!input.trim() && !pending.some((p) => p.status === "done")) || uploading || !!setupError}
             className="ml-auto flex h-9 w-9 items-center justify-center rounded-xl text-white disabled:opacity-40"
             style={{ backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)" }}
             aria-label="Kirim"
@@ -437,22 +640,22 @@ export default function AiChat({
               ✨
             </span>
             <h2 className="mt-4 font-display text-[22px] font-bold">Halo {firstName}, mau ngobrol apa?</h2>
-            <p className="mt-1 text-[13px] text-zinc-500">Tanya bebas — ide konten, rumus Excel, terjemahan, atau sekadar iseng.</p>
-            <div className="mt-5 grid w-full max-w-[540px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
-              {SUGGEST.map(([icon, label, prompt]) => (
+            <p className="mt-1 text-[13px] text-zinc-500">Tanya bebas, kirim screenshot / chart trading, atau tanya isi CS Tracker.</p>
+            <div className="mt-5 grid w-full max-w-[600px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
+              {SUGGEST.map((s) => (
                 <button
-                  key={label}
+                  key={s.label}
                   type="button"
                   disabled={!!setupError}
                   onClick={() => {
-                    if (prompt.endsWith("\n\n")) {
-                      setInput(prompt);
-                      setTimeout(() => ta.current?.focus(), 30);
-                    } else run(prompt);
+                    if (s.send) return run(s.prompt);
+                    setInput(s.prompt);
+                    if (s.pick) fileRef.current?.click();
+                    setTimeout(() => ta.current?.focus(), 30);
                   }}
                   className="rounded-xl border border-zinc-800 px-3 py-2.5 text-left text-zinc-300 transition hover:border-orange-500/50 hover:bg-orange-500/5 disabled:opacity-50"
                 >
-                  {icon} {label}
+                  {s.icon} {s.label}
                 </button>
               ))}
             </div>
@@ -467,18 +670,39 @@ export default function AiChat({
                 <div className="mx-auto max-w-[720px] space-y-6">
                   {msgs.map((m) =>
                     m.role === "user" ? (
-                      <div key={m.id} className="flex justify-end">
-                        <div
-                          className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md px-4 py-2.5 text-[14px] text-white"
-                          style={{ backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)" }}
-                        >
-                          {m.content}
-                        </div>
+                      <div key={m.id} className="flex flex-col items-end gap-1.5">
+                        {(m.images?.length ?? 0) > 0 && (
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            {m.images!.map((p) =>
+                              urls[p] ? (
+                                <button key={p} type="button" onClick={() => setZoom(urls[p])} className="overflow-hidden rounded-2xl ring-1 ring-zinc-800">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={urls[p]} alt="Gambar terkirim" className="h-32 w-auto max-w-[240px] object-cover" />
+                                </button>
+                              ) : (
+                                <span key={p} className="flex h-32 w-40 items-center justify-center rounded-2xl bg-zinc-800 text-[12px] text-zinc-500">
+                                  🖼️ gambar
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
+                        {m.content && (
+                          <div
+                            className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md px-4 py-2.5 text-[14px] text-white"
+                            style={{ backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)" }}
+                          >
+                            {m.content}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div key={m.id} className="flex gap-3">
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-[14px]">✨</span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
+                          {m.used_data && (
+                            <span className="mb-1.5 inline-block rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>
+                          )}
                           {m.content ? (
                             m.error ? (
                               <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-red-400">{m.content.replace(/^⚠️\s*/, "⚠️ ")}</div>
@@ -513,7 +737,12 @@ export default function AiChat({
                                   ↻ Ulangi
                                 </button>
                               )}
-                              {m.model && <span>· {m.model}</span>}
+                              {m.model && (
+                                <span title={m.model}>
+                                  · ⚔️ {hero(m.model)}
+                                  {m.switched && " (dipilih otomatis karena ada gambar)"}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -527,6 +756,13 @@ export default function AiChat({
           </>
         )}
       </div>
+
+      {zoom && (
+        <button type="button" onClick={() => setZoom(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" aria-label="Tutup gambar">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={zoom} alt="Gambar" className="max-h-full max-w-full rounded-xl" />
+        </button>
+      )}
     </div>
   );
 }

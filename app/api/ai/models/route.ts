@@ -1,25 +1,23 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { aiConfig, aiHeaders } from "@/lib/ai.server";
+import { aiConfig, listModels } from "@/lib/ai.server";
+import { isChatModel, isVisionModel, pickTextModel, pickVisionModel } from "@/lib/aiModels";
 
 export const dynamic = "force-dynamic";
 
-let cache: { at: number; ids: string[] } | null = null;
-
-/** Daftar model dari OmniRoute (disimpan 10 menit) */
+/** Daftar model untuk pemilih model (model non-chat disembunyikan) */
 export async function GET() {
   await getCurrentUser();
   const cfg = aiConfig();
-  if (!cfg.ok) return NextResponse.json({ models: [], default: cfg.model, ready: false });
-  if (!cache || Date.now() - cache.at > 600000) {
-    try {
-      const r = await fetch(`${cfg.base}/models`, { headers: aiHeaders(cfg.key), signal: AbortSignal.timeout(8000) });
-      const j = await r.json();
-      const ids = ((j?.data ?? []) as { id?: string }[]).map((m) => String(m.id ?? "")).filter(Boolean);
-      cache = { at: Date.now(), ids: [...new Set(ids)].sort((a, b) => a.localeCompare(b)) };
-    } catch {
-      return NextResponse.json({ models: cache?.ids ?? [], default: cfg.model, ready: true });
-    }
-  }
-  return NextResponse.json({ models: cache.ids, default: cfg.model, ready: true });
+  if (!cfg.ok) return NextResponse.json({ models: [], ready: false });
+  const all = await listModels();
+  const models = all.filter(isChatModel);
+  return NextResponse.json({
+    ready: true,
+    models,
+    vision: models.filter(isVisionModel),
+    bestText: pickTextModel(all),
+    bestVision: cfg.visionModel || pickVisionModel(all),
+    default: cfg.model,
+  });
 }

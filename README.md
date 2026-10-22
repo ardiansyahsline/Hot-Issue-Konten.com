@@ -23,7 +23,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Laporan clipper per topik:** satu Hot Issue = satu topik. Kasus yang sama dari clipper lain ditambahkan sebagai laporan (kontak, keterangan, screenshot sendiri) lewat **+ Tambah laporan** di halaman detail. Meter 🔥 menunjukkan seberapa panas topiknya, dan di form **+ Issue Baru** muncul saran topik mirip dengan tombol **Tambahkan sebagai laporan** supaya tidak dobel.
 - **Ranking di Dashboard:** list di bawah Top 3 ikut tab — tab **Dari agent** menampilkan issue dengan peringkat #1, #2, #3 (HOT & laporan terbanyak di atas), tab **Video Review** menampilkan ranking kategori kasus. Hanya 3 teratas yang tampil, sisanya lewat **Load more**. Issue yang sudah resolved tetap ikut ranking di bawah issue yang masih aktif (bisa masuk top 3 kalau issue aktifnya kurang dari 3).
 - **Bunyi notifikasi:** pilih bunyi sendiri per jenis (chat, mention/balasan, Hot Issue/laporan) + volume di halaman Akun.
-- **✨ AI:** chat dengan AI seperti Claude (daftar percakapan di kiri, jawaban mengalir, markdown/tabel/kode, pilih model, salin, ulangi, ganti nama, hapus). Lewat OmniRoute di VPS sendiri; percakapan tiap orang privat.
+- **✨ AI:** chat dengan AI seperti Claude (daftar percakapan di kiri, jawaban mengalir, markdown/tabel/kode, pilih model, salin, ulangi, ganti nama, hapus). Lewat OmniRoute di VPS sendiri; percakapan tiap orang privat. Bisa kirim gambar/screenshot (📎, tarik-lepas, Ctrl+V) termasuk **analisa chart trading**, dan bisa ditanya soal isi CS Tracker (📊 Data CS Tracker: Otomatis — kontak clipper disensor). Nama model ditampilkan sebagai hero Mobile Legends; pilihan **Layla** = otomatis pilih model terbaik (pindah ke model yang bisa baca gambar kalau ada gambar).
 - **Foto profil:** upload di halaman Akun; tampil di menu atas, chat, dan komentar.
 - **Notifikasi:** pop-up browser (walau tab tertutup) untuk Hot Issue baru & chat, plus email untuk Hot Issue baru dan pesan pribadi saat penerima offline. Tiap orang bisa atur sendiri di Akun → Notifikasi.
 - **Komentar & reaksi:** semua role bisa komentar di Hot Issue dan Catatan & Saran, membalas komentar tertentu (menjorok), dan memberi reaksi emoji (👍 🙏 🔥 ✅ dan lainnya) di issue, catatan, komentar, serta pesan chat. Kolom ketik punya tombol 😊.
@@ -76,6 +76,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - Semua Catatan & Saran kategori **Bug** dipindah jadi Hot Issue kategori **Bug platform** (lampiran, tanggapan, dan reaksi ikut pindah), dan pilihan Bug di Catatan & Saran dihapus.
 - Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
 - Tabel notifikasi (langganan push browser & pengaturan per orang).
+
+**Langkah 1o — Update 15 (AI: kirim gambar, analisa chart, baca data CS Tracker, nama hero):** jalankan `supabase/migration-14-ai-gambar-data.sql`. Supaya AI bisa membaca gambar, sambungkan provider **Gemini** di dashboard OmniRoute (key gratis dari aistudio.google.com/apikey). Opsional env Vercel: `AI_DEFAULT_MODEL` (default `smart` = pilih otomatis) dan `AI_VISION_MODEL` (model khusus gambar).
 
 **Langkah 1n — Update 14 (tab ✨ AI lewat OmniRoute):** jalankan `supabase/migration-13-ai-chat.sql`, lalu ikuti `docs/SETUP-AI-OMNIROUTE.md` (OmniRoute di VPS + env `OMNIROUTE_BASE_URL` & `OMNIROUTE_API_KEY` di Vercel). Tanpa env itu tab AI tetap muncul tapi menampilkan pesan "AI belum disambungkan".
 
