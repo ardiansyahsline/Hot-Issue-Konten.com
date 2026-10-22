@@ -201,6 +201,22 @@ const CG_IDS: Record<string, string> = {
   DOT: "polkadot", SUI: "sui", PEPE: "pepe", SHIB: "shiba-inu", LTC: "litecoin", BCH: "bitcoin-cash", NEAR: "near",
   APT: "aptos", ARB: "arbitrum", OP: "optimism", HYPE: "hyperliquid",
 };
+/** id CoinGecko untuk satu kode koin (daftar umum dulu, lalu pencarian CoinGecko) */
+export async function coinId(symIn: string): Promise<string | null> {
+  const s = symIn.toUpperCase().replace(/(USDT|USDC|USD|IDR|\/.*)$/, "") || symIn.toUpperCase();
+  if (CG_IDS[s]) return CG_IDS[s];
+  const demo = (process.env.COINGECKO_API_KEY ?? "").trim();
+  const cg = (process.env.COINGECKO_BASE_URL ?? "https://api.coingecko.com").trim().replace(/\/+$/, "");
+  try {
+    const r = await fetch(`${cg}/api/v3/search?query=${encodeURIComponent(s)}`, { headers: demo ? { "x-cg-demo-api-key": demo } : {}, signal: AbortSignal.timeout(6000) });
+    const j = await r.json();
+    const hit = (j?.coins ?? []).find((c: { symbol?: string }) => String(c.symbol).toUpperCase() === s) ?? j?.coins?.[0];
+    return hit?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const fmt = (n: number, cur: string) =>
   `${cur === "IDR" ? "Rp" : cur === "USD" ? "$" : ""}${n.toLocaleString("id-ID", { maximumFractionDigits: n < 1 ? 6 : 2 })}${cur !== "IDR" && cur !== "USD" ? ` ${cur}` : ""}`;
 const wib = (d: Date) => new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Jakarta" }).format(d) + " WIB";
@@ -479,7 +495,14 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
     "",
     ...liveBlock,
     ...(history.length ? ["", ...history] : []),
-    ...(chart ? [`(Website menampilkan chart live ${chart} di atas jawabanmu — boleh rujuk "lihat chart di atas", tapi analisamu harus dari angka di sini.)`] : []),
+    ...(chart ? [`(Website menampilkan chart ${chart} di atas jawabanmu — boleh rujuk "lihat chart di atas", tapi analisamu harus dari angka di sini.)`] : []),
+    ...(chart
+      ? [
+          "TRADE PLAN: kalau jawabanmu berisi rencana trading (entry/SL/TP), WAJIB tutup jawaban dengan blok kode berlabel tradeplan berisi JSON satu baris, contoh:",
+          '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
+          "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
+        ]
+      : []),
     ...idxNote,
     "",
     clip(parts.join("\n\n"), 12000),

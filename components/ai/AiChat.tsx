@@ -9,6 +9,8 @@ import Markdown from "./Markdown";
 import HeroArt from "./HeroArt";
 import HeroGallery from "./HeroGallery";
 import TradingChart, { splitChart } from "./TradingChart";
+import TradePlanChart from "./TradePlanChart";
+import { splitPlan } from "@/lib/tradePlan";
 import { personaOf } from "@/lib/aiPersona";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -884,10 +886,16 @@ export default function AiChat({
                               (() => {
                                 const sc = splitChart(m.content);
                                 const chart = sc.chart || m.chart;
+                                const sp = splitPlan(sc.text);
+                                const streaming = busy && m.id === lastAssistant?.id;
                                 return (
                                   <>
-                                    {chart && <TradingChart symbol={chart} />}
-                                    <Markdown text={sc.text} />
+                                    {chart && sp.plan && !streaming ? (
+                                      <TradePlanChart symbol={chart} plan={sp.plan} persona={m.persona || hero(m.model)} />
+                                    ) : chart ? (
+                                      <TradingChart symbol={chart} />
+                                    ) : null}
+                                    <Markdown text={sp.text} />
                                   </>
                                 );
                               })()
@@ -905,7 +913,7 @@ export default function AiChat({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    navigator.clipboard?.writeText(splitChart(m.content).text).then(() => {
+                                    navigator.clipboard?.writeText(splitPlan(splitChart(m.content).text).text).then(() => {
                                       setCopied(m.id);
                                       setTimeout(() => setCopied(null), 1500);
                                     })

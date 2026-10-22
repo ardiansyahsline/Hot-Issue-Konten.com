@@ -1,0 +1,47 @@
+/** Trade plan yang ditulis AI di akhir jawaban sebagai blok ```tradeplan {json}``` */
+export type TradePlan = { symbol?: string; side: "long" | "short"; entry: number; sl: number; tp: number[]; timeframe?: string };
+
+const DONE = /```tradeplan\s*([\s\S]*?)```\s*/i;
+const PARTIAL = /```tradeplan[\s\S]*$/i; // blok yang belum selesai saat jawaban masih mengalir
+
+const num = (v: unknown) => {
+  const n = typeof v === "string" ? Number(v.replace(/,/g, "")) : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : NaN;
+};
+
+/** pisahkan blok trade plan dari teks jawaban + validasi angkanya (long: SL < entry < TP, short: TP < entry < SL) */
+export function splitPlan(text: string): { text: string; plan: TradePlan | null } {
+  const m = text.match(DONE);
+  if (!m) return { text: text.replace(PARTIAL, "").trimEnd(), plan: null };
+  const rest = text.replace(DONE, "").trimEnd();
+  try {
+    const j = JSON.parse(m[1].trim()) as Record<string, unknown>;
+    const entry = num(j.entry);
+    const sl = num(j.sl ?? j.stop ?? j.stop_loss);
+    const tpRaw = Array.isArray(j.tp) ? j.tp : [j.tp ?? j.target];
+    let tp = tpRaw.map(num).filter((n) => !Number.isNaN(n));
+    if (Number.isNaN(entry) || Number.isNaN(sl) || !tp.length) return { text: rest, plan: null };
+    const sideIn = String(j.side ?? "").toLowerCase();
+    const side: "long" | "short" = /short|jual|sell/.test(sideIn) ? "short" : /long|beli|buy/.test(sideIn) ? "long" : tp[0] < entry ? "short" : "long";
+    if (side === "long") {
+      if (!(sl < entry)) return { text: rest, plan: null };
+      tp = tp.filter((t) => t > entry).sort((a, b) => a - b);
+    } else {
+      if (!(sl > entry)) return { text: rest, plan: null };
+      tp = tp.filter((t) => t < entry).sort((a, b) => b - a);
+    }
+    if (!tp.length) return { text: rest, plan: null };
+    return {
+      text: rest,
+      plan: { side, entry, sl, tp: tp.slice(0, 3), symbol: j.symbol ? String(j.symbol).slice(0, 30) : undefined, timeframe: j.timeframe ? String(j.timeframe).slice(0, 10) : undefined },
+    };
+  } catch {
+    return { text: rest, plan: null };
+  }
+}
+
+/** jumlah angka di belakang koma yang pas untuk harga ini */
+export const decimalsFor = (p: number) => (p >= 1000 ? 2 : p >= 1 ? 4 : Math.min(10, Math.max(4, 3 - Math.floor(Math.log10(p)) + 1)));
+export const fmtPrice = (p: number, d = decimalsFor(p)) => p.toLocaleString("id-ID", { minimumFractionDigits: d, maximumFractionDigits: d });
+export const pctFrom = (entry: number, p: number) => ((p - entry) / entry) * 100;
+export const rr = (plan: TradePlan) => Math.abs(plan.tp[plan.tp.length - 1] - plan.entry) / Math.abs(plan.entry - plan.sl);
