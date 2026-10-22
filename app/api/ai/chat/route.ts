@@ -210,7 +210,11 @@ export async function POST(req: NextRequest) {
         const t = await upstream.text();
         detail = (JSON.parse(t)?.error?.message as string) || t;
       } catch {}
-      if (upstream.status === 401) return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
+      // 401 bisa dari kunci website ATAU dari provider (key provider salah / provider tanpa key).
+      // Kalau daftar model barusan bisa dibaca pakai kunci yang sama, berarti kunci website benar -> lanjut hero lain.
+      if (upstream.status === 401 && !catalog.ids.length) {
+        return saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys.");
+      }
       coolDown(model);
       failures.push(`${model} (${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""})`);
       await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
