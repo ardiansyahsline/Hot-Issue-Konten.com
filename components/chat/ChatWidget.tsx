@@ -10,7 +10,8 @@ import { notifyChatMessage } from "@/lib/notifyActions";
 /** Tombol chat melayang di pojok kanan bawah (semua halaman kecuali halaman Chat) */
 export default function ChatWidget({ meId }: { meId: string }) {
   const path = usePathname();
-  if (path.startsWith("/chat")) return null;
+  // halaman Chat punya tampilan sendiri; di halaman AI tombolnya menutupi kolom ketik
+  if (path.startsWith("/chat") || path.startsWith("/ai")) return null;
   return <Widget meId={meId} />;
 }
 

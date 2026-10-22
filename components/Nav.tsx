@@ -12,6 +12,7 @@ export default function Nav({ role }: { role: string | null }) {
     { href: "/video-review", label: "Video Review", show: true },
     { href: "/catatan", label: "Catatan & Saran", show: true },
     { href: "/chat", label: "Chat", show: true },
+    { href: "/ai", label: "✨ AI", show: true },
     { href: "/admin", label: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
 

@@ -23,6 +23,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Laporan clipper per topik:** satu Hot Issue = satu topik. Kasus yang sama dari clipper lain ditambahkan sebagai laporan (kontak, keterangan, screenshot sendiri) lewat **+ Tambah laporan** di halaman detail. Meter 🔥 menunjukkan seberapa panas topiknya, dan di form **+ Issue Baru** muncul saran topik mirip dengan tombol **Tambahkan sebagai laporan** supaya tidak dobel.
 - **Ranking di Dashboard:** list di bawah Top 3 ikut tab — tab **Dari agent** menampilkan issue dengan peringkat #1, #2, #3 (HOT & laporan terbanyak di atas), tab **Video Review** menampilkan ranking kategori kasus. Hanya 3 teratas yang tampil, sisanya lewat **Load more**. Issue yang sudah resolved tetap ikut ranking di bawah issue yang masih aktif (bisa masuk top 3 kalau issue aktifnya kurang dari 3).
 - **Bunyi notifikasi:** pilih bunyi sendiri per jenis (chat, mention/balasan, Hot Issue/laporan) + volume di halaman Akun.
+- **✨ AI:** chat dengan AI seperti Claude (daftar percakapan di kiri, jawaban mengalir, markdown/tabel/kode, pilih model, salin, ulangi, ganti nama, hapus). Lewat OmniRoute di VPS sendiri; percakapan tiap orang privat.
 - **Foto profil:** upload di halaman Akun; tampil di menu atas, chat, dan komentar.
 - **Notifikasi:** pop-up browser (walau tab tertutup) untuk Hot Issue baru & chat, plus email untuk Hot Issue baru dan pesan pribadi saat penerima offline. Tiap orang bisa atur sendiri di Akun → Notifikasi.
 - **Komentar & reaksi:** semua role bisa komentar di Hot Issue dan Catatan & Saran, membalas komentar tertentu (menjorok), dan memberi reaksi emoji (👍 🙏 🔥 ✅ dan lainnya) di issue, catatan, komentar, serta pesan chat. Kolom ketik punya tombol 😊.
@@ -75,6 +76,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - Semua Catatan & Saran kategori **Bug** dipindah jadi Hot Issue kategori **Bug platform** (lampiran, tanggapan, dan reaksi ikut pindah), dan pilihan Bug di Catatan & Saran dihapus.
 - Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
 - Tabel notifikasi (langganan push browser & pengaturan per orang).
+
+**Langkah 1n — Update 14 (tab ✨ AI lewat OmniRoute):** jalankan `supabase/migration-13-ai-chat.sql`, lalu ikuti `docs/SETUP-AI-OMNIROUTE.md` (OmniRoute di VPS + env `OMNIROUTE_BASE_URL` & `OMNIROUTE_API_KEY` di Vercel). Tanpa env itu tab AI tetap muncul tapi menampilkan pesan "AI belum disambungkan".
 
 **Langkah 1m — Update 13 (bunyi notifikasi + issue resolved tetap di ranking):** jalankan `supabase/migration-12-bunyi-notif.sql`. Tiap user bisa memilih bunyi sendiri di **Akun → Bunyi notifikasi** (Ding, Pop, Chime, Bell, Tri-tone, Alarm, atau tanpa bunyi) untuk chat, mention/balasan, dan Hot Issue/laporan, plus volume. Bunyi diputar selama CS Tracker terbuka (termasuk di tab belakang); kalau tab tertutup, pop-up memakai bunyi bawaan HP/laptop. Catatan: browser baru mengizinkan bunyi setelah halaman diklik sekali.
 
