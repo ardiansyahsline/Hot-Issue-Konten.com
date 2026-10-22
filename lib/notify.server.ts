@@ -1,5 +1,6 @@
 import "server-only";
 import webpush from "web-push";
+import nodemailer from "nodemailer";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isOnline } from "@/components/UserAvatar";
 
@@ -8,7 +9,8 @@ import { isOnline } from "@/components/UserAvatar";
  * Butuh env di Vercel:
  *   SUPABASE_SERVICE_ROLE_KEY            (sudah ada untuk halaman Admin)
  *   NEXT_PUBLIC_VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY   -> push browser
- *   RESEND_API_KEY, EMAIL_FROM           -> email
+ *   SMTP_USER + SMTP_PASS (Gmail / Google Workspace App Password)  -> email
+ *   atau RESEND_API_KEY + EMAIL_FROM (domain terverifikasi di Resend)
  * Kalau salah satu belum diisi, jenis notifikasi itu dilewati saja (aplikasi tetap jalan).
  */
 
@@ -84,26 +86,59 @@ function emailHtml(heading: string, lines: string[], cta: string, url: string) {
   </div></body></html>`;
 }
 
-async function sendEmails(list: { to: string; subject: string; html: string }[]) {
-  const key = process.env.RESEND_API_KEY;
-  if (!key || !list.length) return 0;
-  const from = process.env.EMAIL_FROM || "CS Tracker <onboarding@resend.dev>";
-  if (process.env.NOTIFY_DRY_RUN) {
-    log("email (dry run)", list.map((l) => `${l.to}: ${l.subject}`));
-    return list.length;
+type Mail = { to: string; subject: string; html: string };
+
+/** Email lewat akun Gmail / Google Workspace (SMTP + App Password) — tanpa perlu setting DNS */
+async function sendViaSmtp(list: Mail[]) {
+  const user = process.env.SMTP_USER!;
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || "smtp.gmail.com",
+    port: Number(process.env.SMTP_PORT || 465),
+    secure: Number(process.env.SMTP_PORT || 465) === 465,
+    auth: { user, pass: (process.env.SMTP_PASS || "").replace(/\s+/g, "") }, // App Password boleh ditempel dengan spasi
+  });
+  const from = process.env.EMAIL_FROM || `CS Tracker <${user}>`;
+  let sent = 0;
+  for (const m of list) {
+    try {
+      await transporter.sendMail({ from, to: m.to, subject: m.subject, html: m.html });
+      sent++;
+    } catch (e) {
+      log("email gagal", m.to, (e as Error).message.slice(0, 200));
+      if (/Invalid login|Username and Password not accepted|535/i.test((e as Error).message)) break; // salah password: berhenti
+    }
   }
+  transporter.close();
+  return sent;
+}
+
+/** Email lewat Resend (butuh domain terverifikasi) */
+async function sendViaResend(list: Mail[]) {
+  const from = process.env.EMAIL_FROM || "CS Tracker <onboarding@resend.dev>";
   let sent = 0;
   for (let i = 0; i < list.length; i += 100) {
     const batch = list.slice(i, i + 100).map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html }));
     const r = await fetch("https://api.resend.com/emails/batch", {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(batch),
     });
     if (r.ok) sent += batch.length;
     else log("email gagal", r.status, (await r.text()).slice(0, 300));
   }
   return sent;
+}
+
+/** Pakai Resend kalau RESEND_API_KEY diisi, kalau tidak pakai Gmail (SMTP_USER + SMTP_PASS). Tidak ada keduanya = email dilewati. */
+async function sendEmails(list: Mail[]) {
+  const useResend = !!process.env.RESEND_API_KEY;
+  const useSmtp = !!process.env.SMTP_USER && !!process.env.SMTP_PASS;
+  if ((!useResend && !useSmtp) || !list.length) return 0;
+  if (process.env.NOTIFY_DRY_RUN) {
+    log(`email (dry run, ${useResend ? "resend" : "smtp"})`, list.map((l) => `${l.to}: ${l.subject}`));
+    return list.length;
+  }
+  return useResend ? sendViaResend(list) : sendViaSmtp(list);
 }
 
 /** Hot Issue baru -> semua orang (kecuali yang input) sesuai pengaturan masing-masing */

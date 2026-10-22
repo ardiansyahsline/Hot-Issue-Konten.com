@@ -79,12 +79,17 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | kunci publik push (dari file `notif.env` yang dikirim) |
 | `VAPID_PRIVATE_KEY` | kunci privat push (rahasia) |
 | `VAPID_SUBJECT` | `mailto:email-admin@domainmu` |
-| `RESEND_API_KEY` | API key dari resend.com (rahasia) |
-| `EMAIL_FROM` | mis. `CS Tracker <notif@orovagroup.id>` — domainnya harus sudah diverifikasi di Resend |
+| `SMTP_USER` | email pengirim, mis. `alif.ardiansyah@orovagroup.id` (akun Google Workspace / Gmail) |
+| `SMTP_PASS` | **App Password** 16 huruf dari akun Google itu (rahasia) — bukan password login biasa |
+| `EMAIL_FROM` | opsional, mis. `CS Tracker <alif.ardiansyah@orovagroup.id>` |
 | `APP_URL` | alamat web, mis. `https://cs-tracker.vercel.app` (untuk link di email/notifikasi) |
 
 `SUPABASE_SERVICE_ROLE_KEY` juga wajib ada (sudah dipakai halaman Admin). Kalau env push/email belum diisi, aplikasi tetap jalan — notifikasi jenis itu saja yang dilewati.
-Resend: daftar di resend.com → **Domains → Add Domain** → tambahkan record DNS yang diminta di pengelola domain → tunggu status *Verified* → **API Keys → Create**.
+
+**App Password Google:** login ke akun pengirim → myaccount.google.com → **Security** → aktifkan **2-Step Verification** → buka myaccount.google.com/apppasswords → buat dengan nama `CS Tracker` → salin 16 hurufnya ke `SMTP_PASS`. Kalau menu App passwords tidak ada, admin Google Workspace kantor perlu mengizinkan 2-Step Verification / App passwords.
+Bukan Google (mis. Microsoft 365)? Tambahkan `SMTP_HOST=smtp.office365.com` dan `SMTP_PORT=587`, lalu pakai password / app password dari akun itu.
+Alternatif tanpa Gmail: isi `RESEND_API_KEY` + `EMAIL_FROM` (domain harus diverifikasi di Resend lewat DNS). Kalau `RESEND_API_KEY` diisi, Resend yang dipakai.
+
 Tiap orang menyalakan notifikasi browser di **Akun → Notifikasi → Aktifkan** (atau dari ajakan 🔔 yang muncul sekali). Di iPhone: buka web di Safari → Share → **Add to Home Screen**, lalu buka dari ikon itu dan aktifkan.
 
 **Langkah 1h — Update 08 (komentar semua role, balas komentar, reaksi emoji):** jalankan `supabase/migration-08-komentar-reaksi.sql`. Semua role (termasuk User) jadi bisa komentar di Hot Issue, ada kolom balasan, dan tabel reaksi emoji untuk issue, catatan, komentar, dan pesan chat (ikut Realtime).
