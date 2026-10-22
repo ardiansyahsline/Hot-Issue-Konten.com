@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { aiConfig, healthMap, healthRank, listCatalog, loadHealth } from "@/lib/ai.server";
+import { webConfig } from "@/lib/aiWeb.server";
 import { isChatModel, isVisionModel, pickTextModel, pickVisionModel, setVisionCatalog } from "@/lib/aiModels";
 
 export const dynamic = "force-dynamic";
@@ -33,5 +34,6 @@ export async function GET() {
     visionList: models.filter(isVisionModel),
     default: cfg.model,
     catalogError: fromCatalog.length ? null : catalog.error ?? "daftar kosong",
+    web: webConfig().ok,
   });
 }

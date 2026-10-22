@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
+import { buildWebContext, looksNeedWeb, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 
@@ -22,6 +23,7 @@ type Body = {
   regenerate?: boolean;
   images?: string[];
   data?: "auto" | "off";
+  web?: "auto" | "off";
 };
 type Row = { role: "user" | "assistant"; content: string; error: boolean; images: string[] | null; used_data: boolean | null };
 
@@ -143,7 +145,12 @@ export async function POST(req: NextRequest) {
   // pertanyaan lanjutan ("yang itu siapa PIC-nya?") setelah jawaban yang memakai data -> tetap pakai data
   const followUp = !!prevAssistant?.used_data && lastText.length < 200 && /\b(itu|tadi|tersebut|yang mana|siapa|berapa|kenapa|kapan|detail|lanjut|lainnya|yang lain|nomor|#\d+)\b|\w+nya\b/i.test(lastText);
   const useData = body.data !== "off" && (looksAboutSite(lastText) || followUp);
-  const context = useData ? await buildSiteContext(supabase).catch(() => "") : "";
+  // 5b) internet (Tavily) — otomatis kalau pertanyaannya soal hal terbaru / ada link
+  const useWeb = webConfig().ok && body.web !== "off" && looksNeedWeb(lastText);
+  const [context, web] = await Promise.all([
+    useData ? buildSiteContext(supabase).catch(() => "") : Promise.resolve(""),
+    useWeb ? buildWebContext(lastText) : Promise.resolve({ context: "", sources: [] as { title: string; url: string }[] }),
+  ]);
 
   // 6) gambar -> data URL
   const toDataUrl = async (path: string) => {
@@ -156,6 +163,7 @@ export async function POST(req: NextRequest) {
     { role: "system", content: systemPrompt(profile?.full_name || "anggota tim") },
   ];
   if (context) messages.push({ role: "system", content: context });
+  if (web.context) messages.push({ role: "system", content: web.context });
   for (const [i, m] of hist.entries()) {
     const imgs = m.images ?? [];
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
@@ -320,6 +328,11 @@ export async function POST(req: NextRequest) {
             controller.enqueue(enc.encode(e));
           }
         }
+        const foot = sourcesFooter(web.sources);
+        if (foot && full.trim()) {
+          full += foot;
+          controller.enqueue(enc.encode(foot));
+        }
       } catch {
         // dihentikan user / koneksi putus — simpan yang sudah ada
       } finally {
@@ -350,6 +363,7 @@ export async function POST(req: NextRequest) {
       "x-conversation-id": convId!,
       "x-ai-model": encodeURIComponent(usedModel),
       "x-ai-data": useData ? "1" : "0",
+      "x-ai-web": web.sources.length ? "1" : "0",
       "x-ai-fallback": failures.length ? "1" : "0",
     },
   });

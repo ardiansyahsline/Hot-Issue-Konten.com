@@ -17,6 +17,7 @@ export type AiMsg = {
   created_at?: string;
   images?: string[] | null;
   used_data?: boolean | null;
+  used_web?: boolean;
   /** model diganti otomatis (mis. karena ada gambar) */
   switched?: boolean;
 };
@@ -34,6 +35,7 @@ const SUGGEST: { icon: string; label: string; prompt: string; pick?: boolean; se
 
 const MODEL_KEY = "cs-ai-model-v2";
 const DATA_KEY = "cs-ai-data";
+const WEB_KEY = "cs-ai-web";
 const MAX_IMAGES = 4;
 
 function group(iso: string) {
@@ -280,6 +282,8 @@ export default function AiChat({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(!setupError);
   const [dataMode, setDataMode] = useState<"auto" | "off">("auto");
+  const [webMode, setWebMode] = useState<"auto" | "off">("auto");
+  const [webReady, setWebReady] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [zoom, setZoom] = useState<string | null>(null);
@@ -302,6 +306,7 @@ export default function AiChat({
       const m = localStorage.getItem(MODEL_KEY);
       if (m) setModel(m);
       if (localStorage.getItem(DATA_KEY) === "off") setDataMode("off");
+      if (localStorage.getItem(WEB_KEY) === "off") setWebMode("off");
     } catch {}
     loadModels(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,6 +323,7 @@ export default function AiChat({
         setVisionList(j.visionList ?? []);
         setReady(!!j.ready);
         setLoadError(j.catalogError ?? null);
+        setWebReady(!!j.web);
         if (retry && j.ready && !(j.models ?? []).length) setTimeout(() => loadModels(false), 4000);
       })
       .catch(() => setLoadError("koneksi"));
@@ -326,6 +332,13 @@ export default function AiChat({
     setModel(m);
     try {
       localStorage.setItem(MODEL_KEY, m);
+    } catch {}
+  };
+  const toggleWeb = () => {
+    const next = webMode === "auto" ? "off" : "auto";
+    setWebMode(next);
+    try {
+      localStorage.setItem(WEB_KEY, next);
     } catch {}
   };
   const toggleData = () => {
@@ -443,7 +456,7 @@ export default function AiChat({
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: activeId, content, model, regenerate, images, data: dataMode }),
+        body: JSON.stringify({ conversationId: activeId, content, model, regenerate, images, data: dataMode, web: webMode }),
         signal: ac.signal,
       });
       const newId = res.headers.get("x-conversation-id");
@@ -459,8 +472,9 @@ export default function AiChat({
       }
       const used = decodeURIComponent(res.headers.get("x-ai-model") ?? "");
       const usedData = res.headers.get("x-ai-data") === "1";
+      const usedWeb = res.headers.get("x-ai-web") === "1";
       const switched = !!used && ((model !== SMART && used !== model) || res.headers.get("x-ai-fallback") === "1");
-      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, switched } : x)));
+      setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, used_web: usedWeb, switched } : x)));
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let text = "";
@@ -685,6 +699,23 @@ export default function AiChat({
         >
           📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
         </button>
+        {webReady && (
+          <button
+            type="button"
+            onClick={toggleWeb}
+            className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
+              webMode === "auto" ? "border-sky-500/40 bg-sky-500/10 text-sky-400" : "border-zinc-800 text-zinc-500"
+            }`}
+            title={
+              webMode === "auto"
+                ? "AI otomatis cari di internet kalau pertanyaannya soal hal terbaru (hari ini, harga, berita, dll) atau ada link yang ditempel. Klik untuk mematikan."
+                : "AI tidak mencari di internet. Klik untuk menyalakan."
+            }
+            aria-pressed={webMode === "auto"}
+          >
+            🌐 Internet: {webMode === "auto" ? "Otomatis" : "Off"}
+          </button>
+        )}
         <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
@@ -806,7 +837,10 @@ export default function AiChat({
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-500/15 text-[14px]">✨</span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                           {m.used_data && (
-                            <span className="mb-1.5 inline-block rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>
+                            <span className="mb-1.5 mr-1.5 inline-block rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>
+                          )}
+                          {(m.used_web || (!m.error && m.content?.includes("🌐 **Sumber:**"))) && (
+                            <span className="mb-1.5 inline-block rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-400">🌐 pakai internet</span>
                           )}
                           {m.content ? (
                             m.error ? (

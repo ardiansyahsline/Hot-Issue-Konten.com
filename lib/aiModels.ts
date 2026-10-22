@@ -2,7 +2,7 @@
 export const SMART = "smart"; // pilihan "otomatis": aplikasi memilih model terbaik yang tersedia
 
 /** model yang bukan untuk chat (suara, filter, embedding, khusus bahasa Arab, dll.) */
-const HIDE = /whisper|orpheus|tts|speech|audio|transcri|prompt-guard|safeguard|llama-guard|allam|embed|rerank|moderation|dall-?e|imagen|veo|flux|sdxl|stable-diffusion|image-gen|text-to-image|playai|distil/i;
+const HIDE = /(^|\/)compound(-mini)?$|whisper|orpheus|tts|speech|audio|transcri|prompt-guard|safeguard|llama-guard|allam|embed|rerank|moderation|dall-?e|imagen|veo|flux|sdxl|stable-diffusion|image-gen|text-to-image|playai|distil/i;
 
 /** model yang bisa membaca gambar */
 const VISION = /gemini|gemma-?[34]|vision|[-_/]vl\b|-vl-|llava|pixtral|llama-4|maverick|scout|gpt-4o|gpt-4\.1|gpt-5|claude|kimi-k2\.5|kimi-k3|glm-4\.?\dv|qwen.*vl|qwen3\.8|muse/i;
