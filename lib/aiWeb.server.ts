@@ -562,6 +562,8 @@ export async function buildWebContext(plan: WebPlan): Promise<{ context: string;
           "TRADE PLAN: kalau jawabanmu berisi rencana trading (entry/SL/TP), WAJIB tutup jawaban dengan blok kode berlabel tradeplan berisi JSON satu baris, contoh:",
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
           "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
+          "Angka di JSON: TANPA pemisah ribuan, titik untuk desimal, skala sama dengan harga asli (saham BBRI Rp2.560 -> 2560; XAUUSD 4.022,46 -> 4022.46; PUMP 0,00461 -> 0.00461).",
+          ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 (tanpa desimal)."] : []),
         ]
       : []),
     ...idxNote,

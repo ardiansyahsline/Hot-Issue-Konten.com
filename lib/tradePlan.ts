@@ -45,3 +45,23 @@ export const decimalsFor = (p: number) => (p >= 1000 ? 2 : p >= 1 ? 4 : Math.min
 export const fmtPrice = (p: number, d = decimalsFor(p)) => p.toLocaleString("id-ID", { minimumFractionDigits: d, maximumFractionDigits: d });
 export const pctFrom = (entry: number, p: number) => ((p - entry) / entry) * 100;
 export const rr = (plan: TradePlan) => Math.abs(plan.tp[plan.tp.length - 1] - plan.entry) / Math.abs(plan.entry - plan.sl);
+
+/**
+ * Samakan skala angka trade plan dengan harga chart. AI kadang menulis harga Indonesia "2.560" (= 2560 rupiah)
+ * yang terbaca 2,56 di JSON. Kalau angka plan meleset jauh dari harga terakhir, dikali/dibagi 10/100/1000.
+ */
+export function rescalePlan(p: TradePlan, ref?: number, idx = false): TradePlan {
+  let f = 1;
+  if (ref && ref > 0) {
+    let best = 1;
+    let err = Math.abs(Math.log(p.entry / ref));
+    for (const k of [1000, 100, 10, 0.1, 0.01, 0.001]) {
+      const e = Math.abs(Math.log((p.entry * k) / ref));
+      if (e < err) [best, err] = [k, e];
+    }
+    if (best !== 1 && err < Math.log(2)) f = best;
+  } else if (idx && p.entry < 50 && p.entry * 1000 >= 50) f = 1000;
+  if (f === 1) return p;
+  const r = (x: number) => Math.round(x * f * 1e6) / 1e6;
+  return { ...p, entry: r(p.entry), sl: r(p.sl), tp: p.tp.map(r) };
+}

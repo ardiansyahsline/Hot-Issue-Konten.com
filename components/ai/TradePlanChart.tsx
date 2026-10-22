@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
-import { decimalsFor, fmtPrice, pctFrom, rr, type TradePlan } from "@/lib/tradePlan";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { decimalsFor, fmtPrice, pctFrom, rescalePlan, rr, type TradePlan } from "@/lib/tradePlan";
 import TradingChart from "./TradingChart";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
@@ -16,12 +16,19 @@ const pairName = (sym: string) => {
  * Chart trade plan: candle asli + kotak posisi (zona SL merah, TP hijau, garis entry) seperti alat Long/Short TradingView.
  * Kalau data candle tidak ada (mis. saham BEI), tampil chart live TradingView + tangga level.
  */
-function TradePlanChart({ symbol, plan, persona }: { symbol: string; plan: TradePlan; persona?: string }) {
+function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; plan: TradePlan; persona?: string }) {
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [meta, setMeta] = useState<{ interval?: string; source?: string }>({});
   const [live, setLive] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const d = decimalsFor(plan.entry);
+  const idx = symbol.startsWith("IDX:");
+  // skala angka plan disamakan dengan harga chart (mis. 2,56 -> 2.560 untuk saham BEI)
+  const plan = useMemo(() => rescalePlan(planIn, candles?.length ? candles[candles.length - 1].close : undefined, idx), [planIn, candles, idx]);
+  // saham BEI: rupiah bulat (2.900), lainnya sesuai besar harga
+  const d = idx && plan.entry >= 50 ? 0 : decimalsFor(plan.entry);
+  // angka plan tetap jauh dari harga chart (mis. plan untuk aset lain) -> jangan digambar di candle
+  const refPrice = candles?.length ? candles[candles.length - 1].close : 0;
+  const mismatch = !!refPrice && Math.abs(Math.log(plan.entry / refPrice)) > Math.log(3);
   const short = plan.side === "short";
   const last = plan.tp[plan.tp.length - 1];
 
@@ -42,7 +49,7 @@ function TradePlanChart({ symbol, plan, persona }: { symbol: string; plan: Trade
 
   useEffect(() => {
     const el = box.current;
-    if (!el || !candles?.length || live) return;
+    if (!el || !candles?.length || live || mismatch) return;
     let dispose = () => {};
     let cancelled = false;
     (async () => {
@@ -125,9 +132,19 @@ function TradePlanChart({ symbol, plan, persona }: { symbol: string; plan: Trade
         // label jangan keluar dari area chart (sisakan ruang skala harga di kanan)
         const scaleW = chart.priceScale("right").width();
         const fit = (lb: HTMLDivElement) => `${Math.max(0, Math.min(x1, el.clientWidth - scaleW - lb.offsetWidth - 4))}px`;
-        Object.assign(lStop.style, { left: fit(lStop), top: `${short ? ys - 20 : ys + 4}px` });
-        Object.assign(lTarget.style, { left: fit(lTarget), top: `${short ? yt + 4 : yt - 20}px` });
-        Object.assign(lEntry.style, { left: fit(lEntry), top: `${short ? ye + 4 : ye - 20}px` });
+        // posisi awal tiap label, lalu digeser supaya tidak saling tumpuk (jarak minimal 22px)
+        const want: [HTMLDivElement, number][] = [
+          [lStop, short ? ys - 20 : ys + 4],
+          [lTarget, short ? yt + 4 : yt - 20],
+          [lEntry, short ? ye + 4 : ye - 20],
+        ];
+        want.sort((a, b) => a[1] - b[1]);
+        const H = el.clientHeight - 30;
+        for (let i = 1; i < want.length; i++) if (want[i][1] < want[i - 1][1] + 22) want[i][1] = want[i - 1][1] + 22;
+        // kalau terdorong keluar bawah, geser semua ke atas
+        const over = want[want.length - 1][1] - H;
+        if (over > 0) for (const w of want) w[1] -= over;
+        for (const [lb, top] of want) Object.assign(lb.style, { left: fit(lb), top: `${Math.max(2, top)}px` });
       };
       chart.timeScale().subscribeVisibleLogicalRangeChange(draw);
       const ro = new ResizeObserver(() => requestAnimationFrame(draw));
@@ -143,7 +160,7 @@ function TradePlanChart({ symbol, plan, persona }: { symbol: string; plan: Trade
       cancelled = true;
       dispose();
     };
-  }, [candles, live, plan, d, short, last, meta.interval]);
+  }, [candles, live, plan, d, short, last, meta.interval, mismatch]);
 
   const head = (
     <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-3 py-2 text-[12.5px]">
@@ -218,12 +235,12 @@ function TradePlanChart({ symbol, plan, persona }: { symbol: string; plan: Trade
       {head}
       {candles === null ? (
         <div className="flex h-[380px] items-center justify-center text-[12px] text-zinc-500">Memuat chart…</div>
-      ) : candles.length && !live ? (
+      ) : candles.length && !live && !mismatch ? (
         <div ref={box} className="relative h-[340px] w-full sm:h-[400px]" />
       ) : (
         <>
           <TradingChart symbol={symbol} bare />
-          {!candles.length && ladder()}
+          {(!candles.length || mismatch) && ladder()}
         </>
       )}
       {levels}
