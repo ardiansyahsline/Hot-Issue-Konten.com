@@ -14,8 +14,11 @@ import { isOnline } from "@/components/UserAvatar";
  * Kalau salah satu belum diisi, jenis notifikasi itu dilewati saja (aplikasi tetap jalan).
  */
 
-type Prefs = { push_issue: boolean; push_dm: boolean; push_room: boolean; email_issue: boolean; email_dm: boolean };
-const DEFAULT_PREFS: Prefs = { push_issue: true, push_dm: true, push_room: true, email_issue: true, email_dm: true };
+type Prefs = {
+  push_issue: boolean; push_dm: boolean; push_room: boolean; push_mention: boolean;
+  email_issue: boolean; email_dm: boolean; email_mention: boolean;
+};
+const DEFAULT_PREFS: Prefs = { push_issue: true, push_dm: true, push_room: true, push_mention: true, email_issue: true, email_dm: true, email_mention: true };
 type Payload = { title: string; body: string; url: string; tag: string };
 
 const log = (...a: unknown[]) => console.log("[notif]", ...a);
@@ -177,17 +180,24 @@ export async function notifyNewIssue(issueId: number, actorId: string, origin: s
   log(`issue #${issueId}: push ${pushed}, email ${emailed}`);
 }
 
-/** Pesan chat baru -> anggota room (push). Pesan pribadi + penerima offline -> email (maks 1 / 15 menit). */
+/**
+ * Pesan chat baru:
+ *  - yang di-mention / dibalas pesannya -> push khusus "@ … menyebut kamu" (walau notifikasi room dimatikan)
+ *    + email kalau sedang offline (maks 1 email / 15 menit per room)
+ *  - anggota lain -> push biasa sesuai pengaturan (room / pesan pribadi)
+ *  - pesan pribadi + penerima offline -> email (maks 1 / 15 menit)
+ */
 export async function notifyChat(messageId: number, origin: string) {
   const db = admin();
   if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
-  const { data: m } = await db.from("chat_messages").select("id, room_id, sender_id, body, created_at").eq("id", messageId).maybeSingle();
+  const { data: m } = await db.from("chat_messages").select("*").eq("id", messageId).maybeSingle();
   if (!m) return;
-  const [{ data: room }, { data: members }, { data: people }, { count: fileCount }] = await Promise.all([
+  const [{ data: room }, { data: members }, { data: people }, { count: fileCount }, { data: replied }] = await Promise.all([
     db.from("chat_rooms").select("id, name, kind").eq("id", m.room_id).maybeSingle(),
     db.from("chat_members").select("user_id, last_read_at, last_emailed_at").eq("room_id", m.room_id),
     db.from("profiles").select("id, email, full_name, last_seen_at"),
     db.from("attachments").select("id", { count: "exact", head: true }).eq("chat_message_id", m.id),
+    m.reply_to ? db.from("chat_messages").select("sender_id").eq("id", m.reply_to).maybeSingle() : Promise.resolve({ data: null }),
   ]);
   if (!room) return;
   const sender = (people ?? []).find((p) => p.id === m.sender_id);
@@ -198,10 +208,43 @@ export async function notifyChat(messageId: number, origin: string) {
   const direct = room.kind === "direct";
   const text = m.body?.trim() || (fileCount ? `📎 ${fileCount} lampiran` : "");
   const url = `${appOrigin(origin)}/chat?room=${room.id}`;
+  const now = Date.now();
+  const memOf = (id: string) => (members ?? []).find((x) => x.user_id === id);
+  const canEmail = (p: (typeof targets)[number]) => {
+    const mem = memOf(p.id);
+    const recentlyEmailed = mem?.last_emailed_at && now - new Date(mem.last_emailed_at).getTime() < 15 * 60000;
+    const alreadyRead = mem?.last_read_at && mem.last_read_at >= m.created_at;
+    return !!p.email && !isOnline(p.last_seen_at as string | null) && !recentlyEmailed && !alreadyRead;
+  };
 
-  const pushed = await sendPush(
+  // siapa yang disebut / dibalas (khusus room; di pesan pribadi semua pesan sudah dikabari)
+  const replyAuthor = (replied as { sender_id: string | null } | null)?.sender_id ?? null;
+  const tagged = new Map<string, "mention" | "reply">();
+  if (!direct) {
+    for (const p of targets) {
+      if (m.mention_all || (m.mentions ?? []).includes(p.id)) tagged.set(p.id, "mention");
+      else if (p.id === replyAuthor) tagged.set(p.id, "reply");
+    }
+  }
+  const tagWho = m.mention_all ? "semua" : "kamu";
+
+  let pushed = 0;
+  // 1) yang di-mention / dibalas
+  const mentionPush = targets.filter((p) => tagged.has(p.id) && prefs.get(p.id)!.push_mention);
+  for (const kind of ["mention", "reply"] as const) {
+    const ids = mentionPush.filter((p) => tagged.get(p.id) === kind).map((p) => p.id);
+    if (!ids.length) continue;
+    pushed += await sendPush(db, ids, {
+      title: kind === "mention" ? `@ ${senderName} menyebut ${tagWho} · #${room.name}` : `↩︎ ${senderName} membalas pesanmu · #${room.name}`,
+      body: text.slice(0, 180),
+      url,
+      tag: `chat-${room.id}`,
+    });
+  }
+  // 2) anggota lain: push biasa
+  pushed += await sendPush(
     db,
-    targets.filter((p) => (direct ? prefs.get(p.id)!.push_dm : prefs.get(p.id)!.push_room)).map((p) => p.id),
+    targets.filter((p) => !tagged.has(p.id) && (direct ? prefs.get(p.id)!.push_dm : prefs.get(p.id)!.push_room)).map((p) => p.id),
     {
       title: direct ? `💬 ${senderName}` : `💬 ${senderName} · #${room.name}`,
       body: text.slice(0, 180),
@@ -210,27 +253,38 @@ export async function notifyChat(messageId: number, origin: string) {
     }
   );
 
-  let emailed = 0;
-  if (direct) {
-    const now = Date.now();
-    const due = targets.filter((p) => {
-      const mem = (members ?? []).find((x) => x.user_id === p.id);
-      const recentlyEmailed = mem?.last_emailed_at && now - new Date(mem.last_emailed_at).getTime() < 15 * 60000;
-      const alreadyRead = mem?.last_read_at && mem.last_read_at >= m.created_at;
-      return p.email && prefs.get(p.id)!.email_dm && !isOnline(p.last_seen_at as string | null) && !recentlyEmailed && !alreadyRead;
-    });
-    emailed = await sendEmails(
-      due.map((p) => ({
+  // 3) email
+  const due = direct
+    ? targets.filter((p) => prefs.get(p.id)!.email_dm && canEmail(p))
+    : targets.filter((p) => tagged.has(p.id) && prefs.get(p.id)!.email_mention && canEmail(p));
+  const emailed = await sendEmails(
+    due.map((p) => {
+      const kind = tagged.get(p.id);
+      const heading = direct
+        ? `Pesan baru dari ${senderName}`
+        : kind === "reply"
+          ? `${senderName} membalas pesanmu di #${room.name}`
+          : `${senderName} menyebut ${tagWho} di #${room.name}`;
+      return {
         to: p.email as string,
-        subject: `[CS Tracker] Pesan baru dari ${senderName}`,
-        html: emailHtml(`Pesan baru dari ${senderName}`, [text.slice(0, 1000) || "(lampiran)"], "Balas di CS Tracker", url),
-      }))
+        subject: `[CS Tracker] ${heading}`,
+        html: emailHtml(heading, [text.slice(0, 1000) || "(lampiran)"], "Balas di CS Tracker", url),
+      };
+    })
+  );
+  if (due.length && emailed) {
+    // catat waktu email (baris anggota dibuat kalau belum ada, mis. di room publik)
+    await db.from("chat_members").upsert(
+      due.map((p) => ({
+        room_id: room.id,
+        user_id: p.id,
+        last_emailed_at: new Date().toISOString(),
+        last_read_at: memOf(p.id)?.last_read_at ?? new Date(now - 3 * 86400000).toISOString(),
+      })),
+      { onConflict: "room_id,user_id" }
     );
-    if (due.length && emailed) {
-      await db.from("chat_members").update({ last_emailed_at: new Date().toISOString() }).eq("room_id", room.id).in("user_id", due.map((p) => p.id));
-    }
   }
-  log(`chat #${messageId}: push ${pushed}, email ${emailed}`);
+  log(`chat #${messageId}: push ${pushed}, email ${emailed}${tagged.size ? `, mention/balas ${tagged.size}` : ""}`);
 }
 
 /** Tes dari halaman Akun */

@@ -19,6 +19,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Video Review:** log kasus review video (banding, rilis, saldo dibekukan, kesesuaian brief, dll.) dengan kolom yang sama seperti sheet "Video Review WA", rekap otomatis per kategori & status, dan **import dari Google Sheet (CSV)**.
 - **Report Video Review:** sub-menu **Detail** (rekap per kategori), **Visualisasi** (tren harian, status, per kategori; 7/30/90 hari/semua), dan **Compare** (tabel heatmap 3/7/14/30 hari/all time + perbandingan dengan periode sebelumnya).
 - **Chat:** kirim gambar & dokumen (📎, tarik-lepas, atau Ctrl+V) di room maupun pesan pribadi, daftar anggota dengan status **Online / Terakhir dilihat**, galeri file per room, dan keterangan **Dilihat** di pesan kamu.
+- **Balas & mention di chat:** arahkan kursor ke pesan → **Balas** (di HP: tekan lama), ketik **@** untuk memilih anggota atau **@semua**. Room yang ada mention untukmu diberi tanda **@**.
 - **Foto profil:** upload di halaman Akun; tampil di menu atas, chat, dan komentar.
 - **Notifikasi:** pop-up browser (walau tab tertutup) untuk Hot Issue baru & chat, plus email untuk Hot Issue baru dan pesan pribadi saat penerima offline. Tiap orang bisa atur sendiri di Akun → Notifikasi.
 - **Komentar & reaksi:** semua role bisa komentar di Hot Issue dan Catatan & Saran, membalas komentar tertentu (menjorok), dan memberi reaksi emoji (👍 🙏 🔥 ✅ dan lainnya) di issue, catatan, komentar, serta pesan chat. Kolom ketik punya tombol 😊.
@@ -71,6 +72,8 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - Semua Catatan & Saran kategori **Bug** dipindah jadi Hot Issue kategori **Bug platform** (lampiran, tanggapan, dan reaksi ikut pindah), dan pilihan Bug di Catatan & Saran dihapus.
 - Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
 - Tabel notifikasi (langganan push browser & pengaturan per orang).
+
+**Langkah 1k — Update 11 (balas pesan & mention @ di chat):** jalankan `supabase/migration-10-balas-mention.sql`. Di chat bisa **Balas** pesan tertentu (kutipan muncul di dalam bubble, klik untuk lompat ke pesan aslinya) dan menyebut orang dengan **@nama** atau **@semua**. Yang disebut / dibalas dapat pop-up browser (walau notifikasi room dimatikan) dan email kalau sedang offline (maks 1 email per 15 menit per room). Bisa diatur di Akun → Notifikasi.
 
 **Langkah 1j — Notifikasi (push browser + email):** tambahkan env berikut di Vercel → Settings → Environment Variables, lalu **Redeploy**:
 

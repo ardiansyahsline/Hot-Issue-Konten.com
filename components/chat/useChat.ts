@@ -16,8 +16,19 @@ export type ChatRoom = {
   last_sender: string | null;
   unread: number;
   member_count: number;
+  mentioned?: number;
 };
-export type ChatMsg = { id: number; room_id: string; sender_id: string | null; body: string; created_at: string };
+export type ChatMsg = {
+  id: number;
+  room_id: string;
+  sender_id: string | null;
+  body: string;
+  created_at: string;
+  reply_to?: number | null;
+  mentions?: string[] | null;
+  mention_all?: boolean | null;
+};
+export type SendOpts = { replyTo?: number | null; mentions?: string[]; mentionAll?: boolean };
 export type ChatPerson = {
   id: string;
   full_name: string | null;
@@ -31,6 +42,7 @@ export type Reader = { user_id: string; last_read_at: string };
 
 const PAGE = 50;
 const COLS = "id, room_id, sender_id, body, created_at";
+const COLS_FULL = `${COLS}, reply_to, mentions, mention_all`;
 
 export const personName = (p?: ChatPerson | null) => p?.full_name || p?.email?.split("@")[0] || "Anggota";
 
@@ -60,6 +72,19 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   const [roomFiles, setRoomFiles] = useState<ChatFile[]>([]);
   const [readers, setReaders] = useState<Reader[]>([]);
   const signed = useRef(new Map<string, { url: string; at: number }>());
+  const [refs, setRefs] = useState<Record<number, ChatMsg>>({});
+
+  // kolom balasan/mention ada setelah migration-10; kalau belum, pakai kolom lama
+  const colsRef = useRef(COLS_FULL);
+  type MsgRes = { data: unknown; error: { message: string } | null };
+  const selectMsgs = useCallback(async (build: (cols: string) => PromiseLike<MsgRes>): Promise<MsgRes> => {
+    let r = await build(colsRef.current);
+    if (r.error && colsRef.current !== COLS && /reply_to|mention/i.test(r.error.message)) {
+      colsRef.current = COLS;
+      r = await build(COLS);
+    }
+    return r;
+  }, []);
 
   const roomRef = useRef(roomId);
   const visibleRef = useRef(visible);
@@ -114,12 +139,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     let cancelled = false;
     setLoadingMsgs(true);
     setMsgs([]);
-    supabase
-      .from("chat_messages")
-      .select(COLS)
-      .eq("room_id", roomId)
-      .order("id", { ascending: false })
-      .limit(PAGE)
+    selectMsgs((cols) => supabase.from("chat_messages").select(cols).eq("room_id", roomId).order("id", { ascending: false }).limit(PAGE))
       .then(({ data }) => {
         if (cancelled) return;
         const list = ((data ?? []) as ChatMsg[]).reverse();
@@ -130,7 +150,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     return () => {
       cancelled = true;
     };
-  }, [supabase, roomId]);
+  }, [supabase, roomId, selectMsgs]);
 
   // tandai dibaca saat room dibuka / tampilan chat terlihat
   useEffect(() => {
@@ -151,11 +171,11 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     const id = roomRef.current;
     if (!id) return;
     const lastId = msgsRef.current.at(-1)?.id ?? 0;
-    const { data } = await supabase.from("chat_messages").select(COLS).eq("room_id", id).gt("id", lastId).order("id").limit(PAGE);
+    const { data } = await selectMsgs((cols) => supabase.from("chat_messages").select(cols).eq("room_id", id).gt("id", lastId).order("id").limit(PAGE));
     const list = (data ?? []) as ChatMsg[];
     appendMsgs(list);
     if (list.some((m) => m.sender_id !== meId) && visibleRef.current) await markRead(id);
-  }, [supabase, appendMsgs, markRead, meId]);
+  }, [supabase, appendMsgs, markRead, meId, selectMsgs]);
 
   // Reaksi emoji untuk pesan yang sedang tampil
   const loadReactions = useCallback(async () => {
@@ -245,6 +265,18 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     loadFiles();
     loadReaders();
   }, [roomId, lastMsgId, msgs.length, loadReactions, loadFiles, loadReaders]);
+  // pesan yang dibalas tapi belum termuat (lebih lama dari 50 pesan terakhir)
+  useEffect(() => {
+    const have = new Set(msgs.map((m) => m.id));
+    const missing = [...new Set(msgs.map((m) => m.reply_to).filter((x): x is number => !!x && !have.has(x) && !refs[x]))];
+    if (!missing.length) return;
+    selectMsgs((cols) => supabase.from("chat_messages").select(cols).in("id", missing)).then(({ data }) => {
+      const add: Record<number, ChatMsg> = {};
+      for (const m of (data ?? []) as ChatMsg[]) add[m.id] = m;
+      setRefs((r) => ({ ...r, ...add }));
+    });
+  }, [msgs, refs, supabase, selectMsgs]);
+
   useEffect(() => {
     setRoomFiles([]);
     setReaders([]);
@@ -317,20 +349,31 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
     const id = roomRef.current;
     const first = msgsRef.current[0]?.id;
     if (!id || !first) return;
-    const { data } = await supabase.from("chat_messages").select(COLS).eq("room_id", id).lt("id", first).order("id", { ascending: false }).limit(PAGE);
+    const { data } = await selectMsgs((cols) => supabase.from("chat_messages").select(cols).eq("room_id", id).lt("id", first).order("id", { ascending: false }).limit(PAGE));
     const older = ((data ?? []) as ChatMsg[]).reverse();
     setHasMore(older.length === PAGE);
     setMsgs((prev) => [...older, ...prev]);
-  }, [supabase]);
+  }, [supabase, selectMsgs]);
 
   /** kirim teks dan/atau lampiran (file sudah ter-upload ke Storage) */
   const send = useCallback(
-    async (body: string, attach: AttachmentInput[] = []) => {
+    async (body: string, attach: AttachmentInput[] = [], opts: SendOpts = {}) => {
       const text = body.trim().slice(0, 4000);
       const id = roomRef.current;
       if ((!text && !attach.length) || !id) return false;
       let mid: number | null = null;
-      const rpc = await supabase.rpc("chat_send", { p_room: id, p_body: text, p_files: attach });
+      let rpc = await supabase.rpc("chat_send", {
+        p_room: id,
+        p_body: text,
+        p_files: attach,
+        p_reply_to: opts.replyTo ?? null,
+        p_mentions: opts.mentions ?? [],
+        p_mention_all: !!opts.mentionAll,
+      });
+      // migration-10 belum dijalankan -> kirim tanpa balasan/mention
+      if (rpc.error && /p_reply_to|p_mentions|chat_send/i.test(rpc.error.message)) {
+        rpc = await supabase.rpc("chat_send", { p_room: id, p_body: text, p_files: attach });
+      }
       if (!rpc.error) mid = rpc.data as number;
       else if (/chat_send|function/i.test(rpc.error.message) && !attach.length) {
         // migration-09 belum dijalankan -> cara lama (teks saja)
@@ -345,7 +388,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
         );
         return false;
       }
-      const { data } = await supabase.from("chat_messages").select(COLS).eq("id", mid).single();
+      const { data } = await selectMsgs((cols) => supabase.from("chat_messages").select(cols).eq("id", mid!).single());
       setError(null);
       if (data) {
         appendMsgs([data as ChatMsg]);
@@ -360,7 +403,7 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
       onSent?.(mid!);
       return true;
     },
-    [supabase, appendMsgs, loadFiles, loadRoomFiles, onSent]
+    [supabase, appendMsgs, loadFiles, loadRoomFiles, onSent, selectMsgs]
   );
 
   const openDm = useCallback(
@@ -398,6 +441,6 @@ export function useChat(meId: string, visible: boolean, initialRoom?: string | n
   return {
     rooms, room, roomId, setRoomId, msgs, loadingMsgs, hasMore, loadOlder,
     people, peopleMap, send, openDm, createRoom, unreadTotal, live, error, setError,
-    reactions, toggleReaction, files, roomFiles, readers,
+    reactions, toggleReaction, files, roomFiles, readers, refs,
   };
 }

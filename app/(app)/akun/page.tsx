@@ -12,6 +12,8 @@ export default async function AkunPage() {
     push_room: prefs?.push_room ?? true,
     email_issue: prefs?.email_issue ?? true,
     email_dm: prefs?.email_dm ?? true,
+    push_mention: prefs?.push_mention ?? true,
+    email_mention: prefs?.email_mention ?? true,
   };
   return (
     <div className="mx-auto max-w-xl space-y-4">

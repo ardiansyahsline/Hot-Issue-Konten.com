@@ -89,6 +89,11 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
             )
           )}
         </span>
+        {(r.mentioned ?? 0) > 0 && (
+          <span className="ml-auto rounded-full bg-orange-500 px-1.5 text-[11px] font-bold leading-5 text-white" title={`${r.mentioned} mention / balasan untukmu`}>
+            @
+          </span>
+        )}
         <Badge n={r.unread} />
       </button>
     );
@@ -226,6 +231,8 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
               files={c.files}
               readers={c.readers}
               direct={c.room.kind === "direct"}
+              members={members}
+              refs={c.refs}
             />
           </>
         ) : (

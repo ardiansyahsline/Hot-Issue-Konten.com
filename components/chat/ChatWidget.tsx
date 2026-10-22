@@ -63,7 +63,7 @@ function Widget({ meId }: { meId: string }) {
                   <option key={r.room_id} value={r.room_id}>
                     {r.kind === "direct" ? "@ " : "# "}
                     {roomTitle(r, c.peopleMap)}
-                    {r.unread ? ` (${r.unread})` : ""}
+                    {r.unread ? ` (${r.unread})` : ""}{(r.mentioned ?? 0) > 0 ? " @" : ""}
                   </option>
                 ))}
               </select>
@@ -95,6 +95,12 @@ function Widget({ meId }: { meId: string }) {
             files={c.files}
             readers={c.readers}
             direct={c.room?.kind === "direct"}
+            members={
+              c.room?.kind === "public"
+                ? c.people
+                : c.people.filter((p) => c.readers.some((r) => r.user_id === p.id) || p.id === c.room?.other_id)
+            }
+            refs={c.refs}
             compact
             disabled={!c.roomId}
           />

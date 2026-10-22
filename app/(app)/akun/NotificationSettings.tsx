@@ -8,8 +8,10 @@ const ROWS: [keyof NotifPrefs, string, string][] = [
   ["push_issue", "Hot Issue baru", "browser"],
   ["push_dm", "Chat pribadi", "browser"],
   ["push_room", "Chat room (semua-cs, dll.)", "browser"],
+  ["push_mention", "Saat di-mention / pesanmu dibalas (tetap muncul walau chat room dimatikan)", "browser"],
   ["email_issue", "Hot Issue baru", "email"],
   ["email_dm", "Chat pribadi saat kamu offline (maks 1 email / 15 menit)", "email"],
+  ["email_mention", "Di-mention / dibalas di room saat kamu offline (maks 1 email / 15 menit per room)", "email"],
 ];
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {

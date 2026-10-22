@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { personName, type ChatFile, type ChatMsg, type ChatPerson, type Reader } from "./useChat";
-import UserAvatar from "@/components/UserAvatar";
+import { personName, type ChatFile, type ChatMsg, type ChatPerson, type Reader, type SendOpts } from "./useChat";
+import UserAvatar, { isOnline } from "@/components/UserAvatar";
+import { ROLES, isRole } from "@/lib/roles";
 import { DocIcon } from "@/components/attach/AttachmentPicker";
 import { Lightbox } from "@/components/attach/AttachmentGallery";
 import { useUploads } from "@/components/attach/useUploads";
@@ -28,6 +29,37 @@ function dayLabel(iso: string) {
 export function Avatar({ name, me = false, size = 28, url, online }: { name: string; me?: boolean; size?: number; url?: string | null; online?: boolean }) {
   return <UserAvatar name={name} url={url} me={me} size={size} online={online} />;
 }
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Tulisan pesan dengan @mention disorot */
+function Body({ m, people, mine, meId }: { m: ChatMsg; people: Map<string, ChatPerson>; mine: boolean; meId: string }) {
+  const labels = (m.mentions ?? []).map((id) => ({ id, label: `@${personName(people.get(id))}` }));
+  if (m.mention_all) labels.push({ id: "*", label: "@semua" });
+  if (!labels.length) return <>{m.body}</>;
+  const re = new RegExp(`(${labels.map((l) => escRe(l.label)).sort((a, b) => b.length - a.length).join("|")})`, "g");
+  return (
+    <>
+      {m.body.split(re).map((part, i) => {
+        const hit = labels.find((l) => l.label === part);
+        if (!hit) return <span key={i}>{part}</span>;
+        const me = hit.id === meId || hit.id === "*";
+        return (
+          <span
+            key={i}
+            className={`rounded px-1 font-semibold ${mine ? "bg-white/25" : me ? "bg-orange-500/20 text-orange-500" : "bg-orange-500/10 text-orange-500"}`}
+          >
+            {part}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/** potongan pesan untuk kutipan balasan */
+const snippet = (m: ChatMsg | undefined, hasFiles: boolean) =>
+  !m ? "Pesan tidak tersedia" : m.body?.trim() ? m.body.trim().slice(0, 140) : hasFiles ? "📎 Lampiran" : "…";
 
 /** Lampiran di dalam pesan: gambar (klik = perbesar) + dokumen */
 function MsgFiles({ list, mine, onOpen }: { list: ChatFile[]; mine: boolean; onOpen: (f: ChatFile) => void }) {
@@ -82,7 +114,13 @@ export default function ChatThread({
   files = {},
   readers = [],
   direct = false,
+  members = [],
+  refs = {},
 }: {
+  /** anggota room (untuk daftar @mention) */
+  members?: ChatPerson[];
+  /** pesan lama yang dibalas tapi belum termuat */
+  refs?: Record<number, ChatMsg>;
   files?: Record<number, ChatFile[]>;
   readers?: Reader[];
   /** pesan pribadi: "Dilihat" tanpa angka */
@@ -95,7 +133,7 @@ export default function ChatThread({
   loading: boolean;
   hasMore: boolean;
   onLoadOlder: () => void;
-  onSend: (body: string, files: AttachmentInput[]) => Promise<boolean>;
+  onSend: (body: string, files: AttachmentInput[], opts?: SendOpts) => Promise<boolean>;
   compact?: boolean;
   disabled?: boolean;
 }) {
@@ -103,6 +141,12 @@ export default function ChatThread({
   const nearBottom = useRef(true);
   const lastId = useRef<number | null>(null);
   const [text, setText] = useState("");
+  const [replyTo, setReplyTo] = useState<ChatMsg | null>(null);
+  const [flash, setFlash] = useState<number | null>(null);
+  // @mention: query yang sedang diketik + orang yang sudah dipilih
+  const [mq, setMq] = useState<{ start: number; q: string } | null>(null);
+  const [mIdx, setMIdx] = useState(0);
+  const [chosen, setChosen] = useState<Map<string, string>>(new Map());
   const [sending, setSending] = useState(false);
   const [pick, setPick] = useState<{ id: number; all: boolean } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -173,14 +217,67 @@ export default function ChatThread({
     nearBottom.current = true;
   }, [loading]);
 
+  const msgById = (id: number) => msgs.find((x) => x.id === id) ?? refs[id];
+  const jumpTo = (id: number) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlash(id);
+    setTimeout(() => setFlash(null), 1600);
+  };
+  const startReply = (m: ChatMsg) => {
+    setReplyTo(m);
+    setPick(null);
+    requestAnimationFrame(() => input.current?.focus());
+  };
+
+  // daftar saran @mention
+  const mentionList = (() => {
+    if (!mq) return [] as { id: string; label: string; sub: string; person?: ChatPerson }[];
+    const q = mq.q.toLowerCase();
+    const list: { id: string; label: string; sub: string; person?: ChatPerson }[] = members
+      .filter((p) => p.id !== meId && personName(p).toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((p) => ({ id: p.id, label: personName(p), sub: p.role ?? "", person: p }));
+    if (!direct && "semua".startsWith(q)) list.push({ id: "*", label: "semua", sub: "semua anggota room" } as (typeof list)[number]);
+    return list;
+  })();
+  const detectMention = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const m = before.match(/(^|\s)@([^\s@]{0,24})$/);
+    if (m) {
+      setMq({ start: caret - m[2].length - 1, q: m[2] });
+      setMIdx(0);
+    } else setMq(null);
+  };
+  const pickMention = (item: { id: string; label: string }) => {
+    if (!mq) return;
+    const caret = input.current?.selectionStart ?? text.length;
+    const insert = `@${item.label} `;
+    const next = text.slice(0, mq.start) + insert + text.slice(caret);
+    setText(next);
+    setChosen((c) => new Map(c).set(item.id, item.label));
+    setMq(null);
+    const pos = mq.start + insert.length;
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(pos, pos);
+    });
+  };
+
   async function submit() {
     if ((!text.trim() && !up.done.length) || sending || up.uploading) return;
     setSending(true);
-    const ok = await onSend(text, up.done);
+    const mentions = [...chosen.entries()].filter(([id, label]) => id !== "*" && text.includes(`@${label}`)).map(([id]) => id);
+    const mentionAll = !direct && /(^|\s)@semua(\s|$|[.,!?])/.test(text);
+    const ok = await onSend(text, up.done, { replyTo: replyTo?.id ?? null, mentions, mentionAll });
     setSending(false);
     if (ok) {
       setText("");
       up.clear();
+      setReplyTo(null);
+      setChosen(new Map());
+      setMq(null);
     }
   }
 
@@ -238,7 +335,7 @@ export default function ChatThread({
           const name = mine ? "Kamu" : personName(people.get(m.sender_id ?? ""));
           const avatarName = personName(people.get(m.sender_id ?? ""));
           return (
-            <div key={m.id}>
+            <div key={m.id} id={`msg-${m.id}`} className={`rounded-xl transition-colors duration-700 ${flash === m.id ? "bg-orange-500/10" : ""}`}>
               {newDay && (
                 <div className="my-3 flex items-center gap-3 text-[11px] font-semibold text-zinc-500">
                   <span className="h-px flex-1 bg-zinc-800" />
@@ -276,18 +373,53 @@ export default function ChatThread({
                           }}
                         />
                       )}
-                      {m.body && (
+                      {(m.body || m.reply_to) && (
                         <div
-                          className={`whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${
+                          className={`whitespace-pre-wrap break-words rounded-2xl text-[13.5px] leading-relaxed ${m.reply_to ? "p-1.5" : "px-3.5 py-2"} ${
                             mine ? "rounded-tr-md text-white" : "rounded-tl-md bg-zinc-800/70 text-zinc-100"
                           }`}
                           style={mine ? { backgroundImage: "linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%)", boxShadow: "var(--shadow-primary)" } : undefined}
                         >
-                          {m.body}
+                          {m.reply_to && (() => {
+                            const q = msgById(m.reply_to);
+                            const who = q ? (q.sender_id === meId ? "Kamu" : personName(people.get(q.sender_id ?? ""))) : "";
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => jumpTo(m.reply_to!)}
+                                className={`mb-1 block w-full rounded-xl border-l-4 px-3 py-1.5 text-left ${
+                                  mine ? "border-white/80 bg-white/15" : "border-orange-500 bg-zinc-950/50"
+                                }`}
+                                title="Lihat pesan asli"
+                              >
+                                <span className={`block text-[11.5px] font-semibold ${mine ? "text-white" : "text-orange-400"}`}>{who || "Pesan"}</span>
+                                <span className={`block truncate text-[12px] ${mine ? "text-white/80" : "text-zinc-400"}`}>
+                                  {snippet(q, !!q && (files[q.id]?.length ?? 0) > 0)}
+                                </span>
+                              </button>
+                            );
+                          })()}
+                          {m.body && (
+                            <div className={m.reply_to ? "px-2 pb-0.5" : ""}>
+                              <Body m={m} people={people} mine={mine} meId={meId} />
+                            </div>
+                          )}
                         </div>
                       )}
                       {!m.body && !(files[m.id]?.length) && <span className="text-[12px] italic text-zinc-500">📎 Lampiran</span>}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => startReply(m)}
+                      aria-label="Balas pesan"
+                      title="Balas"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 opacity-0 transition hover:bg-zinc-800 hover:text-zinc-200 focus:opacity-100 group-hover:opacity-100"
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 14 4 9l5-5" />
+                        <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+                      </svg>
+                    </button>
                     {onReact && (
                       <button
                         type="button"
@@ -307,8 +439,16 @@ export default function ChatThread({
                     )}
                   </div>
                   {pick?.id === m.id && !pick.all && (
-                    <div data-react-menu className="z-30 mt-1.5">
+                    <div data-react-menu className="z-30 mt-1.5 flex flex-wrap items-center gap-1.5">
                       <QuickBar onPick={(e) => react(m.id, e)} onMore={() => setPick({ id: m.id, all: true })} />
+                      <button
+                        type="button"
+                        onClick={() => startReply(m)}
+                        className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-[12.5px] font-semibold text-zinc-300"
+                        style={{ boxShadow: "var(--shadow-pop)" }}
+                      >
+                        ↩︎ Balas
+                      </button>
                     </div>
                   )}
                   {pick?.id === m.id && pick.all && (
@@ -336,6 +476,19 @@ export default function ChatThread({
         }}
         className={`border-t border-zinc-800/80 py-3 ${pad}`}
       >
+        {replyTo && (
+          <div className="mb-2 flex items-center gap-3 rounded-xl border-l-4 border-orange-500 bg-zinc-950/60 px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-[11.5px] font-semibold text-orange-400">
+                Membalas {replyTo.sender_id === meId ? "diri sendiri" : personName(people.get(replyTo.sender_id ?? ""))}
+              </div>
+              <div className="truncate text-[12px] text-zinc-400">{snippet(replyTo, (files[replyTo.id]?.length ?? 0) > 0)}</div>
+            </div>
+            <button type="button" onClick={() => setReplyTo(null)} aria-label="Batal membalas" className="text-zinc-500 hover:text-zinc-200">
+              ✕
+            </button>
+          </div>
+        )}
         {/* lampiran yang akan dikirim */}
         {(up.items.length > 0 || up.notice) && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -364,7 +517,39 @@ export default function ChatThread({
             {up.notice && <span className="self-center text-[11.5px] text-amber-400">{up.notice}</span>}
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div className="relative flex items-end gap-2">
+          {mq && mentionList.length > 0 && (
+            <div
+              className="absolute bottom-full left-0 z-40 mb-2 w-72 max-w-full rounded-2xl border border-zinc-800 bg-zinc-900 p-1.5"
+              style={{ boxShadow: "var(--shadow-pop), 0 18px 40px -16px rgba(0,0,0,.35)" }}
+              role="listbox"
+              aria-label="Sebut anggota"
+            >
+              <div className="px-2 py-1 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">Sebut anggota</div>
+              {mentionList.map((it, i) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mIdx}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickMention(it);
+                  }}
+                  onMouseEnter={() => setMIdx(i)}
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left ${i === mIdx ? "bg-orange-500/10" : ""}`}
+                >
+                  {it.person ? (
+                    <UserAvatar name={it.label} url={it.person.avatar_url} size={26} online={isOnline(it.person.last_seen_at)} />
+                  ) : (
+                    <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-orange-500/15 text-[11px] font-bold text-orange-400">@</span>
+                  )}
+                  <span className="truncate text-[13px] font-semibold">{it.label}</span>
+                  <span className="truncate text-[11px] text-zinc-500">{isRole(it.sub) ? ROLES[it.sub].label : it.sub}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -392,7 +577,12 @@ export default function ChatThread({
           <textarea
             ref={input}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+            }}
+            onClick={(e) => detectMention(text, e.currentTarget.selectionStart ?? text.length)}
+            onBlur={() => setTimeout(() => setMq(null), 150)}
             onPaste={(e) => {
               const fl = Array.from(e.clipboardData?.files ?? []);
               if (fl.length) {
@@ -401,6 +591,24 @@ export default function ChatThread({
               }
             }}
             onKeyDown={(e) => {
+              if (mq && mentionList.length) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMIdx((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + mentionList.length) % mentionList.length);
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  pickMention(mentionList[Math.min(mIdx, mentionList.length - 1)]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMq(null);
+                  return;
+                }
+              }
+              if (e.key === "Escape" && replyTo) setReplyTo(null);
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 submit();

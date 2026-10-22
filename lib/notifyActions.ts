@@ -47,7 +47,15 @@ export async function removePushSubscription(endpoint: string) {
   return { ok: "Notifikasi browser dimatikan di perangkat ini." };
 }
 
-export type NotifPrefs = { push_issue: boolean; push_dm: boolean; push_room: boolean; email_issue: boolean; email_dm: boolean };
+export type NotifPrefs = {
+  push_issue: boolean;
+  push_dm: boolean;
+  push_room: boolean;
+  push_mention: boolean;
+  email_issue: boolean;
+  email_dm: boolean;
+  email_mention: boolean;
+};
 
 export async function saveNotifPrefs(p: NotifPrefs) {
   const { supabase, user } = await getCurrentUser();
@@ -58,9 +66,16 @@ export async function saveNotifPrefs(p: NotifPrefs) {
     push_room: !!p.push_room,
     email_issue: !!p.email_issue,
     email_dm: !!p.email_dm,
+    push_mention: p.push_mention !== false,
+    email_mention: p.email_mention !== false,
     updated_at: new Date().toISOString(),
   };
-  const { error } = await supabase.from("notification_prefs").upsert(row, { onConflict: "user_id" });
+  let { error } = await supabase.from("notification_prefs").upsert(row, { onConflict: "user_id" });
+  if (error && /mention/.test(error.message)) {
+    // migration-10 belum dijalankan -> simpan tanpa pengaturan mention
+    const { push_mention: _a, email_mention: _b, ...old } = row;
+    ({ error } = await supabase.from("notification_prefs").upsert(old, { onConflict: "user_id" }));
+  }
   if (error) return { error: /notification_prefs/.test(error.message) ? "Notifikasi belum aktif (migration-09 belum dijalankan)." : error.message };
   return { ok: "Pengaturan disimpan." };
 }
