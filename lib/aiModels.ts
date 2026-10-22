@@ -5,12 +5,12 @@ export const SMART = "smart"; // pilihan "otomatis": aplikasi memilih model terb
 const HIDE = /whisper|orpheus|tts|speech|audio|transcri|prompt-guard|safeguard|llama-guard|allam|embed|rerank|moderation|dall-?e|imagen|veo|flux|sdxl|stable-diffusion|image-gen|text-to-image|playai|distil/i;
 
 /** model yang bisa membaca gambar */
-const VISION = /gemini|gemma-?[34]|vision|[-_/]vl\b|-vl-|llava|pixtral|llama-4|maverick|scout|gpt-4o|gpt-4\.1|gpt-5|claude|kimi-k2\.5|kimi-k3|glm-4\.?\dv|qwen.*vl|muse/i;
+const VISION = /gemini|gemma-?[34]|vision|[-_/]vl\b|-vl-|llava|pixtral|llama-4|maverick|scout|gpt-4o|gpt-4\.1|gpt-5|claude|kimi-k2\.5|kimi-k3|glm-4\.?\dv|qwen.*vl|qwen3\.8|muse/i;
 
 /** urutan model terbaik untuk chat biasa (yang pertama tersedia dipakai) */
 const BEST_TEXT = [/claude[^/]*(opus|sonnet)/i, /claude/i, /gemini[^/]*flash(?!-lite)/i, /kimi/i, /deepseek(?!.*r1)/i, /gpt-oss-120b/i, /qwen3/i, /llama-3\.3-70b/i, /grok/i, /gemini/i, /mistral-(large|medium)/i, /gpt-oss-20b/i, /llama/i];
 /** urutan model terbaik untuk membaca gambar */
-const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /claude/i, /gemma-?[34]/i, /llama-4/i];
+const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /claude/i, /qwen3\.8/i, /nemotron.*-vl-|-vl-/i, /gemma-?[34]/i, /llama-4/i];
 
 /** agen coding / akun IDE / login web — bukan untuk chat biasa (sering error kalau dipanggil dari aplikasi lain) */
 const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|(^|[/:])no-?think(ing)?[/:]|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;

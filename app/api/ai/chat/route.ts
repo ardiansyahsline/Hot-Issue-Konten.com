@@ -184,7 +184,12 @@ export async function POST(req: NextRequest) {
   const OPEN_DEADLINE = t0 + 40_000;
   const FIRST_TOKEN_MS = 18_000;
   let timedOut = false;
+  // kalau key provider bermasalah, model lain dari provider yang sama pasti gagal juga -> lewati.
+  // (kuota habis TIDAK dihitung: kuota gratis Gemini dll dihitung per model, model lain bisa masih ada jatah)
+  const deadProv = new Set<string>();
+  const PROVIDER_DOWN = /authenticat|authorization|invalid api key|api key not valid|missing api key|reconnect|decrypt|unauthori[sz]ed|forbidden/i;
   for (const model of candidates) {
+    if (providerOf(model) && deadProv.has(providerOf(model))) continue;
     const left = OPEN_DEADLINE - Date.now();
     if (left < 3000) {
       timedOut = true;
@@ -203,6 +208,7 @@ export async function POST(req: NextRequest) {
       upstreamAbort.signal.removeEventListener("abort", onAbort);
       coolDown(model);
       failures.push(`${model} (${why})`);
+      if (providerOf(model) && PROVIDER_DOWN.test(why)) deadProv.add(providerOf(model));
     };
     let upstream: Response | null = null;
     let netErr: unknown = null;
