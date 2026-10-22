@@ -1,5 +1,30 @@
 /** Trade plan yang ditulis AI di akhir jawaban sebagai blok ```tradeplan {json}``` */
-export type TradePlan = { symbol?: string; side: "long" | "short"; entry: number; sl: number; tp: number[]; timeframe?: string };
+/** pola chart dari AI: nama + titik [waktu unix detik, harga] */
+export type Pattern = { name: string; points: [number, number][] };
+export type TradePlan = { symbol?: string; side: "long" | "short"; entry: number; sl: number; tp: number[]; timeframe?: string; pattern?: Pattern };
+
+/** "2026-10-02" / "2026-10-02 14:00" / unix (detik/milidetik) -> unix detik */
+const toTime = (v: unknown): number => {
+  if (typeof v === "number") return v > 1e12 ? Math.floor(v / 1000) : v;
+  const s = String(v ?? "").trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?/);
+  if (!m) return NaN;
+  return Math.floor(Date.parse(`${m[1]}T${m[2] ?? "00:00"}:00Z`) / 1000);
+};
+function parsePattern(v: unknown): Pattern | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as { name?: unknown; points?: unknown };
+  const pts = (Array.isArray(o.points) ? o.points : [])
+    .map((x): [number, number] => {
+      const a = Array.isArray(x) ? x : [(x as { date?: unknown; time?: unknown })?.date ?? (x as { time?: unknown })?.time, (x as { price?: unknown })?.price];
+      return [toTime(a[0]), num(a[1])];
+    })
+    .filter(([t, p]) => Number.isFinite(t) && !Number.isNaN(p))
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, 6);
+  if (pts.length < 2) return undefined;
+  return { name: String(o.name ?? "Pola").slice(0, 40), points: pts };
+}
 
 const DONE = /```tradeplan\s*([\s\S]*?)```\s*/i;
 const PARTIAL = /```tradeplan[\s\S]*$/i; // blok yang belum selesai saat jawaban masih mengalir
@@ -33,7 +58,7 @@ export function splitPlan(text: string): { text: string; plan: TradePlan | null 
     if (!tp.length) return { text: rest, plan: null };
     return {
       text: rest,
-      plan: { side, entry, sl, tp: tp.slice(0, 3), symbol: j.symbol ? String(j.symbol).slice(0, 30) : undefined, timeframe: j.timeframe ? String(j.timeframe).slice(0, 10) : undefined },
+      plan: { side, entry, sl, tp: tp.slice(0, 3), symbol: j.symbol ? String(j.symbol).slice(0, 30) : undefined, timeframe: j.timeframe ? String(j.timeframe).slice(0, 10) : undefined, pattern: parsePattern(j.pattern) },
     };
   } catch {
     return { text: rest, plan: null };
@@ -64,5 +89,11 @@ export function rescalePlan(p: TradePlan, ref?: number, idx = false): TradePlan 
   } else if (idx && p.entry < 50 && p.entry * 1000 >= 50) f = 1000;
   if (f === 1) return p;
   const r = (x: number) => Math.round(x * f * 1e6) / 1e6;
-  return { ...p, entry: r(p.entry), sl: r(p.sl), tp: p.tp.map(r) };
+  return {
+    ...p,
+    entry: r(p.entry),
+    sl: r(p.sl),
+    tp: p.tp.map(r),
+    pattern: p.pattern ? { ...p.pattern, points: p.pattern.points.map(([t, v]): [number, number] => [t, r(v)]) } : undefined,
+  };
 }

@@ -1,5 +1,6 @@
 import "server-only";
 import { hasStockData, stockCandles, stockCode, stockQuote, summarizeDaily } from "./stockData.server";
+import { autoLevels, levelsLine } from "./chartLevels";
 
 /**
  * "Cari di Internet" untuk tab AI.
@@ -294,6 +295,26 @@ async function forexQuotes(symbols: string[]): Promise<{ lines: string[]; source
   return { lines, source: lines.length ? { title: "Twelve Data — kurs live", url: "https://twelvedata.com/" } : undefined };
 }
 
+/** forex/emas: candle harian ±4 bulan dari Twelve Data (kalau key diisi) -> ringkasan + support/resistance otomatis */
+async function forexHistory(symbols: string[]): Promise<string[]> {
+  const key = (process.env.TWELVEDATA_API_KEY ?? "").trim();
+  const s = (symbols[0] ?? "").toUpperCase().replace(/^[A-Z_]+:/, "").replace(/[^A-Z]/g, "");
+  const pair = s.length === 6 ? `${s.slice(0, 3)}/${s.slice(3)}` : s === "XAU" || s === "GOLD" ? "XAU/USD" : "";
+  if (!key || !pair) return [];
+  const td = (process.env.TWELVEDATA_BASE_URL ?? "https://api.twelvedata.com").trim().replace(/\/+$/, "");
+  const r = await fetch(`${td}/time_series?symbol=${encodeURIComponent(pair)}&interval=1day&outputsize=120&timezone=UTC&apikey=${encodeURIComponent(key)}`, {
+    signal: AbortSignal.timeout(8000),
+    cache: "no-store",
+  });
+  if (!r.ok) return [];
+  const j = await r.json();
+  const candles = ((j?.values ?? []) as { datetime: string; open: string; high: string; low: string; close: string }[])
+    .map((v) => ({ time: Math.floor(Date.parse(`${v.datetime.slice(0, 10)}T00:00:00Z`) / 1000), open: +v.open, high: +v.high, low: +v.low, close: +v.close }))
+    .filter((c) => Number.isFinite(c.time) && c.close > 0)
+    .sort((a, b) => a.time - b.time);
+  return summarizeDaily(pair, candles, "Twelve Data");
+}
+
 /** angka harga yang enak dibaca untuk koin murah maupun mahal */
 const px = (n: number) => (n >= 100 ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : n >= 1 ? n.toFixed(4) : n.toPrecision(4));
 
@@ -349,6 +370,10 @@ async function cryptoHistory(sym: string, id: string): Promise<string[]> {
     swings.length ? `- Titik balik terakhir: ${swings.slice(-6).join("; ")}` : "",
     "- Candle harian (tanggal: open/high/low/close):",
     ...days.slice(-14).map(([k, d]) => `  ${k}: ${px(d.o)}/${px(d.h)}/${px(d.l)}/${px(d.c)}`),
+    levelsLine(
+      autoLevels(days.map(([k, d]) => ({ time: Date.parse(`${k}T00:00:00Z`) / 1000, open: d.o, high: d.h, low: d.l, close: d.c }))),
+      px
+    ),
     "Gunakan angka ini untuk support/resistance & tren. Jangan menyebut level yang tidak didukung data ini atau sumber lain.",
   ].filter(Boolean);
 }
@@ -580,6 +605,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
           const ids = (q as { ids?: Map<string, string> }).ids;
           const first = ids ? [...ids.entries()][0] : undefined;
           if (first) history.push(...(await cryptoHistory(first[0], first[1]).catch(() => [])));
+          if (plan.market === "forex") history.push(...(await forexHistory(plan.symbols).catch(() => [])));
         })
         .catch(() => {})
     );
@@ -629,7 +655,8 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
       ? [
           "TRADE PLAN: kalau jawabanmu berisi rencana trading (entry/SL/TP), WAJIB tutup jawaban dengan blok kode berlabel tradeplan berisi JSON satu baris, contoh:",
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
-          "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
+          'Opsional "pattern": kalau di data RIWAYAT HARGA terlihat pola chart (mis. trendline turun/naik, double top/bottom, higher low, breakout), tambahkan {"name":"nama pola singkat","points":[["YYYY-MM-DD",harga],["YYYY-MM-DD",harga]]} — 2 sampai 5 titik, tanggal & harga WAJIB diambil dari candle di data (high untuk puncak, low untuk lembah). Contoh: "pattern":{"name":"Lower high","points":[["2026-09-22",4172],["2026-10-10",4143]]}. Kalau tidak ada pola yang jelas, jangan tulis "pattern".',
+          "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini, plus garis support/resistance otomatis & garis pola. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
           "Angka di JSON: TANPA pemisah ribuan, titik untuk desimal, skala sama dengan harga asli (saham BBRI Rp2.560 -> 2560; XAUUSD 4.022,46 -> 4022.46; PUMP 0,00461 -> 0.00461).",
           "Di teks jawaban, harga yang angkanya bulat ditulis tanpa ,00 (4.025 bukan 4.025,00); desimal hanya kalau memang ada (4.027,41).",
           ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 atau 5.320 — JANGAN pakai angka di belakang koma (salah: 5.320,00)."] : []),

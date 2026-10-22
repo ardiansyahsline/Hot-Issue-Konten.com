@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { decimalsFor, fmtPrice, pctFrom, rescalePlan, rr, type TradePlan } from "@/lib/tradePlan";
 import TradingChart from "./TradingChart";
+import { autoLevels } from "@/lib/chartLevels";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
 
@@ -24,6 +25,27 @@ function normTf(raw?: string): TF {
   }
   return "1d";
 }
+/**
+ * Titik pola dari AI ditempel ke candle asli. Kalau tanggal di luar data chart atau harganya tidak
+ * cocok dengan candle di tanggal itu, pola tidak digambar (lebih baik tidak ada daripada ngarang).
+ */
+function snapPattern(points: [number, number][] | undefined, candles: Candle[] | null): { time: number; value: number }[] | null {
+  if (!points || points.length < 2 || !candles || candles.length < 3) return null;
+  const step = Math.max(60, candles[candles.length - 1].time - candles[candles.length - 2].time);
+  const out: { time: number; value: number }[] = [];
+  for (const [t, v] of points) {
+    const win = t % 86400 === 0 ? Math.max(86400, step) : step; // tanggal tanpa jam = satu hari penuh
+    const cand = candles.filter((c) => c.time < t + win && c.time + step > t);
+    if (!cand.length) return null;
+    const near = (c: Candle) => Math.min(Math.abs(c.high - v), Math.abs(c.low - v));
+    const best = cand.reduce((a, b) => (near(b) < near(a) ? b : a));
+    if (v > best.high * 1.015 || v < best.low * 0.985) return null;
+    if (out.length && best.time <= out[out.length - 1].time) continue;
+    out.push({ time: best.time, value: v });
+  }
+  return out.length >= 2 ? out : null;
+}
+
 /** saham (BEI / luar negeri) = bukan forex & bukan crypto */
 export const isStockSymbol = (sym: string) => !/^(OANDA|FX|FX_IDC|BINANCE|OKX):/.test(sym) && !/USDT?$/.test(sym);
 
@@ -59,6 +81,10 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
   const mismatch = !!refPrice && Math.abs(Math.log(plan.entry / refPrice)) > Math.log(3);
   const short = plan.side === "short";
   const last = plan.tp[plan.tp.length - 1];
+  // garis analisa: support/resistance otomatis dari candle + pola dari AI (dicek ke candle asli)
+  const [showLines, setShowLines] = useState(true);
+  const srLevels = useMemo(() => (candles?.length ? autoLevels(candles) : []), [candles]);
+  const patternPts = useMemo(() => snapPattern(plan.pattern?.points, candles), [plan.pattern, candles]);
 
   useEffect(() => {
     let off = false;
@@ -132,6 +158,26 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       ];
       for (const [price, color, title] of lines) series.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title });
 
+      // garis analisa: support (hijau toska) & resistance (ungu), garis pola (oranye)
+      const PURPLE = "#9333ea";
+      const TEAL = "#0d9488";
+      const ORANGE = "#ea580c";
+      const lvShown = showLines ? srLevels : [];
+      for (const l of lvShown)
+        series.createPriceLine({ price: l.price, color: l.kind === "resistance" ? PURPLE : TEAL, lineWidth: 1, lineStyle: 3, axisLabelVisible: false, title: "" });
+      const pat = showLines && patternPts ? patternPts : null;
+      if (pat) {
+        const ln = chart.addSeries(LC.LineSeries, {
+          color: ORANGE,
+          lineWidth: 2,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        ln.setData(pat.map((x) => ({ time: x.time as import("lightweight-charts").UTCTimestamp, value: x.value })));
+      }
+
       // kotak posisi di kanan candle terakhir
       // lapisan kotak posisi: seukuran area candle (tidak menimpa skala harga/waktu), isi yang keluar area dipotong
       const layer = document.createElement("div");
@@ -156,6 +202,19 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       lStop.textContent = `Stop ${fmtPrice(plan.sl, d)} (${pct(pctFrom(plan.entry, plan.sl))})`;
       lTarget.textContent = `Target ${fmtPrice(last, d)} (${pct(pctFrom(plan.entry, last))})`;
       lEntry.textContent = `${short ? "SHORT" : "LONG"} · R:R ${rr(plan).toLocaleString("id-ID", { maximumFractionDigits: 1 })}`;
+      const lvTags = lvShown.map((l) => {
+        const t = lbl(l.kind === "resistance" ? PURPLE : TEAL);
+        t.style.fontSize = "10.5px";
+        t.textContent = `${l.name} ${fmtPrice(l.price, d)}${l.touches >= 2 ? ` · ${l.touches}x` : ""}`;
+        return t;
+      });
+      const patDots = (pat ?? []).map(() => {
+        const z = mk("#fff");
+        z.style.cssText += `;width:9px;height:9px;border-radius:50%;border:2px solid ${ORANGE};z-index:4`;
+        return z;
+      });
+      const patTag = pat ? lbl(ORANGE) : null;
+      if (patTag) patTag.textContent = `Pola: ${plan.pattern?.name ?? ""}`;
       let alive = true;
       let prevKey = "";
       /**
@@ -172,10 +231,39 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         const [ye, ys, yt] = [y(plan.entry), y(plan.sl), y(last)];
         const paneW = Math.max(0, el.clientWidth - chart.priceScale("right").width());
         const paneH = Math.max(0, el.clientHeight - ts.height());
-        const key = [x1, x2, ye, ys, yt, paneW, paneH].map((v) => (v == null ? "x" : Math.round(v))).join(",");
+        const lvY = lvShown.map((l) => y(l.price));
+        const patXY = (pat ?? []).map((pp) => [ts.timeToCoordinate(pp.time as import("lightweight-charts").UTCTimestamp), y(pp.value)] as const);
+        const key = [x1, x2, ye, ys, yt, paneW, paneH, ...lvY, ...patXY.flat()].map((v) => (v == null ? "x" : Math.round(v))).join(",");
         if (key === prevKey) return;
         prevKey = key;
         Object.assign(layer.style, { width: `${paneW}px`, height: `${paneH}px` });
+        // label support/resistance di kiri, digeser supaya tidak saling tumpuk
+        const lvWant = lvTags.flatMap((t, i): [HTMLDivElement, number][] => (lvY[i] == null ? [] : [[t, Number(lvY[i])]]));
+        lvTags.forEach((t, i) => (t.style.display = lvY[i] == null || lvY[i]! < 0 || lvY[i]! > paneH ? "none" : "block"));
+        lvWant.sort((a, b) => a[1] - b[1]);
+        let prevTop = -99;
+        for (const [t, yy] of lvWant) {
+          const top = Math.max(yy - 9, prevTop + 20);
+          prevTop = top;
+          Object.assign(t.style, { left: "6px", top: `${top}px` });
+        }
+        // titik pola + nama pola di atas titik pertama
+        patXY.forEach(([px, py], i) => {
+          const dot = patDots[i];
+          if (px == null || py == null) return void (dot.style.display = "none");
+          Object.assign(dot.style, { display: "block", left: `${px - 4.5}px`, top: `${py - 4.5}px` });
+        });
+        if (patTag) {
+          const [px, py] = patXY[0] ?? [null, null];
+          const tops = patXY.map((q) => q[1]).filter((v) => v != null).map(Number);
+          if (px == null || py == null) patTag.style.display = "none";
+          else
+            Object.assign(patTag.style, {
+              display: "block",
+              left: `${Math.max(2, Math.min(px - 10, paneW - patTag.offsetWidth - 4))}px`,
+              top: `${Math.max(2, Math.min(...tops) - 28)}px`,
+            });
+        }
         if (x1 == null || x2 == null || ye == null || ys == null || yt == null) {
           layer.style.visibility = "hidden";
           return;
@@ -221,7 +309,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       cancelled = true;
       dispose();
     };
-  }, [candles, live, plan, d, short, last, meta.interval, mismatch]);
+  }, [candles, live, plan, d, short, last, meta.interval, mismatch, showLines, srLevels, patternPts]);
 
   const head = (
     <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-3 py-2 text-[12.5px]">
@@ -261,12 +349,22 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           </button>
         );
       })}
+      {!!candles?.length && !mismatch && (srLevels.length > 0 || !!patternPts) && (
+        <button
+          type="button"
+          onClick={() => setShowLines((v) => !v)}
+          title="Tampilkan / sembunyikan garis support-resistance & pola"
+          className={`ml-auto shrink-0 rounded-md px-2 py-0.5 font-semibold ${showLines ? "bg-purple-500/15 text-purple-500" : "text-zinc-400 hover:bg-zinc-800"}`}
+        >
+          📏 Garis analisa
+        </button>
+      )}
       {!!candles?.length && !mismatch && (
         <button
           type="button"
           onClick={() => fitRef.current?.()}
           title="Kembalikan tampilan ke trade plan"
-          className="ml-auto shrink-0 rounded-md px-2 py-0.5 font-semibold text-zinc-400 hover:bg-zinc-800"
+          className={`${srLevels.length || patternPts ? "" : "ml-auto "}shrink-0 rounded-md px-2 py-0.5 font-semibold text-zinc-400 hover:bg-zinc-800`}
         >
           🎯 Fokus plan
         </button>
@@ -338,6 +436,35 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         </>
       )}
       {levels}
+      {showLines && !live && !mismatch && !!candles?.length && (srLevels.length > 0 || !!patternPts) && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-2 text-[11.5px] text-zinc-500">
+          <span>📏</span>
+          {srLevels.some((l) => l.kind === "support") && (
+            <span>
+              <b className="text-teal-600">Support</b>{" "}
+              {srLevels
+                .filter((l) => l.kind === "support")
+                .map((l) => `${fmtPrice(l.price, d)}${l.touches >= 2 ? ` (${l.touches}x)` : ""}`)
+                .join(" · ")}
+            </span>
+          )}
+          {srLevels.some((l) => l.kind === "resistance") && (
+            <span>
+              <b className="text-purple-500">Resistance</b>{" "}
+              {srLevels
+                .filter((l) => l.kind === "resistance")
+                .map((l) => `${fmtPrice(l.price, d)}${l.touches >= 2 ? ` (${l.touches}x)` : ""}`)
+                .join(" · ")}
+            </span>
+          )}
+          {patternPts && (
+            <span>
+              <b className="text-orange-600">Pola</b> {plan.pattern?.name}
+            </span>
+          )}
+          <span className="text-zinc-600">· S/R dihitung otomatis dari candle {meta.interval ?? ""}</span>
+        </div>
+      )}
       <div className="flex flex-wrap justify-between gap-2 border-t border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-500">
         <span>⚠️ Analisa edukasi, bukan saran finansial</span>
         <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer noopener" className="hover:text-orange-400">
