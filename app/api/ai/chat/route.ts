@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, listModels, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { SMART, isChatModel, isVisionModel, pickTextModel, pickVisionModel } from "@/lib/aiModels";
+import { SMART, heroName, isChatModel, isVisionModel, rankTextModels, rankVisionModels } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 
 export const runtime = "nodejs";
@@ -13,6 +13,7 @@ const HISTORY = 40; // pesan terakhir yang dikirim ke AI sebagai konteks
 const MAX_INPUT = 20000;
 const MAX_IMAGES = 4;
 const IMAGE_TURNS = 2; // gambar dari 2 pesan terakhir saja yang ikut dikirim ulang
+const MAX_TRIES = 4; // maksimal model yang dicoba bergantian kalau error
 
 type Body = {
   conversationId?: string | null;
@@ -87,22 +88,27 @@ export async function POST(req: NextRequest) {
   const imageTurns = new Set(userIdx.filter((i) => (hist[i].images?.length ?? 0) > 0).slice(-IMAGE_TURNS));
   const hasImages = imageTurns.size > 0;
 
-  // 4) pilih model
+  // 4) daftar calon model: pilihan user dulu, lalu cadangan terbaik (kalau satu error, otomatis coba berikutnya)
   const models = await listModels();
-  let model = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
-  if (model === SMART || (models.length && !models.includes(model) && model !== "auto")) {
-    model = (hasImages && (cfg.visionModel || pickVisionModel(models))) || pickTextModel(models) || "auto";
+  const chosen = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
+  const ranked = hasImages
+    ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(models)]
+    : rankTextModels(models);
+  const fresh = (m: string) => !coolingDown(m);
+  let candidates: string[] = [];
+  if (chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen))) {
+    candidates.push(chosen);
   }
-  if (hasImages && !isVisionModel(model) && model !== "auto") {
-    const v = cfg.visionModel || pickVisionModel(models);
-    if (!v) {
-      const msg = "Model yang bisa membaca gambar belum tersambung. Sambungkan Gemini (API key dari aistudio.google.com/apikey) di dashboard OmniRoute → Providers.";
-      await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model });
+  candidates.push(...ranked.filter(fresh), ...ranked.filter((m) => !fresh(m)));
+  candidates = [...new Set(candidates)].slice(0, MAX_TRIES);
+  if (!candidates.length) {
+    if (hasImages) {
+      const msg = "Hero yang bisa melihat gambar belum ada. Sambungkan Gemini (API key gratis dari aistudio.google.com/apikey) di dashboard OmniRoute → Providers.";
+      await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: chosen });
       return err(422, msg, convId);
     }
-    model = v;
+    candidates = ["auto"];
   }
-  if (!isChatModel(model)) model = pickTextModel(models) || "auto";
 
   // 5) data CS Tracker (otomatis kalau pertanyaannya soal isi website / lanjutan dari jawaban yang memakai data)
   const prevAssistant = [...hist].reverse().find((m) => m.role === "assistant");
@@ -136,70 +142,92 @@ export async function POST(req: NextRequest) {
   }
 
   const saveError = async (msg: string, status = 502) => {
-    await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model });
+    await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: candidates[0] });
     return err(status, msg, convId);
   };
 
-  // 7) panggil OmniRoute (format OpenAI, streaming)
+  // 7) panggil OmniRoute; kalau model error / kosong sebelum menjawab -> coba calon berikutnya
   const upstreamAbort = new AbortController();
   req.signal.addEventListener("abort", () => upstreamAbort.abort());
-  let upstream: Response;
-  try {
-    upstream = await fetch(`${cfg.base}/chat/completions`, {
-      method: "POST",
-      headers: aiHeaders(cfg.key),
-      body: JSON.stringify({ model, messages, stream: true }),
-      signal: upstreamAbort.signal,
-    });
-  } catch (e) {
-    return saveError(`Tidak bisa menghubungi server AI (${e instanceof Error ? e.message : "error"}). Cek OMNIROUTE_BASE_URL & VPS-nya nyala.`);
-  }
-  if (!upstream.ok || !upstream.body) {
-    let detail = "";
+  const failures: string[] = [];
+  let opened: { model: string; events: AsyncGenerator<SseEvent>; first: string } | null = null;
+  for (const model of candidates) {
+    let upstream: Response;
     try {
-      const t = await upstream.text();
-      detail = (JSON.parse(t)?.error?.message as string) || t;
+      upstream = await fetch(`${cfg.base}/chat/completions`, {
+        method: "POST",
+        headers: aiHeaders(cfg.key),
+        body: JSON.stringify({ model, messages, stream: true }),
+        signal: upstreamAbort.signal,
+      });
+    } catch (e) {
+      if (upstreamAbort.signal.aborted) return new Response(null, { status: 499 });
+      // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
+      return saveError(`Server AI (VPS) tidak bisa dihubungi (${e instanceof Error ? e.message : "error"}). Pastikan jendela OmniRoute & Caddy di VPS masih terbuka.`);
+    }
+    if (!upstream.ok || !upstream.body) {
+      let detail = "";
+      try {
+        const t = await upstream.text();
+        detail = (JSON.parse(t)?.error?.message as string) || t;
+      } catch {}
+      if (upstream.status === 401) return saveError("API key OmniRoute ditolak. Cek OMNIROUTE_API_KEY di Vercel sama dengan key di dashboard OmniRoute → API Keys.");
+      coolDown(model);
+      failures.push(`${model} (${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""})`);
+      continue;
+    }
+    // baca sampai potongan jawaban pertama — kalau langsung error / kosong, anggap gagal
+    const events = sse(upstream.body);
+    let first = "";
+    let failed = "";
+    for (;;) {
+      const { value, done } = await events.next();
+      if (done) break;
+      if (value.error) {
+        failed = value.error;
+        break;
+      }
+      if (value.piece) {
+        first = value.piece;
+        break;
+      }
+    }
+    if (first) {
+      opened = { model, events, first };
+      break;
+    }
+    coolDown(model);
+    failures.push(`${model} (${failed ? failed.slice(0, 80) : "jawaban kosong"})`);
+    try {
+      await events.return(undefined);
     } catch {}
-    return saveError(`Server AI menolak (${upstream.status}). ${String(detail).slice(0, 300)}`.trim());
+  }
+  if (!opened) {
+    console.log("[ai] semua model gagal:", failures.join(" | "));
+    return saveError(
+      `Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba: ${candidates.map((m) => heroName(m)).join(", ")}`
+    );
   }
 
   // 8) alirkan ke browser sambil dikumpulkan, lalu simpan jawaban lengkap
   const enc = new TextEncoder();
-  const dec = new TextDecoder();
+  const usedModel = opened.model;
   let full = "";
-  let usedModel = model;
-  const reader = upstream.body.getReader();
+  const { events, first } = opened;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let buf = "";
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (data === "[DONE]") continue;
-            try {
-              const j = JSON.parse(data);
-              if (j.model && model === "auto") usedModel = String(j.model);
-              const piece: string = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content ?? "";
-              if (piece) {
-                full += piece;
-                controller.enqueue(enc.encode(piece));
-              }
-              if (j.error?.message) {
-                const e = `\n\n⚠️ ${j.error.message}`;
-                full += e;
-                controller.enqueue(enc.encode(e));
-              }
-            } catch {
-              // baris bukan JSON — abaikan
-            }
+        full += first;
+        controller.enqueue(enc.encode(first));
+        for await (const ev of events) {
+          if (ev.piece) {
+            full += ev.piece;
+            controller.enqueue(enc.encode(ev.piece));
+          }
+          if (ev.error) {
+            const e = `\n\n⚠️ Jawaban terpotong: ${ev.error}`;
+            full += e;
+            controller.enqueue(enc.encode(e));
           }
         }
       } catch {
@@ -230,8 +258,53 @@ export async function POST(req: NextRequest) {
       "Cache-Control": "no-cache, no-transform",
       "X-Accel-Buffering": "no",
       "x-conversation-id": convId!,
-      "x-ai-model": encodeURIComponent(model),
+      "x-ai-model": encodeURIComponent(usedModel),
       "x-ai-data": useData ? "1" : "0",
+      "x-ai-fallback": failures.length ? "1" : "0",
     },
   });
 }
+
+type SseEvent = { piece?: string; error?: string };
+
+/** baca aliran SSE format OpenAI -> potongan teks / error */
+async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        try {
+          const j = JSON.parse(data);
+          const piece: string = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content ?? "";
+          if (piece) yield { piece };
+          if (j.error) yield { error: String(j.error.message ?? j.error) };
+        } catch {
+          // baris bukan JSON — abaikan
+        }
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+    try {
+      await body.cancel();
+    } catch {}
+  }
+}
+
+// model yang barusan error diistirahatkan 15 menit (dicoba paling akhir)
+const cooldown = new Map<string, number>();
+const coolDown = (m: string) => cooldown.set(m, Date.now() + 15 * 60 * 1000);
+const coolingDown = (m: string) => (cooldown.get(m) ?? 0) > Date.now();

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
 import { ATTACH_BUCKET } from "@/lib/attachments";
-import { SMART, SMART_HERO, heroName, heroNames, isVisionModel } from "@/lib/aiModels";
+import { SMART, SMART_HERO, heroDesc, heroName, heroNames, isVisionModel } from "@/lib/aiModels";
 import Markdown from "./Markdown";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -104,7 +104,7 @@ function ModelPicker({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="max-w-[200px] truncate rounded-full border border-zinc-800 px-3 py-1 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
-        title={value === SMART ? "Pilih otomatis model terbaik" : value}
+        title={`${label(value)}: ${heroDesc(value)}${value === SMART ? "" : ` (${value})`}`}
         aria-label="Pilih model"
       >
         ⚔️ {label(value)}
@@ -112,7 +112,7 @@ function ModelPicker({
       </button>
       {open && (
         <div
-          className="absolute bottom-full left-0 z-40 mb-2 w-80 max-w-[85vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-2"
+          className="absolute bottom-full left-0 z-40 mb-2 w-[340px] max-w-[85vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-2"
           style={{ boxShadow: "var(--shadow-pop), 0 18px 40px -16px rgba(0,0,0,.35)" }}
         >
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / model…" className="input mb-2 py-1.5 text-[13px]" />
@@ -131,11 +131,12 @@ function ModelPicker({
                 <span className="min-w-0 flex-1">
                   <span className={`block truncate text-[13px] font-semibold ${m === value ? "text-orange-400" : "text-zinc-200"}`}>
                     {label(m)}
-                    {m === SMART && " — pilih otomatis"}
+                    {m === SMART && " · otomatis"}
                   </span>
-                  <span className="block truncate text-[11px] text-zinc-500">
+                  <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(m)}</span>
+                  <span className="block truncate text-[10.5px] text-zinc-500">
                     {m === SMART
-                      ? `chat: ${vision.text ? label(vision.text) : "-"} · gambar: ${vision.image ? label(vision.image) : "belum ada"}`
+                      ? `sekarang: chat ${vision.text ? label(vision.text) : "-"} · gambar ${vision.image ? label(vision.image) : "belum ada"}`
                       : m}
                   </span>
                 </span>
@@ -354,7 +355,7 @@ export default function AiChat({
       }
       const used = decodeURIComponent(res.headers.get("x-ai-model") ?? "");
       const usedData = res.headers.get("x-ai-data") === "1";
-      const switched = !!used && model !== SMART && used !== model;
+      const switched = !!used && ((model !== SMART && used !== model) || res.headers.get("x-ai-fallback") === "1");
       setMsgs((m) => m.map((x) => (x.id === tempId ? { ...x, model: used || x.model, used_data: usedData, switched } : x)));
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -740,7 +741,7 @@ export default function AiChat({
                               {m.model && (
                                 <span title={m.model}>
                                   · ⚔️ {hero(m.model)}
-                                  {m.switched && " (dipilih otomatis karena ada gambar)"}
+                                  {m.switched && " (dialihkan otomatis — hero lain lagi sibuk / ada gambar)"}
                                 </span>
                               )}
                             </div>
