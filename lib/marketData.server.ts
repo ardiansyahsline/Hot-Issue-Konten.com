@@ -27,8 +27,11 @@ async function getJson(url: string, ms = 7000, headers: Record<string, string> =
 }
 const n = (v: unknown) => Number(v);
 const pct = (v: number, d = 2) => `${v >= 0 ? "+" : ""}${v.toFixed(d)}%`;
-const usd = (v: number) =>
-  v >= 1e12 ? `$${(v / 1e12).toFixed(2)} T` : v >= 1e9 ? `$${(v / 1e9).toFixed(2)} M` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)} jt` : `$${Math.round(v).toLocaleString("en-US")}`;
+/** nominal dolar dengan satuan kata (bukan singkatan "M" yang bisa terbaca juta): $5,66 miliar */
+const usd = (v: number) => {
+  const f = (x: number, d: number) => x.toLocaleString("id-ID", { maximumFractionDigits: d });
+  return v >= 1e12 ? `US$${f(v / 1e12, 2)} triliun` : v >= 1e9 ? `US$${f(v / 1e9, 2)} miliar` : v >= 1e6 ? `US$${f(v / 1e6, 1)} juta` : `US$${f(v, 0)}`;
+};
 const wib = (t: number) => new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Jakarta" }).format(new Date(t));
 
 /* ---------------- crypto ---------------- */

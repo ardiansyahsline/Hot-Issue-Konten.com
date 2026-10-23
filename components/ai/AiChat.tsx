@@ -12,6 +12,9 @@ import TradingChart, { splitChart } from "./TradingChart";
 import TradePlanChart from "./TradePlanChart";
 import ThinkingSteps from "./ThinkingSteps";
 import { tidyAnswer } from "@/lib/aiText";
+import AnalysisCard from "./AnalysisCard";
+import AskCard from "./AskCard";
+import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
 import { personaOf } from "@/lib/aiPersona";
 
@@ -941,21 +944,45 @@ export default function AiChat({
                               <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-red-400">{m.content.replace(/^⚠️\s*/, "⚠️ ")}</div>
                             ) : (
                               (() => {
+                                const streaming = busy && m.id === lastAssistant?.id;
+                                // kotak pertanyaan pendekatan analisa
+                                const sk = splitAsk(m.content);
+                                if (sk.ask) {
+                                  return (
+                                    <>
+                                      {!!m.steps?.length && (
+                                        <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps} live={false} startedAt={m.startedAt} doneAt={m.doneAt} />
+                                      )}
+                                      <AskCard title={sk.text} info={sk.ask} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />
+                                    </>
+                                  );
+                                }
                                 const sc = splitChart(m.content);
                                 const chart = sc.chart || m.chart;
                                 const sp = splitPlan(sc.text);
-                                const streaming = busy && m.id === lastAssistant?.id;
+                                const sa = splitAnalysis(sp.text);
+                                const short = sa.text.replace(/\n---\n🌐[\s\S]*$/, "").length < 700;
                                 return (
                                   <>
                                     {!!m.steps?.length && (
                                       <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps} live={false} startedAt={m.startedAt} doneAt={m.doneAt} />
+                                    )}
+                                    {sa.card && (
+                                      <AnalysisCard
+                                        card={sa.card}
+                                        onDetail={
+                                          short && !streaming
+                                            ? () => run(`📌 Detail lengkap analisa ${sa.card?.symbol ?? (chart ?? "").replace(/^[A-Z_]+:/, "")} · TF ${sa.card?.timeframe ?? sp.plan?.timeframe ?? "1D"}`)
+                                            : undefined
+                                        }
+                                      />
                                     )}
                                     {chart && sp.plan && !streaming ? (
                                       <TradePlanChart symbol={chart} plan={sp.plan} persona={m.persona || hero(m.model)} />
                                     ) : chart ? (
                                       <TradingChart symbol={chart} />
                                     ) : null}
-                                    <Markdown text={tidyAnswer(sp.text)} />
+                                    <Markdown text={tidyAnswer(sa.text)} />
                                   </>
                                 );
                               })()
@@ -969,7 +996,12 @@ export default function AiChat({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    navigator.clipboard?.writeText(tidyAnswer(splitPlan(splitChart(m.content).text).text)).then(() => {
+                                    navigator.clipboard?.writeText(
+                                      (() => {
+                                        const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + sa.text);
+                                      })()
+                                    ).then(() => {
                                       setCopied(m.id);
                                       setTimeout(() => setCopied(null), 1500);
                                     })

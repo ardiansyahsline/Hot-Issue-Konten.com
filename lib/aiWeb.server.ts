@@ -558,6 +558,42 @@ export function analysisGuide(chart: string): string {
   ].join("\n");
 }
 
+/**
+ * Format jawaban analisa RINGKAS: website menggambar blok ```analisa jadi kartu metrik
+ * (bias, 4–6 angka terpenting, 3 sinyal), lalu chart trade plan. Teks bebas dibatasi 2 kalimat.
+ */
+export function compactGuide(chart: string, approach: "sr" | "pattern" | "full" | "auto", note = ""): string {
+  const market = /^IDX:/.test(chart) ? "saham_id" : /^(OANDA|FX|FX_IDC):/.test(chart) ? "forex" : /USDT$/.test(chart) ? "crypto" : "saham_global";
+  const prio: Record<string, string> = {
+    crypto: "Harga, Funding rate, Open interest, Long/short ritel (atau top trader), Fear & Greed, COT CME / Dominasi BTC",
+    forex: "Harga, Suku bunga / selisih bunga, Yield riil AS atau Indeks dolar, COT spekulan, Support, Resistance",
+    saham_id: "Harga, PER, PBV, ROE, Asing (net buy/sell + periode), Support / Resistance",
+    saham_global: "Harga, P/E, P/B, Pertumbuhan laba, Target analis, Support / Resistance",
+  };
+  const how: Record<string, string> = {
+    sr: "PENDEKATAN DIPILIH USER: SUPPORT & RESISTANCE — dasar entry/SL/TP adalah level S/R otomatis di data (sebut jumlah sentuhannya). Masukkan metrik 'Support' dan 'Resistance'.",
+    pattern:
+      "PENDEKATAN DIPILIH USER: CHART PATTERN — cari pola paling jelas dari candle di data (double top/bottom, triangle, flag, channel, head & shoulders, trendline, higher low/lower high). WAJIB isi \"pattern\" di blok tradeplan dengan titik dari candle, dan masukkan metrik 'Pola' (nama + status: sudah breakout / menunggu konfirmasi). Kalau tidak ada pola yang jelas, katakan jujur dan pakai S/R.",
+    full: "PENDEKATAN DIPILIH USER: LENGKAP — buat kartu ringkas dulu, lalu SETELAH blok tradeplan tulis analisa lengkap mengikuti KERANGKA di bawah (heading pendek, ringkas per bagian).",
+    auto: "Pilih pendekatan yang paling cocok dengan data (biasanya support & resistance).",
+  };
+  return [
+    "FORMAT JAWABAN: KARTU RINGKAS — website menggambar blok ```analisa jadi kartu metrik yang berkelas. Tulis berurutan:",
+    '1) Blok kode berlabel analisa berisi JSON satu baris, contoh: ```analisa\n{"symbol":"ETHUSDT","timeframe":"4H","bias":"bearish","confidence":"sedang","lead":"…","metrics":[{"label":"Harga","value":"2.405","note":"−1,24% · di bawah MA20","tone":"down"},{"label":"Funding","value":"+0,0087%","note":"netral","tone":"neutral"}],"signals":[{"text":"Lower high 2.737 → 2.575, ditolak di R1","tone":"bad"},{"text":"Batal kalau close harian > 2.575","tone":"good"}]}\n```',
+    "   - bias: bullish | bearish | netral; confidence: rendah | sedang | tinggi; timeframe sesuai permintaan user.",
+    "   - lead: 1–2 kalimat dengan pembuka & gaya KHAS KARAKTERMU — kesimpulan + apa yang ditunggu.",
+    `   - metrics: 4–6 angka TERPENTING dari data di atas. Prioritas: ${prio[market]}. value singkat format Indonesia, note maksimal 5 kata, tone up/down/neutral (up = mendukung harga naik). Metrik yang datanya tidak ada JANGAN dimasukkan (jangan mengarang).`,
+    "   - signals: tepat 3 poin terpenting (maks 14 kata), tone bad/warn/good; salah satunya level pembatalan.",
+    "2) Blok tradeplan (aturan di atas).",
+    "3) Maksimal 2 kalimat penutup khas karaktermu + pengingat singkat bahwa ini edukasi.",
+    approach === "full" ? "" : "JANGAN menulis analisa panjang, tabel markdown, atau mengulang angka kartu di teks — user bisa klik 'Detail lengkap' kalau mau versi panjang.",
+    how[approach],
+    note ? `Catatan dari user: ${note}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** nama lain kode forex/komoditas yang biasa dipakai di judul berita */
 const FX_WORDS: Record<string, string[]> = {
   XAU: ["gold", "emas"], XAG: ["silver", "perak"], IDR: ["rupiah"], EUR: ["euro"], JPY: ["yen"], GBP: ["pound", "sterling"],

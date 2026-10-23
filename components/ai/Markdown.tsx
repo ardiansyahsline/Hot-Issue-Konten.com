@@ -46,12 +46,13 @@ const C: Components = {
   blockquote: ({ children }) => <blockquote className="my-2 border-l-4 border-orange-500/60 pl-3 text-zinc-400">{children}</blockquote>,
   hr: () => <hr className="my-4 border-zinc-800" />,
   table: ({ children }) => (
-    <div className="my-3 overflow-x-auto rounded-xl border border-zinc-800">
-      <table className="w-full text-[13px]">{children}</table>
+    <div className="ai-table">
+      <table>{children}</table>
     </div>
   ),
-  th: ({ children }) => <th className="border-b border-zinc-800 bg-zinc-800/50 px-3 py-1.5 text-left font-semibold">{children}</th>,
-  td: ({ children }) => <td className="border-b border-zinc-800/60 px-3 py-1.5 align-top">{children}</td>,
+  th: ({ children }) => <th>{children}</th>,
+  // sel berisi angka (harga, persen, rasio) -> rata kanan & tebal
+  td: ({ children }) => <td className={isNumCell(children) ? "ai-num" : undefined}>{children}</td>,
   code: ({ className, children }) => {
     const text = String(children ?? "");
     const lang = /language-(\w+)/.exec(className ?? "")?.[1] ?? "";
@@ -62,6 +63,14 @@ const C: Components = {
 };
 
 /** Tampilkan jawaban AI (markdown: daftar, tabel, kode, dll.) */
+/** teks sel tabel (rekursif) untuk mendeteksi sel angka */
+const cellText = (n: unknown): string =>
+  typeof n === "string" || typeof n === "number" ? String(n) : Array.isArray(n) ? n.map(cellText).join("") : n && typeof n === "object" && "props" in n ? cellText((n as { props?: { children?: unknown } }).props?.children) : "";
+const isNumCell = (n: unknown) => {
+  const t = cellText(n).trim();
+  return !!t && t.length <= 28 && /\d/.test(t) && /^[\d.,+\-−–%x×:/→\s$Rp()~±≈]+$/i.test(t);
+};
+
 export default function Markdown({ text }: { text: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={C}>

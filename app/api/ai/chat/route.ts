@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { TRADE_INTENT, analysisGuide, buildWebContext, ensureTradePlan, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
+import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
+import { personaIntro } from "@/lib/aiPersona";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
@@ -217,6 +218,10 @@ export async function POST(req: NextRequest) {
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
   const noWeb: { context: string; lite?: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
+  // permintaan analisa / trade plan: tanya pendekatan dulu (S/R, chart pattern, lengkap) — kecuali ini jawaban dari kotak pertanyaan
+  const answered = /^📌\s*(Analisa|Detail lengkap)/i.test(lastText);
+  let askFor: WebPlan | null = null;
+  const cleanHist = hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content.replace(/\[\[ask:[\s\S]*?\]\]/g, "") }));
   if (useData) step("data", "run");
   if (webOn) step("decide", "run");
   const [context, web] = await Promise.all([
@@ -230,18 +235,37 @@ export async function POST(req: NextRequest) {
           base: cfg.base,
           headers: aiHeaders(cfg.key),
           models: [...new Set([...planners, ...candidates.filter((m) => m !== "auto")])],
-          history: hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })),
+          history: cleanHist,
           question: lastText,
         })
           .then((p) => {
             // analisa / trade plan suatu aset selalu pakai data harga & chart (kecuali sedang membahas gambar yang dikirim)
-            const plan = hasImages ? p : ensureTradePlan(p, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })));
+            const plan = hasImages ? p : ensureTradePlan(p, lastText, cleanHist);
             step("decide", plan ? "done" : "skip");
+            if (plan && !answered && !hasImages && TRADE_INTENT.test(lastText) && chartSymbol(plan)) {
+              askFor = plan;
+              return noWeb;
+            }
             return plan ? buildWebContext(plan, (k, st, extra) => step(k, st, extra)) : noWeb;
           })
           .catch(() => noWeb)
       : Promise.resolve(noWeb),
   ]);
+
+  // 5c) tanya pendekatan analisa dulu (kotak pilihan di website), tanpa memanggil AI
+  if (askFor) {
+    const plan = askFor as WebPlan;
+    const sym = chartSymbol(plan)!;
+    const askHero = chosenHero ?? heroName(candidates[0] === "auto" ? SMART : candidates[0]);
+    const label = sym.replace(/^[A-Z_]+:/, "");
+    const info = { sym, label, market: plan.market, tf: (plan.timeframe ?? detectTimeframe(lastText) ?? "1d").toUpperCase(), hero: askHero };
+    const text = `${personaIntro(askHero).replace(/[.…]+$/, "")} — ${label} mau dianalisa pakai pendekatan apa?\n\n[[ask:${JSON.stringify(info)}]]`;
+    emit({ t: "meta", model: candidates[0] === "auto" ? "" : candidates[0], persona: askHero, data: false, web: false, chart: null, fallback: false });
+    controller.enqueue(enc.encode(text));
+    await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: text, model: candidates[0], persona: askHero });
+    await supabase.from("ai_conversations").update({ updated_at: new Date().toISOString() }).eq("id", convId);
+    return;
+  }
 
   // 6) gambar -> data URL
   const toDataUrl = async (path: string) => {
@@ -258,7 +282,16 @@ export async function POST(req: NextRequest) {
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
-  const tradeIntent = TRADE_INTENT.test(lastText);
+  const tradeIntent = TRADE_INTENT.test(lastText) || answered;
+  // pendekatan yang dipilih di kotak pertanyaan: "📌 Analisa ETHUSDT · Support & Resistance · TF 4H"
+  const approach: "sr" | "pattern" | "full" | "auto" = /Detail lengkap|Lengkap ala analis/i.test(lastText)
+    ? "full"
+    : /Support\s*&\s*Resistance/i.test(lastText)
+      ? "sr"
+      : /Chart Pattern/i.test(lastText)
+        ? "pattern"
+        : "auto";
+  const userNote = answered ? (lastText.match(/\(([^)]{2,200})\)/)?.[1] ?? "") : "";
   if (tradeIntent && web.chart) {
     messages.push({
       role: "system",
@@ -267,7 +300,7 @@ export async function POST(req: NextRequest) {
         "WAJIB beri trade plan dengan ANGKA KONKRET: arah (long/short atau wait & see dengan level pemicunya), entry (boleh area), stop loss, TP1, TP2, timeframe, dan alasan singkat berdasarkan data.",
         "Patokan harga: pakai harga live / candle kalau ada; kalau tidak ada, pakai harga paling baru dari hasil browsing dan sebut tanggalnya ('per 23 Okt'). JANGAN minta user memberikan harga, JANGAN menjawab hanya dengan persentase.",
         "Tutup jawaban dengan blok ```tradeplan berisi JSON (symbol, side, entry, sl, tp[], timeframe) — website menggambarnya di chart. Untuk entry berupa area, isi entry dengan titik tengah area.",
-        analysisGuide(web.chart),
+        ...(approach === "full" ? [compactGuide(web.chart, approach, userNote), analysisGuide(web.chart)] : [compactGuide(web.chart, approach, userNote)]),
       ].join("\n"),
     });
   }
@@ -293,7 +326,7 @@ export async function POST(req: NextRequest) {
         content: [{ type: "text", text: m.content || "Tolong jelaskan gambar ini." }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))],
       });
     } else {
-      messages.push({ role: m.role, content: m.content + (imgs.length ? `\n[${imgs.length} gambar dilampirkan sebelumnya]` : "") });
+      messages.push({ role: m.role, content: m.content.replace(/\[\[ask:[\s\S]*?\]\]/g, "(menanyakan pendekatan analisa)") + (imgs.length ? `\n[${imgs.length} gambar dilampirkan sebelumnya]` : "") });
     }
   }
 

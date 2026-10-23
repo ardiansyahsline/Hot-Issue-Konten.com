@@ -114,3 +114,70 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .hero-bob, .hero-sway, .hero-hop, .hero-wiggle, .hero-eye, .hero-arm-wave, .hero-arm-point, .hero-prop-spin, .hero-talk .hero-mouth { animation: none !important; }
 }
+
+/* ---------- Kartu analisa AI & tabel jawaban (warna solid, tanpa gradasi) ----------
+   Mode gelap: "premium gelap" (navy + emas). Mode terang: "aksen lembut" (warna sesuai arti). */
+.ai-card { border-radius: 18px; overflow: hidden; border: 1px solid #1e293b; background: #0b1220; color: #e5e7eb; margin: 8px 0; box-shadow: 0 18px 40px -26px rgb(15 23 42 / 0.9); }
+.ai-card .ai-band { padding: 13px 15px 11px; background: #111a2e; border-bottom: 1px solid #1e293b; }
+.ai-card .ai-sym { font-size: 15px; font-weight: 700; color: #f8fafc; }
+.ai-card .ai-pill { font-size: 11px; font-weight: 800; letter-spacing: .03em; border-radius: 999px; padding: 2px 10px; border: 1px solid transparent; }
+.ai-card .ai-bearish { background: rgb(239 68 68 / .14); color: #fca5a5; border-color: rgb(239 68 68 / .35); }
+.ai-card .ai-bullish { background: rgb(34 197 94 / .14); color: #86efac; border-color: rgb(34 197 94 / .35); }
+.ai-card .ai-netral { background: rgb(148 163 184 / .14); color: #cbd5e1; border-color: rgb(148 163 184 / .3); }
+.ai-card .ai-conf { background: rgb(251 191 36 / .1); color: #fcd34d; border-color: rgb(251 191 36 / .3); }
+.ai-card .ai-lead { margin: 7px 0 0; font-size: 13.5px; line-height: 1.55; color: #cbd5e1; }
+.ai-card .ai-body { padding: 13px 15px; }
+.ai-card .ai-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 640px) { .ai-card .ai-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.ai-card .ai-tile { position: relative; border-radius: 12px; padding: 9px 10px 9px 12px; background: #111a2e; border: 1px solid #1f2a40; }
+.ai-card .ai-tile::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: #334155; }
+.ai-card .ai-tile.up::before { background: #22c55e; } .ai-card .ai-tile.down::before { background: #ef4444; }
+.ai-card .ai-k { display: block; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; }
+.ai-card .ai-v { display: block; margin-top: 2px; font-size: 16.5px; font-weight: 700; line-height: 1.25; color: #f8fafc; font-variant-numeric: tabular-nums; }
+.ai-card .ai-tile.up .ai-v { color: #4ade80; } .ai-card .ai-tile.down .ai-v { color: #f87171; }
+.ai-card .ai-n { display: block; margin-top: 2px; font-size: 11px; line-height: 1.35; color: #94a3b8; }
+.ai-card .ai-sec { margin: 13px 0 5px; font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #fbbf24; }
+.ai-card .ai-sig { display: flex; align-items: flex-start; gap: 9px; padding: 7px 0; font-size: 13px; color: #e2e8f0; border-bottom: 1px solid #1e293b; }
+.ai-card .ai-sig:last-child { border-bottom: 0; }
+.ai-card .ai-ic { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; font-size: 0; }
+.ai-card .ai-sig.good .ai-ic { background: #4ade80; } .ai-card .ai-sig.warn .ai-ic { background: #fbbf24; } .ai-card .ai-sig.bad .ai-ic { background: #f87171; }
+.ai-card .ai-foot { padding: 8px 15px; border-top: 1px solid #1e293b; font-size: 11.5px; color: #64748b; }
+.ai-card .ai-foot button { font-weight: 700; color: #fbbf24; }
+
+html.light .ai-card { background: #fff; color: #27272a; border-color: #e7e5e4; box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 16px 36px -26px rgb(234 88 12 / .35); }
+html.light .ai-card .ai-band { background: #fff7ed; border-bottom-color: #fde4d6; }
+html.light .ai-card .ai-sym { color: #18181b; }
+html.light .ai-card .ai-bearish { background: #dc2626; color: #fff; border-color: #dc2626; }
+html.light .ai-card .ai-bullish { background: #16a34a; color: #fff; border-color: #16a34a; }
+html.light .ai-card .ai-netral { background: #71717a; color: #fff; border-color: #71717a; }
+html.light .ai-card .ai-conf { background: #fff; color: #c2410c; border-color: #fed7aa; }
+html.light .ai-card .ai-lead { color: #3f3f46; }
+html.light .ai-card .ai-tile { background: #fafaf9; border-color: #e7e5e4; }
+html.light .ai-card .ai-tile::before { background: #a8a29e; }
+html.light .ai-card .ai-tile.up { background: #f0fdf4; border-color: #bbf7d0; } html.light .ai-card .ai-tile.up::before { background: #22c55e; }
+html.light .ai-card .ai-tile.down { background: #fef2f2; border-color: #fecaca; } html.light .ai-card .ai-tile.down::before { background: #ef4444; }
+html.light .ai-card .ai-k { color: #78716c; }
+html.light .ai-card .ai-v { color: #18181b; }
+html.light .ai-card .ai-tile.up .ai-v { color: #166534; } html.light .ai-card .ai-tile.down .ai-v { color: #991b1b; }
+html.light .ai-card .ai-n { color: #78716c; }
+html.light .ai-card .ai-tile.up .ai-n { color: #15803d; } html.light .ai-card .ai-tile.down .ai-n { color: #b91c1c; }
+html.light .ai-card .ai-sec { color: #a8a29e; }
+html.light .ai-card .ai-sig { border: 0; border-radius: 10px; padding: 7px 10px; margin-bottom: 5px; }
+html.light .ai-card .ai-sig.bad { background: #fef2f2; color: #7f1d1d; } html.light .ai-card .ai-sig.warn { background: #fffbeb; color: #78350f; } html.light .ai-card .ai-sig.good { background: #f0fdf4; color: #14532d; }
+html.light .ai-card .ai-ic { width: auto; height: auto; margin-top: 0; border-radius: 0; background: none !important; font-size: 12px; line-height: 1.55; }
+html.light .ai-card .ai-foot { border-top: 1px dashed #e7e5e4; color: #a8a29e; }
+html.light .ai-card .ai-foot button { color: #ea580c; }
+
+/* tabel di jawaban AI: header oranye solid, baris selang-seling, kolom pertama tebal, angka rata kanan */
+.ai-table { margin: 12px 0; overflow-x: auto; border-radius: 13px; border: 1px solid rgb(234 88 12 / .35); }
+.ai-table table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.ai-table th { background: #c2410c; color: #fff; text-align: left; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 8px 11px; white-space: nowrap; }
+.ai-table td { padding: 7px 11px; vertical-align: top; border-bottom: 1px solid rgb(234 88 12 / .14); }
+.ai-table tr:nth-child(even) td { background: rgb(234 88 12 / .06); }
+.ai-table tr:last-child td { border-bottom: 0; }
+.ai-table td:first-child { font-weight: 700; color: #fdba74; }
+.ai-table td.ai-num { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+html.light .ai-table { border-color: #fed7aa; }
+html.light .ai-table td { border-bottom-color: #fde8d7; }
+html.light .ai-table tr:nth-child(even) td { background: #fffaf5; }
+html.light .ai-table td:first-child { color: #7c2d12; }
