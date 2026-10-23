@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { canWriteIssues } from "@/lib/roles";
+import MusicButton from "./MusicButton";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -86,6 +87,7 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
           </Link>
         );
       })}
+      <MusicButton />
     </nav>
   );
 }
