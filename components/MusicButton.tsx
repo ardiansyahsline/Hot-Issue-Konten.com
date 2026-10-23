@@ -34,6 +34,13 @@ export default function MusicButton() {
   const ctx = useRef<AudioContext | null>(null);
   const gain = useRef<GainNode | null>(null);
   const nextAt = useRef(0);
+  // auto-sambung lagi: musik jalan terus sampai user sendiri yang pause/stop
+  const want = useRef(false);
+  const gen = useRef(0);
+  const lastChunk = useRef(0);
+  const retry = useRef(0);
+  const retryT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef<{ prompts: object[]; cfg: object }>({ prompts: [], cfg: {} });
 
   useEffect(() => {
     try {
@@ -63,6 +70,24 @@ export default function MusicButton() {
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
   useEffect(() => () => stopAll(), []);
+  // penjaga: kalau koneksi diam/putus atau audio disuspend browser, sambungkan & lanjutkan lagi
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!want.current) return;
+      if (ctx.current && ctx.current.state !== "running") ctx.current.resume().catch(() => {});
+      if (session.current && lastChunk.current && Date.now() - lastChunk.current > 20000) reconnect();
+    }, 5000);
+    const vis = () => want.current && ctx.current?.state !== "running" && ctx.current?.resume().catch(() => {});
+    document.addEventListener("visibilitychange", vis);
+    window.addEventListener("focus", vis);
+    window.addEventListener("online", () => want.current && !session.current && reconnect());
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", vis);
+      window.removeEventListener("focus", vis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const cfgOf = (p: Preset, b = bpm, nd = noDrums) => ({ musicGenerationConfig: { bpm: b ?? p.bpm, density: p.density, brightness: p.brightness, guidance: 4.0, temperature: 1.1, muteDrums: nd } });
   const promptsOf = (p: Preset, c = active) => (c.trim() ? [{ text: c.trim().slice(0, 400), weight: 1.4 }, ...p.prompts.map((x) => ({ ...x, weight: 0.5 }))] : p.prompts);
@@ -95,9 +120,84 @@ export default function MusicButton() {
     nextAt.current += buf.duration;
   };
 
+  /** buka sesi Lyria baru memakai setelan terakhir (AudioContext dipakai ulang) */
+  const connect = async () => {
+    const g = ++gen.current;
+    const r = await fetch("/api/music/key", { cache: "no-store" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Musik belum disetel");
+    if (!ctx.current) {
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      ctx.current = new AC({ sampleRate: 48000 });
+      gain.current = ctx.current.createGain();
+      gain.current.gain.value = vol;
+      gain.current.connect(ctx.current.destination);
+      nextAt.current = 0;
+    }
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey: j.key, apiVersion: "v1alpha" });
+    const s = (await ai.live.music.connect({
+      model: j.model,
+      callbacks: {
+        onmessage: (m: { serverContent?: { audioChunks?: { data?: string; mimeType?: string }[] }; filteredPrompt?: { filteredReason?: string } }) => {
+          if (g !== gen.current) return;
+          for (const c of m.serverContent?.audioChunks ?? [])
+            if (c.data) {
+              lastChunk.current = Date.now();
+              retry.current = 0;
+              playChunk(c.data, c.mimeType);
+            }
+          if (m.filteredPrompt) setErr(`Prompt ditolak: ${m.filteredPrompt.filteredReason ?? "-"}`);
+        },
+        onerror: () => {
+          if (g === gen.current) lost();
+        },
+        onclose: () => {
+          if (g === gen.current) lost();
+        },
+      },
+    })) as unknown as Session;
+    if (g !== gen.current) return s.close();
+    session.current = s;
+    lastChunk.current = Date.now();
+    await s.setWeightedPrompts({ weightedPrompts: latest.current.prompts });
+    await s.setMusicGenerationConfig(latest.current.cfg);
+    s.play();
+    await ctx.current?.resume();
+  };
+  /** sesi putus (batas waktu server / jaringan / laptop tidur) -> sambung lagi otomatis kalau user masih mau dengar */
+  function lost() {
+    session.current = null;
+    if (!want.current) return setState((x) => (x === "error" ? x : "idle"));
+    reconnect();
+  }
+  function reconnect() {
+    if (retryT.current) return;
+    try {
+      gen.current++;
+      session.current?.close();
+    } catch {}
+    session.current = null;
+    const wait = Math.min(15000, 800 * 2 ** retry.current++);
+    retryT.current = setTimeout(async () => {
+      retryT.current = null;
+      if (!want.current) return;
+      try {
+        await connect();
+        setErr(null);
+        setState("playing");
+      } catch {
+        reconnect();
+      }
+    }, wait);
+  }
+
   const start = async (p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0]) => {
     setErr(null);
+    want.current = true;
+    latest.current = { prompts: promptsOf(p), cfg: cfgOf(p) };
     if (session.current) {
+      lastChunk.current = Date.now();
       session.current.play();
       await ctx.current?.resume();
       setState("playing");
@@ -105,51 +205,27 @@ export default function MusicButton() {
     }
     setState("connecting");
     try {
-      const r = await fetch("/api/music/key", { cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Musik belum disetel");
-      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      ctx.current = new AC({ sampleRate: 48000 });
-      gain.current = ctx.current.createGain();
-      gain.current.gain.value = vol;
-      gain.current.connect(ctx.current.destination);
-      nextAt.current = 0;
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: j.key, apiVersion: "v1alpha" });
-      const s = (await ai.live.music.connect({
-        model: j.model,
-        callbacks: {
-          onmessage: (m: { serverContent?: { audioChunks?: { data?: string; mimeType?: string }[] }; filteredPrompt?: { filteredReason?: string } }) => {
-            for (const c of m.serverContent?.audioChunks ?? []) if (c.data) playChunk(c.data, c.mimeType);
-            if (m.filteredPrompt) setErr(`Prompt ditolak: ${m.filteredPrompt.filteredReason ?? "-"}`);
-          },
-          onerror: () => {
-            setErr("Koneksi musik terputus.");
-            setState("error");
-          },
-          onclose: () => {
-            session.current = null;
-            setState((x) => (x === "error" ? x : "idle"));
-          },
-        },
-      })) as unknown as Session;
-      session.current = s;
-      await s.setWeightedPrompts({ weightedPrompts: promptsOf(p) });
-      await s.setMusicGenerationConfig(cfgOf(p));
-      s.play();
+      retry.current = 0;
+      await connect();
       setState("playing");
     } catch (e) {
+      want.current = false;
       setErr((e as Error).message || "Gagal memulai musik");
       setState("error");
       stopAll();
     }
   };
   const pause = async () => {
+    want.current = false;
     session.current?.pause();
     await ctx.current?.suspend();
     setState("paused");
   };
   function stopAll() {
+    want.current = false;
+    gen.current++;
+    if (retryT.current) clearTimeout(retryT.current);
+    retryT.current = null;
     try {
       session.current?.stop();
       session.current?.close();
@@ -161,6 +237,7 @@ export default function MusicButton() {
   }
   const choose = async (p: Preset) => {
     setPreset(p.id);
+    latest.current = { prompts: promptsOf(p), cfg: cfgOf(p) };
     const s = session.current;
     if (!s) return start(p);
     // ganti gaya: prompt baru + reset supaya tempo berubah
@@ -172,6 +249,7 @@ export default function MusicButton() {
   /** terapkan prompt sendiri (tanpa reset: transisi halus) */
   const applyCustom = async (text: string) => {
     setActive(text);
+    latest.current = { ...latest.current, prompts: promptsOf(cur(), text) };
     const s = session.current;
     if (!s) return start(cur());
     await s.setWeightedPrompts({ weightedPrompts: promptsOf(cur(), text) });
@@ -180,6 +258,7 @@ export default function MusicButton() {
   const applyCfg = async (b: number | null, nd: boolean) => {
     setBpm(b);
     setNoDrums(nd);
+    latest.current = { ...latest.current, cfg: cfgOf(cur(), b, nd) };
     const s = session.current;
     if (!s) return;
     await s.setMusicGenerationConfig(cfgOf(cur(), b, nd));
