@@ -357,6 +357,8 @@ export default function AiChat({
   const [webMode, setWebMode] = useState<"auto" | "off">("auto");
   const [webReady, setWebReady] = useState(false);
   const [view, setView] = useState<"chat" | "chars">("chat");
+  // mode Cowork: halaman sambutan khusus + kerja di folder laptop
+  const [cowork, setCowork] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [zoom, setZoom] = useState<string | null>(null);
@@ -999,7 +1001,7 @@ export default function AiChat({
             ☰
           </button>
           <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
-            <button type="button" onClick={() => setView("chat")} className={`rounded-full px-2.5 py-1 ${view === "chat" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat"}>
+            <button type="button" onClick={() => { setView("chat"); setCowork(false); }} className={`rounded-full px-2.5 py-1 ${view === "chat" && !cowork ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat" && !cowork}>
               💬 Chat
             </button>
             {canFolder && (
@@ -1008,11 +1010,14 @@ export default function AiChat({
                   type="button"
                   onClick={() => {
                     setView("chat");
-                    if (folder) rescanFolder();
+                    if (!cowork) {
+                      newChat();
+                      setCowork(true);
+                    } else if (folder) rescanFolder();
                     else connectFolder();
                   }}
                   disabled={folderBusy || !!setupError}
-                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 ${folder ? "bg-violet-500/15 text-violet-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 ${cowork && view === "chat" ? "bg-violet-500/15 text-violet-400" : folder ? "text-violet-400" : "text-zinc-500 hover:text-zinc-300"}`}
                   aria-label="Cowork: AI kerja langsung di folder laptop kamu"
                 >
                   {folderBusy ? "⏳" : "💼"}
@@ -1105,6 +1110,54 @@ export default function AiChat({
               setTimeout(() => ta.current?.focus(), 50);
             }}
           />
+        ) : msgs.length === 0 && !loadingMsgs && cowork ? (
+          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+            <div className="relative">
+              <HeroArt hero={hero(model)} size={104} title={hero(model)} />
+              <span className="absolute -right-3 top-2 animate-bounce text-[26px]">💼</span>
+            </div>
+            <h2 className="mt-2 font-display text-[22px] font-bold">Selamat datang di Cowork, {firstName}! 👋</h2>
+            <p className="mt-1 max-w-[560px] text-[13.5px] text-zinc-400">
+              Di sini {hero(model)} bisa ikut kerja langsung di folder laptop kamu. Semua perubahan kamu cek dulu sebelum dijalankan, dan file tetap di laptop kamu.
+            </p>
+            {folder ? (
+              <p className="mt-3 rounded-full bg-violet-500/10 px-3 py-1 text-[12.5px] font-semibold text-violet-400">
+                💼 Folder terhubung: {folder.root.name} · {folder.files.length.toLocaleString("id-ID")} file
+              </p>
+            ) : (
+              <button type="button" onClick={connectFolder} disabled={folderBusy} className="mt-3 rounded-xl bg-violet-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-violet-500 disabled:opacity-60">
+                {folderBusy ? "Membaca folder…" : "📁 Pilih folder dulu"}
+              </button>
+            )}
+            {!folder && <p className="mt-1 text-[11px] text-zinc-500">Pilih subfolder (bukan Downloads/Documents/Desktop langsung) · Chrome / Edge di laptop</p>}
+            <div className="mt-5 grid w-full max-w-[640px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
+              {[
+                { icon: "📊", t: "Data mentah → PPT laporan rapi", d: "Excel/CSV per divisi jadi slide gaya Konten.com", p: "Bikinin PPT laporan dari data di folder ini, per divisi, lengkap grafik & kesimpulan" },
+                { icon: "🖼️", t: "Report campaign siap kirim", d: "Halaman Campaign Performance (PNG)", p: "Bikinin report campaign dari data di folder ini" },
+                { icon: "🗂️", t: "Rapihin folder berantakan", d: "Pisah per jenis / bulan, otomatis", p: "Rapihin folder ini per jenis file, screenshot pisahin per bulan" },
+                { icon: "🔁", t: "Cari & beresin file dobel", d: "Duplikat dipindah ke _Duplikat", p: "Cari file duplikat di folder ini dan pindahin ke _Duplikat" },
+                { icon: "✏️", t: "Ganti nama massal", d: "Hapus (1), samakan format tanggal", p: "Rapihin nama file: hapus (1) (2), kasih format tanggal di depan" },
+                { icon: "📈", t: "Rangkum isi Excel / CSV", d: "Total, rata-rata, temuan penting", p: "Rangkum isi file data di folder ini: total, tren, dan temuan penting" },
+              ].map((x) => (
+                <button
+                  key={x.t}
+                  type="button"
+                  onClick={() => {
+                    setInput(x.p);
+                    if (!folder) connectFolder();
+                    setTimeout(() => ta.current?.focus(), 30);
+                  }}
+                  className="rounded-xl border border-zinc-800 px-3 py-2.5 text-left transition hover:border-violet-500/50 hover:bg-violet-500/5"
+                >
+                  <span className="block font-semibold text-zinc-200">
+                    {x.icon} {x.t}
+                  </span>
+                  <span className="block text-[11.5px] text-zinc-500">{x.d}</span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-6 w-full max-w-[680px]">{composer}</div>
+          </div>
         ) : msgs.length === 0 && !loadingMsgs ? (
           <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
             <HeroArt hero={hero(model)} size={92} title={hero(model)} />
