@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type YTPlayer = {
   loadVideoById(id: string): void;
-  loadPlaylist(o: { list: string; listType: "playlist"; index?: number }): void;
+  loadPlaylist(o: { list: string; listType: "playlist"; index?: number } | string[], index?: number): void;
   playVideo(): void;
   pauseVideo(): void;
   nextVideo(): void;
@@ -17,7 +17,7 @@ type YTPlayer = {
   getPlaylist(): string[] | null;
   destroy(): void;
 };
-type Track = { kind: "video" | "playlist"; id: string; list?: string; title: string; channel?: string };
+type Track = { kind: "video" | "playlist" | "queue"; id: string; list?: string; ids?: string[]; title: string; channel?: string };
 type Hit = { id: string; title: string; channel: string; thumb: string };
 const KEY = "cs-music-yt";
 
@@ -60,8 +60,14 @@ const loadApi = () =>
  * ▶ YouTube / YouTube Music lewat pemutar resmi (embed). Lagu bebas: tempel link atau cari.
  * Pemutar mengambang di pojok (wajib terlihat, min. 200px, sesuai aturan YouTube), tetap jalan saat pindah halaman.
  */
-export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTMLElement | null; vol: number; onStart: () => void; stopTick: number }) {
+const CORNERS = ["bottom-4 right-4", "bottom-4 left-4", "top-20 left-4", "top-20 right-4"];
+
+export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { panel: HTMLElement | null; vol: number; onStart: () => void; stopTick: number; onPlaying?: (on: boolean) => void }) {
   const [track, setTrack] = useState<Track | null>(null);
+  const cur = useRef<Track | null>(null);
+  const [corner, setCorner] = useState(0);
+  const [topTab, setTopTab] = useState<"id" | "global">("id");
+  const [tops, setTops] = useState<Record<string, Hit[] | string>>({});
   const [playing, setPlaying] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
@@ -75,17 +81,37 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
     try {
       const s = JSON.parse(localStorage.getItem(KEY) ?? "{}");
       if (Array.isArray(s.recent)) setRecent(s.recent.slice(0, 8));
+      if (typeof s.corner === "number") setCorner(s.corner % CORNERS.length);
     } catch {}
   }, []);
   const remember = (t: Track) =>
     setRecent((r) => {
       const n = [t, ...r.filter((x) => x.id !== t.id)].slice(0, 8);
       try {
-        localStorage.setItem(KEY, JSON.stringify({ recent: n }));
+        localStorage.setItem(KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(KEY) ?? "{}"), recent: n }));
       } catch {}
       return n;
     });
   useEffect(() => player.current?.setVolume(Math.round(vol * 100)), [vol]);
+  useEffect(() => onPlaying?.(playing), [playing, onPlaying]);
+  const moveCorner = () =>
+    setCorner((c) => {
+      const n = (c + 1) % CORNERS.length;
+      try {
+        localStorage.setItem(KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(KEY) ?? "{}"), corner: n }));
+      } catch {}
+      return n;
+    });
+  // top 10 trending (diambil sekali per buka, server cache 3 jam)
+  useEffect(() => {
+    if (!panel || tops[topTab]) return;
+    setTops((t) => ({ ...t, [topTab]: "loading" }));
+    fetch(`/api/music/yt?top=${topTab}`)
+      .then((r) => r.json())
+      .then((j) => setTops((t) => ({ ...t, [topTab]: j.error === "nokey" ? "Daftar trending aktif setelah admin isi YOUTUBE_API_KEY." : j.error || j.items || [] })))
+      .catch(() => setTops((t) => ({ ...t, [topTab]: "Gagal memuat trending." })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel, topTab]);
   // musik AI diputar -> YouTube dijeda
   useEffect(() => {
     if (stopTick) player.current?.pauseVideo();
@@ -96,10 +122,12 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
     setMsg(null);
     onStart();
     setTrack(t);
+    cur.current = t;
     const YT = await loadApi();
     const go = (p: YTPlayer) => {
       p.setVolume(Math.round(vol * 100));
-      if (t.kind === "playlist") p.loadPlaylist({ list: t.id, listType: "playlist" });
+      if (t.kind === "queue" && t.ids) p.loadPlaylist(t.ids, Math.max(0, t.ids.indexOf(t.id)));
+      else if (t.kind === "playlist") p.loadPlaylist({ list: t.id, listType: "playlist" });
       else if (t.list) p.loadPlaylist({ list: t.list, listType: "playlist" }), setTimeout(() => (p.getVideoData().video_id !== t.id ? p.loadVideoById(t.id) : null), 1500);
       else p.loadVideoById(t.id);
     };
@@ -123,10 +151,15 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
           if (e.data === 1) {
             const d = e.target.getVideoData();
             setTrack((x) => (x ? { ...x, title: d.title || x.title, channel: d.author || x.channel } : x));
-            if (d.title) remember({ ...t, title: t.kind === "playlist" ? `Playlist · ${d.title}` : d.title, channel: d.author });
+            const c = cur.current;
+            if (d.title && c) remember(c.kind === "queue" ? { kind: "video", id: d.video_id || c.id, title: d.title, channel: d.author } : { ...c, title: c.kind === "playlist" ? `Playlist · ${d.title}` : d.title, channel: d.author });
           }
         },
-        onError: (e: { data: number }) => setMsg(e.data === 101 || e.data === 150 ? "Lagu ini tidak boleh diputar di luar YouTube oleh pemiliknya. Coba versi/lagu lain." : "Video tidak bisa diputar. Cek lagi link-nya."),
+        onError: (e: { data: number; target: YTPlayer }) => {
+          // di antrean (top 10 / playlist): lagu yang diblokir pemiliknya dilewati otomatis
+          if (cur.current && cur.current.kind !== "video") return void setTimeout(() => e.target.nextVideo(), 800);
+          setMsg(e.data === 101 || e.data === 150 ? "Lagu ini tidak boleh diputar di luar YouTube oleh pemiliknya. Coba versi/lagu lain." : "Video tidak bisa diputar. Cek lagi link-nya.");
+        },
       },
     });
   };
@@ -162,7 +195,8 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
       setBusy(false);
     }
   };
-  const isList = track && (track.kind === "playlist" || track.list);
+  const isList = track && (track.kind !== "video" || track.list);
+  const topList = tops[topTab];
 
   const ui = (
     <div>
@@ -217,6 +251,50 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
           </button>
         </div>
       )}
+      {!hits.length && (
+        <div className="mt-2.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">🔥 Top 10 trending</span>
+            <div className="ml-auto flex rounded-full bg-zinc-800 p-0.5 text-[11px] font-semibold">
+              {(
+                [
+                  ["id", "🇮🇩 Indo"],
+                  ["global", "🌍 Global"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setTopTab(k)} className={`rounded-full px-2 py-0.5 ${topTab === k ? "bg-red-600 text-white" : "text-zinc-400"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          {topList === "loading" || !topList ? (
+            <p className="mt-1.5 text-[11.5px] text-zinc-500">Memuat…</p>
+          ) : typeof topList === "string" ? (
+            <p className="mt-1.5 text-[11.5px] text-zinc-500">{topList}</p>
+          ) : (
+            <div className="mt-1 max-h-[230px] space-y-0.5 overflow-y-auto">
+              {topList.map((h, i) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => play({ kind: "queue", id: h.id, ids: topList.map((x) => x.id), title: h.title, channel: h.channel })}
+                  className={`flex w-full items-center gap-2 rounded-lg p-1 text-left hover:bg-zinc-800 ${track?.title === h.title ? "bg-red-500/10" : ""}`}
+                >
+                  <b className="w-4 shrink-0 text-center text-[12px] text-zinc-500">{i + 1}</b>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={h.thumb} alt="" className="h-8 w-11 shrink-0 rounded object-cover" />
+                  <span className="min-w-0">
+                    <span className="line-clamp-1 block text-[12.5px] font-semibold text-zinc-200">{h.title}</span>
+                    <span className="block truncate text-[11px] text-zinc-500">{h.channel}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {Array.isArray(topList) && topList.length > 0 && <p className="mt-1 text-[10.5px] text-zinc-500">Klik satu lagu → 10 lagu diputar berurutan. Sumber: chart resmi YouTube{topTab === "global" ? " (gabungan US, UK, Korea, Jepang, Brasil, India)" : " Indonesia"}.</p>}
+        </div>
+      )}
       {!hits.length && recent.length > 0 && (
         <div className="mt-2">
           <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Terakhir diputar</div>
@@ -238,12 +316,15 @@ export default function YtMusic({ panel, vol, onStart, stopTick }: { panel: HTML
       {panel && createPortal(ui, panel)}
       {/* pemutar mengambang: tetap terlihat (aturan YouTube) */}
       <div
-        className={`fixed bottom-4 right-4 z-[80] overflow-hidden rounded-xl border border-zinc-800 bg-black shadow-2xl transition-all ${track ? "" : "pointer-events-none invisible"}`}
+        className={`fixed ${CORNERS[corner]} z-[80] overflow-hidden rounded-xl border border-zinc-800 bg-black shadow-2xl transition-all ${track ? "" : "pointer-events-none invisible"}`}
         style={{ width: "min(356px, calc(100vw - 32px))" }}
       >
         <div className="flex items-center gap-1 bg-zinc-900 px-2 py-1 text-[11px]">
           <span className={`truncate ${playing ? "text-red-400" : "text-zinc-400"}`}>{playing ? "▶" : "⏸"} {track?.title || "YouTube"}</span>
-          <button type="button" onClick={close} className="ml-auto px-1 text-zinc-400 hover:text-zinc-100" aria-label="Tutup">
+          <button type="button" onClick={moveCorner} className="ml-auto px-1 text-zinc-400 hover:text-zinc-100" title="Pindah pojok" aria-label="Pindah pojok">
+            ⇄
+          </button>
+          <button type="button" onClick={close} className="px-1 text-zinc-400 hover:text-zinc-100" aria-label="Tutup">
             ✕
           </button>
         </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import YtMusic from "./YtMusic";
+import Meteors from "./Meteors";
 
 type Preset = { id: string; icon: string; name: string; desc: string; prompts: { text: string; weight: number }[]; bpm: number; density: number; brightness: number };
 const PRESETS: Preset[] = [
@@ -22,6 +23,7 @@ export default function MusicButton() {
   const [tab, setTab] = useState<"ai" | "yt">("ai");
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [ytStop, setYtStop] = useState(0);
+  const [ytOn, setYtOn] = useState(false);
   const [state, setState] = useState<"idle" | "connecting" | "playing" | "paused" | "error">("idle");
   const [err, setErr] = useState<string | null>(null);
   const [preset, setPreset] = useState(PRESETS[0].id);
@@ -278,11 +280,11 @@ export default function MusicButton() {
         ref={btn}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`relative whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium transition ${playing ? "text-emerald-400" : "text-zinc-400 hover:text-zinc-100"}`}
+        className={`relative whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium transition ${playing || ytOn ? "text-emerald-400" : "text-zinc-400 hover:text-zinc-100"}`}
         title="Musik sambil kerja: AI atau YouTube"
         aria-label="Musik"
       >
-        {playing ? <span className="inline-block animate-pulse">🎵</span> : "🎵"}
+        {playing || ytOn ? <span className="inline-block animate-pulse">🎵</span> : "🎵"}
       </button>
       {open && (
         <div ref={box} className="fixed z-[90] max-h-[calc(100vh-80px)] w-[300px] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left" style={{ top: pos.top, left: pos.left, boxShadow: "var(--shadow-pop), 0 20px 40px -16px rgba(0,0,0,.4)" }}>
@@ -416,10 +418,12 @@ export default function MusicButton() {
           )}
         </div>
       )}
+      <Meteors on={playing || ytOn} />
       <YtMusic
         panel={open && tab === "yt" ? panel : null}
         vol={vol}
         stopTick={ytStop}
+        onPlaying={setYtOn}
         onStart={() => {
           if (want.current || session.current) {
             pause();
