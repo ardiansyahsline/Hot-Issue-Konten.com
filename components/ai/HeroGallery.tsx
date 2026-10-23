@@ -155,11 +155,11 @@ export default function HeroGallery({
         <p className="mt-0.5 text-[12.5px] text-zinc-500">
           Tiap hero punya kepribadian & gaya jawab sendiri (gaya 16 tipe MBTI). Pilih hero untuk ngobrol — gaya jawabnya ikut hero yang sedang menjawab.
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <div className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] sm:flex-wrap sm:overflow-visible">
           <button
             type="button"
             onClick={() => setGroup("all")}
-            className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${group === "all" ? "border-orange-500/50 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-500"}`}
+            className={`shrink-0 rounded-full border px-3 py-1 text-[12px] font-semibold ${group === "all" ? "border-orange-500/50 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-500"}`}
           >
             Semua
           </button>
@@ -169,7 +169,7 @@ export default function HeroGallery({
               type="button"
               onClick={() => setGroup(g)}
               title={GROUPS[g].desc}
-              className="rounded-full border px-3 py-1 text-[12px] font-semibold"
+              className="shrink-0 rounded-full border px-3 py-1 text-[12px] font-semibold"
               style={group === g ? { borderColor: GROUPS[g].color, background: GROUPS[g].soft, color: GROUPS[g].color } : undefined}
             >
               <span className={group === g ? "" : "text-zinc-500"}>
@@ -177,7 +177,7 @@ export default function HeroGallery({
               </span>
             </button>
           ))}
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / tipe / sifat…" className="input ml-auto w-full py-1.5 text-[12.5px] sm:w-56" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / tipe / sifat…" className="input ml-auto w-44 shrink-0 py-1.5 text-[12.5px] sm:w-56" />
         </div>
         {owner && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 px-3 py-2 text-[12px]">

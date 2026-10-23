@@ -25,7 +25,7 @@ import DeckCard from "./DeckCard";
 import ReportCard from "./ReportCard";
 import { splitReports } from "@/lib/kontenDesign";
 import { splitDeck } from "@/lib/deck";
-import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, splitFilePlan, type Scan } from "@/lib/localFolder";
+import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, scanFromFiles, splitFilePlan, type Scan } from "@/lib/localFolder";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
 export type AiStep = { id: string; k: string; s: "run" | "done" | "skip"; q?: string; n?: number; sym?: string; src?: string; to?: string; plan?: boolean };
@@ -359,6 +359,8 @@ export default function AiChat({
   const [view, setView] = useState<"chat" | "chars">("chat");
   // mode Cowork: halaman sambutan khusus + kerja di folder laptop
   const [cowork, setCowork] = useState(false);
+  // tiap chat baru: user memilih "teman ngobrol" (hero) dulu — boleh langsung ketik juga
+  const [heroPicked, setHeroPicked] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [zoom, setZoom] = useState<string | null>(null);
@@ -490,7 +492,19 @@ export default function AiChat({
   const [folderBusy, setFolderBusy] = useState(false);
   const [canFolder, setCanFolder] = useState(false);
   useEffect(() => setCanFolder(folderSupported()), []);
+  const pickFilesRef = useRef<HTMLInputElement>(null);
+  const onPickedFiles = (list: FileList | null) => {
+    const files = Array.from(list ?? []);
+    if (!files.length) return;
+    const first = files[0] as File & { webkitRelativePath?: string };
+    const name = first.webkitRelativePath ? first.webkitRelativePath.split("/")[0] : files.length === 1 ? files[0].name : `${files.length} file dipilih`;
+    const sc = scanFromFiles(files, name);
+    setFolder(sc);
+    flash(`💼 Cowork: ${sc.files.length.toLocaleString("id-ID")} file siap dibaca`);
+  };
   const connectFolder = async () => {
+    // HP / Safari / Firefox: pilih file (baca saja)
+    if (!canFolder) return pickFilesRef.current?.click();
     const root = await pickFolder();
     if (!root) return;
     setFolderBusy(true);
@@ -506,6 +520,7 @@ export default function AiChat({
   };
   const rescanFolder = async () => {
     if (!folder) return;
+    if (folder.root.readonly) return pickFilesRef.current?.click();
     try {
       setFolder(await scanFolder(folder.root));
     } catch {}
@@ -607,6 +622,7 @@ export default function AiChat({
     if (busy) abortRef.current?.abort();
     setActiveId(null);
     setMsgs([]);
+    setHeroPicked(false);
     setUrl(null);
     setSideOpen(false);
     setErr(null);
@@ -635,7 +651,7 @@ export default function AiChat({
       let folderBody: { name: string; listing: string; contents: string } | null = null;
       if (folder) {
         const ask = content || [...msgs].reverse().find((x) => x.role === "user")?.content || "";
-        let sc = await scanFolder(folder.root);
+        let sc = folder.root.readonly ? folder : await scanFolder(folder.root);
         if (/duplikat|kembar|dobel|double|sama persis|ganda/i.test(ask)) sc = { ...sc, dups: await findDuplicates(sc) };
         setFolder(sc);
         const needRead = /\b(isi|baca|rangkum|ringkas|data|laporan|report|ppt|pptx|powerpoint|presentasi|slide|deck|analisa|analisis|hitung|total|grafik|chart|tabel|cek)\w*/i.test(ask);
@@ -745,6 +761,7 @@ export default function AiChat({
   };
 
   const send = () => {
+    setHeroPicked(true);
     const t = input.trim();
     const imgs = pending.filter((p) => p.status === "done" && p.path).map((p) => p.path!);
     if ((!t && !imgs.length) || busy || uploading) return;
@@ -937,7 +954,8 @@ export default function AiChat({
           title={dataMode === "auto" ? "AI otomatis membaca data CS Tracker kalau pertanyaannya soal issue / laporan / video review / catatan. Klik untuk mematikan." : "AI tidak membaca data CS Tracker. Klik untuk menyalakan."}
           aria-pressed={dataMode === "auto"}
         >
-          📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
+          <span className="sm:hidden">📊 Data{dataMode === "auto" ? "" : " off"}</span>
+          <span className="hidden sm:inline">📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}</span>
         </button>
         {webReady && (
           <button
@@ -953,7 +971,8 @@ export default function AiChat({
             }
             aria-pressed={webMode === "auto"}
           >
-            🌐 Internet: {webMode === "auto" ? "Otomatis" : "Off"}
+            <span className="sm:hidden">🌐 Internet{webMode === "auto" ? "" : " off"}</span>
+            <span className="hidden sm:inline">🌐 Internet: {webMode === "auto" ? "Otomatis" : "Off"}</span>
           </button>
         )}
         <ModelPicker owner={owner} chars={chars} value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
@@ -983,7 +1002,7 @@ export default function AiChat({
       className={
         focus
           ? "fixed inset-0 z-[60] flex overflow-hidden bg-zinc-900"
-          : "card card-plain relative flex h-[calc(100dvh-220px)] min-h-[460px] overflow-hidden p-0 md:h-[calc(100dvh-150px)]"
+          : "card card-plain relative flex h-[calc(100dvh-200px)] min-h-[460px] overflow-hidden p-0 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 md:h-[calc(100dvh-150px)]"
       }
     >
       {/* daftar percakapan: desktop di kiri, HP (dan mode fokus) lewat tombol ☰ */}
@@ -1004,8 +1023,9 @@ export default function AiChat({
             <button type="button" onClick={() => { setView("chat"); setCowork(false); }} className={`rounded-full px-2.5 py-1 ${view === "chat" && !cowork ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat" && !cowork}>
               💬 Chat
             </button>
-            {canFolder && (
+            {(
               <span className="group relative flex items-center">
+                <input ref={pickFilesRef} type="file" multiple className="hidden" accept=".csv,.tsv,.xlsx,.txt,.md,.json,.srt,.html,text/*,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => { onPickedFiles(e.target.files); e.target.value = ""; }} />
                 <button
                   type="button"
                   onClick={() => {
@@ -1021,23 +1041,24 @@ export default function AiChat({
                   aria-label="Cowork: AI kerja langsung di folder laptop kamu"
                 >
                   {folderBusy ? "⏳" : "💼"}
-                  <span className="max-w-[110px] truncate">{folder ? folder.root.name : "Cowork"}</span>
+                  <span className="hidden max-w-[110px] truncate sm:inline">{folder ? folder.root.name : "Cowork"}</span>
+                  <span className="sm:hidden">{folder ? "" : "Cowork"}</span>
                 </button>
                 {folder && (
                   <button type="button" onClick={() => setFolder(null)} className="-ml-1 rounded-full px-1.5 py-1 text-violet-400 hover:text-red-400" aria-label="Putuskan folder" title="Putuskan folder">
                     ✕
                   </button>
                 )}
-                <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-[230px] -translate-x-1/2 rounded-xl bg-zinc-100 px-3 py-2 text-[11.5px] font-medium leading-snug text-zinc-900 shadow-lg group-hover:block">
+                <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-[230px] -translate-x-1/2 rounded-xl bg-zinc-100 px-3 py-2 text-[11.5px] font-medium leading-snug text-zinc-900 shadow-lg sm:group-hover:block">
                   <b>💼 Cowork</b> — AI bantu kerja langsung di folder laptop kamu: rapihin file, ganti nama, cari duplikat, baca Excel/CSV & bikin laporan PPT.
                   <span className="mt-1 block text-zinc-500">
-                    {folder ? `Terhubung: ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")} file. Klik untuk baca ulang.` : "Klik untuk pilih folder (Chrome / Edge di laptop)."}
+                    {folder ? `Terhubung: ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")} file. Klik untuk baca ulang.` : canFolder ? "Klik untuk pilih folder." : "Di HP: pilih file Excel / CSV / teks untuk dibaca & dibikin laporan."}
                   </span>
                 </span>
               </span>
             )}
             <button type="button" onClick={() => setView("chars")} className={`rounded-full px-2.5 py-1 ${view === "chars" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chars"}>
-              🎭 Karakter
+              🎭<span className="hidden sm:inline"> Karakter</span>
             </button>
           </span>
           <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
@@ -1052,7 +1073,7 @@ export default function AiChat({
             <span className="mkchar-new hidden sm:inline">BARU</span>
           </button>
           <span className="mkchar-tip hidden lg:inline">Bikin AI versimu! 👀</span>
-          <span className="truncate font-semibold">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
+          <span className="hidden truncate font-semibold md:inline">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
           <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
             {active && view === "chat" && (
               <>
@@ -1118,45 +1139,112 @@ export default function AiChat({
             </div>
             <h2 className="mt-2 font-display text-[22px] font-bold">Selamat datang di Cowork, {firstName}! 👋</h2>
             <p className="mt-1 max-w-[560px] text-[13.5px] text-zinc-400">
-              Di sini {hero(model)} bisa ikut kerja langsung di folder laptop kamu. Semua perubahan kamu cek dulu sebelum dijalankan, dan file tetap di laptop kamu.
+              {canFolder
+                ? `Di sini ${hero(model)} bisa ikut kerja langsung di folder laptop kamu. Semua perubahan kamu cek dulu sebelum dijalankan, dan file tetap di laptop kamu.`
+                : `Pilih file Excel / CSV / teks dari HP, ${hero(model)} bantu rangkum & bikin laporan PPT atau report. Rapihin folder cukup dari laptop (Chrome / Edge).`}
             </p>
             {folder ? (
               <p className="mt-3 rounded-full bg-violet-500/10 px-3 py-1 text-[12.5px] font-semibold text-violet-400">
-                💼 Folder terhubung: {folder.root.name} · {folder.files.length.toLocaleString("id-ID")} file
+                💼 {folder.root.readonly ? "File siap" : "Folder terhubung"}: {folder.root.name} · {folder.files.length.toLocaleString("id-ID")} file
               </p>
             ) : (
               <button type="button" onClick={connectFolder} disabled={folderBusy} className="mt-3 rounded-xl bg-violet-600 px-4 py-2 text-[13px] font-bold text-white hover:bg-violet-500 disabled:opacity-60">
-                {folderBusy ? "Membaca folder…" : "📁 Pilih folder dulu"}
+                {folderBusy ? "Membaca folder…" : canFolder ? "📁 Pilih folder dulu" : "📎 Pilih file"}
               </button>
             )}
-            {!folder && <p className="mt-1 text-[11px] text-zinc-500">Pilih subfolder (bukan Downloads/Documents/Desktop langsung) · Chrome / Edge di laptop</p>}
-            <div className="mt-5 grid w-full max-w-[640px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
+            {!folder && canFolder && <p className="mt-1 text-[11px] text-zinc-500">Pilih subfolder (bukan Downloads/Documents/Desktop langsung)</p>}
+            <div className="mt-5 grid w-full max-w-[640px] grid-cols-2 gap-2 text-left text-[12px] sm:text-[13px]">
               {[
                 { icon: "📊", t: "Data mentah → PPT laporan rapi", d: "Excel/CSV per divisi jadi slide gaya Konten.com", p: "Bikinin PPT laporan dari data di folder ini, per divisi, lengkap grafik & kesimpulan" },
                 { icon: "🖼️", t: "Report campaign siap kirim", d: "Halaman Campaign Performance (PNG)", p: "Bikinin report campaign dari data di folder ini" },
-                { icon: "🗂️", t: "Rapihin folder berantakan", d: "Pisah per jenis / bulan, otomatis", p: "Rapihin folder ini per jenis file, screenshot pisahin per bulan" },
-                { icon: "🔁", t: "Cari & beresin file dobel", d: "Duplikat dipindah ke _Duplikat", p: "Cari file duplikat di folder ini dan pindahin ke _Duplikat" },
-                { icon: "✏️", t: "Ganti nama massal", d: "Hapus (1), samakan format tanggal", p: "Rapihin nama file: hapus (1) (2), kasih format tanggal di depan" },
+                { icon: "🗂️", lap: true, t: "Rapihin folder berantakan", d: "Pisah per jenis / bulan, otomatis", p: "Rapihin folder ini per jenis file, screenshot pisahin per bulan" },
+                { icon: "🔁", lap: true, t: "Cari & beresin file dobel", d: "Duplikat dipindah ke _Duplikat", p: "Cari file duplikat di folder ini dan pindahin ke _Duplikat" },
+                { icon: "✏️", lap: true, t: "Ganti nama massal", d: "Hapus (1), samakan format tanggal", p: "Rapihin nama file: hapus (1) (2), kasih format tanggal di depan" },
                 { icon: "📈", t: "Rangkum isi Excel / CSV", d: "Total, rata-rata, temuan penting", p: "Rangkum isi file data di folder ini: total, tren, dan temuan penting" },
               ].map((x) => (
                 <button
                   key={x.t}
                   type="button"
+                  disabled={!canFolder && "lap" in x}
                   onClick={() => {
                     setInput(x.p);
                     if (!folder) connectFolder();
                     setTimeout(() => ta.current?.focus(), 30);
                   }}
-                  className="rounded-xl border border-zinc-800 px-3 py-2.5 text-left transition hover:border-violet-500/50 hover:bg-violet-500/5"
+                  className="rounded-xl border border-zinc-800 px-3 py-2.5 text-left transition hover:border-violet-500/50 hover:bg-violet-500/5 disabled:opacity-45"
                 >
                   <span className="block font-semibold text-zinc-200">
                     {x.icon} {x.t}
                   </span>
-                  <span className="block text-[11.5px] text-zinc-500">{x.d}</span>
+                  <span className="block text-[11.5px] text-zinc-500">{!canFolder && "lap" in x ? "khusus laptop (Chrome / Edge)" : x.d}</span>
                 </button>
               ))}
             </div>
             <div className="mt-6 w-full max-w-[680px]">{composer}</div>
+          </div>
+        ) : msgs.length === 0 && !loadingMsgs && !heroPicked && !activeId ? (
+          <div className="flex flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6">
+            <div className="mx-auto w-full max-w-[760px]">
+              <h2 className="font-display text-[21px] font-bold sm:text-[24px]">Halo {firstName} 👋</h2>
+              <p className="mt-0.5 text-[13px] text-zinc-500">Mau ditemani siapa hari ini? Tiap hero punya gaya ngobrol sendiri — atau langsung ketik aja di bawah.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  pickModel(SMART);
+                  setHeroPicked(true);
+                }}
+                className={`mt-3 flex w-full items-center gap-3 rounded-2xl border-[1.5px] px-3 py-2 text-left transition ${model === SMART ? "border-orange-500 bg-orange-500/10" : "border-orange-500/40 hover:bg-orange-500/5"}`}
+              >
+                <span className="flex h-12 w-12 shrink-0 items-end justify-center overflow-hidden">
+                  <HeroArt hero={SMART_HERO} size={52} />
+                </span>
+                <span>
+                  <b className="block text-[14px]">Layla · pilihkan otomatis</b>
+                  <span className="text-[12px] text-zinc-500">Aku pilih hero yang paling cocok untuk tiap pertanyaan</span>
+                </span>
+              </button>
+              <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {[
+                  ...chars.map((c) => ({ hero: c.name, model: `${CHAR_PREFIX}${c.id}`, mine: true })),
+                  ...[...heroOpts].sort((a, b) => a.status - b.status || a.hero.localeCompare(b.hero)).map((o) => ({ hero: o.hero, model: o.model, mine: false })),
+                ]
+                  .slice(0, 11)
+                  .map((o) => {
+                    const p = personaOf(o.hero);
+                    const g = GROUPS[p.group];
+                    const on = model === o.model;
+                    return (
+                      <button
+                        key={o.model}
+                        type="button"
+                        onClick={() => {
+                          pickModel(o.model);
+                          setHeroPicked(true);
+                          setTimeout(() => ta.current?.focus(), 50);
+                        }}
+                        className="flex flex-col rounded-2xl border px-2.5 pb-2.5 pt-1.5 text-left transition hover:-translate-y-0.5"
+                        style={{ background: g.soft, borderColor: on ? "#f97316" : `${g.color}44` }}
+                      >
+                        <span className="flex h-[66px] items-end justify-center">
+                          <HeroArt hero={o.hero} size={68} />
+                        </span>
+                        <b className="text-[13.5px] leading-tight">
+                          {o.hero}
+                          {o.mine && <span className="ml-1 text-[9.5px] font-extrabold text-orange-400">MILIKMU</span>}
+                        </b>
+                        <span className="text-[12px] font-extrabold" style={{ color: g.color }}>
+                          {p.label}
+                        </span>
+                        <span className="line-clamp-2 text-[11px] leading-snug text-zinc-500">{p.tag}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+              <button type="button" onClick={() => setView("chars")} className="mt-3 w-full text-center text-[12.5px] font-bold text-orange-400 hover:underline">
+                Lihat semua hero & kepribadiannya ›
+              </button>
+            </div>
+            <div className="mx-auto mt-4 w-full max-w-[760px]">{composer}</div>
           </div>
         ) : msgs.length === 0 && !loadingMsgs ? (
           <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
@@ -1166,7 +1254,7 @@ export default function AiChat({
               {hero(model)} · {personaOf(hero(model)).type} {personaOf(hero(model)).label} — ganti karakter 🎭
             </button>
             <p className="mt-1 text-[13px] text-zinc-500">Tanya bebas, kirim screenshot / chart trading, atau tanya isi CS Tracker.</p>
-            <div className="mt-5 grid w-full max-w-[600px] grid-cols-1 gap-2 text-left text-[13px] sm:grid-cols-2">
+            <div className="mt-5 grid w-full max-w-[600px] grid-cols-2 gap-2 text-left text-[12px] sm:text-[13px]">
               {SUGGEST.map((s) => (
                 <button
                   key={s.label}

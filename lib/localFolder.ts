@@ -12,6 +12,8 @@ export type DirHandle = {
   getDirectoryHandle(name: string, o?: { create?: boolean }): Promise<DirHandle>;
   getFileHandle(name: string, o?: { create?: boolean }): Promise<FileHandle>;
   removeEntry(name: string, o?: { recursive?: boolean }): Promise<void>;
+  /** true = file dipilih lewat "pilih file" (HP / browser tanpa akses folder): hanya bisa dibaca */
+  readonly?: boolean;
   queryPermission?(o: { mode: "read" | "readwrite" }): Promise<Perm>;
   requestPermission?(o: { mode: "read" | "readwrite" }): Promise<Perm>;
 };
@@ -22,6 +24,26 @@ export type FileHandle = {
   createWritable(): Promise<{ write(d: Blob | BufferSource | string): Promise<void>; close(): Promise<void> }>;
   move?: (dir: DirHandle, name: string) => Promise<void>;
 };
+
+/**
+ * HP / Safari / Firefox: tidak bisa membuka folder, tapi bisa memilih file (atau folder baca-saja lewat webkitdirectory).
+ * File dibungkus jadi "folder" baca-saja supaya AI tetap bisa membaca & membuat laporan.
+ */
+export function scanFromFiles(list: File[], name = "File dipilih"): Scan {
+  const ro = async () => {
+    throw new Error("Di perangkat ini file hanya bisa dibaca — pindah/ganti nama/hapus pakai Chrome/Edge di laptop.");
+  };
+  const root = { kind: "directory", name, readonly: true, entries: async function* () {}, getDirectoryHandle: ro, getFileHandle: ro, removeEntry: ro } as unknown as DirHandle;
+  const files: FileEntry[] = list.slice(0, 4000).map((f) => {
+    const rel = ((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name).split("/");
+    const path = rel.length > 1 ? rel.slice(1).join("/") : rel[0];
+    const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    const handle = { kind: "file", name: f.name, getFile: async () => f, createWritable: ro } as unknown as FileHandle;
+    return { path, name: f.name, dir, ext: extOf(f.name), size: f.size, modified: f.lastModified, handle, parent: root };
+  });
+  const dirs = [...new Set(files.map((f) => f.dir).filter(Boolean))];
+  return { root, files, dirs, truncated: list.length > 4000, at: Date.now() };
+}
 
 export const folderSupported = () => typeof window !== "undefined" && "showDirectoryPicker" in window;
 

@@ -33,6 +33,16 @@ export default function FilePlanCard({ plan, scan, onConnect, onChanged }: { pla
       </div>
     );
 
+  if (scan.root.readonly)
+    return (
+      <div className="ai-card mt-3">
+        <div className="ai-body text-[13px]">
+          <b>📁 Rencana rapikan file</b>
+          {plan.summary && <p className="mt-1 text-zinc-400">{plan.summary}</p>}
+          <p className="mt-2 text-zinc-500">Di perangkat ini file cuma bisa dibaca. Untuk memindah / ganti nama / hapus file, buka 💼 Cowork pakai Chrome atau Edge di laptop.</p>
+        </div>
+      </div>
+    );
   const acts = exp.actions;
   const chosen = acts.filter((_, i) => !off.has(i));
   const dir = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");

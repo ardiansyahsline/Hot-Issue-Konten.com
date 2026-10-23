@@ -169,7 +169,7 @@ export default function DeckCard({ deck, root }: { deck: Deck; root: DirHandle |
           <button type="button" onClick={download} disabled={!!busy} className="rounded-lg bg-orange-500 px-3.5 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-60">
             {busy === "dl" ? "Menyusun PPT…" : "⬇ Unduh PowerPoint"}
           </button>
-          {root && (
+          {root && !root.readonly && (
             <button type="button" onClick={save} disabled={!!busy} className="rounded-lg border border-zinc-700 px-3 py-1.5 text-[12.5px] font-bold text-zinc-300 hover:border-zinc-500 disabled:opacity-60">
               {busy === "save" ? "Menyimpan…" : `💾 Simpan ke folder ${root.name}/Laporan`}
             </button>
