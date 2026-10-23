@@ -1,6 +1,7 @@
 import "server-only";
 import { hasStockData, stockCandles, stockCode, stockQuote, summarizeDaily } from "./stockData.server";
 import { autoLevels, levelsLine } from "./chartLevels";
+import { candlesFor, summarizeCandles, tfLabel, type TF } from "./candles.server";
 
 /**
  * "Cari di Internet" untuk tab AI.
@@ -66,8 +67,37 @@ export type WebPlan = {
   symbols: string[];
   /** nama lengkap aset/emiten (mis. "Bank Syariah Indonesia") untuk menyaring artikel yang tidak nyambung */
   names?: string[];
+  /** timeframe yang diminta user (mis. 15m, 1h); kosong = harian */
+  timeframe?: TF;
   by: "ai" | "aturan";
 };
+
+/** timeframe dari kalimat user: "tf 15 menit", "m15", "1 jam", "H4", "daily", "mingguan", "scalping" */
+export function detectTimeframe(text: string): TF | undefined {
+  const t = ` ${text.toLowerCase()} `;
+  // "15m" / "1h" rapat, atau "15 menit" / "1 jam" (bukan "5 menit lagi", "1 jam yang lalu")
+  const m =
+    t.match(/(?:^|[^a-z0-9])(\d{1,2})(m|h)(?![a-z0-9])/) ??
+    t.match(/(?:^|[^a-z0-9])(\d{1,2})\s*(min|mnt|menit|minute|minutes|jam|hour|hours|hr)(?![a-z])(?!\s+(lagi|yang lalu|yg lalu|terakhir|kemudian|sebelum|sesudah|setelah))/);
+  if (m) {
+    const n = Number(m[1]);
+    const unit = /^(h|jam|hour|hours|hr)$/.test(m[2]) ? "h" : "m";
+    const tf = `${n}${unit}`;
+    if (["1m", "5m", "15m", "30m", "1h", "4h"].includes(tf)) return tf as TF;
+    if (tf === "60m") return "1h";
+    if (tf === "240m") return "4h";
+  }
+  const r = t.match(/(?:^|[^a-z0-9])(m|h)(1|5|15|30|4)(?![0-9a-z])/);
+  if (r) {
+    const tf = `${r[2]}${r[1]}`;
+    if (["1m", "5m", "15m", "30m", "1h", "4h"].includes(tf)) return tf as TF;
+  }
+  if (/(?:^|[^a-z])(1w|w1|weekly|mingguan|tf minggu)(?![a-z])/.test(t)) return "1w";
+  if (/(?:^|[^a-z])(1d|d1|daily|harian)(?![a-z])/.test(t)) return "1d";
+  if (/scalp/.test(t)) return "5m";
+  if (/intraday|intra day/.test(t)) return "1h";
+  return undefined;
+}
 
 const PLAN_PROMPT = (today: string) =>
   [
@@ -100,6 +130,9 @@ export async function planWebSearch(opts: {
   question: string;
 }): Promise<WebPlan | null> {
   const urls = extractUrls(opts.question);
+  // timeframe dari pesan ini, kalau tidak ada dari pesan user sebelumnya (mis. "trade plan-nya dong" setelah "analisa tf 15m")
+  const prevUser = [...opts.history].reverse().filter((m) => m.role === "user").slice(0, 3).map((m) => m.content);
+  const askedTf = detectTimeframe(opts.question) ?? prevUser.map(detectTimeframe).find(Boolean);
   const transcript = opts.history
     .slice(-8)
     .map((m) => `${m.role === "user" ? "USER" : "AI"}: ${clip(m.content.replace(/\n---\n🌐 \*\*Sumber:\*\*[\s\S]*$/, "").replace(/\s+/g, " "), 500)}`)
@@ -135,7 +168,7 @@ export async function planWebSearch(opts: {
       const fresh = (["day", "week", "month", "any"].includes(String(plan.fresh)) ? plan.fresh : market !== "none" ? "week" : plan.recent ? "month" : "any") as Fresh;
       const symbols = (Array.isArray(plan.symbols) ? plan.symbols : []).map((s) => String(s).toUpperCase().replace(/[^A-Z0-9/.-]/g, "")).filter(Boolean).slice(0, 5);
       const names = (Array.isArray(plan.names) ? plan.names : []).map((s) => clip(String(s).trim(), 60)).filter((s) => s.length >= 3).slice(0, 5);
-      return { queries, urls, topic, market, fresh, symbols, names, by: "ai" };
+      return { queries, urls, topic, market, fresh, symbols, names, timeframe: askedTf, by: "ai" };
     } catch {
       // coba model berikutnya / pakai aturan
     }
@@ -158,6 +191,7 @@ export async function planWebSearch(opts: {
     market,
     fresh: market !== "none" ? "week" : news ? "week" : "any",
     symbols: [],
+    timeframe: askedTf,
     by: "aturan",
   };
 }
@@ -312,7 +346,7 @@ async function forexHistory(symbols: string[]): Promise<string[]> {
     .map((v) => ({ time: Math.floor(Date.parse(`${v.datetime.slice(0, 10)}T00:00:00Z`) / 1000), open: +v.open, high: +v.high, low: +v.low, close: +v.close }))
     .filter((c) => Number.isFinite(c.time) && c.close > 0)
     .sort((a, b) => a.time - b.time);
-  return summarizeDaily(pair, candles, "Twelve Data");
+  return summarizeDaily(pair, candles, "Twelve Data", false);
 }
 
 /** angka harga yang enak dibaca untuk koin murah maupun mahal */
@@ -370,10 +404,6 @@ async function cryptoHistory(sym: string, id: string): Promise<string[]> {
     swings.length ? `- Titik balik terakhir: ${swings.slice(-6).join("; ")}` : "",
     "- Candle harian (tanggal: open/high/low/close):",
     ...days.slice(-14).map(([k, d]) => `  ${k}: ${px(d.o)}/${px(d.h)}/${px(d.l)}/${px(d.c)}`),
-    levelsLine(
-      autoLevels(days.map(([k, d]) => ({ time: Date.parse(`${k}T00:00:00Z`) / 1000, open: d.o, high: d.h, low: d.l, close: d.c }))),
-      px
-    ),
     "Gunakan angka ini untuk support/resistance & tren. Jangan menyebut level yang tidak didukung data ini atau sumber lain.",
   ].filter(Boolean);
 }
@@ -458,7 +488,19 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
   const blocks: { url: string; title: string; text: string; date?: string }[] = [];
   let error = "";
   let dropped = 0;
+  // judul tanpa embel-embel situs/negara ("XAU USD | Gold Spot - Investing.com ZA" = "... - Investing.com PH")
+  const titleKey = (t: string) => t.toLowerCase().replace(/\s*[-|–—]\s*[^-|–—]*$/, "").replace(/[^a-z0-9]+/g, " ").trim();
   const add = (url: string, title: string, text: string, date?: string) => {
+    // forum / ruang obrolan (opini anonim) bukan sumber analisa
+    if (/\/minds\b|\/forum|\/chats?\b|\/community\b|\/ideas\//i.test(url) || /forum\s*&\s*chats?|\bminds\b|forum diskusi/i.test(title)) {
+      dropped++;
+      return;
+    }
+    const tk = titleKey(title);
+    if (tk.length > 8 && blocks.some((b) => b.url !== url && titleKey(b.title) === tk)) {
+      dropped++;
+      return;
+    }
     const hit = blocks.find((b) => b.url === url);
     if (hit) {
       if (text.length > hit.text.length) hit.text = text;
@@ -610,10 +652,44 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
         .catch(() => {})
     );
   }
+  // timeframe yang diminta user (mis. 15m / 1H): candle asli timeframe itu, sama dengan yang dipakai chart
+  const tfHist: string[] = [];
+  const tfNotes: string[] = [];
+  const tf = plan.timeframe;
+  const chartSym = chartSymbol(plan);
+  const stockish = plan.market === "saham_id" || plan.market === "saham_global";
+  const tfPx = (n: number) => n.toLocaleString("id-ID", { maximumFractionDigits: n >= 100 ? 2 : n >= 1 ? 4 : 8 });
+  const effTf: TF = tf ?? "1d";
+  if (chartSym && (plan.market === "crypto" || plan.market === "forex" || (stockish && effTf === "1w"))) {
+    const sym = `${(plan.symbols[0] ?? "").replace(/^[A-Z_]+:/, "").replace(/USDT$/, "")} ${tfLabel(effTf)}`;
+    if (effTf !== "1d") onStep("price", "run", { id: "candles", sym });
+    tasks.push(
+      candlesFor(chartSym, effTf, coinId)
+        .then((body) => {
+          const L = body.interval ?? tfLabel(effTf);
+          const lv = levelsLine(autoLevels(body.candles), tfPx, L, true);
+          if (effTf === "1d") {
+            // harian: ringkasan sudah ada di atas, cukup level yang sama dengan garis di chart
+            if (body.candles.length >= 12 && lv) tfHist.push(lv);
+            return;
+          }
+          onStep("price", "done", { id: "candles", sym, src: body.source });
+          const sum = summarizeCandles(plan.symbols[0] ?? chartSym, body, effTf, lv);
+          if (sum.length) tfHist.push(...sum);
+          else tfNotes.push(`- Data candle ${tfLabel(effTf)} tidak tersedia saat ini${plan.market === "forex" ? " (butuh TWELVEDATA_API_KEY)" : ""}. Bilang terus terang ke user bahwa analisa memakai candle harian.`);
+          if (sum.length && L !== tfLabel(effTf)) tfNotes.push(`- Candle ${tfLabel(effTf)} tidak tersedia; yang terdekat candle ${L}. Sebutkan ini ke user.`);
+        })
+        .catch(() => {
+          if (effTf !== "1d") onStep("price", "done", { id: "candles", sym });
+        })
+    );
+  } else if (tf && stockish && tf !== "1d") {
+    tfNotes.push(`- User minta timeframe ${tfLabel(tf)}, tapi data candle intraday saham tidak tersedia (hanya harian). Bilang terus terang bahwa analisa memakai candle harian, jangan berpura-pura melihat candle ${tfLabel(tf)}.`);
+  }
   await Promise.all(tasks);
 
   const chart = chartSymbol(plan);
-  if (!blocks.length && !live.length && !history.length) {
+  if (!blocks.length && !live.length && !history.length && !tfHist.length) {
     return {
       context: `PENCARIAN INTERNET: sudah dicoba tapi gagal / tidak ada hasil yang cukup baru${error ? ` (${error})` : ""}. Bilang terus terang bahwa data terbaru tidak ditemukan; jangan mengarang info terbaru.`,
       sources: [],
@@ -650,14 +726,23 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     "",
     ...liveBlock,
     ...(history.length ? ["", ...history] : []),
+    ...(tfHist.length ? ["", ...tfHist] : []),
+    ...(tfNotes.length ? ["", ...tfNotes] : []),
+    ...(tf && tf !== "1d" && tfHist.length ? [`(Timeframe yang diminta user: ${tfLabel(tf)} — chart di website juga dibuka di ${tfLabel(tf)}. Harian di atas hanya untuk konteks tren besar.)`] : []),
     ...(chart ? [`(Website menampilkan chart ${chart} di atas jawabanmu — boleh rujuk "lihat chart di atas", tapi analisamu harus dari angka di sini.)`] : []),
     ...(chart
       ? [
           "TRADE PLAN: kalau jawabanmu berisi rencana trading (entry/SL/TP), WAJIB tutup jawaban dengan blok kode berlabel tradeplan berisi JSON satu baris, contoh:",
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
           'Opsional "pattern": kalau di data RIWAYAT HARGA terlihat pola chart (mis. trendline turun/naik, double top/bottom, higher low, breakout), tambahkan {"name":"nama pola singkat","points":[["YYYY-MM-DD",harga],["YYYY-MM-DD",harga]]} — 2 sampai 5 titik, tanggal & harga WAJIB diambil dari candle di data (high untuk puncak, low untuk lembah). Contoh: "pattern":{"name":"Lower high","points":[["2026-09-22",4172],["2026-10-10",4143]]}. Kalau tidak ada pola yang jelas, jangan tulis "pattern".',
+          ...(tf
+            ? tf !== "1d" && !tfHist.some((l) => l.startsWith("RIWAYAT HARGA"))
+              ? [`Timeframe trade plan: data candle ${tfLabel(tf)} tidak ada, jadi isi "timeframe":"1D" dan pakai level harian.`]
+              : [`Timeframe trade plan: isi "timeframe":"${tfLabel(tf)}"${tf !== "1d" ? ` dan tentukan entry/SL/TP dari candle ${tfLabel(tf)} (level intraday lebih rapat daripada harian)` : ""}.`]
+            : []),
           "Website akan menggambar kotak posisi (SL merah, TP hijau) dari blok ini, plus garis support/resistance otomatis & garis pola. Angka harus konsisten dengan teksmu (long: SL < entry < TP; short: TP < entry < SL). Kalau tidak memberi trade plan, jangan tulis blok ini.",
           "Angka di JSON: TANPA pemisah ribuan, titik untuk desimal, skala sama dengan harga asli (saham BBRI Rp2.560 -> 2560; XAUUSD 4.022,46 -> 4022.46; PUMP 0,00461 -> 0.00461).",
+          "Format angka: titik untuk ribuan & koma untuk desimal (4.028,84) — JANGAN pakai spasi sebagai pemisah ribuan. Jangan menulis deretan strip/garis hiasan (–‑ ‑ –) di teks atau tabel.",
           "Di teks jawaban, harga yang angkanya bulat ditulis tanpa ,00 (4.025 bukan 4.025,00); desimal hanya kalau memang ada (4.027,41).",
           ...(plan.market === "saham_id" ? ["Di teks jawaban, tulis harga saham BEI dalam rupiah bulat dengan titik ribuan, mis. Rp2.560 atau 5.320 — JANGAN pakai angka di belakang koma (salah: 5.320,00)."] : []),
         ]

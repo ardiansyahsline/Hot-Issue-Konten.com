@@ -99,7 +99,7 @@ export async function stockQuote(code: string, market: "saham_id" | "saham_globa
 const px = (n: number) => n.toLocaleString("id-ID", { maximumFractionDigits: n >= 100 ? 2 : n >= 1 ? 4 : 8 });
 
 /** ringkasan riwayat harian untuk AI (tertinggi/terendah, perubahan, rata-rata, titik balik, candle terakhir) */
-export function summarizeDaily(label: string, candles: Candle[], source: string): string[] {
+export function summarizeDaily(label: string, candles: Candle[], source: string, withLevels = true): string[] {
   const days = candles.slice(-60);
   if (days.length < 5) return [];
   const closes = days.map((d) => d.close);
@@ -126,7 +126,7 @@ export function summarizeDaily(label: string, candles: Candle[], source: string)
     swings.length ? `- Titik balik terakhir: ${swings.slice(-6).join("; ")}` : "",
     "- Candle 10 hari terakhir (tanggal: open/high/low/close):",
     ...days.slice(-10).map((d) => `  ${date(d.time)}: ${px(d.open)}/${px(d.high)}/${px(d.low)}/${px(d.close)}`),
-    levelsLine(autoLevels(candles), px),
+    withLevels ? levelsLine(autoLevels(candles), px, "harian", true) : "",
     "Gunakan angka ini untuk support/resistance & tren.",
   ].filter(Boolean);
 }

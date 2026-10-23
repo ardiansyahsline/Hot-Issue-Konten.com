@@ -11,6 +11,7 @@ import HeroGallery from "./HeroGallery";
 import TradingChart, { splitChart } from "./TradingChart";
 import TradePlanChart from "./TradePlanChart";
 import ThinkingSteps from "./ThinkingSteps";
+import { tidyAnswer } from "@/lib/aiText";
 import { splitPlan } from "@/lib/tradePlan";
 import { personaOf } from "@/lib/aiPersona";
 
@@ -954,7 +955,7 @@ export default function AiChat({
                                     ) : chart ? (
                                       <TradingChart symbol={chart} />
                                     ) : null}
-                                    <Markdown text={sp.text} />
+                                    <Markdown text={tidyAnswer(sp.text)} />
                                   </>
                                 );
                               })()
@@ -968,7 +969,7 @@ export default function AiChat({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    navigator.clipboard?.writeText(splitPlan(splitChart(m.content).text).text).then(() => {
+                                    navigator.clipboard?.writeText(tidyAnswer(splitPlan(splitChart(m.content).text).text)).then(() => {
                                       setCopied(m.id);
                                       setTimeout(() => setCopied(null), 1500);
                                     })

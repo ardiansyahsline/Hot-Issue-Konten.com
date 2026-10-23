@@ -9,7 +9,8 @@ const toTime = (v: unknown): number => {
   const s = String(v ?? "").trim();
   const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?/);
   if (!m) return NaN;
-  return Math.floor(Date.parse(`${m[1]}T${m[2] ?? "00:00"}:00Z`) / 1000);
+  // tanggal saja = candle harian (00:00 UTC); tanggal + jam = waktu WIB dari data candle intraday
+  return Math.floor(Date.parse(m[2] ? `${m[1]}T${m[2]}:00+07:00` : `${m[1]}T00:00:00Z`) / 1000);
 };
 function parsePattern(v: unknown): Pattern | undefined {
   if (!v || typeof v !== "object") return undefined;

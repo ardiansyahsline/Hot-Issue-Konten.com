@@ -72,10 +72,10 @@ export function autoLevels(candlesIn: Bar[], max = 2): Level[] {
 }
 
 /** satu baris ringkas untuk data AI: "S1 3.995 (3x sentuh) · S2 3.870 · R1 4.120 · R2 4.165 (2x)" */
-export function levelsLine(levels: Level[], fmt: (n: number) => string): string {
+export function levelsLine(levels: Level[], fmt: (n: number) => string, scope = "harian", onChart = false): string {
   if (!levels.length) return "";
   const t = (l: Level) => `${l.name} ${fmt(l.price)}${l.touches >= 2 ? ` (${l.touches}x sentuh)` : ""}`;
   const sup = levels.filter((l) => l.kind === "support").map(t);
   const res = levels.filter((l) => l.kind === "resistance").map(t);
-  return `- Support/resistance otomatis dari titik balik candle (SAMA dengan garis yang digambar di chart website): support ${sup.join(", ") || "-"} · resistance ${res.join(", ") || "-"}. Pakai level ini saat menyebut support/resistance.`;
+  return `- Support/resistance otomatis dari titik balik candle ${scope}${onChart ? " (SAMA dengan garis yang digambar di chart website)" : ""}: support ${sup.join(", ") || "-"} · resistance ${res.join(", ") || "-"}. Pakai level ini saat menyebut support/resistance.`;
 }
