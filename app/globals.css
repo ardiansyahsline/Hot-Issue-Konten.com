@@ -292,3 +292,23 @@ html:not(.light) .mkchar-tip::before { border-right-color: #fafafa; }
 .hp-back { animation: hp-fade .18s ease-out both; }
 .hp-card { animation: hp-pop .26s cubic-bezier(.2,.8,.2,1) both; }
 @media (prefers-reduced-motion: reduce) { .hp-back, .hp-card { animation: none; } }
+
+/* ===== Mode gelap: langit malam + aurora (hijau → pink → oren) bergerak pelan ===== */
+html:not(.light) body::before {
+  content: "";
+  position: fixed;
+  inset: -6%;
+  z-index: -1;
+  pointer-events: none;
+  background: url("/aurora.svg") center top / cover no-repeat;
+  opacity: .9;
+  animation: aurora-drift 48s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+html:not(.light) body { background-image: none; }
+@keyframes aurora-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: .78; }
+  50% { transform: translate3d(-2.5%, 1.2%, 0) scale(1.05); opacity: .95; }
+  100% { transform: translate3d(1.5%, -0.8%, 0) scale(1.03); opacity: .84; }
+}
+@media (prefers-reduced-motion: reduce) { html:not(.light) body::before { animation: none; } }
