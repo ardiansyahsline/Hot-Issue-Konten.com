@@ -8,9 +8,9 @@ const HIDE = /(^|\/)compound(-mini)?$|whisper|orpheus|tts|speech|audio|transcri|
 const VISION = /gemini|gemma-?[34]|vision|[-_/]vl\b|-vl-|llava|pixtral|llama-4|maverick|scout|gpt-4o|gpt-4\.1|gpt-5|claude|kimi-k2\.5|kimi-k3|glm-4\.?\dv|qwen.*vl|qwen3\.8|muse/i;
 
 /** urutan model terbaik untuk chat biasa (yang pertama tersedia dipakai) */
-const BEST_TEXT = [/claude[^/]*(opus|sonnet)/i, /claude/i, /gemini[^/]*flash(?!-lite)/i, /kimi/i, /deepseek(?!.*r1)/i, /gpt-oss-120b/i, /qwen3/i, /llama-3\.3-70b/i, /grok/i, /gemini/i, /mistral-(large|medium)/i, /gpt-oss-20b/i, /llama/i];
+const BEST_TEXT = [/claude[^/]*haiku/i, /gemini[^/]*flash(?!-lite)/i, /kimi/i, /deepseek(?!.*r1)/i, /gpt-oss-120b/i, /qwen3/i, /llama-3\.3-70b/i, /grok/i, /gemini/i, /mistral-(large|medium)/i, /gpt-oss-20b/i, /llama/i];
 /** urutan model terbaik untuk membaca gambar */
-const BEST_VISION = [/claude[^/]*(opus|sonnet)/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /claude/i, /qwen3\.8/i, /nemotron.*-vl-|-vl-/i, /gemma-?[34]/i, /llama-4/i];
+const BEST_VISION = [/claude[^/]*haiku/i, /gemini[^/]*flash(?!-lite)/i, /gemini/i, /qwen3\.8/i, /nemotron.*-vl-|-vl-/i, /gemma-?[34]/i, /llama-4/i];
 
 /** agen coding / akun IDE / login web — bukan untuk chat biasa (sering error kalau dipanggil dari aplikasi lain) */
 const AGENT = /(^|[/:])(devin|jules|codex|cursor|kiro|windsurf|cline|trae|zed|copilot|github-copilot|antigravity|agy|cc|claude-code|gemini-cli|qwen-code|grok-build|amp|augment|warp|aider|opencode|iflow|roo|kilo|continue|droid|factory|yuanbao|agnes)[\w.-]*[/:]|agentic|cloud-?agent|omniroute-no-thinking|(^|[/:])no-?think(ing)?[/:]|[\w-]+-(cli|web|cookie|oauth|ide)[/:]/i;
@@ -33,7 +33,10 @@ const BLOCKED_PROVIDERS = new Set(
 );
 const blockedProvider = (id: string) => id.includes("/") && BLOCKED_PROVIDERS.has(id.split("/")[0].toLowerCase());
 
-export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id);
+/** Claude berbayar per pemakaian: yang dipakai hanya Haiku (murah); Sonnet/Opus disembunyikan supaya tagihan tidak bengkak */
+const PRICEY = (id: string) => /claude|anthropic/i.test(id) && !/haiku/i.test(id);
+
+export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id) && !PRICEY(id);
 let visionSet: Set<string> | null = null;
 /** daftar model yang menurut katalog OmniRoute bisa membaca gambar (lebih akurat dari tebakan nama) */
 export function setVisionCatalog(ids: string[] | null) {
@@ -150,6 +153,7 @@ const DESC: [RegExp, string][] = [
   [/glm/i, "Coding & penalaran"],
   [/pixtral/i, "Mistral yang bisa lihat gambar"],
   [/mistral|mixtral/i, "Nulis cepat & ringkas"],
+  [/haiku/i, "Cepat & stabil: nulis, analisa, trade plan, lihat gambar (berbayar, murah)"],
   [/claude/i, "Paling pintar: nulis, analisa, lihat gambar (berbayar)"],
   [/compound/i, "Bisa cari info di internet & hitung-hitungan"],
   [/grok/i, "Gaya santai, penalaran"],
