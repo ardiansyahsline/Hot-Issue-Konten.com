@@ -305,6 +305,29 @@ export default function AiChat({
   const [zoom, setZoom] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [sideOpen, setSideOpen] = useState(false);
+  // mode fokus (layar penuh): navbar & daftar riwayat disembunyikan, chat memenuhi jendela. Diingat per browser.
+  const [focus, setFocus] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("cs-ai-focus") === "1") setFocus(true);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cs-ai-focus", focus ? "1" : "0");
+    } catch {}
+    if (!focus) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector("[role=dialog]")) setFocus(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [focus]);
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | number | null>(null);
@@ -808,11 +831,17 @@ export default function AiChat({
   );
 
   return (
-    <div className="card card-plain relative flex h-[calc(100dvh-220px)] min-h-[460px] overflow-hidden p-0 md:h-[calc(100dvh-150px)]">
-      {/* daftar percakapan: desktop di kiri, HP lewat tombol ☰ */}
-      <aside className="hidden w-64 shrink-0 border-r border-zinc-800/80 md:block">{sidebar}</aside>
+    <div
+      className={
+        focus
+          ? "fixed inset-0 z-[60] flex overflow-hidden bg-zinc-900"
+          : "card card-plain relative flex h-[calc(100dvh-220px)] min-h-[460px] overflow-hidden p-0 md:h-[calc(100dvh-150px)]"
+      }
+    >
+      {/* daftar percakapan: desktop di kiri, HP (dan mode fokus) lewat tombol ☰ */}
+      {!focus && <aside className="hidden w-64 shrink-0 border-r border-zinc-800/80 md:block">{sidebar}</aside>}
       {sideOpen && (
-        <div className="absolute inset-0 z-30 flex md:hidden">
+        <div className={`absolute inset-0 z-30 flex ${focus ? "" : "md:hidden"}`}>
           <div className="w-[82%] max-w-[300px] border-r border-zinc-800 bg-zinc-900">{sidebar}</div>
           <button type="button" className="flex-1 bg-black/30" onClick={() => setSideOpen(false)} aria-label="Tutup daftar" />
         </div>
@@ -820,7 +849,7 @@ export default function AiChat({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2 border-b border-zinc-800/80 px-4 py-3">
-          <button type="button" onClick={() => setSideOpen(true)} className="rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 md:hidden" aria-label="Daftar percakapan">
+          <button type="button" onClick={() => setSideOpen(true)} className={`rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 ${focus ? "" : "md:hidden"}`} aria-label="Daftar percakapan">
             ☰
           </button>
           <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
@@ -837,16 +866,28 @@ export default function AiChat({
             ))}
           </span>
           <span className="truncate font-semibold">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
-          {active && view === "chat" && (
-            <span className="ml-auto flex shrink-0 gap-3 text-[12px] text-zinc-500">
-              <button type="button" onClick={() => { setSideOpen(true); setEditing(active.id); }} className="hover:text-zinc-200">
-                ✎ Ganti nama
-              </button>
-              <button type="button" onClick={() => { setSideOpen(true); setConfirmDel(active.id); }} className="hover:text-red-400">
-                🗑 Hapus
-              </button>
-            </span>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
+            {active && view === "chat" && (
+              <>
+                <button type="button" onClick={() => { setSideOpen(true); setEditing(active.id); }} className="hover:text-zinc-200">
+                  ✎<span className="hidden sm:inline"> Ganti nama</span>
+                </button>
+                <button type="button" onClick={() => { setSideOpen(true); setConfirmDel(active.id); }} className="hover:text-red-400">
+                  🗑<span className="hidden sm:inline"> Hapus</span>
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setFocus((v) => !v)}
+              title={focus ? "Keluar dari layar penuh (Esc)" : "Layar penuh"}
+              aria-pressed={focus}
+              className={`rounded-lg border px-2 py-1 font-semibold ${focus ? "border-orange-500/40 bg-orange-500/10 text-orange-400" : "border-zinc-800 hover:border-zinc-600 hover:text-zinc-200"}`}
+            >
+              {focus ? "✕" : "⛶"}
+              <span className="hidden sm:inline">{focus ? " Keluar" : " Layar penuh"}</span>
+            </button>
+          </span>
         </header>
 
         {setupError && <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12.5px] text-amber-400">{setupError}</div>}

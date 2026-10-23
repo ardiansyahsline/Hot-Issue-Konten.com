@@ -15,7 +15,15 @@ import SoundNotifier from "@/components/SoundNotifier";
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [{ user }, profile, theme] = await Promise.all([getCurrentUser(), getProfile(), getTheme()]);
+  const [{ user }, profile, theme, pendingVr] = await Promise.all([
+    getCurrentUser(),
+    getProfile(),
+    getTheme(),
+    // jumlah Video Review yang masih "menunggu" (bubble angka di tab Video Review)
+    getCurrentUser()
+      .then(({ supabase }) => supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu"))
+      .then((r) => r.count ?? 0, () => 0),
+  ]);
   const name = profile?.full_name || user.email;
   const role = profile && isRole(profile.role) ? ROLES[profile.role] : null;
 
@@ -31,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                 <span className="block text-[11px] font-medium text-zinc-500">Konten.com</span>
               </span>
             </Link>
-            <Nav role={profile?.role ?? null} />
+            <Nav role={profile?.role ?? null} pendingVr={pendingVr} />
           </div>
           <div className="flex items-center gap-2">
             <Link
