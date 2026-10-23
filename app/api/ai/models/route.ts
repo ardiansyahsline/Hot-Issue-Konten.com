@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { aiConfig, healthMap, healthRank, listCatalog, loadHealth } from "@/lib/ai.server";
+import { aiConfig, healthMap, healthRank, isDeadModel, listCatalog, loadHealth } from "@/lib/ai.server";
 import { webConfig } from "@/lib/aiWeb.server";
 import { isChatModel, isVisionModel, pickTextModel, pickVisionModel, setVisionCatalog } from "@/lib/aiModels";
 
@@ -15,7 +15,8 @@ export async function GET() {
   const [catalog, health] = await Promise.all([listCatalog(), loadHealth(supabase)]);
   setVisionCatalog(catalog.vision);
   // katalog gagal terbaca -> tampilkan minimal hero yang pernah terbukti jalan
-  const fromCatalog = catalog.ids.filter(isChatModel);
+  // model yang sudah tidak ada (404/410) tidak ditampilkan
+  const fromCatalog = catalog.ids.filter(isChatModel).filter((m) => !isDeadModel(health.get(m)));
   const chat = fromCatalog.length ? fromCatalog : [...health.values()].filter((h) => healthRank(h) === 0).map((h) => h.model).filter(isChatModel);
   const hm = healthMap(chat, health);
   const status = (m: string) => hm.get(m) ?? 1;

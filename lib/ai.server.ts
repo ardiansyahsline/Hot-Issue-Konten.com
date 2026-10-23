@@ -87,6 +87,10 @@ export async function loadHealth(db: DB): Promise<Map<string, Health>> {
   }
 }
 
+/** error "model sudah tidak ada" (404 does not exist / 410 end of life) diberi tanda dead: supaya dilewati 3 hari */
+const DEAD_MODEL = /does not exist|no such model|model.?not.?found|unknown model|end of life|decommission|function not found|not supported for this account/i;
+const deadLabel = (e: string) => (/^dead:/.test(e) ? e : /^410\b/.test(e) || DEAD_MODEL.test(e) ? `dead: ${e}` : e);
+
 export async function markHealth(db: DB, model: string, ok: boolean, errText?: string) {
   if (!model || model === "auto") return;
   const now = new Date().toISOString();
@@ -96,7 +100,7 @@ export async function markHealth(db: DB, model: string, ok: boolean, errText?: s
       const { data } = await db.from("ai_model_health").select("fail_count").eq("model", model).maybeSingle();
       await db
         .from("ai_model_health")
-        .upsert({ model, fail_at: now, fail_count: (data?.fail_count ?? 0) + 1, last_error: (errText ?? "").slice(0, 300), updated_at: now }, { onConflict: "model" });
+        .upsert({ model, fail_at: now, fail_count: (data?.fail_count ?? 0) + 1, last_error: deadLabel(errText ?? "").slice(0, 300), updated_at: now }, { onConflict: "model" });
     }
   } catch {
     // tabel belum ada -> abaikan
@@ -128,6 +132,13 @@ export function healthMap(models: string[], health: Map<string, Health>): Map<st
     out.set(m, r);
   }
   return out;
+}
+
+/** model dipastikan sudah tidak ada untuk akun ini (404 "does not exist", 410 "end of life") dalam 3 hari terakhir */
+export function isDeadModel(h: Health | undefined): boolean {
+  if (!h || !/^dead:/.test(h.last_error ?? "") || !h.fail_at) return false;
+  const fail = Date.parse(h.fail_at);
+  return Date.now() - fail < 72 * H && !(h.ok_at && Date.parse(h.ok_at) > fail);
 }
 
 export function healthRank(h: Health | undefined): 0 | 1 | 2 {
