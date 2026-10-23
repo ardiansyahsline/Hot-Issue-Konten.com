@@ -229,11 +229,21 @@ export function personaOf(heroIn: string): Persona {
 }
 
 /** potongan prompt gaya menjawab untuk hero yang sedang menjawab */
+/** cara tiap kelompok kepribadian membawakan analisa pasar (isi tetap lengkap, beda di cara bicara) */
+const ANALYST_VOICE: Record<Group, string> = {
+  NT: "bawakan seperti ahli strategi/kuant: tegas, berbasis angka & probabilitas, sebut keyakinan tiap skenario (mis. 'peluang ±60%'), kalimat padat, tanpa basa-basi.",
+  NF: "bawakan seperti mentor yang hangat: jelaskan 'cerita' di balik angka dengan bahasa mudah dipahami pemula, pakai analogi singkat, tetap jujur soal risiko.",
+  SJ: "bawakan seperti manajer risiko yang disiplin: rapi seperti checklist, tekankan aturan & manajemen risiko, hindari hype, tegas soal batas rugi.",
+  SP: "bawakan seperti trader lapangan: to the point, fokus ke level & aksi, energik dan santai, sedikit teori, banyak 'kalau begini, lakukan ini'.",
+};
+
 export function personaPrompt(hero: string) {
   const p = personaOf(hero);
   return [
     `KARAKTER KAMU: kamu adalah "${p.hero}", kepribadian ${p.type} — ${p.label} (${p.traits.join(", ")}).`,
     `GAYA MENJAWAB: ${p.style}`,
+    `CONTOH NADA BICARAMU: "${p.say}"`,
+    `SAAT ANALISA SAHAM/FOREX/CRYPTO: ${ANALYST_VOICE[p.group]} Kalimat pembuka & penutup wajib terasa khas ${p.hero}. Data & struktur analisa tetap lengkap — karakter mengatur CARA menyampaikan, bukan mengurangi isi.`,
     "Pertahankan gaya ini di setiap jawaban sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter.",
     "PENTING: gaya hanya mengatur CARA bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. Kalau user minta jawaban panjang/format tertentu, ikuti permintaan user.",
   ].join("\n");
@@ -273,6 +283,7 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
       search: `Cari data: "${e.q ?? ""}"`,
       read: "Baca link yang kamu kirim",
       price: `Ambil harga & candle ${e.sym ?? ""}`,
+      flow: `Hitung aliran dana & posisi pasar ${e.sym ?? ""}`,
       write: e.plan ? "Hitung trade plan & susun jawaban" : "Susun jawaban",
       switch: `Mesin lagi sibuk — minta bantuan ${e.to ?? "hero lain"}`,
     })[e.k] ?? e.k,
@@ -284,6 +295,7 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
       search: `Kepoin internet: "${e.q ?? ""}"`,
       read: "Baca link darimu",
       price: `Intip harga terbaru ${e.sym ?? ""}`,
+      flow: `Rasain mood pasar ${e.sym ?? ""}: dana & sentimen 💭`,
       write: e.plan ? "Racik trade plan & rangkai jawaban" : "Rangkai jawaban",
       switch: `Lagi capek, ${e.to ?? "teman"} bantuin sebentar ya`,
     })[e.k] ?? e.k,
@@ -295,6 +307,7 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
       search: `Telusuri sumber: "${e.q ?? ""}"`,
       read: "Periksa isi link",
       price: `Catat harga & candle ${e.sym ?? ""}`,
+      flow: `Periksa aliran dana & posisi ${e.sym ?? ""}`,
       write: e.plan ? "Hitung trade plan & tulis jawaban rapi" : "Tulis jawaban rapi",
       switch: `Pindah tugas ke ${e.to ?? "hero lain"} dulu`,
     })[e.k] ?? e.k,
@@ -306,6 +319,7 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
       search: `Gas cari: "${e.q ?? ""}"`,
       read: "Sikat isi link",
       price: `Ambil harga ${e.sym ?? ""}`,
+      flow: `Cek siapa yang lagi borong ${e.sym ?? ""}`,
       write: e.plan ? "Bikin trade plan & langsung tulis" : "Langsung tulis jawabannya",
       switch: `Oper ke ${e.to ?? "hero lain"} dulu`,
     })[e.k] ?? e.k,

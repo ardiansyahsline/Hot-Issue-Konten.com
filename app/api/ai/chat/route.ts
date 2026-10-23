@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { aiConfig, aiHeaders, healthMap, healthRank, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
+import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { buildWebContext, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
+import { TRADE_INTENT, analysisGuide, buildWebContext, ensureTradePlan, planWebSearch, sourcesFooter, webConfig } from "@/lib/aiWeb.server";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const HISTORY = 40; // pesan terakhir yang dikirim ke AI sebagai konteks
 const MAX_INPUT = 20000;
@@ -151,7 +151,9 @@ export async function POST(req: NextRequest) {
   setVisionCatalog(catalog.vision);
   const chosen = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
   // katalog gagal terbaca (server AI lambat / putus sesaat) -> pakai model yang pernah terbukti jalan, bukan "auto"
-  const pool = models.length ? models : [...health.values()].filter((h) => healthRank(h) === 0).map((h) => h.model).filter(isChatModel);
+  // model yang dipastikan sudah tidak ada (404 "does not exist", 410 "end of life") dilewati 3 hari
+  const isDead = (m: string) => isDeadModel(health.get(m));
+  const pool = (models.length ? models : [...health.values()].filter((h) => healthRank(h) === 0).map((h) => h.model).filter(isChatModel)).filter((m) => !isDead(m));
   const ranked = hasImages ? [...(cfg.visionModel ? [cfg.visionModel] : []), ...rankVisionModels(pool)] : rankTextModels(pool);
   const hm = healthMap(ranked, health);
   const byHealth = ranked
@@ -214,7 +216,7 @@ export async function POST(req: NextRequest) {
   const textRank = rankTextModels(pool);
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
-  const noWeb: { context: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
+  const noWeb: { context: string; lite?: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
   if (useData) step("data", "run");
   if (webOn) step("decide", "run");
   const [context, web] = await Promise.all([
@@ -231,7 +233,9 @@ export async function POST(req: NextRequest) {
           history: hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })),
           question: lastText,
         })
-          .then((plan) => {
+          .then((p) => {
+            // analisa / trade plan suatu aset selalu pakai data harga & chart (kecuali sedang membahas gambar yang dikirim)
+            const plan = hasImages ? p : ensureTradePlan(p, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })));
             step("decide", plan ? "done" : "skip");
             return plan ? buildWebContext(plan, (k, st, extra) => step(k, st, extra)) : noWeb;
           })
@@ -254,8 +258,7 @@ export async function POST(req: NextRequest) {
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
-  const tradeIntent =
-    /\b(trade ?plan|tradeplan|analisa|analisis|analyze|setup|signal|sinyal|entry|entri|stop ?loss|\bsl\b|take ?profit|\btp\d?\b|target|beli di|jual di|masuk di|buy|sell|long|short|kapan (beli|jual|masuk)|harga berapa|di harga berapa|layak beli|worth)\b/i.test(lastText);
+  const tradeIntent = TRADE_INTENT.test(lastText);
   if (tradeIntent && web.chart) {
     messages.push({
       role: "system",
@@ -264,31 +267,23 @@ export async function POST(req: NextRequest) {
         "WAJIB beri trade plan dengan ANGKA KONKRET: arah (long/short atau wait & see dengan level pemicunya), entry (boleh area), stop loss, TP1, TP2, timeframe, dan alasan singkat berdasarkan data.",
         "Patokan harga: pakai harga live / candle kalau ada; kalau tidak ada, pakai harga paling baru dari hasil browsing dan sebut tanggalnya ('per 23 Okt'). JANGAN minta user memberikan harga, JANGAN menjawab hanya dengan persentase.",
         "Tutup jawaban dengan blok ```tradeplan berisi JSON (symbol, side, entry, sl, tp[], timeframe) — website menggambarnya di chart. Untuk entry berupa area, isi entry dengan titik tengah area.",
+        analysisGuide(web.chart),
       ].join("\n"),
     });
   }
-  // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413)
-  const trimContext = () => {
-    let changed = false;
-    for (const m of messages) {
-      if (m.role !== "system" || typeof m.content !== "string") continue;
-      if (m.content === context && context) {
-        m.content = context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "");
-        changed = true;
-      } else if (m.content === web.context && web.context.length > 6000) {
-        m.content = web.context.slice(0, 6000) + "\n… (hasil browsing diringkas)";
-        changed = true;
-      }
-    }
-    // riwayat panjang dipangkas: sisakan 6 pesan terakhir
-    const firstHist = messages.findIndex((m) => m.role !== "system");
-    if (firstHist > 0 && messages.length - firstHist > 6) {
-      messages.splice(firstHist, messages.length - firstHist - 6);
-      changed = true;
-    }
-    return changed;
+  // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413).
+  // Data harga / candle / instruksi trade plan tetap utuh; yang dipangkas: isi artikel, data CS, riwayat chat lama.
+  const liteOf = (src: typeof messages): typeof messages => {
+    const out = src.map((m) => {
+      if (m.role !== "system" || typeof m.content !== "string") return m;
+      if (context && m.content === context) return { ...m, content: context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "") };
+      if (web.context && m.content === web.context) return { ...m, content: web.lite ?? web.context.slice(0, 6000) };
+      return m;
+    });
+    const firstHist = out.findIndex((m) => m.role !== "system");
+    if (firstHist > 0 && out.length - firstHist > 6) out.splice(firstHist, out.length - firstHist - 6);
+    return out;
   };
-  let trimmed = false;
   for (const [i, m] of hist.entries()) {
     const imgs = m.images ?? [];
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
@@ -312,75 +307,62 @@ export async function POST(req: NextRequest) {
   let lastSwitch = "";
   const failures: string[] = [];
   let opened: { model: string; events: AsyncGenerator<SseEvent>; first: string } | null = null;
-  // batas waktu: Vercel memutus di 60 detik (jadi "Gagal (504)"). Tiap hero diberi maks ±18 detik sampai mulai menjawab,
-  // dan setelah ±40 detik berhenti mencoba supaya pesan error yang jelas masih sempat terkirim.
-  const OPEN_DEADLINE = t0 + 40_000;
-  const FIRST_TOKEN_MS = 18_000;
+  // Batas waktu (Vercel Hobby + Fluid compute: maks 300 detik; di sini dipakai 120):
+  // - tiap hero diberi maks 35 detik sampai mulai menjawab
+  // - kalau hero pertama belum menjawab dalam 10 detik, hero berikutnya ikut dicoba BERSAMAAN (yang duluan menjawab dipakai)
+  // - setelah 75 detik berhenti mencoba, supaya jawaban sempat dialirkan & pesan error jelas masih terkirim
+  const OPEN_DEADLINE = t0 + 75_000;
+  const ATTEMPT_MS = 35_000;
+  const HEDGE_MS = 10_000;
   let timedOut = false;
   // kalau key provider bermasalah, model lain dari provider yang sama pasti gagal juga -> lewati.
   // (kuota habis TIDAK dihitung: kuota gratis Gemini dll dihitung per model, model lain bisa masih ada jatah)
   const deadProv = new Set<string>();
   const PROVIDER_DOWN = /authenticat|authorization|invalid api key|api key not valid|missing api key|reconnect|decrypt|unauthori[sz]ed|forbidden/i;
-  for (let ci = 0; ci < candidates.length; ci++) {
-    const model = candidates[ci];
-    if (providerOf(model) && deadProv.has(providerOf(model))) continue;
-    const left = OPEN_DEADLINE - Date.now();
-    if (left < 3000) {
-      timedOut = true;
-      break;
-    }
-    const ac = new AbortController();
-    const onAbort = () => ac.abort();
-    upstreamAbort.signal.addEventListener("abort", onAbort);
-    let slow = false;
-    const timer = setTimeout(() => {
-      slow = true;
-      ac.abort();
-    }, Math.min(FIRST_TOKEN_MS, left));
-    const giveUp = (why: string) => {
-      clearTimeout(timer);
-      upstreamAbort.signal.removeEventListener("abort", onAbort);
-      coolDown(model);
-      failures.push(`${model} (${why})`);
-      // kasih tahu tampilan: mesin ini gagal, coba yang berikutnya
-      const nextHero = candidates[ci + 1] ? heroName(candidates[ci + 1]) : "";
-      if (nextHero && nextHero !== lastSwitch) {
-        lastSwitch = nextHero;
-        step("switch", "done", { from: heroName(model), to: nextHero, hero: chosenHero ?? nextHero });
-      }
-      if (providerOf(model) && PROVIDER_DOWN.test(why)) deadProv.add(providerOf(model));
-    };
+  // permintaan besar: Groq gratis membatasi token per menit (413) -> kirim versi ringkas
+  const charsOf = (arr: typeof messages) => arr.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length), 0);
+  const fullChars = charsOf(messages);
+  let forceLite = false;
+  const liteMessages = liteOf(messages);
+  const msgsFor = (model: string) => {
+    const useLite = forceLite || (providerOf(model) === "groq" && fullChars > 20_000);
+    const arr = [...(useLite ? liteMessages : messages)];
+    arr[1] = { role: "system", content: personaPrompt(chosenHero ?? heroName(model)) };
+    return arr;
+  };
+
+  type Res =
+    | { ok: true; model: string; events: AsyncGenerator<SseEvent>; first: string }
+    | { ok: false; model: string; why: string; status?: number; detail?: string; tooBig?: boolean; fatal?: string };
+
+  /** satu percobaan: kirim ke server AI lalu baca ±160 huruf pertama (error / kosong / huruf asing = gagal) */
+  const attempt = async (model: string, ac: AbortController): Promise<Res> => {
     let upstream: Response | null = null;
     let netErr: unknown = null;
-    // koneksi ke server AI kadang putus sesaat -> coba ulang sekali sebelum menyerah
-    for (let attempt = 0; attempt < 2 && !upstream && !slow; attempt++) {
+    // koneksi ke server AI kadang putus sesaat -> coba ulang sekali
+    for (let a = 0; a < 2 && !upstream && !ac.signal.aborted; a++) {
       try {
-        messages[1] = { role: "system", content: personaPrompt(chosenHero ?? heroName(model)) };
         upstream = await fetch(`${cfg.base}/chat/completions`, {
           method: "POST",
           headers: aiHeaders(cfg.key),
-          body: JSON.stringify({ model, messages, stream: true }),
+          body: JSON.stringify({ model, messages: msgsFor(model), stream: true }),
           signal: ac.signal,
         });
       } catch (e) {
-        if (upstreamAbort.signal.aborted) return;
         netErr = e;
-        if (attempt === 0 && !slow) await new Promise((r) => setTimeout(r, 1500));
+        if (a === 0 && !ac.signal.aborted) await new Promise((r) => setTimeout(r, 1500));
       }
     }
-    if (!upstream && slow) {
-      giveUp("terlalu lama, tidak menjawab");
-      await markHealth(supabase, model, false, "timeout");
-      continue;
-    }
     if (!upstream) {
-      clearTimeout(timer);
-      // server AI-nya sendiri tidak bisa dihubungi -> percuma coba model lain
+      if (ac.signal.aborted) return { ok: false, model, why: "terlalu lama, tidak menjawab" };
       const cause = (netErr as { cause?: { code?: string } })?.cause?.code;
       console.log("[ai] server AI tidak bisa dihubungi:", cause ?? netErr);
-      return void (await saveError(
-        `Server AI tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena komputer server AI mati / sleep / tidak ada internet, atau jendela server AI tertutup. Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI-nya.`
-      ));
+      return {
+        ok: false,
+        model,
+        why: "server AI tidak bisa dihubungi",
+        fatal: `Server AI tidak bisa dihubungi${cause ? ` (${cause})` : ""}. Biasanya karena komputer server AI mati / sleep / tidak ada internet, atau server AI-nya belum dinyalakan. Cek: buka ${cfg.base}/models dari HP — kalau tidak bisa dibuka, nyalakan lagi server AI-nya.`,
+      };
     }
     if (!upstream.ok || !upstream.body) {
       let detail = "";
@@ -388,26 +370,13 @@ export async function POST(req: NextRequest) {
         const t = await upstream.text();
         detail = (JSON.parse(t)?.error?.message as string) || t;
       } catch {}
-      // 401 bisa dari kunci website ATAU dari provider (key provider salah / provider tanpa key).
-      // Kalau daftar model barusan bisa dibaca pakai kunci yang sama, berarti kunci website benar -> lanjut hero lain.
+      // 401 bisa dari kunci website ATAU dari provider. Kalau daftar model barusan terbaca, kunci website benar -> lanjut hero lain.
       if (upstream.status === 401 && !catalog.ids.length) {
-        clearTimeout(timer);
-        return void (await saveError("Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys."));
+        return { ok: false, model, why: "401", fatal: "Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys." };
       }
-      // permintaan terlalu besar untuk model ini -> ringkas konteks sekali lalu coba lagi model yang sama
-      if ((upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail)) && !trimmed && trimContext()) {
-        trimmed = true;
-        clearTimeout(timer);
-        upstreamAbort.signal.removeEventListener("abort", onAbort);
-        ci--; // ulangi model yang sama dengan konteks ringkas
-        continue;
-      }
-      giveUp(`${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`);
-      // terlalu besar / kuota habis itu sementara -> jangan dicap rusak
-      if (upstream.status !== 413 && upstream.status !== 429) await markHealth(supabase, model, false, `${upstream.status} ${String(detail)}`);
-      continue;
+      const tooBig = upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail);
+      return { ok: false, model, why: `${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`, status: upstream.status, detail: String(detail), tooBig };
     }
-    // baca dulu ±160 huruf pertama: kalau error / kosong / tiba-tiba pakai huruf Arab-Mandarin dll padahal user tidak -> ganti hero
     const events = sse(upstream.body);
     let first = "";
     let failed = "";
@@ -423,29 +392,125 @@ export async function POST(req: NextRequest) {
         if (first.length >= 160) break;
       }
     } catch {
-      if (upstreamAbort.signal.aborted) return;
-      if (!first) failed = slow ? "terlalu lama, tidak menjawab" : "koneksi terputus";
+      if (!first) failed = ac.signal.aborted ? "terlalu lama, tidak menjawab" : "koneksi terputus";
     }
     if (first && wrongScript(first, lastUserText)) {
       failed = "menjawab pakai bahasa/huruf asing";
       first = "";
     }
-    if (first) {
-      clearTimeout(timer);
-      opened = { model, events, first };
-      await markHealth(supabase, model, true);
-      break;
-    }
-    giveUp(failed || "jawaban kosong");
-    await markHealth(supabase, model, false, failed || "jawaban kosong");
+    if (first && !ac.signal.aborted) return { ok: true, model, events, first };
     try {
       await events.return(undefined);
     } catch {}
+    return { ok: false, model, why: failed || (ac.signal.aborted ? "terlalu lama, tidak menjawab" : "jawaban kosong") };
+  };
+
+  type Run = { model: string; ac: AbortController; timer: ReturnType<typeof setTimeout>; started: number; onAbort: () => void; p: Promise<{ key: number; r: Res }> };
+  const queue = [...candidates];
+  const running = new Map<number, Run>();
+  let seq = 0;
+  let fatal = "";
+  const stop = (key: number, abort: boolean, keepListener = false) => {
+    const run = running.get(key);
+    if (!run) return;
+    running.delete(key);
+    clearTimeout(run.timer);
+    if (!keepListener) upstreamAbort.signal.removeEventListener("abort", run.onAbort);
+    if (abort) {
+      run.ac.abort();
+      // kalau ternyata sempat terbuka, tutup alirannya
+      run.p
+        .then(({ r }) => {
+          if (r.ok) r.events.return(undefined).catch(() => {});
+        })
+        .catch(() => {});
+    }
+  };
+  const startNext = (): boolean => {
+    while (queue.length) {
+      const model = queue.shift()!;
+      if (providerOf(model) && deadProv.has(providerOf(model))) continue;
+      const left = OPEN_DEADLINE - Date.now();
+      if (left < 3000) {
+        timedOut = true;
+        return false;
+      }
+      const ac = new AbortController();
+      const onAbort = () => ac.abort();
+      upstreamAbort.signal.addEventListener("abort", onAbort);
+      const timer = setTimeout(() => ac.abort(), Math.min(ATTEMPT_MS, left));
+      const key = ++seq;
+      running.set(key, { model, ac, timer, started: Date.now(), onAbort, p: attempt(model, ac).then((r) => ({ key, r })) });
+      return true;
+    }
+    return false;
+  };
+  const giveUp = (model: string, why: string) => {
+    coolDown(model);
+    failures.push(`${model} (${why})`);
+    // kasih tahu tampilan: mesin ini gagal, dibantu hero berikutnya
+    const next = [...running.values()][0]?.model ?? queue.find((m) => !deadProv.has(providerOf(m)));
+    const nextHero = next ? heroName(next) : "";
+    if (nextHero && nextHero !== lastSwitch) {
+      lastSwitch = nextHero;
+      step("switch", "done", { from: heroName(model), to: nextHero, hero: chosenHero ?? nextHero });
+    }
+    if (providerOf(model) && PROVIDER_DOWN.test(why)) deadProv.add(providerOf(model));
+  };
+
+  startNext();
+  while (running.size) {
+    const runs = [...running.values()];
+    const oldest = Math.min(...runs.map((x) => x.started));
+    let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+    const canHedge = running.size < 2 && queue.length > 0 && OPEN_DEADLINE - Date.now() > 8000;
+    const hedge = canHedge ? new Promise<"hedge">((res) => (hedgeTimer = setTimeout(() => res("hedge"), Math.max(0, HEDGE_MS - (Date.now() - oldest))))) : null;
+    const out = await Promise.race<{ key: number; r: Res } | "hedge">(hedge ? [...runs.map((x) => x.p), hedge] : runs.map((x) => x.p));
+    if (hedgeTimer) clearTimeout(hedgeTimer);
+    if (upstreamAbort.signal.aborted) {
+      for (const k of [...running.keys()]) stop(k, true);
+      return;
+    }
+    // hero pertama lambat -> hero berikutnya ikut dicoba bersamaan
+    if (out === "hedge") {
+      startNext();
+      continue;
+    }
+    const { key, r } = out;
+    if (!running.has(key)) continue;
+    // pemenang tetap ikut berhenti kalau user menekan Stop
+    stop(key, false, r.ok);
+    if (r.ok) {
+      opened = r;
+      for (const k of [...running.keys()]) stop(k, true);
+      await markHealth(supabase, r.model, true);
+      break;
+    }
+    if (r.fatal) {
+      fatal = r.fatal;
+      for (const k of [...running.keys()]) stop(k, true);
+      break;
+    }
+    // terlalu besar -> ulangi model yang sama dengan konteks ringkas (sekali)
+    if (r.tooBig && !forceLite) {
+      forceLite = true;
+      queue.unshift(r.model);
+      if (running.size < 2) startNext();
+      continue;
+    }
+    giveUp(r.model, r.why);
+    // terlalu besar / kuota habis itu sementara -> jangan dicap rusak (model yang sudah tidak ada otomatis ditandai dead:)
+    if (r.status !== 413 && r.status !== 429) await markHealth(supabase, r.model, false, r.why);
+    // ganti yang gagal dengan hero berikutnya (maks 2 berjalan bersamaan)
+    if (running.size === 0) startNext();
+    else if (running.size < 2 && Date.now() - Math.min(...[...running.values()].map((x) => x.started)) >= HEDGE_MS) startNext();
   }
+  if (!opened && Date.now() >= OPEN_DEADLINE - 3000) timedOut = true;
+  if (fatal) return void (await saveError(fatal));
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
     return void (await saveError(
-      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 40 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
+      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 75 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
     ));
   }
 

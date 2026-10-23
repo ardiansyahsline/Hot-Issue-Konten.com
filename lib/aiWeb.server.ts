@@ -2,6 +2,7 @@ import "server-only";
 import { hasStockData, stockCandles, stockCode, stockQuote, summarizeDaily } from "./stockData.server";
 import { autoLevels, levelsLine } from "./chartLevels";
 import { candlesFor, summarizeCandles, tfLabel, type TF } from "./candles.server";
+import { cotAssetsFor, cotPositioning, cryptoDerivatives, cryptoGlobal, fearGreed, usMacro, type MarketBlock } from "./marketData.server";
 
 /**
  * "Cari di Internet" untuk tab AI.
@@ -110,6 +111,8 @@ const PLAN_PROMPT = (today: string) =>
     "market: saham_id (saham BEI/IHSG), saham_global (saham luar negeri), crypto, forex (mata uang, emas XAU, komoditas), none.",
     "fresh: day (harga/berita hari ini), week (kondisi pasar terbaru), month (analisa/proyeksi), any (fakta umum).",
     "symbols: kode aset yang ditanya (mis. BBCA, BTC, ETH, XAUUSD, USDIDR, EURUSD), maksimal 5. Kode 4 huruf seperti BRIS, BBRI, BBCA, GOTO = saham BEI (saham_id), kecuali user jelas menyebut saham luar.",
+    "Permintaan analisa / trade plan / entry / 'beli di harga berapa' untuk suatu aset SELALU search:true dengan market & symbols terisi (data harga & candle dibutuhkan). Kalau pesan terakhir tidak menyebut asetnya, pakai aset yang sedang dibahas di percakapan.",
+    "'koin X' / 'token X' / 'X usdt' = crypto dengan symbol X (mis. 'koin pump' -> PUMP, 'trade plan pump' -> PUMP), BUKAN pencarian umum soal koin yang sedang naik.",
     "names: nama lengkap aset/emiten dari symbols (mis. BRIS -> \"Bank Syariah Indonesia\", BBRI -> \"Bank Rakyat Indonesia\", BTC -> \"Bitcoin\", XAUUSD -> \"emas\").",
     "Untuk saham, SETIAP kata kunci wajib memuat kode DAN nama emitennya supaya mesin pencari tidak salah tangkap (mis. 'saham BRIS Bank Syariah Indonesia analisa Oktober 2026', bukan cuma 'BRIS').",
     'Jawab HANYA JSON satu baris: {"search":true,"queries":["..."],"topic":"general|news|finance","market":"none","fresh":"week","symbols":[],"names":[]}',
@@ -440,6 +443,121 @@ type Hit = { title?: string; url: string; content?: string; raw_content?: string
  * Cari tiap kata kunci (prioritas situs berkualitas, buang yang basi) + baca link yang ditempel + harga live.
  * Tidak pernah melempar error — kalau gagal, kembalikan catatan singkat supaya AI bilang terus terang.
  */
+/** permintaan analisa / trade plan / level masuk suatu aset */
+export const TRADE_INTENT =
+  /\b(trade ?plan|tradeplan|analisa|analisis|analyze|setup|signal|sinyal|entry|entri|stop ?loss|sl|take ?profit|tp\d?|target|beli di|jual di|masuk di|buy|sell|long|short|kapan (beli|jual|masuk)|harga berapa|di harga berapa|layak beli|worth)\b/i;
+
+const CRYPTO_WORDS: Record<string, [string, string]> = {
+  bitcoin: ["BTC", "Bitcoin"], btc: ["BTC", "Bitcoin"], ethereum: ["ETH", "Ethereum"], eth: ["ETH", "Ethereum"], solana: ["SOL", "Solana"],
+  bnb: ["BNB", "BNB"], xrp: ["XRP", "XRP"], doge: ["DOGE", "Dogecoin"], dogecoin: ["DOGE", "Dogecoin"], pepe: ["PEPE", "Pepe"],
+  pump: ["PUMP", "Pump.fun"], ton: ["TON", "Toncoin"], sui: ["SUI", "Sui"], cardano: ["ADA", "Cardano"], ada: ["ADA", "Cardano"],
+  avax: ["AVAX", "Avalanche"], tron: ["TRX", "TRON"], trx: ["TRX", "TRON"], shib: ["SHIB", "Shiba Inu"], litecoin: ["LTC", "Litecoin"],
+  hype: ["HYPE", "Hyperliquid"], chainlink: ["LINK", "Chainlink"],
+};
+const IDX_CODES = /\b(bbri|bbca|bmri|bbni|bris|tlkm|asii|goto|antm|adro|unvr|icbp|indf|mdka|pgas|ptba|smgr|untr|cpin|amrt|mapi|bbtn|arto|bren|cuan|ptro|dewa|inco|medc|aadi)\b/i;
+
+type Asset = { market: Market; symbol: string; name?: string };
+/** tebak aset dari kalimat (cadangan kalau perencana AI tidak mengisi symbols) */
+function guessAsset(text: string): Asset | null {
+  const t = ` ${text} `;
+  if (/\b(xau(usd)?|gold|emas)\b/i.test(t)) return { market: "forex", symbol: "XAUUSD", name: "emas" };
+  const fx = t.match(/\b(eur|gbp|usd|aud|nzd|cad|chf)\s*\/?\s*(usd|idr|jpy|chf|cad)\b/i);
+  if (fx && fx[1].toLowerCase() !== fx[2].toLowerCase()) return { market: "forex", symbol: `${fx[1]}${fx[2]}`.toUpperCase() };
+  const usdt = t.match(/\b([a-z0-9]{2,12}?)\s*\/?\s*usdt?\b/i);
+  if (usdt && !/^(xau|eur|gbp|aud)$/i.test(usdt[1])) return { market: "crypto", symbol: usdt[1].toUpperCase(), name: CRYPTO_WORDS[usdt[1].toLowerCase()]?.[1] };
+  const coin = t.match(/\b(?:koin|coin|token|crypto|kripto)\s+([a-z0-9]{2,12})\b/i);
+  if (coin && !/^(yang|apa|ini|itu|baru|bagus|lagi)$/i.test(coin[1])) return { market: "crypto", symbol: coin[1].toUpperCase(), name: CRYPTO_WORDS[coin[1].toLowerCase()]?.[1] };
+  for (const [w, [sym, name]] of Object.entries(CRYPTO_WORDS)) if (new RegExp(`\\b${w}\\b`, "i").test(t)) return { market: "crypto", symbol: sym, name };
+  const saham = t.match(/\bsaham\s+([a-z]{4})\b/i) ?? t.match(IDX_CODES);
+  if (saham) return { market: "saham_id", symbol: saham[1].toUpperCase() };
+  return null;
+}
+
+/** aset dari chart jawaban sebelumnya ([[chart:IDX:BBRI]] / [[chart:PUMPUSDT]] / [[chart:OANDA:XAUUSD]]) */
+function assetFromChart(sym: string): Asset | null {
+  if (/^IDX:/.test(sym)) return { market: "saham_id", symbol: sym.slice(4) };
+  if (/^(OANDA|FX|FX_IDC):/.test(sym)) return { market: "forex", symbol: sym.split(":")[1] };
+  if (/USDT$/.test(sym)) return { market: "crypto", symbol: sym.replace(/USDT$/, "") };
+  if (/^[A-Z.]{1,8}$/.test(sym)) return { market: "saham_global", symbol: sym };
+  return null;
+}
+
+/**
+ * Permintaan analisa / trade plan WAJIB pakai data harga & chart. Kalau perencana AI bilang tidak perlu browsing
+ * atau lupa mengisi aset, aset ditebak dari pesan ini -> pesan user sebelumnya -> chart di jawaban sebelumnya.
+ */
+export function ensureTradePlan(plan: WebPlan | null, question: string, history: { role: string; content: string }[]): WebPlan | null {
+  if (!TRADE_INTENT.test(question)) return plan;
+  if (plan && plan.market !== "none" && plan.symbols.length) return plan;
+  let a = guessAsset(question);
+  const recent = history.slice(-8).reverse();
+  if (!a) for (const m of recent.filter((m) => m.role === "user").slice(0, 4)) if ((a = guessAsset(m.content))) break;
+  if (!a)
+    for (const m of recent.filter((m) => m.role === "assistant")) {
+      const c = m.content.match(/\[\[chart:([A-Z0-9_:.\-]{1,40})\]\]/);
+      if (c && (a = assetFromChart(c[1]))) break;
+    }
+  if (!a) return plan;
+  const now = new Date();
+  const monthId = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(now);
+  const monthEn = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(now);
+  const q = a.market === "saham_id" ? `saham ${a.symbol} ${a.name ?? ""} analisa ${monthId}`.replace(/\s+/g, " ") : `${a.name ?? a.symbol} ${a.symbol} price analysis ${monthEn}`;
+  const prevTf = recent.filter((m) => m.role === "user").slice(0, 3).map((m) => detectTimeframe(m.content)).find(Boolean);
+  return {
+    queries: [q],
+    urls: plan?.urls ?? [],
+    topic: "finance",
+    market: a.market,
+    fresh: "week",
+    symbols: [a.symbol],
+    names: a.name ? [a.name] : [],
+    timeframe: plan?.timeframe ?? detectTimeframe(question) ?? prevTf,
+    by: plan?.by ?? "aturan",
+  };
+}
+
+/**
+ * Kerangka analisa ala analis profesional per pasar (dipakai saat user minta analisa / trade plan).
+ * Isi bagian wajib lengkap; gaya bahasa tetap mengikuti karakter hero.
+ */
+export function analysisGuide(chart: string): string {
+  const market = /^IDX:/.test(chart) ? "saham_id" : /^(OANDA|FX|FX_IDC):/.test(chart) ? "forex" : /USDT$/.test(chart) ? "crypto" : "saham_global";
+  const mid: Record<string, string[]> = {
+    saham_id: [
+      "2. VALUASI: PER, PBV (bandingkan dengan rata-rata sektor/historis kalau ada di sumber), dividend yield. Sebut periode laporan (mis. 'laporan Q3 2026').",
+      "3. FUNDAMENTAL: pertumbuhan pendapatan & laba (YoY/QoQ), ROE, utang/DER; khusus bank: NIM, NPL, LDR, CAR kalau ada.",
+      "4. ALIRAN DANA: foreign net buy/sell (sebut periode & sumbernya). Broker summary/bandarmologi hanya kalau ada di sumber — jangan dikarang. Foreign flow = indikator tambahan, bukan sinyal tunggal.",
+      "5. BERITA & KATALIS: laporan keuangan, dividen/cum date, RUPS, buyback, aksi korporasi, regulasi, makro (BI rate, rupiah, komoditas).",
+    ],
+    saham_global: [
+      "2. VALUASI: P/E, P/B, EV/EBITDA bila ada, dibanding sektor.",
+      "3. FUNDAMENTAL: pertumbuhan pendapatan & laba, margin, guidance perusahaan, target harga analis bila ada.",
+      "4. ALIRAN DANA & SENTIMEN: rating analis, perubahan kepemilikan institusi/ETF bila ada di sumber.",
+      "5. BERITA & KATALIS: earnings date, produk, regulasi, makro (suku bunga AS).",
+    ],
+    forex: [
+      "2. MAKRO & BANK SENTRAL: suku bunga & arah kebijakan kedua mata uang (selisih bunga), inflasi, data terbaru vs perkiraan (yang menggerakkan pasar adalah kejutannya). Emas: yield riil AS (naik = menekan emas), dolar AS, permintaan bank sentral/ETF, geopolitik.",
+      "3. POSITIONING: COT CFTC — spekulan net long/short, perubahan mingguan, apakah mendekati ekstrem rentangnya (ramai di satu sisi = rawan berbalik).",
+      "4. KALENDER & KATALIS: rilis data/rapat bank sentral terdekat yang disebut berita.",
+    ],
+    crypto: [
+      "2. DERIVATIF: funding rate, open interest, rasio long/short, taker buy/sell — TAFSIRKAN: funding positif tinggi + OI naik = long ramai (rawan long squeeze); funding negatif saat harga naik = short squeeze; OI naik bersama harga = uang baru masuk; OI turun saat harga naik = rally karena short menutup posisi.",
+      "3. SENTIMEN & ALIRAN DANA: Fear & Greed (tulis '(sumber: alternative.me)' di sampingnya; ekstrem sering jadi sinyal kontrarian), dominasi BTC, ETF spot & stablecoin dari berita bila ada, COT CME untuk BTC/ETH bila ada.",
+      "4. BERITA & KATALIS: ETF, regulasi, unlock token, listing, makro (dolar, suku bunga AS).",
+    ],
+  };
+  return [
+    "KERANGKA ANALISA ALA ANALIS PROFESIONAL — susun jawaban dengan bagian berikut (urut). Judul bagian boleh diberi sentuhan gaya karaktermu, tapi isinya WAJIB ada. Bagian yang datanya tidak ada di atas: tulis singkat 'data belum tersedia' — JANGAN mengarang angka.",
+    "1. RINGKASAN & BIAS: bullish / bearish / netral + tingkat keyakinan (rendah/sedang/tinggi), 2–3 kalimat.",
+    ...mid[market],
+    `${market === "forex" || market === "crypto" ? "5" : "6"}. TEKNIKAL: tren & struktur, support/resistance (pakai level otomatis di data), pola chart.`,
+    `${market === "forex" || market === "crypto" ? "6" : "7"}. SKENARIO: bullish & bearish masing-masing dengan level pemicu / invalidasi.`,
+    `${market === "forex" || market === "crypto" ? "7" : "8"}. TRADE PLAN & MANAJEMEN RISIKO: entry, SL, TP1, TP2, R:R; risiko per transaksi maksimal 1–2% modal.`,
+    `${market === "forex" || market === "crypto" ? "8" : "9"}. RISIKO UTAMA yang bisa membatalkan analisa.`,
+    "Setiap angka dari data/artikel: sebut tanggal & sumbernya [n]. Bawakan dengan GAYA KARAKTERMU: kalimat pembuka & penutup harus khas kamu, cara menjelaskan & pilihan kata sesuai kepribadianmu — tapi struktur & angka tetap lengkap.",
+  ].join("\n");
+}
+
 /** nama lain kode forex/komoditas yang biasa dipakai di judul berita */
 const FX_WORDS: Record<string, string[]> = {
   XAU: ["gold", "emas"], XAG: ["silver", "perak"], IDR: ["rupiah"], EUR: ["euro"], JPY: ["yen"], GBP: ["pound", "sterling"],
@@ -481,7 +599,7 @@ function relevanceTest(plan: WebPlan): ((text: string) => boolean) | null {
 
 export type StepFn = (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void;
 
-export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}): Promise<{ context: string; sources: Source[]; error?: string; chart?: string | null }> {
+export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}): Promise<{ context: string; lite?: string; sources: Source[]; error?: string; chart?: string | null }> {
   const cfg = webConfig();
   if (!cfg.ok) return { context: "", sources: [] };
   const sources: Source[] = [];
@@ -528,7 +646,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     );
   }
 
-  const search = async (query: string, i: number) => {
+  const search = async (query: string, i: number, fresh: Fresh = plan.fresh, domainsIn?: string[]) => {
     const base = {
       query,
       search_depth: "basic",
@@ -536,14 +654,14 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
       topic: plan.topic,
       // isi halaman lengkap untuk hasil kata kunci pertama -> jawaban lebih dalam (biaya kredit sama)
       include_raw_content: i === 0,
-      ...(plan.fresh !== "any" ? { time_range: plan.fresh } : {}),
+      ...(fresh !== "any" ? { time_range: fresh } : {}),
       ...(plan.topic === "general" && plan.market === "saham_id" ? { country: "indonesia" } : {}),
       exclude_domains: LOW_QUALITY,
     };
     const take = (j: { results?: Hit[] }) => {
       let n = 0;
       for (const r of j?.results ?? []) {
-        if (LOW_QUALITY.some((d) => host(r.url).endsWith(d)) || isStale(r, plan.fresh)) {
+        if (LOW_QUALITY.some((d) => host(r.url).endsWith(d)) || isStale(r, fresh)) {
           dropped++;
           continue;
         }
@@ -559,7 +677,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
       return n;
     };
     try {
-      const domains = plan.market !== "none" ? DOMAINS[plan.market] : null;
+      const domains = domainsIn ?? (plan.market !== "none" ? DOMAINS[plan.market] : null);
       const got = take(await tavily("search", cfg.key, domains ? { ...base, include_domains: domains } : base, 12000));
       // situs berkualitas belum cukup -> ulangi kata kunci pertama tanpa batas situs
       if (domains && got < 2 && i === 0) take(await tavily("search", cfg.key, base, 12000));
@@ -573,6 +691,68 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     const b0 = before();
     tasks.push(search(q, i).finally(() => onStep("search", "done", { id: `q${i}`, q, n: Math.max(0, blocks.length - b0) })));
   });
+
+  // ===== data ala analis profesional =====
+  const flow: string[] = [];
+  const flowSources: Source[] = [];
+  const addBlock = (b: MarketBlock) => {
+    flow.push(...b.lines);
+    flowSources.push(...b.sources);
+  };
+  const sym0 = (plan.symbols[0] ?? "").toUpperCase().replace(/^[A-Z_]+:/, "").replace(/\.(JK|US)$/, "");
+  const flowStep = (label: string, job: Promise<unknown>) => {
+    onStep("flow", "run", { id: "flow", sym: label });
+    tasks.push(job.finally(() => onStep("flow", "done", { id: "flow", sym: label })).then(() => {}));
+  };
+  if (plan.market === "crypto" && sym0) {
+    // derivatif (funding, OI, long/short, taker) + sentimen + dominasi + COT CME untuk BTC/ETH
+    const coin = sym0.replace(/(USDT|USDC|USD|IDR)$/, "") || sym0;
+    flowStep(
+      coin,
+      Promise.all([cryptoDerivatives(coin), fearGreed(), cryptoGlobal(), cotPositioning(coin)]).then((bs) => {
+        const [d, f, g, c] = bs;
+        if (d.lines.length) addBlock(d);
+        const sent = [f, g, c].filter((x) => x.lines.length);
+        if (sent.length) {
+          flow.push("SENTIMEN & POSISI PASAR CRYPTO:");
+          sent.forEach(addBlock);
+        }
+      })
+    );
+  } else if (plan.market === "forex" && sym0) {
+    // posisi spekulan COT + makro AS (FRED)
+    flowStep(
+      sym0,
+      Promise.all([...cotAssetsFor(sym0).map(cotPositioning), usMacro()]).then((bs) => {
+        const cot = bs.slice(0, -1).filter((x) => x.lines.length);
+        if (cot.length) {
+          flow.push("POSITIONING (COT CFTC — spekulan besar; posisi ekstrem sering jadi tanda pasar sudah ramai di satu sisi):");
+          cot.forEach(addBlock);
+        }
+        const mac = bs.at(-1)!;
+        if (mac.lines.length) addBlock(mac);
+        else flow.push("- Data makro AS otomatis (FRED) belum aktif — ambil suku bunga/inflasi/yield dari berita di bawah dan sebut tanggalnya.");
+      })
+    );
+  } else if ((plan.market === "saham_id" || plan.market === "saham_global") && sym0) {
+    // browsing terarah: valuasi & fundamental + aliran dana asing
+    const name = plan.names?.[0] ?? "";
+    const yr = new Date().getFullYear();
+    const month = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
+    const extra: [string, Fresh, string[] | undefined][] =
+      plan.market === "saham_id"
+        ? [
+            [`${sym0} ${name} PER PBV ROE laba bersih kinerja keuangan ${yr}`.replace(/\s+/g, " "), "month", ["idnfinancials.com", "idx.co.id", "cnbcindonesia.com", "bisnis.com", "investor.id", "emitennews.com", "kontan.co.id", "stockbit.com", "katadata.co.id", "idxchannel.com"]],
+            [`saham ${sym0} net buy net sell asing ${month}`, "week", ["cnbcindonesia.com", "bisnis.com", "idnfinancials.com", "investor.id", "emitennews.com", "idxchannel.com", "kontan.co.id", "bloombergtechnoz.com"]],
+          ]
+        : [[`${sym0} ${name} P/E ratio valuation earnings growth analyst price target ${yr}`.replace(/\s+/g, " "), "month", undefined]];
+    extra.forEach(([q, fr, dom], k) => {
+      const id = `x${k}`;
+      onStep("search", "run", { id, q });
+      const b0 = blocks.length;
+      tasks.push(search(q, plan.queries.length + k, fr, dom).finally(() => onStep("search", "done", { id, q, n: Math.max(0, blocks.length - b0) })));
+    });
+  }
 
   // saham: kalau tidak ada key data saham -> cari khusus harga penutupan terbaru (ringkasan mesin pencari + berita pasar)
   const priceNotes: string[] = [];
@@ -689,7 +869,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
   await Promise.all(tasks);
 
   const chart = chartSymbol(plan);
-  if (!blocks.length && !live.length && !history.length && !tfHist.length) {
+  if (!blocks.length && !live.length && !history.length && !tfHist.length && !flow.length) {
     return {
       context: `PENCARIAN INTERNET: sudah dicoba tapi gagal / tidak ada hasil yang cukup baru${error ? ` (${error})` : ""}. Bilang terus terang bahwa data terbaru tidak ditemukan; jangan mengarang info terbaru.`,
       sources: [],
@@ -699,7 +879,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
   }
   // sumber terbaru di atas
   blocks.sort((a, b) => (b.date ? Date.parse(b.date) || 0 : 0) - (a.date ? Date.parse(a.date) || 0 : 0));
-  sources.push(...liveSources);
+  sources.push(...liveSources, ...flowSources);
   const parts = blocks.slice(0, 9).map((b) => {
     sources.push({ title: b.title, url: b.url });
     return `[${sources.length}] ${b.title} — ${b.url}${b.date ? ` (terbit ${b.date})` : ""}\n${b.text}`;
@@ -715,7 +895,9 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
           "Pakai harga paling baru yang ada (sebut tanggal & sumbernya) sebagai patokan; boleh juga patokan dari level yang disebut artikel/analis. Ingatkan singkat untuk cek harga live di aplikasi sekuritas sebelum eksekusi.",
         ]
       : [];
-  const context = [
+  // data pasar (harga live / candle) lebih penting dari artikel -> artikel dibatasi lebih ketat kalau datanya ada
+  const hasMarket = live.length > 0 || history.length > 0 || tfHist.length > 0 || flow.length > 0;
+  const build = (articleChars: number) => [
     `HASIL BROWSING INTERNET (barusan dicarikan untukmu${plan.queries.length ? `, kata kunci: ${plan.queries.map((q) => `"${q}"`).join(", ")}` : ""}):`,
     "- Kamu SUDAH browsing untuk pertanyaan ini — jangan bilang tidak bisa mengakses internet. Jawab berdasarkan hasil ini.",
     "- Utamakan sumber PALING BARU; selalu sebut tanggal data/artikel. Kalau sebuah artikel sudah lama, bilang itu data lama — jangan disajikan seolah kondisi sekarang.",
@@ -727,6 +909,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     ...liveBlock,
     ...(history.length ? ["", ...history] : []),
     ...(tfHist.length ? ["", ...tfHist] : []),
+    ...(flow.length ? ["", ...flow] : []),
     ...(tfNotes.length ? ["", ...tfNotes] : []),
     ...(tf && tf !== "1d" && tfHist.length ? [`(Timeframe yang diminta user: ${tfLabel(tf)} — chart di website juga dibuka di ${tfLabel(tf)}. Harian di atas hanya untuk konteks tren besar.)`] : []),
     ...(chart ? [`(Website menampilkan chart ${chart} di atas jawabanmu — boleh rujuk "lihat chart di atas", tapi analisamu harus dari angka di sini.)`] : []),
@@ -749,9 +932,12 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
       : []),
     ...idxNote,
     "",
-    clip(parts.join("\n\n"), 12000),
+    clip(parts.join("\n\n"), articleChars),
   ].join("\n");
-  return { context, sources, error: error || undefined, chart };
+  const context = build(hasMarket ? 8000 : 12000);
+  // versi ringkas (untuk model berbatas kecil / saat 413): data pasar & instruksi tetap utuh, artikel dipangkas
+  const lite = build(hasMarket ? 2000 : 4000);
+  return { context, lite, sources, error: error || undefined, chart };
 }
 
 /** daftar sumber yang ditempel di akhir jawaban (ikut tersimpan di riwayat chat) */
