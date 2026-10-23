@@ -10,7 +10,7 @@ export type Analysis = {
   metrics: Metric[];
   signals: Signal[];
 };
-export type AskInfo = { sym: string; label: string; market: string; tf?: string; hero?: string };
+export type AskInfo = { sym: string; label: string; market: string; tf?: string; hero?: string; rec?: string; v?: number; x?: number };
 
 const DONE = /```analisa\s*([\s\S]*?)```\s*/i;
 const PARTIAL = /```analisa[\s\S]*$/i;

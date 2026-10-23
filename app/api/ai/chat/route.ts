@@ -3,7 +3,7 @@ import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
-import { personaIntro } from "@/lib/aiPersona";
+import { personaIntro, personaOf, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
@@ -235,6 +235,19 @@ export async function POST(req: NextRequest) {
     }
     candidates = ["auto"];
   }
+  // 🎯 Layla (otomatis): pilih KARAKTER yang cocok dengan jenis pertanyaan, diputar acak (tidak sama dengan jawaban sebelumnya).
+  //    Mesin tetap yang terbaik/siap; yang berganti gaya & kepribadian penjawabnya.
+  if (!chosenHero && (chosen === SMART || chosen === "auto")) {
+    const groups = groupsFor(lastText, hasImages);
+    const heroes = [...new Set(pool.filter(isChatModel).map((m) => heroName(m)))];
+    const { data: prev } = await supabase.from("ai_messages").select("persona").eq("conversation_id", convId).eq("role", "assistant").order("id", { ascending: false }).limit(2);
+    const recent = new Set((prev ?? []).map((r) => r.persona as string).filter(Boolean));
+    let fit = heroes.filter((h) => groups.includes(personaOf(h).group));
+    if (!fit.length) fit = heroes;
+    const fresh = fit.filter((h) => !recent.has(h));
+    const pickFrom = fresh.length ? fresh : fit;
+    if (pickFrom.length) fixedHero = pickFrom[Math.floor(Math.random() * pickFrom.length)];
+  }
   step("understand", "done", { hero: heroOf(candidates[0] === "auto" ? SMART : candidates[0]) });
 
   const lastUserText = content || ([...hist].reverse().find((m) => m.role === "user")?.content ?? "");
@@ -309,8 +322,21 @@ export async function POST(req: NextRequest) {
     const sym = chartSymbol(plan)!;
     const askHero = heroOf(candidates[0] === "auto" ? SMART : candidates[0]);
     const label = sym.replace(/^[A-Z_]+:/, "");
-    const info = { sym, label, market: plan.market, tf: (plan.timeframe ?? detectTimeframe(lastText) ?? "1d").toUpperCase(), hero: askHero };
-    const text = `${personaIntro(askHero).replace(/[.…]+$/, "")} — ${label} mau dianalisa pakai pendekatan apa?\n\n[[ask:${JSON.stringify(info)}]]`;
+    const tf = (plan.timeframe ?? detectTimeframe(lastText) ?? "1d").toUpperCase();
+    // variasi supaya tidak monoton: kalimat pertanyaan, rekomendasi (sesuai timeframe & kepribadian hero), dan opsi tambahan
+    const rnd = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+    const g = personaOf(askHero).group;
+    const short = /^(1M|5M|15M|30M|1H)$/.test(tf);
+    const rec = short ? rnd(["sr", "sr", "extra"]) : tf === "1W" || /^saham/.test(plan.market) ? rnd(["full", "pattern", "sr"]) : g === "NT" ? rnd(["full", "pattern"]) : g === "SJ" ? rnd(["sr", "full"]) : rnd(["sr", "pattern", "extra"]);
+    const info = { sym, label, market: plan.market, tf, hero: askHero, rec, v: Math.floor(Math.random() * 3), x: Math.floor(Math.random() * 4) };
+    const q = rnd([
+      `${label} mau dianalisa pakai pendekatan apa?`,
+      `Biar pas, ${label} mau dibedah dari sisi mana dulu?`,
+      `Oke, ${label}! Mau fokus ke strategi yang mana?`,
+      `Untuk ${label}, kamu lebih suka cara baca yang mana?`,
+      `Siap bedah ${label} — pilih dulu gaya analisanya ya`,
+    ]);
+    const text = `${personaIntro(askHero).replace(/[.…]+$/, "")} — ${q}\n\n[[ask:${JSON.stringify(info)}]]`;
     emit({ t: "meta", model: candidates[0] === "auto" ? "" : candidates[0], persona: askHero, data: false, web: false, chart: null, fallback: false });
     controller.enqueue(enc.encode(text));
     await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: text, model: candidates[0], persona: askHero });
@@ -752,6 +778,19 @@ const coolingDown = (m: string) => (cooldown.get(m) ?? 0) > Date.now();
 /** huruf non-Latin yang sering "nyasar" (Arab, Mandarin/Jepang/Korea, Thai, Hindi, Kiril) */
 const FOREIGN = /[\u0600-\u06FF\u0750-\u077F\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F\u0900-\u097F\u0400-\u04FF]/g;
 /** jawaban memakai huruf asing (≥3 huruf) padahal pesan user tidak memakainya */
+/**
+ * Layla otomatis: kelompok kepribadian yang paling cocok untuk jenis pertanyaan.
+ * NT = Si Analis, NF = Si Diplomat, SJ = Si Penjaga, SP = Si Penjelajah.
+ */
+function groupsFor(text: string, hasImages: boolean): PGroup[] {
+  const t = text.toLowerCase();
+  if (/(analis|analisa|trading|trade plan|saham|crypto|kripto|forex|xau|btc|eth|chart|grafik|data|excel|csv|rumus|hitung|angka|statistik|kode|coding|script|bug|logika|bandingkan|strategi|riset|ppt|presentasi|report|laporan performa)/.test(t) || hasImages) return ["NT"];
+  if (/(curhat|sedih|capek|stres|semangat|motivasi|galau|caption|kreatif|ide konten|puisi|cerita|story|nama brand|tagline|hook|kata-kata|ucapan|minta maaf|hibur)/.test(t)) return ["NF"];
+  if (/(hot issue|issue|video review|banding|sop|checklist|prosedur|aturan|laporan|rekap|rangkum|jadwal|payout|withdraw|clipper|balasan cs|template|tiket|komplain)/.test(t)) return ["SJ"];
+  if (/(cepat|singkat|gimana cara|cara |tips|terjemah|translate|langsung|praktis|rekomendasi|saran|apa itu|jelasin singkat)/.test(t)) return ["SP"];
+  return ["NT", "NF", "SJ", "SP"];
+}
+
 /** alasan sebuah pertanyaan dianggap "tugas berat & penting" (null = tugas biasa, pakai mesin hemat) */
 function heavyReason(text: string, o: { approach: string; folderData: boolean; design: boolean; trade: boolean }): string | null {
   if (/\b(pakai sonnet|mode berat|mode teliti|analisa mendalam|riset mendalam|penting banget|super teliti)\b/i.test(text)) return "diminta";

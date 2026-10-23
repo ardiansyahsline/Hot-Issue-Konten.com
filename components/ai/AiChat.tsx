@@ -760,11 +760,34 @@ export default function AiChat({
     }
   };
 
-  const send = () => {
+  // pesan pertama di chat baru -> popup pilih hero dulu, lalu pesan langsung terkirim dengan hero itu
+  const [askHero, setAskHero] = useState<{ text: string; imgs: string[] } | null>(null);
+  const [queued, setQueued] = useState<{ text: string; imgs: string[] } | null>(null);
+  useEffect(() => {
+    if (!queued || busy) return;
+    const q = queued;
+    setQueued(null);
+    run(q.text, false, q.imgs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued, model]);
+  const chooseHero = (m: string) => {
+    if (!askHero) return;
+    pickModel(m);
     setHeroPicked(true);
+    setQueued(askHero);
+    setAskHero(null);
+  };
+  const send = () => {
     const t = input.trim();
     const imgs = pending.filter((p) => p.status === "done" && p.path).map((p) => p.path!);
     if ((!t && !imgs.length) || busy || uploading) return;
+    if (!heroPicked && !activeId && msgs.length === 0 && !cowork) {
+      setInput("");
+      setPending([]);
+      setAskHero({ text: t, imgs });
+      return;
+    }
+    setHeroPicked(true);
     setInput("");
     setPending([]);
     run(t, false, imgs);
@@ -1182,7 +1205,7 @@ export default function AiChat({
             </div>
             <div className="mt-6 w-full max-w-[680px]">{composer}</div>
           </div>
-        ) : msgs.length === 0 && !loadingMsgs && !heroPicked && !activeId ? (
+        ) : false ? (
           <div className="flex flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6">
             <div className="mx-auto w-full max-w-[760px]">
               <h2 className="font-display text-[21px] font-bold sm:text-[24px]">Halo {firstName} 👋</h2>
@@ -1510,6 +1533,84 @@ export default function AiChat({
         )}
       </div>
 
+      {askHero && (
+        <div className="hp-back fixed inset-0 z-[75] flex items-center justify-center bg-black/45 p-3 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Pilih teman ngobrol">
+          <div className="hp-card flex max-h-[86dvh] w-full max-w-[460px] flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900" style={{ boxShadow: "var(--shadow-pop), 0 30px 60px -20px rgba(0,0,0,.35)" }}>
+            <div className="border-b border-zinc-800/80 px-4 pb-3 pt-4">
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-[17px] font-bold">Hai {firstName} 👋 hari ini mau ditemani siapa?</div>
+                  <div className="text-[12px] text-zinc-400">Pilih teman yang gayanya paling pas buat kamu — atau biar Layla yang pilihkan.</div>
+                  <div className="mt-1 line-clamp-1 text-[11.5px] italic text-zinc-500">Pesanmu: “{askHero.text || "gambar"}”</div>
+                </div>
+                <button type="button" onClick={() => chooseHero(model)} className="shrink-0 rounded-lg px-2 py-1 text-[12px] font-semibold text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">
+                  Lewati ›
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto p-2">
+              <button type="button" onClick={() => chooseHero(SMART)} className="flex w-full items-center gap-3 rounded-xl border border-orange-500/40 bg-orange-500/10 px-3 py-2.5 text-left hover:border-orange-500">
+                <span className="flex h-10 w-10 shrink-0 items-end justify-center overflow-hidden rounded-[10px] bg-orange-500/15">
+                  <HeroArt hero={SMART_HERO} size={44} still />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[13.5px] font-bold text-orange-400">Layla · pilihkan otomatis</span>
+                  <span className="block text-[11.5px] leading-snug text-zinc-400">Layla bukan hero yang menjawab — dia yang memilihkan hero paling cocok untuk tiap pertanyaanmu.</span>
+                </span>
+              </button>
+              {chars.length > 0 && (
+                <div>
+                  <div className="mx-1 mb-1 mt-2.5 text-[10.5px] font-extrabold uppercase tracking-wider text-zinc-500">Karakter buatanmu</div>
+                  {chars.map((c) => {
+                    const p = personaOf(c.name);
+                    const g = GROUPS[p.group];
+                    return (
+                      <button key={c.id} type="button" onClick={() => chooseHero(`${CHAR_PREFIX}${c.id}`)} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-zinc-800">
+                        <span className="flex h-9 w-9 shrink-0 items-end justify-center overflow-hidden rounded-[10px] border" style={{ background: g.soft, borderColor: `${g.color}55` }}>
+                          <HeroArt hero={c.name} size={40} still />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="text-[13px] font-semibold text-zinc-200">{c.name}</span>{" "}
+                          <span className="rounded-full px-1.5 py-px text-[10.5px] font-bold" style={{ background: g.soft, color: g.color }}>{p.label}</span>
+                          <span className="block truncate text-[11.5px] text-zinc-400">{c.profile.role || p.tag}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {(Object.keys(GROUPS) as PGroup[]).map((gk) => {
+                const list = heroOpts.filter((o) => personaOf(o.hero).group === gk).sort((a, b) => a.hero.localeCompare(b.hero));
+                if (!list.length) return null;
+                const G = GROUPS[gk];
+                return (
+                  <div key={gk}>
+                    <div className="mx-1 mb-1 mt-2.5 rounded-lg px-2 py-1 text-[10.5px] font-extrabold uppercase tracking-wider" style={{ background: G.soft, color: G.color }}>
+                      {G.icon} {G.name} <span className="font-medium normal-case tracking-normal opacity-80">· {G.desc}</span>
+                    </div>
+                    {list.map((o) => {
+                      const p = personaOf(o.hero);
+                      return (
+                        <button key={o.hero} type="button" onClick={() => chooseHero(o.model)} className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-zinc-800 ${model === o.model ? "bg-orange-500/10" : ""}`}>
+                          <span className="flex h-9 w-9 shrink-0 items-end justify-center overflow-hidden rounded-[10px] border" style={{ background: G.soft, borderColor: `${G.color}55` }}>
+                            <HeroArt hero={o.hero} size={40} still />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="text-[13px] font-semibold text-zinc-200">{o.hero}</span>{" "}
+                            <span className="rounded-full px-1.5 py-px text-[10.5px] font-bold" style={{ background: G.soft, color: G.color }}>{p.label}</span>
+                            <span className="block truncate text-[11.5px] text-zinc-400">{p.tag}</span>
+                          </span>
+                          {o.vision && <span className="shrink-0 text-[11px] opacity-60" title="Bisa lihat gambar">👁</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
       {wizard && (
         <CharacterWizard
           initial={wizard === "new" ? null : wizard}

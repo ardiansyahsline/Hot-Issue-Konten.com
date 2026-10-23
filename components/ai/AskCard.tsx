@@ -3,11 +3,30 @@
 import { useState } from "react";
 import type { AskInfo } from "@/lib/analysisCard";
 
-const OPTIONS = [
-  { id: "sr", title: "Support & Resistance", desc: "Level kunci, area entry / SL / TP paling jelas", tag: "Disarankan" },
-  { id: "pattern", title: "Chart Pattern", desc: "Double top, triangle, flag, trendline — digambar di chart" },
-  { id: "full", title: "Lengkap ala analis", desc: "Derivatif/fundamental, sentimen, berita + teknikal (lebih panjang)" },
-] as const;
+/** judul opsi sr/pattern/full tetap (dibaca server), deskripsinya bervariasi supaya tidak monoton */
+const DESC: Record<string, string[]> = {
+  sr: ["Level kunci, area entry / SL / TP paling jelas", "Cari area pantul & tembus — cocok buat entry rapi", "Zona harga yang sering diuji pasar, langsung jadi trade plan"],
+  pattern: ["Double top, triangle, flag, trendline — digambar di chart", "Baca pola harga yang lagi terbentuk + target polanya", "Head & shoulders, wedge, channel — lengkap dengan garisnya"],
+  full: ["Derivatif/fundamental, sentimen, berita + teknikal (lebih panjang)", "Ala analis pro: data, sentimen pasar, makro + level teknikal", "Bedah menyeluruh: berita, fundamental/derivatif, lalu skenario"],
+};
+const EXTRA = [
+  { id: "extra", title: "Tren & Moving Average", desc: "Arah tren pakai MA20/50/200 + titik pullback" },
+  { id: "extra", title: "Volume & Momentum", desc: "RSI, MACD & volume — kuat atau mulai lemah?" },
+  { id: "extra", title: "Smart Money (SMC)", desc: "Order block, liquidity sweep & break of structure" },
+  { id: "extra", title: "Fibonacci Retracement", desc: "Area koreksi 38,2–61,8% buat cari entry" },
+];
+const optionsFor = (info: AskInfo) => {
+  const v = (info.v ?? 0) % 3;
+  const base = [
+    { id: "sr", title: "Support & Resistance", desc: DESC.sr[v] },
+    { id: "pattern", title: "Chart Pattern", desc: DESC.pattern[v] },
+    { id: "full", title: "Lengkap ala analis", desc: DESC.full[v] },
+    EXTRA[(info.x ?? 0) % EXTRA.length],
+  ];
+  const rec = base.find((o) => o.id === (info.rec ?? "sr")) ?? base[0];
+  // yang direkomendasikan ditaruh paling atas
+  return [rec, ...base.filter((o) => o !== rec)].map((o) => ({ ...o, tag: o === rec ? "Disarankan" : undefined }));
+};
 const TFS = ["15m", "1H", "4H", "1D", "1W"];
 
 /**
@@ -17,7 +36,8 @@ const TFS = ["15m", "1H", "4H", "1D", "1W"];
 export default function AskCard({ title, info, disabled, onSubmit }: { title: string; info: AskInfo; disabled?: boolean; onSubmit: (text: string) => void }) {
   const stock = /^saham/.test(info.market);
   const initTf = TFS.find((t) => t.toLowerCase() === String(info.tf ?? "").toLowerCase()) ?? "1D";
-  const [pick, setPick] = useState<string>("sr");
+  const OPTIONS = optionsFor(info);
+  const [pick, setPick] = useState<string>(OPTIONS[0].id);
   const [tf, setTf] = useState(stock && !["1D", "1W"].includes(initTf) ? "1D" : initTf);
   const [other, setOther] = useState("");
   const send = (skip = false) => {
@@ -45,7 +65,7 @@ export default function AskCard({ title, info, disabled, onSubmit }: { title: st
           <span>
             <b className="block">
               {o.title}
-              {"tag" in o && o.tag && <span className="ml-1.5 rounded-md bg-orange-500/15 px-1.5 py-px text-[10px] font-bold text-orange-500">{o.tag}</span>}
+              {o.tag && <span className="ml-1.5 rounded-md bg-orange-500/15 px-1.5 py-px text-[10px] font-bold text-orange-500">{o.tag}</span>}
             </b>
             <span className="text-[12px] text-zinc-500">{o.desc}</span>
           </span>
@@ -57,7 +77,7 @@ export default function AskCard({ title, info, disabled, onSubmit }: { title: st
           disabled={disabled}
           onChange={(e) => {
             setOther(e.target.value);
-            if (e.target.value.trim() && pick === "sr") setPick("other");
+            if (e.target.value.trim() && pick === OPTIONS[0].id) setPick("other");
           }}
           onFocus={() => setPick("other")}
           onKeyDown={(e) => e.key === "Enter" && send()}
