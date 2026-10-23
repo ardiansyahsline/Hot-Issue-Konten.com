@@ -293,22 +293,38 @@ html:not(.light) .mkchar-tip::before { border-right-color: #fafafa; }
 .hp-card { animation: hp-pop .26s cubic-bezier(.2,.8,.2,1) both; }
 @media (prefers-reduced-motion: reduce) { .hp-back, .hp-card { animation: none; } }
 
-/* ===== Mode gelap: langit malam + aurora (hijau → pink → oren) bergerak pelan ===== */
+/* ===== Mode gelap: langit luar angkasa (diam) + aurora kecil yang melayang pelan ke kiri-kanan ===== */
 html:not(.light) body::before {
   content: "";
   position: fixed;
-  inset: -6%;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background: url("/aurora.svg") center / cover no-repeat;
+}
+html:not(.light) body::after {
+  content: "";
+  position: fixed;
   z-index: -1;
   pointer-events: none;
-  background: url("/aurora.svg") center top / cover no-repeat;
-  opacity: .9;
-  animation: aurora-drift 48s ease-in-out infinite alternate;
+  top: 2vh;
+  left: 50%;
+  width: min(58vw, 900px);
+  aspect-ratio: 2 / 1;
+  margin-left: calc(min(58vw, 900px) / -2);
+  background: url("/aurora-band.svg") center / contain no-repeat;
+  opacity: .85;
+  mix-blend-mode: screen;
+  animation: aurora-roam 90s ease-in-out infinite;
   will-change: transform, opacity;
 }
 html:not(.light) body { background-image: none; }
-@keyframes aurora-drift {
-  0% { transform: translate3d(0, 0, 0) scale(1); opacity: .78; }
-  50% { transform: translate3d(-2.5%, 1.2%, 0) scale(1.05); opacity: .95; }
-  100% { transform: translate3d(1.5%, -0.8%, 0) scale(1.03); opacity: .84; }
+/* melayang pelan: kiri → tengah → kanan → tengah (aurora lebih sering terlihat di pinggir layar) */
+@keyframes aurora-roam {
+  0%   { transform: translate3d(-38vw, 6vh, 0) rotate(-3deg) scale(.95); opacity: .75; }
+  25%  { transform: translate3d(-8vw, 0, 0) rotate(0deg) scale(1); opacity: .9; }
+  50%  { transform: translate3d(36vw, 8vh, 0) rotate(3deg) scale(.92); opacity: .8; }
+  75%  { transform: translate3d(6vw, 34vh, 0) rotate(-2deg) scale(.9); opacity: .65; }
+  100% { transform: translate3d(-38vw, 6vh, 0) rotate(-3deg) scale(.95); opacity: .75; }
 }
-@media (prefers-reduced-motion: reduce) { html:not(.light) body::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { html:not(.light) body::after { animation: none; transform: translate3d(-36vw, 4vh, 0); } }

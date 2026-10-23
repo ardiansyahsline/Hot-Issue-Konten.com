@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="230 80 1140 460"><defs>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#03060d"/><stop offset=".5" stop-color="#060b16"/><stop offset="1" stop-color="#04050a"/></linearGradient>
+<linearGradient id="band" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#19d67a" stop-opacity=".2"/><stop offset=".2" stop-color="#22e48a"/><stop offset=".6" stop-color="#3ef09a"/><stop offset=".85" stop-color="#e2558f"/><stop offset="1" stop-color="#ff7a32" stop-opacity=".3"/></linearGradient>
+<filter id="haze" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="55"/></filter>
+<filter id="b1" x="-30%" y="-300%" width="160%" height="700%"><feGaussianBlur stdDeviation="30"/></filter>
+<filter id="mw" x="-30%" y="-300%" width="160%" height="700%"><feGaussianBlur stdDeviation="40"/></filter>
+<filter id="sg" x="-300%" y="-300%" width="700%" height="700%"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs><g opacity=".5">
+<ellipse cx="760" cy="300" rx="520" ry="150" fill="#0f8a57" filter="url(#haze)" opacity=".55"/>
+<path d="M330 420 C 520 360, 680 320, 840 280 S 1100 210, 1260 190" stroke="url(#band)" stroke-width="80" fill="none" filter="url(#b1)"/>
+<path d="M380 440 C 560 400, 740 370, 900 330 S 1150 280, 1280 270" stroke="url(#band)" stroke-width="30" fill="none" filter="url(#b1)" opacity=".5"/>
+</g></svg>

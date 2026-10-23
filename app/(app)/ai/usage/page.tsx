@@ -3,6 +3,9 @@ import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { isAiOwner } from "@/lib/aiOwner";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cookies } from "next/headers";
+import { PIN_COOKIE, pinToken } from "./pin";
+import { lockUsage, unlockUsage } from "./actions";
 import { heroName, providerOf, SMART_HERO } from "@/lib/aiModels";
 import { isBuiltinHero } from "@/lib/aiPersona";
 
@@ -29,9 +32,40 @@ const ago = (iso: string) => {
 /**
  * Halaman Usage AI — khusus pemilik (Alif). Hanya angka pemakaian; isi percakapan tetap privat.
  */
-export default async function UsagePage({ searchParams }: { searchParams: Promise<{ d?: string }> }) {
+export default async function UsagePage({ searchParams }: { searchParams: Promise<{ d?: string; salah?: string }> }) {
   const { user } = await getCurrentUser();
   if (!isAiOwner(user.email)) notFound();
+  // 🔒 PIN terpisah untuk membuka halaman Usage
+  if ((await cookies()).get(PIN_COOKIE)?.value !== pinToken(user.id)) {
+    const wrong = (await searchParams).salah === "1";
+    return (
+      <div className="mx-auto mt-10 max-w-[360px]">
+        <form action={unlockUsage} className="card space-y-3 p-6 text-center">
+          <div className="text-[34px]">🔒</div>
+          <h1 className="font-display text-[19px] font-bold">Masukkan PIN Usage</h1>
+          <p className="text-[12.5px] text-zinc-500">Halaman pemakaian AI dilindungi PIN terpisah.</p>
+          <input
+            name="pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            autoFocus
+            maxLength={12}
+            placeholder="••••"
+            className="input text-center text-[20px] tracking-[0.5em]"
+            aria-label="PIN"
+          />
+          {wrong && <p className="text-[12.5px] font-semibold text-red-400">PIN salah, coba lagi.</p>}
+          <button type="submit" className="btn-primary w-full justify-center">
+            Buka Usage
+          </button>
+          <Link href="/ai" className="block text-[12px] text-zinc-500 hover:text-zinc-300">
+            ← Kembali ke AI
+          </Link>
+        </form>
+      </div>
+    );
+  }
   const days = (await searchParams).d === "7" ? 7 : 30;
   const since = new Date(Date.now() - days * 86400_000).toISOString();
 
@@ -154,6 +188,11 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
         <Link href="/ai" className="btn-ghost rounded-full px-3 py-1.5 text-xs">
           ← Kembali ke AI
         </Link>
+        <form action={lockUsage}>
+          <button type="submit" className="btn-ghost rounded-full px-3 py-1.5 text-xs" title="Kunci lagi halaman Usage">
+            🔒 Kunci
+          </button>
+        </form>
       </div>
 
       <div className="ai-card">
