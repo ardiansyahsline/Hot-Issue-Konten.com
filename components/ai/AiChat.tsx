@@ -16,7 +16,7 @@ import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
-import { personaOf } from "@/lib/aiPersona";
+import { personaOf, registerCustom } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
 import CharacterWizard from "./CharacterWizard";
 import CharacterBrain from "./CharacterBrain";
@@ -57,6 +57,9 @@ const SUGGEST: { icon: string; label: string; prompt: string; pick?: boolean; se
 ];
 
 const MODEL_KEY = "cs-ai-model-v2";
+// chibi mini di tombol "Buat Karakter AI"
+const BTN_CHIBI = "__tombol_buat_karakter__";
+registerCustom(BTN_CHIBI, { type: "ENFP", hair: 3, skin: "#f5c9a8", hc: "#3b2a1e", prop: "orb" });
 const DATA_KEY = "cs-ai-data";
 const WEB_KEY = "cs-ai-web";
 const MAX_IMAGES = 4;
@@ -961,6 +964,18 @@ export default function AiChat({
               </button>
             ))}
           </span>
+          <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
+            <span className="mkchar-shine" aria-hidden />
+            <span className="mkchar-av" aria-hidden>
+              <HeroArt hero={BTN_CHIBI} size={30} still />
+            </span>
+            <span>
+              <span className="hidden sm:inline">✨ Buat Karakter AI</span>
+              <span className="sm:hidden">＋</span>
+            </span>
+            <span className="mkchar-new hidden sm:inline">BARU</span>
+          </button>
+          <span className="mkchar-tip hidden lg:inline">Bikin AI versimu! 👀</span>
           <span className="truncate font-semibold">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
           <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
             {active && view === "chat" && (

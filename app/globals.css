@@ -181,3 +181,21 @@ html.light .ai-table { border-color: #fed7aa; }
 html.light .ai-table td { border-bottom-color: #fde8d7; }
 html.light .ai-table tr:nth-child(even) td { background: #fffaf5; }
 html.light .ai-table td:first-child { color: #7c2d12; }
+
+/* tombol "Buat Karakter AI": gradien mengalir + kilau + chibi + gelembung ajakan */
+.mkchar { position: relative; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; border-radius: 999px; padding: 2px 11px 2px 3px; font-size: 12px; font-weight: 800; color: #fff; white-space: nowrap;
+  background: linear-gradient(90deg, #f97316, #ec4899, #8b5cf6, #f97316); background-size: 300% 100%; animation: mkchar-flow 4s linear infinite; box-shadow: 0 6px 16px -6px rgb(236 72 153 / .6); transition: transform .15s; }
+.mkchar:hover { transform: translateY(-1px) scale(1.03); }
+.mkchar .mkchar-shine { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; }
+.mkchar .mkchar-shine::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / .6) 50%, transparent 70%); transform: translateX(-120%); animation: mkchar-shine 2.4s ease-in-out infinite; }
+.mkchar .mkchar-av { width: 24px; height: 24px; border-radius: 999px; background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.mkchar .mkchar-av svg { margin-top: 7px; animation: mkchar-bob 1.2s ease-in-out infinite; }
+.mkchar .mkchar-new { font-size: 9.5px; background: #fff; color: #db2777; border-radius: 999px; padding: 1px 6px; }
+.mkchar-tip { position: relative; flex-shrink: 0; font-size: 11px; font-weight: 700; background: #18181b; color: #fff; border-radius: 8px; padding: 4px 8px; white-space: nowrap; animation: mkchar-bob 1.6s ease-in-out infinite; }
+.mkchar-tip::before { content: ""; position: absolute; left: -5px; top: 50%; margin-top: -5px; border: 5px solid transparent; border-right-color: #18181b; border-left: 0; }
+html:not(.light) .mkchar-tip { background: #fafafa; color: #18181b; }
+html:not(.light) .mkchar-tip::before { border-right-color: #fafafa; }
+@keyframes mkchar-flow { to { background-position: 300% 0 } }
+@keyframes mkchar-shine { 0%, 40% { transform: translateX(-120%) } 80%, 100% { transform: translateX(120%) } }
+@keyframes mkchar-bob { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-2px) } }
+@media (prefers-reduced-motion: reduce) { .mkchar, .mkchar .mkchar-av svg, .mkchar .mkchar-shine::after, .mkchar-tip { animation: none !important; } }
