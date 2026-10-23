@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import YtMusic from "./YtMusic";
 
 type Preset = { id: string; icon: string; name: string; desc: string; prompts: { text: string; weight: number }[]; bpm: number; density: number; brightness: number };
 const PRESETS: Preset[] = [
@@ -18,6 +19,9 @@ type Session = { setWeightedPrompts(p: object): Promise<void>; setMusicGeneratio
 /** 🎵 Musik AI (Google Lyria RealTime): musik instrumental yang dibuat langsung, terus mengalir sambil kerja. */
 export default function MusicButton() {
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"ai" | "yt">("ai");
+  const [panel, setPanel] = useState<HTMLDivElement | null>(null);
+  const [ytStop, setYtStop] = useState(0);
   const [state, setState] = useState<"idle" | "connecting" | "playing" | "paused" | "error">("idle");
   const [err, setErr] = useState<string | null>(null);
   const [preset, setPreset] = useState(PRESETS[0].id);
@@ -53,14 +57,15 @@ export default function MusicButton() {
       }
       if (typeof s.bpm === "number") setBpm(s.bpm);
       if (s.noDrums) setNoDrums(true);
+      if (s.tab === "yt") setTab("yt");
     } catch {}
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ preset, vol, custom: active, bpm, noDrums }));
+      localStorage.setItem(KEY, JSON.stringify({ preset, vol, custom: active, bpm, noDrums, tab }));
     } catch {}
     if (gain.current) gain.current.gain.value = vol;
-  }, [preset, vol, active, bpm, noDrums]);
+  }, [preset, vol, active, bpm, noDrums, tab]);
   useEffect(() => {
     if (!open) return;
     const r = btn.current?.getBoundingClientRect();
@@ -195,6 +200,7 @@ export default function MusicButton() {
   const start = async (p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0]) => {
     setErr(null);
     want.current = true;
+    setYtStop((n) => n + 1);
     latest.current = { prompts: promptsOf(p), cfg: cfgOf(p) };
     if (session.current) {
       lastChunk.current = Date.now();
@@ -273,7 +279,7 @@ export default function MusicButton() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={`relative whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium transition ${playing ? "text-emerald-400" : "text-zinc-400 hover:text-zinc-100"}`}
-        title="Musik AI santai sambil kerja"
+        title="Musik sambil kerja: AI atau YouTube"
         aria-label="Musik"
       >
         {playing ? <span className="inline-block animate-pulse">🎵</span> : "🎵"}
@@ -281,9 +287,24 @@ export default function MusicButton() {
       {open && (
         <div ref={box} className="fixed z-[90] max-h-[calc(100vh-80px)] w-[300px] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left" style={{ top: pos.top, left: pos.left, boxShadow: "var(--shadow-pop), 0 20px 40px -16px rgba(0,0,0,.4)" }}>
           <div className="flex items-center gap-2">
-            <b className="text-[14px]">🎵 Musik santai</b>
-            <span className="text-[11px] text-zinc-500">dibuat AI langsung, tanpa jeda</span>
+            <b className="text-[14px]">🎵 Musik</b>
+            <div className="ml-auto flex rounded-full bg-zinc-800 p-0.5 text-[12px] font-semibold">
+              {(
+                [
+                  ["ai", "✨ Musik AI"],
+                  ["yt", "▶ YouTube"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setTab(k)} className={`rounded-full px-2.5 py-1 ${tab === k ? (k === "yt" ? "bg-red-600 text-white" : "bg-emerald-600 text-white") : "text-zinc-400"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
           </div>
+          <div ref={setPanel} className={tab === "yt" ? "mt-2.5" : "hidden"} />
+          {tab === "ai" && (
+          <>
+          <p className="mt-1 text-[11px] text-zinc-500">Instrumental dibuat AI langsung, tanpa jeda</p>
           <div className="mt-2 space-y-1">
             {PRESETS.map((p) => (
               <button
@@ -385,8 +406,26 @@ export default function MusicButton() {
           </div>
           {err && <p className="mt-2 text-[11.5px] text-red-400">{err}</p>}
           <p className="mt-2 text-[10.5px] leading-snug text-zinc-500">Instrumental dari Google Lyria (eksperimental). Musik tetap jalan saat pindah halaman.</p>
+          </>
+          )}
+          {tab === "yt" && (
+            <label className="mt-2 flex items-center gap-1.5 text-[12px] text-zinc-500">
+              🔈 Volume
+              <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => setVol(Number(e.target.value))} className="flex-1 accent-red-500" aria-label="Volume" />
+            </label>
+          )}
         </div>
       )}
+      <YtMusic
+        panel={open && tab === "yt" ? panel : null}
+        vol={vol}
+        stopTick={ytStop}
+        onStart={() => {
+          if (want.current || session.current) {
+            pause();
+          }
+        }}
+      />
     </>
   );
 }
