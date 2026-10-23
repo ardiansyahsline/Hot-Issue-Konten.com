@@ -4,6 +4,7 @@ import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, l
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
 import { personaIntro } from "@/lib/aiPersona";
+import { isAiOwner } from "@/lib/aiOwner";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
@@ -43,6 +44,8 @@ export async function POST(req: NextRequest) {
   if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu melengkapi pengaturan AI di Vercel.");
 
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  // info teknis (hero pengganti, daftar error) hanya untuk pemilik (Alif); user lain melihat hero pilihannya saja
+  const owner = isAiOwner(user.email);
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -164,9 +167,10 @@ export async function POST(req: NextRequest) {
   let candidates: string[] = [];
   // hero pilihan user: karakternya dipertahankan walaupun mesinnya dialihkan
   const chosenHero = chosen !== SMART && chosen !== "auto" ? heroName(chosen) : null;
-  if (chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen))) {
-    candidates.push(chosen);
-  }
+  // mesin hero pilihan dicoba duluan, KECUALI baru gagal / sudah tidak ada -> langsung pakai mesin yang siap (karakter tetap hero pilihan)
+  const chosenOk = chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen)) && !isDeadModel(health.get(chosen));
+  const chosenHealthy = chosenOk && !coolingDown(chosen) && healthRank(health.get(chosen)) !== 2;
+  if (chosenHealthy) candidates.push(chosen);
   // varian lain dari hero yang sama dicoba dulu (mis. DeepSeek versi lain) sebelum pindah ke hero lain
   if (chosenHero) {
     const same = sameHeroVariants(byHealth, chosenHero)
@@ -192,6 +196,8 @@ export async function POST(req: NextRequest) {
     if (candidates.length >= MAX_TRIES) break;
     if (!candidates.includes(m)) candidates.push(m);
   }
+  // mesin hero pilihan yang baru gagal tetap dicoba, tapi paling akhir (siapa tahu sudah pulih)
+  if (chosenOk && !chosenHealthy && !candidates.includes(chosen)) candidates.splice(Math.min(candidates.length, MAX_TRIES - 1), 0, chosen);
   candidates = [...new Set(candidates)].slice(0, MAX_TRIES);
   if (!candidates.length) {
     if (hasImages) {
@@ -356,6 +362,7 @@ export async function POST(req: NextRequest) {
   const charsOf = (arr: typeof messages) => arr.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length), 0);
   const fullChars = charsOf(messages);
   let forceLite = false;
+  let useUsage = true;
   const liteMessages = liteOf(messages);
   const msgsFor = (model: string) => {
     const useLite = forceLite || (providerOf(model) === "groq" && fullChars > 20_000);
@@ -366,7 +373,7 @@ export async function POST(req: NextRequest) {
 
   type Res =
     | { ok: true; model: string; events: AsyncGenerator<SseEvent>; first: string }
-    | { ok: false; model: string; why: string; status?: number; detail?: string; tooBig?: boolean; fatal?: string };
+    | { ok: false; model: string; why: string; status?: number; detail?: string; tooBig?: boolean; noUsage?: boolean; fatal?: string };
 
   /** satu percobaan: kirim ke server AI lalu baca ±160 huruf pertama (error / kosong / huruf asing = gagal) */
   const attempt = async (model: string, ac: AbortController): Promise<Res> => {
@@ -378,7 +385,8 @@ export async function POST(req: NextRequest) {
         upstream = await fetch(`${cfg.base}/chat/completions`, {
           method: "POST",
           headers: aiHeaders(cfg.key),
-          body: JSON.stringify({ model, messages: msgsFor(model), stream: true }),
+          // include_usage: jumlah token dicatat untuk halaman Usage (dimatikan otomatis kalau server AI menolaknya)
+          body: JSON.stringify({ model, messages: msgsFor(model), stream: true, ...(useUsage ? { stream_options: { include_usage: true } } : {}) }),
           signal: ac.signal,
         });
       } catch (e) {
@@ -408,7 +416,8 @@ export async function POST(req: NextRequest) {
         return { ok: false, model, why: "401", fatal: "Kunci server AI ditolak. Pastikan kunci di pengaturan Vercel sama dengan kunci di dashboard server AI → API Keys." };
       }
       const tooBig = upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail);
-      return { ok: false, model, why: `${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`, status: upstream.status, detail: String(detail), tooBig };
+      const noUsage = useUsage && upstream.status >= 400 && upstream.status < 500 && /stream_options|include_usage/i.test(detail);
+      return { ok: false, model, why: `${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`, status: upstream.status, detail: String(detail), tooBig, noUsage };
     }
     const events = sse(upstream.body);
     let first = "";
@@ -486,7 +495,7 @@ export async function POST(req: NextRequest) {
     const nextHero = next ? heroName(next) : "";
     if (nextHero && nextHero !== lastSwitch) {
       lastSwitch = nextHero;
-      step("switch", "done", { from: heroName(model), to: nextHero, hero: chosenHero ?? nextHero });
+      if (owner) step("switch", "done", { from: heroName(model), to: nextHero, hero: chosenHero ?? nextHero });
     }
     if (providerOf(model) && PROVIDER_DOWN.test(why)) deadProv.add(providerOf(model));
   };
@@ -524,6 +533,13 @@ export async function POST(req: NextRequest) {
       for (const k of [...running.keys()]) stop(k, true);
       break;
     }
+    // server AI menolak permintaan jumlah token -> ulangi tanpa itu
+    if (r.noUsage) {
+      useUsage = false;
+      queue.unshift(r.model);
+      if (running.size < 2) startNext();
+      continue;
+    }
     // terlalu besar -> ulangi model yang sama dengan konteks ringkas (sekali)
     if (r.tooBig && !forceLite) {
       forceLite = true;
@@ -542,8 +558,11 @@ export async function POST(req: NextRequest) {
   if (fatal) return void (await saveError(fatal));
   if (!opened) {
     console.log("[ai] semua model gagal:", failures.join(" | "));
+    const shownHero = chosenHero ?? heroName(candidates[0] === "auto" ? SMART : candidates[0]);
     return void (await saveError(
-      `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 75 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
+      owner
+        ? `${timedOut ? "Server AI lagi lambat — belum ada hero yang sempat menjawab dalam 75 detik. " : ""}Semua hero yang dicoba lagi tidak bisa menjawab (biasanya kuota gratis habis, key provider salah, atau provider sedang gangguan). Coba lagi sebentar, atau pilih hero lain.\n\nDicoba:\n${failures.map((f) => { const i = f.indexOf(" ("); return `- ${heroName(i > 0 ? f.slice(0, i) : f)}: ${i > 0 ? f.slice(i + 2, -1) : "gagal"}`; }).join("\n")}\n\n${hasImages ? "Untuk gambar butuh provider yang bisa lihat gambar (mis. Gemini) yang lulus Test di dashboard server AI." : "Pastikan minimal satu provider (mis. Groq / Gemini) sudah tersambung & lulus Test di dashboard server AI."}`
+        : `${shownHero} lagi kewalahan — server AI sedang sibuk. Coba kirim lagi sebentar ya 🙏`
     ));
   }
 
@@ -561,11 +580,13 @@ export async function POST(req: NextRequest) {
     fallback: failures.length > 0,
   });
   let full = "";
+  let usage: { in?: number; out?: number } = {};
   const { events, first } = opened;
   try {
     full += first;
     controller.enqueue(enc.encode(first));
     for await (const ev of events) {
+      if (ev.usage) usage = ev.usage;
       if (ev.piece) {
         full += ev.piece;
         controller.enqueue(enc.encode(ev.piece));
@@ -586,19 +607,25 @@ export async function POST(req: NextRequest) {
     // dihentikan user / koneksi putus — simpan yang sudah ada
   } finally {
     if (full.trim()) {
-      const row = { conversation_id: convId, role: "assistant", content: full.slice(0, 100000), model: usedModel, used_data: useData, persona: personaHero };
-      let { error } = await supabase.from("ai_messages").insert(row);
-      // kolom baru belum ada (migration-16 / -14 belum dijalankan) -> simpan tanpa kolom itu
-      if (error && /persona/.test(error.message)) {
-        const { persona: _p, ...noPersona } = row;
-        ({ error } = await supabase.from("ai_messages").insert(noPersona));
-        if (error && /used_data/.test(error.message)) {
-          const { used_data: _u, ...old } = noPersona;
-          await supabase.from("ai_messages").insert(old);
-        }
-      } else if (error && /used_data/.test(error.message)) {
-        const { used_data: _u, ...old } = row;
-        await supabase.from("ai_messages").insert(old);
+      const row: Record<string, unknown> = {
+        conversation_id: convId,
+        role: "assistant",
+        content: full.slice(0, 100000),
+        model: usedModel,
+        used_data: useData,
+        persona: personaHero,
+        ...(usage.in !== undefined ? { tokens_in: usage.in, tokens_out: usage.out ?? 0 } : {}),
+      };
+      // kolom baru belum ada (migration-18 / -16 / -14 belum dijalankan) -> simpan tanpa kolom itu
+      for (let i = 0; i < 4; i++) {
+        const { error } = await supabase.from("ai_messages").insert(row);
+        if (!error) break;
+        if (/tokens_(in|out)/.test(error.message) && "tokens_in" in row) {
+          delete row.tokens_in;
+          delete row.tokens_out;
+        } else if (/persona/.test(error.message) && "persona" in row) delete row.persona;
+        else if (/used_data/.test(error.message) && "used_data" in row) delete row.used_data;
+        else break;
       }
     }
     await supabase.from("ai_conversations").update({ updated_at: new Date().toISOString(), model: usedModel }).eq("id", convId);
@@ -606,7 +633,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-type SseEvent = { piece?: string; error?: string };
+type SseEvent = { piece?: string; error?: string; usage?: { in?: number; out?: number } };
 
 /** baca aliran SSE format OpenAI -> potongan teks / error */
 async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
@@ -629,6 +656,8 @@ async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> 
           const j = JSON.parse(data);
           const piece: string = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content ?? "";
           if (piece) yield { piece };
+          const u = j.usage ?? j.x_groq?.usage;
+          if (u && (u.prompt_tokens !== undefined || u.input_tokens !== undefined)) yield { usage: { in: Number(u.prompt_tokens ?? u.input_tokens) || 0, out: Number(u.completion_tokens ?? u.output_tokens) || 0 } };
           if (j.error) yield { error: String(j.error.message ?? j.error) };
         } catch {
           // baris bukan JSON — abaikan

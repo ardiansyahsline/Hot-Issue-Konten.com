@@ -237,12 +237,21 @@ const ANALYST_VOICE: Record<Group, string> = {
   SP: "bawakan seperti trader lapangan: to the point, fokus ke level & aksi, energik dan santai, sedikit teori, banyak 'kalau begini, lakukan ini'.",
 };
 
+/** cara tiap kelompok kepribadian mengisi tabel & menyorot poin (biar karakter tetap terasa walau jawaban ringkas) */
+const TABLE_VOICE: Record<Group, string> = {
+  NT: "kolom tabelmu tajam & strategis (mis. Faktor | Data | Dampak, atau Opsi | Peluang | Risiko); sorot angka & prioritas.",
+  NF: "kolom tabelmu menjelaskan makna (mis. Poin | Kenapa penting | Saran); kalimat penutup hangat & menyemangati.",
+  SJ: "tabelmu seperti checklist rapi (mis. No | Langkah | Status ✓ / Catatan); tegas soal aturan & batas.",
+  SP: "tabelmu fokus aksi (mis. Situasi | Aksi | Hasil); bahasa singkat, energik, langsung ke praktik.",
+};
+
 export function personaPrompt(hero: string) {
   const p = personaOf(hero);
   return [
     `KARAKTER KAMU: kamu adalah "${p.hero}", kepribadian ${p.type} — ${p.label} (${p.traits.join(", ")}).`,
     `GAYA MENJAWAB: ${p.style}`,
     `CONTOH NADA BICARAMU: "${p.say}"`,
+    `JAWABAN RINGKAS & TABEL: tetap terdengar seperti ${p.hero} — ${TABLE_VOICE[p.group]} Kalimat pembuka & penutup memakai ciri khasmu.`,
     `SAAT ANALISA SAHAM/FOREX/CRYPTO: ${ANALYST_VOICE[p.group]} Kalimat pembuka & penutup wajib terasa khas ${p.hero}. Data & struktur analisa tetap lengkap — karakter mengatur CARA menyampaikan, bukan mengurangi isi.`,
     "Pertahankan gaya ini di setiap jawaban sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter.",
     "PENTING: gaya hanya mengatur CARA bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. Kalau user minta jawaban panjang/format tertentu, ikuti permintaan user.",

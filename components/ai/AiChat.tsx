@@ -120,7 +120,9 @@ function ModelPicker({
   visionList,
   loadError,
   onReload,
+  owner,
 }: {
+  owner: boolean;
   value: string;
   onChange: (m: string) => void;
   models: string[];
@@ -149,9 +151,10 @@ function ModelPicker({
   const opts = useMemo(() => heroOptions(models, status, visionList), [models, status, visionList]);
   const s = q.trim().toLowerCase();
   const match = (o: HeroOpt) => !s || o.hero.toLowerCase().includes(s) || heroRole(o.hero).toLowerCase().includes(s) || heroDesc(o.model).toLowerCase().includes(s);
-  const ready0 = opts.filter((o) => o.status === 0 && match(o));
-  const untried = opts.filter((o) => o.status === 1 && match(o));
-  const off = opts.filter((o) => o.status === 2 && match(o));
+  // pemilik melihat status (siap / belum dicoba / gagal); user lain melihat semua hero sebagai satu daftar siap pakai
+  const ready0 = opts.filter((o) => (owner ? o.status === 0 : true) && match(o)).sort((a, b) => (owner ? 0 : a.hero.localeCompare(b.hero)));
+  const untried = owner ? opts.filter((o) => o.status === 1 && match(o)) : [];
+  const off = owner ? opts.filter((o) => o.status === 2 && match(o)) : [];
   const current = value === SMART ? SMART_HERO : heroName(value);
   const pick = (m: string) => {
     onChange(m);
@@ -162,7 +165,7 @@ function ModelPicker({
     <button
       type="button"
       onClick={() => pick(o.model)}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} ${o.status === 2 ? "opacity-60" : ""}`}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} ${owner && o.status === 2 ? "opacity-60" : ""}`}
     >
       <HeroAvatar hero={o.hero} />
       <span className="min-w-0 flex-1">
@@ -225,14 +228,14 @@ function ModelPicker({
                   Layla · otomatis <span className="ml-1 text-[10.5px] font-medium text-zinc-500">disarankan</span>
                 </span>
                 <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(SMART)}</span>
-                {(vision.text || vision.image) && (
+                {owner && (vision.text || vision.image) && (
                   <span className="block text-[10.5px] text-zinc-500">
                     sekarang: chat {vision.text ? heroName(vision.text) : "-"} · gambar {vision.image ? heroName(vision.image) : "belum ada"}
                   </span>
                 )}
               </span>
             </button>
-            <Group title="Siap dipakai" list={ready0} />
+            <Group title={owner ? "Siap dipakai" : "Hero"} list={ready0} />
             <Group title="Belum dicoba" list={untried} />
             {off.length > 0 && (
               <div>
@@ -255,7 +258,7 @@ function ModelPicker({
             )}
           </div>
           <p className="border-t border-zinc-800/80 px-2 pt-2 text-[10.5px] leading-snug text-zinc-500">
-            Kalau hero pilihan lagi gagal / kuota habis, otomatis dijawab hero lain yang siap.
+            {owner ? "Kalau hero pilihan lagi gagal / kuota habis, otomatis dijawab hero lain yang siap." : "Tiap hero punya karakter & gaya jawab sendiri — pilih yang paling cocok."}
           </p>
         </div>
       )}
@@ -271,7 +274,9 @@ export default function AiChat({
   initialMsgs,
   setupError,
   defaultModel,
+  owner = false,
 }: {
+  owner?: boolean;
   meId: string;
   firstName: string;
   initialConvs: AiConv[];
@@ -808,7 +813,7 @@ export default function AiChat({
             🌐 Internet: {webMode === "auto" ? "Otomatis" : "Off"}
           </button>
         )}
-        <ModelPicker value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
+        <ModelPicker owner={owner} value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop
@@ -877,6 +882,11 @@ export default function AiChat({
                 </button>
               </>
             )}
+            {owner && (
+              <a href="/ai/usage" className="rounded-lg border border-zinc-800 px-2 py-1 font-semibold hover:border-zinc-600 hover:text-zinc-200" title="Pemakaian AI (khusus pemilik)">
+                📊<span className="hidden sm:inline"> Usage</span>
+              </a>
+            )}
             <button
               type="button"
               onClick={() => setFocus((v) => !v)}
@@ -895,6 +905,7 @@ export default function AiChat({
 
         {view === "chars" ? (
           <HeroGallery
+            owner={owner}
             opts={heroOpts}
             value={model}
             ready={ready}
@@ -1064,7 +1075,7 @@ export default function AiChat({
                                 return (
                                   <span>
                                     · ⚔️ {ph} <span className="text-zinc-600">({pp.type} {pp.label})</span>
-                                    {engine !== ph && (
+                                    {owner && engine !== ph && (
                                       <span className="text-zinc-500" title={`${ph} lagi gagal / kuota habis, jadi jawaban ini dibantu ${engine} — gaya jawab tetap ${ph}.`}>
                                         {" "}· ↪ dibantu {engine}
                                       </span>

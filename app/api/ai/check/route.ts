@@ -1,3 +1,4 @@
+import { isAiOwner } from "@/lib/aiOwner";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { aiConfig, aiHeaders, listCatalog, markHealth } from "@/lib/ai.server";
@@ -14,7 +15,8 @@ let last: { at: number; results: Result[] } | null = null;
  * hasilnya dicatat di ai_model_health supaya daftar hero & pilihan otomatis hanya memakai yang benar-benar jalan.
  */
 export async function POST() {
-  const { supabase } = await getCurrentUser();
+  const { supabase, user } = await getCurrentUser();
+  if (!isAiOwner(user.email)) return NextResponse.json({ error: "Khusus pemilik AI." }, { status: 403 });
   const cfg = aiConfig();
   if (!cfg.ok) return NextResponse.json({ error: "Server AI belum disetel." }, { status: 503 });
   // jangan dicek beruntun (hemat kuota gratis) — hasil 3 menit terakhir dipakai ulang

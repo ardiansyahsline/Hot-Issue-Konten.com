@@ -22,7 +22,9 @@ export default function HeroGallery({
   onPick,
   ready,
   onChecked,
+  owner = false,
 }: {
+  owner?: boolean;
   opts: Opt[];
   value: string;
   onPick: (model: string) => void;
@@ -90,6 +92,7 @@ export default function HeroGallery({
           ))}
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari hero / tipe / sifat…" className="input ml-auto w-full py-1.5 text-[12.5px] sm:w-56" />
         </div>
+        {owner && (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 px-3 py-2 text-[12px]">
           <button
             type="button"
@@ -111,6 +114,7 @@ export default function HeroGallery({
             </span>
           )}
         </div>
+        )}
         {!ready && <p className="mt-4 text-[13px] text-zinc-500">Server AI belum tersambung.</p>}
 
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -120,7 +124,7 @@ export default function HeroGallery({
             const active = value === o.model || (o.model === SMART && value === SMART);
             const auto = o.model === SMART;
             return (
-              <div key={o.hero} className={`flex flex-col gap-2 rounded-2xl border p-3 transition hover:-translate-y-0.5 ${active ? "border-orange-500/60" : "border-zinc-800"} ${o.status === 2 ? "opacity-70" : ""}`}>
+              <div key={o.hero} className={`flex flex-col gap-2 rounded-2xl border p-3 transition hover:-translate-y-0.5 ${active ? "border-orange-500/60" : "border-zinc-800"} ${owner && o.status === 2 ? "opacity-70" : ""}`}>
                 <div className="flex h-[116px] items-end justify-center rounded-xl" style={{ background: `linear-gradient(180deg, ${g.soft}, transparent)` }}>
                   <HeroArt hero={o.hero} size={108} title={`${o.hero}, ${p.type} ${p.label}`} />
                 </div>
@@ -135,7 +139,7 @@ export default function HeroGallery({
                       {o.vision && <span className="ml-1.5 text-sky-400">👁 bisa lihat gambar</span>}
                     </div>
                   </div>
-                  {!auto && (
+                  {!auto && owner && (
                     <span
                       className={`shrink-0 text-right text-[10.5px] font-semibold ${checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "text-emerald-400" : "text-red-400") : (STATUS[o.status]?.cls ?? "")}`}
                       title={checkOf(o.hero)?.reason}

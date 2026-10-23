@@ -1,6 +1,7 @@
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig } from "@/lib/ai.server";
 import AiChat, { type AiConv, type AiMsg } from "@/components/ai/AiChat";
+import { isAiOwner } from "@/lib/aiOwner";
 
 export const metadata = { title: "AI · CS Tracker" };
 
@@ -37,6 +38,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
             : null
       }
       defaultModel={cfg.model}
+      owner={isAiOwner(user.email)}
     />
   );
 }
