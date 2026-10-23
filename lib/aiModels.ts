@@ -36,6 +36,22 @@ const blockedProvider = (id: string) => id.includes("/") && BLOCKED_PROVIDERS.ha
 /** Claude berbayar per pemakaian: yang dipakai hanya Haiku (murah); Sonnet/Opus disembunyikan supaya tagihan tidak bengkak */
 const PRICEY = (id: string) => /claude|anthropic/i.test(id) && !/haiku/i.test(id);
 
+/**
+ * Mesin "tugas berat" (Claude Sonnet): TIDAK muncul di daftar hero, hanya dipakai otomatis untuk tugas berat & penting.
+ * AI_HEAVY_MODEL di Vercel bisa menunjuk model tertentu; AI_HEAVY=off mematikan.
+ */
+export function heavyModelFrom(ids: string[]): string | null {
+  if ((process.env.AI_HEAVY ?? "").toLowerCase() === "off") return null;
+  const pinned = (process.env.AI_HEAVY_MODEL ?? "").trim();
+  if (pinned) return ids.length && !ids.includes(pinned) ? null : pinned;
+  const ver = (id: string) => Number((id.match(/sonnet-(\d+)[-.](\d+)/i) ?? id.match(/sonnet-(\d+)/i))?.slice(1).join(".") ?? 0);
+  const list = ids.filter((m) => /claude-sonnet|sonnet-\d/i.test(m) && !/thinking|no-think|devin|cursor|omniroute/i.test(m) && !blockedProvider(m));
+  // utamakan Sonnet 5.5 dari koneksi Anthropic resmi (prefix "anth/")
+  list.sort((a, b) => Number(/^anth\//.test(b)) - Number(/^anth\//.test(a)) || ver(b) - ver(a));
+  return list[0] ?? null;
+}
+export const isHeavyModel = (id: string | null | undefined) => !!id && /sonnet/i.test(id);
+
 export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id) && !PRICEY(id);
 let visionSet: Set<string> | null = null;
 /** daftar model yang menurut katalog OmniRoute bisa membaca gambar (lebih akurat dari tebakan nama) */

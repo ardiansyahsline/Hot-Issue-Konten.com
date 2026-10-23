@@ -20,6 +20,12 @@ import { personaOf, registerCustom } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
 import CharacterWizard from "./CharacterWizard";
 import CharacterBrain from "./CharacterBrain";
+import FilePlanCard from "./FilePlanCard";
+import DeckCard from "./DeckCard";
+import ReportCard from "./ReportCard";
+import { splitReports } from "@/lib/kontenDesign";
+import { splitDeck } from "@/lib/deck";
+import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, splitFilePlan, type Scan } from "@/lib/localFolder";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
 export type AiStep = { id: string; k: string; s: "run" | "done" | "skip"; q?: string; n?: number; sym?: string; src?: string; to?: string; plan?: boolean };
@@ -407,7 +413,7 @@ export default function AiChat({
   }, [supabase]);
   const plainAnswer = (content: string) => {
     const sa = splitAnalysis(splitPlan(splitChart(splitAsk(content).text).text).text);
-    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + sa.text)
+    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitReports(splitDeck(splitFilePlan(sa.text).text).text).text)
       .replace(/\n---\n🌐[\s\S]*$/, "")
       .trim();
   };
@@ -469,6 +475,31 @@ export default function AiChat({
     setModel(m);
     try {
       localStorage.setItem(MODEL_KEY, m);
+    } catch {}
+  };
+  // folder laptop yang dihubungkan (File System Access API, hanya di browser ini — tidak disimpan di server)
+  const [folder, setFolder] = useState<Scan | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [canFolder, setCanFolder] = useState(false);
+  useEffect(() => setCanFolder(folderSupported()), []);
+  const connectFolder = async () => {
+    const root = await pickFolder();
+    if (!root) return;
+    setFolderBusy(true);
+    try {
+      const sc = await scanFolder(root);
+      setFolder(sc);
+      flash(`📁 ${root.name} terhubung · ${sc.files.length.toLocaleString("id-ID")} file`);
+    } catch (e) {
+      setErr(`Folder gagal dibaca: ${(e as Error).message}`);
+    } finally {
+      setFolderBusy(false);
+    }
+  };
+  const rescanFolder = async () => {
+    if (!folder) return;
+    try {
+      setFolder(await scanFolder(folder.root));
     } catch {}
   };
   const toggleWeb = () => {
@@ -592,10 +623,20 @@ export default function AiChat({
     abortRef.current = ac;
     let convId = activeId;
     try {
+      // folder laptop: pindai ulang (selalu terbaru) + baca isi file kalau pertanyaannya butuh
+      let folderBody: { name: string; listing: string; contents: string } | null = null;
+      if (folder) {
+        const ask = content || [...msgs].reverse().find((x) => x.role === "user")?.content || "";
+        let sc = await scanFolder(folder.root);
+        if (/duplikat|kembar|dobel|double|sama persis|ganda/i.test(ask)) sc = { ...sc, dups: await findDuplicates(sc) };
+        setFolder(sc);
+        const needRead = /\b(isi|baca|rangkum|ringkas|data|laporan|report|ppt|pptx|powerpoint|presentasi|slide|deck|analisa|analisis|hitung|total|grafik|chart|tabel|cek)\w*/i.test(ask);
+        folderBody = { name: sc.root.name, listing: listingText(sc), contents: needRead ? await readContents(sc, ask) : "" };
+      }
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: activeId, content, model, regenerate, images, data: dataMode, web: webMode }),
+        body: JSON.stringify({ conversationId: activeId, content, model, regenerate, images, data: dataMode, web: webMode, folder: folderBody }),
         signal: ac.signal,
       });
       const newId = res.headers.get("x-conversation-id");
@@ -890,6 +931,36 @@ export default function AiChat({
         >
           📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
         </button>
+        {canFolder && (
+          <span className="flex items-center">
+            <button
+              type="button"
+              onClick={folder ? rescanFolder : connectFolder}
+              disabled={folderBusy || !!setupError}
+              className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
+                folder ? "rounded-r-none border-violet-500/40 bg-violet-500/10 text-violet-400" : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+              }`}
+              title={
+                folder
+                  ? `Folder "${folder.root.name}" terhubung (${folder.files.length} file). AI bisa merapikan, ganti nama, cari duplikat, baca isi file & bikin laporan PPT. Semua perubahan kamu tinjau dulu sebelum dijalankan. Klik untuk pindai ulang.`
+                  : "Hubungkan folder di laptop (Chrome / Edge). AI bisa merapikan file, ganti nama massal, cari duplikat, membaca isi file & bikin laporan PPT."
+              }
+            >
+              {folderBusy ? "📁 Membaca folder…" : folder ? `📁 ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")}` : "📁 Folder laptop"}
+            </button>
+            {folder && (
+              <button
+                type="button"
+                onClick={() => setFolder(null)}
+                className="rounded-full rounded-l-none border border-l-0 border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[12px] font-semibold text-violet-400 hover:text-red-400"
+                aria-label="Putuskan folder"
+                title="Putuskan folder"
+              >
+                ✕
+              </button>
+            )}
+          </span>
+        )}
         {webReady && (
           <button
             type="button"
@@ -1130,7 +1201,12 @@ export default function AiChat({
                                 const sc = splitChart(m.content);
                                 const chart = sc.chart || m.chart;
                                 const sp = splitPlan(sc.text);
-                                const sa = splitAnalysis(sp.text);
+                                const sa0 = splitAnalysis(sp.text);
+                                const fp = splitFilePlan(sa0.text);
+                                const dk0 = splitDeck(fp.text);
+                                const rp = splitReports(dk0.text);
+                                const dk = { ...dk0, partial: dk0.partial || rp.partial };
+                                const sa = { ...sa0, text: rp.text };
                                 const short = sa.text.replace(/\n---\n🌐[\s\S]*$/, "").length < 700;
                                 return (
                                   <>
@@ -1153,6 +1229,10 @@ export default function AiChat({
                                       <TradingChart symbol={chart} />
                                     ) : null}
                                     <Markdown text={tidyAnswer(sa.text)} />
+                                    {(fp.partial || dk.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ Menyusun {fp.partial ? "rencana file" : rp.partial ? "halaman report" : "slide laporan"}…</p>}
+                                    {fp.plan && !streaming && <FilePlanCard plan={fp.plan} scan={folder} onConnect={connectFolder} onChanged={rescanFolder} />}
+                                    {dk.deck && !streaming && <DeckCard deck={dk.deck} root={folder?.root ?? null} />}
+                                    {!streaming && rp.reports.map((r, ri) => <ReportCard key={ri} report={r} root={folder?.root ?? null} />)}
                                   </>
                                 );
                               })()
@@ -1169,7 +1249,7 @@ export default function AiChat({
                                     navigator.clipboard?.writeText(
                                       (() => {
                                         const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
-                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + sa.text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitReports(splitDeck(splitFilePlan(sa.text).text).text).text);
                                       })()
                                     ).then(() => {
                                       setCopied(m.id);

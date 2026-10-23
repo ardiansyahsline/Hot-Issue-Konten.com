@@ -635,9 +635,12 @@ function relevanceTest(plan: WebPlan): ((text: string) => boolean) | null {
 
 export type StepFn = (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void;
 
-export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}): Promise<{ context: string; lite?: string; sources: Source[]; error?: string; chart?: string | null }> {
+export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}, opts: { offline?: boolean } = {}): Promise<{ context: string; lite?: string; sources: Source[]; error?: string; chart?: string | null }> {
   const cfg = webConfig();
-  if (!cfg.ok) return { context: "", sources: [] };
+  // offline = Internet dimatikan / kunci Tavily belum ada: tetap ambil data harga, candle & derivatif (gratis), tanpa pencarian artikel
+  const offline = !!opts.offline || !cfg.ok;
+  if (offline) plan = { ...plan, queries: [], urls: [] };
+  const tv: typeof tavily = (path, key, b, ms) => (offline ? Promise.resolve({}) : tavily(path, key, b, ms));
   const sources: Source[] = [];
   const blocks: { url: string; title: string; text: string; date?: string }[] = [];
   let error = "";
@@ -670,7 +673,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
   if (plan.urls.length) {
     onStep("read", "run", { id: "read", n: plan.urls.length });
     tasks.push(
-      tavily("extract", cfg.key, { urls: plan.urls, extract_depth: "basic", format: "text" }, 15000)
+      tv("extract", cfg.key, { urls: plan.urls, extract_depth: "basic", format: "text" }, 15000)
         .finally(() => onStep("read", "done", { id: "read" }))
         .then((j) => {
           for (const r of (j?.results ?? []) as { url: string; raw_content?: string }[]) add(r.url, host(r.url), clip(String(r.raw_content ?? ""), 7000));
@@ -714,9 +717,9 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     };
     try {
       const domains = domainsIn ?? (plan.market !== "none" ? DOMAINS[plan.market] : null);
-      const got = take(await tavily("search", cfg.key, domains ? { ...base, include_domains: domains } : base, 12000));
+      const got = take(await tv("search", cfg.key, domains ? { ...base, include_domains: domains } : base, 12000));
       // situs berkualitas belum cukup -> ulangi kata kunci pertama tanpa batas situs
-      if (domains && got < 2 && i === 0) take(await tavily("search", cfg.key, base, 12000));
+      if (domains && got < 2 && i === 0) take(await tv("search", cfg.key, base, 12000));
     } catch (e) {
       error = error || String((e as Error)?.message ?? e);
     }
@@ -823,7 +826,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}):
     const month = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
     const q = plan.market === "saham_id" ? `harga saham ${sym} hari ini penutupan ${month}` : `${sym} stock price today close`;
     tasks.push(
-      tavily(
+      tv(
         "search",
         cfg.key,
         {

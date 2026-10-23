@@ -14,6 +14,7 @@ type Row = { model: string | null; persona: string | null; created_at: string; e
 /** tarif per 1 juta token (US$) untuk model berbayar; model lain dianggap gratis */
 const PRICES: { re: RegExp; label: string; inp: number; out: number }[] = [
   { re: /haiku/i, label: "Claude Haiku", inp: Number(process.env.AI_PRICE_HAIKU_IN ?? 0.1), out: Number(process.env.AI_PRICE_HAIKU_OUT ?? 0.5) },
+  { re: /sonnet/i, label: "Claude", inp: Number(process.env.AI_PRICE_SONNET_IN ?? 2), out: Number(process.env.AI_PRICE_SONNET_OUT ?? 10) },
 ];
 const priceOf = (model: string) => PRICES.find((p) => p.re.test(model));
 const nf = (n: number) => n.toLocaleString("id-ID");
@@ -89,8 +90,11 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
   const byEngine = new Map<string, { hero: string; model: string; n: number; tin: number; tout: number; cost: number; err: number }>();
   const byUser = new Map<string, { n: number; tin: number; tout: number; cost: number; last: string }>();
   const byDay = new Map<string, number>();
+  // mesin tugas berat digabung ke baris Haiku (biaya tetap dihitung sesuai tarif aslinya)
+  const haikuId = rows.find((x) => /haiku/i.test(x.model ?? ""))?.model ?? "anth/claude-haiku-5-5";
   for (const r of rows) {
-    const model = r.model || "auto";
+    const real = r.model || "auto";
+    const model = /sonnet/i.test(real) ? haikuId : real;
     const e = byEngine.get(model) ?? { hero: heroName(model), model, n: 0, tin: 0, tout: 0, cost: 0, err: 0 };
     const uid = convs.get(r.conversation_id) ?? "?";
     const u = byUser.get(uid) ?? { n: 0, tin: 0, tout: 0, cost: 0, last: r.created_at };
@@ -98,7 +102,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
     else {
       const i = r.tokens_in ?? 0;
       const o = r.tokens_out ?? 0;
-      const p = priceOf(model);
+      const p = priceOf(real);
       const c = p ? (i * p.inp + o * p.out) / 1e6 : 0;
       e.n++;
       e.tin += i;
@@ -241,8 +245,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
         </table>
       </div>
       <p className="text-[11.5px] text-zinc-500">
-        Token dicatat mulai update ini (jawaban lama tanpa angka token). Biaya = perkiraan dari tarif Haiku US$0,10 / 1 jt token masuk & US$0,50 / 1 jt token keluar — tagihan resmi
-        tetap di console.anthropic.com. Langkah &quot;mikir dulu&quot; (perencana browsing) tidak ikut dihitung.
+        Token dicatat mulai update ini (jawaban lama tanpa angka token). Biaya = perkiraan dari tarif Claude per 1 jt token — tagihan resmi tetap di console.anthropic.com. Langkah &quot;mikir dulu&quot; (perencana browsing) tidak ikut dihitung.
       </p>
     </div>
   );

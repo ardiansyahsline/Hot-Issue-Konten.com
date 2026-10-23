@@ -7,6 +7,14 @@ const nextConfig = {
     staleTimes: { dynamic: 30, static: 180 },
   },
   poweredByHeader: false,
+  // pptxgenjs (bikin PowerPoint di browser) menyebut modul Node "node:fs"/"node:https" yang tidak dipakai di browser
+  webpack(config, { isServer, webpack }) {
+    if (!isServer) {
+      config.plugins.push(new webpack.NormalModuleReplacementPlugin(/^node:/, (r) => (r.request = r.request.replace(/^node:/, ""))));
+      config.resolve.fallback = { ...(config.resolve.fallback ?? {}), fs: false, https: false, http: false, path: false, os: false, zlib: false, stream: false };
+    }
+    return config;
+  },
   async headers() {
     return [
       {
