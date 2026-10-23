@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { MusicCmd } from "@/lib/musicCmd";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type YTPlayer = {
@@ -58,14 +59,12 @@ const loadApi = () =>
 
 /**
  * ▶ YouTube / YouTube Music lewat pemutar resmi (embed). Lagu bebas: tempel link atau cari.
- * Pemutar mengambang di pojok (wajib terlihat, min. 200px, sesuai aturan YouTube), tetap jalan saat pindah halaman.
+ * Pemutar tidak ditampilkan (cuma suara), kontrol di panel 🎵; tetap jalan saat pindah halaman.
  */
-const CORNERS = ["bottom-4 right-4", "bottom-4 left-4", "top-20 left-4", "top-20 right-4"];
 
-export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { panel: HTMLElement | null; vol: number; onStart: () => void; stopTick: number; onPlaying?: (on: boolean) => void }) {
+export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying, cmd }: { panel: HTMLElement | null; vol: number; onStart: () => void; stopTick: number; onPlaying?: (on: boolean) => void; cmd?: (MusicCmd & { n: number }) | null }) {
   const [track, setTrack] = useState<Track | null>(null);
   const cur = useRef<Track | null>(null);
-  const [corner, setCorner] = useState(0);
   const [topTab, setTopTab] = useState<"id" | "global">("id");
   const [tops, setTops] = useState<Record<string, Hit[] | string>>({});
   const [playing, setPlaying] = useState(false);
@@ -81,7 +80,6 @@ export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { 
     try {
       const s = JSON.parse(localStorage.getItem(KEY) ?? "{}");
       if (Array.isArray(s.recent)) setRecent(s.recent.slice(0, 8));
-      if (typeof s.corner === "number") setCorner(s.corner % CORNERS.length);
     } catch {}
   }, []);
   const remember = (t: Track) =>
@@ -94,14 +92,6 @@ export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { 
     });
   useEffect(() => player.current?.setVolume(Math.round(vol * 100)), [vol]);
   useEffect(() => onPlaying?.(playing), [playing, onPlaying]);
-  const moveCorner = () =>
-    setCorner((c) => {
-      const n = (c + 1) % CORNERS.length;
-      try {
-        localStorage.setItem(KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(KEY) ?? "{}"), corner: n }));
-      } catch {}
-      return n;
-    });
   // top 10 trending (diambil sekali per buka, server cache 3 jam)
   useEffect(() => {
     if (!panel || tops[topTab]) return;
@@ -195,6 +185,40 @@ export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { 
       setBusy(false);
     }
   };
+  // perintah dari chat AI
+  useEffect(() => {
+    if (!cmd) return;
+    if (cmd.action === "pause" || cmd.action === "stop") return void player.current?.pauseVideo();
+    if (cmd.action === "play" && !cmd.query && !cmd.top && !cmd.url) return void (track && (onStart(), player.current?.playVideo()));
+    const t = cmd.url ? parseYt(cmd.url) : null;
+    if (t) return void play(t);
+    if (cmd.top) {
+      setTopTab(cmd.top);
+      void fetch(`/api/music/yt?top=${cmd.top}`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (j.error) return setMsg(j.error === "nokey" ? "Daftar trending aktif setelah admin isi YOUTUBE_API_KEY." : j.error);
+          const items: Hit[] = j.items ?? [];
+          setTops((x) => ({ ...x, [cmd.top!]: items }));
+          if (items[0]) play({ kind: "queue", id: items[0].id, ids: items.map((x) => x.id), title: items[0].title, channel: items[0].channel });
+        })
+        .catch(() => setMsg("Gagal memuat trending."));
+      return;
+    }
+    if (cmd.query) {
+      void fetch(`/api/music/yt?q=${encodeURIComponent(cmd.query)}`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (j.error) return setMsg(j.error === "nokey" ? "Pencarian belum aktif (admin perlu isi YOUTUBE_API_KEY). Tempel link lagu di menu 🎵." : j.error);
+          const items: Hit[] = j.items ?? [];
+          setHits(items);
+          if (!items[0]) return setMsg(`“${cmd.query}” tidak ketemu di YouTube.`);
+          play({ kind: "queue", id: items[0].id, ids: items.map((x) => x.id), title: items[0].title, channel: items[0].channel });
+        })
+        .catch(() => setMsg("Pencarian gagal."));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cmd?.n]);
   const isList = track && (track.kind !== "video" || track.list);
   const topList = tops[topTab];
 
@@ -307,28 +331,16 @@ export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying }: { 
           </div>
         </div>
       )}
-      <p className="mt-2 text-[10.5px] leading-snug text-zinc-500">Pakai pemutar resmi YouTube (bisa ada iklan dari YouTube). Lagu, video & playlist dari YouTube Music juga bisa — salin link lewat tombol Bagikan.</p>
+      <p className="mt-2 text-[10.5px] leading-snug text-zinc-500">Diputar lewat YouTube (cuma suara, bisa ada iklan suara dari YouTube). Lagu, video & playlist dari YouTube Music juga bisa — salin link lewat tombol Bagikan.</p>
     </div>
   );
 
   return (
     <>
       {panel && createPortal(ui, panel)}
-      {/* pemutar mengambang: tetap terlihat (aturan YouTube) */}
-      <div
-        className={`fixed ${CORNERS[corner]} z-[80] overflow-hidden rounded-xl border border-zinc-800 bg-black shadow-2xl transition-all ${track ? "" : "pointer-events-none invisible"}`}
-        style={{ width: "min(356px, calc(100vw - 32px))" }}
-      >
-        <div className="flex items-center gap-1 bg-zinc-900 px-2 py-1 text-[11px]">
-          <span className={`truncate ${playing ? "text-red-400" : "text-zinc-400"}`}>{playing ? "▶" : "⏸"} {track?.title || "YouTube"}</span>
-          <button type="button" onClick={moveCorner} className="ml-auto px-1 text-zinc-400 hover:text-zinc-100" title="Pindah pojok" aria-label="Pindah pojok">
-            ⇄
-          </button>
-          <button type="button" onClick={close} className="px-1 text-zinc-400 hover:text-zinc-100" aria-label="Tutup">
-            ✕
-          </button>
-        </div>
-        <div ref={host} className="h-[200px] w-full" />
+      {/* pemutar YouTube tidak ditampilkan (hanya suara); kontrol ada di panel 🎵 */}
+      <div aria-hidden className="pointer-events-none fixed bottom-0 right-0 overflow-hidden" style={{ width: 320, height: 180, opacity: 0, zIndex: -5 }}>
+        <div ref={host} className="h-full w-full" />
       </div>
     </>
   );

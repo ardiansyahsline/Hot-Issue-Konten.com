@@ -6,6 +6,7 @@ import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide
 import { personaIntro, personaOf, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
+import { MUSIC_INTENT, MUSIC_RULES } from "@/lib/musicCmd";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { SMART, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -363,6 +364,8 @@ export async function POST(req: NextRequest) {
   if (brain) messages.push({ role: "system", content: brain });
   // standar desain Konten.com (skill konten-report-designer) untuk semua permintaan desain / laporan / PPT / report
   if (DESIGN_INTENT.test(lastText)) messages.push({ role: "system", content: DESIGN_RULES });
+  // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
+  if (MUSIC_INTENT.test(lastText)) messages.push({ role: "system", content: MUSIC_RULES });
   const folderMsg = folder ? folderPrompt(folder) : "";
   if (folderMsg) messages.push({ role: "system", content: folderMsg });
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)

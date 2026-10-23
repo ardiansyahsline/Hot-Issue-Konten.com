@@ -25,6 +25,8 @@ import DeckCard from "./DeckCard";
 import ReportCard from "./ReportCard";
 import { splitReports } from "@/lib/kontenDesign";
 import { splitDeck } from "@/lib/deck";
+import { splitMusic } from "@/lib/musicCmd";
+import MusicCmdCard from "./MusicCmdCard";
 import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, scanFromFiles, splitFilePlan, type Scan } from "@/lib/localFolder";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -423,7 +425,7 @@ export default function AiChat({
   }, [supabase]);
   const plainAnswer = (content: string) => {
     const sa = splitAnalysis(splitPlan(splitChart(splitAsk(content).text).text).text);
-    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitReports(splitDeck(splitFilePlan(sa.text).text).text).text)
+    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text)
       .replace(/\n---\n🌐[\s\S]*$/, "")
       .trim();
   };
@@ -1369,8 +1371,9 @@ export default function AiChat({
                                 const fp = splitFilePlan(sa0.text);
                                 const dk0 = splitDeck(fp.text);
                                 const rp = splitReports(dk0.text);
+                                const mu = splitMusic(rp.text);
                                 const dk = { ...dk0, partial: dk0.partial || rp.partial };
-                                const sa = { ...sa0, text: rp.text };
+                                const sa = { ...sa0, text: mu.text };
                                 const short = sa.text.replace(/\n---\n🌐[\s\S]*$/, "").length < 700;
                                 return (
                                   <>
@@ -1397,6 +1400,7 @@ export default function AiChat({
                                     {fp.plan && !streaming && <FilePlanCard plan={fp.plan} scan={folder} onConnect={connectFolder} onChanged={rescanFolder} />}
                                     {dk.deck && !streaming && <DeckCard deck={dk.deck} root={folder?.root ?? null} />}
                                     {!streaming && rp.reports.map((r, ri) => <ReportCard key={ri} report={r} root={folder?.root ?? null} />)}
+                                    {mu.cmd && !streaming && <MusicCmdCard id={String(m.id)} cmd={mu.cmd} fresh={m.id === lastAssistant?.id && !!m.doneAt && Date.now() - m.doneAt < 90000} />}
                                   </>
                                 );
                               })()
@@ -1413,7 +1417,7 @@ export default function AiChat({
                                     navigator.clipboard?.writeText(
                                       (() => {
                                         const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
-                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitReports(splitDeck(splitFilePlan(sa.text).text).text).text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text);
                                       })()
                                     ).then(() => {
                                       setCopied(m.id);

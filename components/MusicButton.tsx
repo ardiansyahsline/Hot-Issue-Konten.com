@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import YtMusic from "./YtMusic";
 import Meteors from "./Meteors";
+import type { MusicCmd } from "@/lib/musicCmd";
 
 type Preset = { id: string; icon: string; name: string; desc: string; prompts: { text: string; weight: number }[]; bpm: number; density: number; brightness: number };
 const PRESETS: Preset[] = [
@@ -24,6 +25,8 @@ export default function MusicButton() {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [ytStop, setYtStop] = useState(0);
   const [ytOn, setYtOn] = useState(false);
+  const [ytCmd, setYtCmd] = useState<(MusicCmd & { n: number }) | null>(null);
+  const onCmd = useRef<(c: MusicCmd) => void>(() => {});
   const [state, setState] = useState<"idle" | "connecting" | "playing" | "paused" | "error">("idle");
   const [err, setErr] = useState<string | null>(null);
   const [preset, setPreset] = useState(PRESETS[0].id);
@@ -199,11 +202,11 @@ export default function MusicButton() {
     }, wait);
   }
 
-  const start = async (p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0]) => {
+  const start = async (p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0], text = active, b = bpm) => {
     setErr(null);
     want.current = true;
     setYtStop((n) => n + 1);
-    latest.current = { prompts: promptsOf(p), cfg: cfgOf(p) };
+    latest.current = { prompts: promptsOf(p, text), cfg: cfgOf(p, b) };
     if (session.current) {
       lastChunk.current = Date.now();
       session.current.play();
@@ -272,6 +275,46 @@ export default function MusicButton() {
     await s.setMusicGenerationConfig(cfgOf(cur(), b, nd));
     s.resetContext?.();
   };
+
+  // perintah dari chat AI ("puterin lagu Tulus", "matiin musik", "musik AI piano")
+  onCmd.current = (c) => {
+    if (c.open) setOpen(true);
+    if (!c.action && !c.source && !c.query && !c.top && !c.url && !c.preset && !c.prompt) return;
+    if (c.action === "pause" || c.action === "stop") {
+      if (session.current || want.current) c.action === "stop" ? (stopAll(), setState("idle")) : pause();
+      setYtCmd({ action: c.action, n: Date.now() });
+      return;
+    }
+    if (c.source === "ai") {
+      setTab("ai");
+      const p = PRESETS.find((x) => x.id === c.preset) ?? cur();
+      if (c.preset && p.id === c.preset) setPreset(p.id);
+      const text = (c.prompt ?? "").trim().slice(0, 400);
+      setCustom(text);
+      setActive(text);
+      if (typeof c.bpm === "number") setBpm(Math.max(60, Math.min(160, Math.round(c.bpm))));
+      const b = typeof c.bpm === "number" ? Math.max(60, Math.min(160, Math.round(c.bpm))) : bpm;
+      latest.current = { prompts: promptsOf(p, text), cfg: cfgOf(p, b) };
+      const s = session.current;
+      if (!s) return void start(p, text, b);
+      void s.setWeightedPrompts({ weightedPrompts: promptsOf(p, text) });
+      void s.setMusicGenerationConfig(cfgOf(p, b));
+      if (state !== "playing") void start(p, text, b);
+      return;
+    }
+    if (c.action === "play" && !c.query && !c.top && !c.url) {
+      if (state === "paused") return void start();
+      setYtCmd({ action: "play", n: Date.now() });
+      return;
+    }
+    setTab("yt");
+    setYtCmd({ ...c, n: Date.now() });
+  };
+  useEffect(() => {
+    const h = (e: Event) => onCmd.current((e as CustomEvent<MusicCmd>).detail ?? {});
+    window.addEventListener("cs-music", h);
+    return () => window.removeEventListener("cs-music", h);
+  }, []);
 
   const playing = state === "playing";
   return (
@@ -424,6 +467,7 @@ export default function MusicButton() {
         vol={vol}
         stopTick={ytStop}
         onPlaying={setYtOn}
+        cmd={ytCmd}
         onStart={() => {
           if (want.current || session.current) {
             pause();
