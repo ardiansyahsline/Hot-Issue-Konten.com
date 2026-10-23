@@ -138,6 +138,19 @@ export default function HeroArt({ hero, size = 96, talk = false, still = false, 
   const c = GROUPS[p.group].color;
   const arm = p.act === "wave" ? "hero-arm-wave" : p.act === "point" ? "hero-arm-point" : "";
   const flat = p.type[2] === "T" && p.type[3] === "J";
+  if (p.img)
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={p.img}
+        alt={title ?? ""}
+        width={size}
+        height={size}
+        className={`shrink-0 rounded-full object-cover hero-${p.anim} ${talk ? "hero-talk" : ""} ${still ? "hero-still" : ""}`}
+        style={{ width: size, height: size, boxShadow: `0 0 0 2px ${c}` }}
+        aria-hidden={title ? undefined : true}
+      />
+    );
   return (
     <svg
       viewBox="0 0 120 120"

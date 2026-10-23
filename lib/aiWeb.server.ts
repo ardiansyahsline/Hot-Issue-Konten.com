@@ -148,7 +148,7 @@ export async function planWebSearch(opts: {
         body: JSON.stringify({
           model,
           stream: false,
-          temperature: 0,
+          // tanpa "temperature": Claude Haiku terbaru menolak parameter itu (400 "temperature is deprecated")
           max_tokens: 500,
           messages: [
             { role: "system", content: PLAN_PROMPT(today()) },

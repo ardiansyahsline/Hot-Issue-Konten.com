@@ -9,7 +9,26 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   return (
     <div className="my-3 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/70">
       <div className="flex items-center justify-between border-b border-zinc-800/80 px-3 py-1.5 text-[11.5px] text-zinc-500">
-        <span>{lang || "teks"}</span>
+        <span>{lang === "srt" ? "subtitle (.srt)" : lang || "teks"}</span>
+        <span className="ml-auto mr-3">
+          {/* subtitle: bisa diunduh lalu diimpor ke CapCut */}
+          {lang === "srt" && (
+            <button
+              type="button"
+              onClick={() => {
+                const url = URL.createObjectURL(new Blob([code.replace(/\r?\n/g, "\r\n")], { type: "application/x-subrip" }));
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `subtitle-${new Date().toISOString().slice(0, 10)}.srt`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+              className="font-semibold text-orange-400 hover:text-orange-300"
+            >
+              ⬇ Unduh .srt
+            </button>
+          )}
+        </span>
         <button
           type="button"
           onClick={() => {

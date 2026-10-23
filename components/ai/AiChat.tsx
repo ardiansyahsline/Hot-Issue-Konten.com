@@ -17,6 +17,9 @@ import AskCard from "./AskCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
 import { personaOf } from "@/lib/aiPersona";
+import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
+import CharacterWizard from "./CharacterWizard";
+import CharacterBrain from "./CharacterBrain";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
 export type AiStep = { id: string; k: string; s: "run" | "done" | "skip"; q?: string; n?: number; sym?: string; src?: string; to?: string; plan?: boolean };
@@ -38,6 +41,8 @@ export type AiMsg = {
   doneAt?: number;
   /** model diganti otomatis (mis. karena ada gambar) */
   switched?: boolean;
+  /** jawaban dari karakter buatan sendiri (untuk 👍 / koreksi / ingat ini) */
+  character_id?: string | null;
 };
 type Pending = { key: string; preview: string; status: "uploading" | "done" | "error"; path?: string };
 
@@ -121,8 +126,10 @@ function ModelPicker({
   loadError,
   onReload,
   owner,
+  chars,
 }: {
   owner: boolean;
+  chars: CustomChar[];
   value: string;
   onChange: (m: string) => void;
   models: string[];
@@ -155,7 +162,8 @@ function ModelPicker({
   const ready0 = opts.filter((o) => (owner ? o.status === 0 : true) && match(o)).sort((a, b) => (owner ? 0 : a.hero.localeCompare(b.hero)));
   const untried = owner ? opts.filter((o) => o.status === 1 && match(o)) : [];
   const off = owner ? opts.filter((o) => o.status === 2 && match(o)) : [];
-  const current = value === SMART ? SMART_HERO : heroName(value);
+  const current = value === SMART ? SMART_HERO : isCharModel(value) ? (chars.find((c) => `${CHAR_PREFIX}${c.id}` === value)?.name ?? "Karakter") : heroName(value);
+  const mine = chars.filter((c) => !s || c.name.toLowerCase().includes(s) || (c.profile.role ?? "").toLowerCase().includes(s));
   const pick = (m: string) => {
     onChange(m);
     setOpen(false);
@@ -165,7 +173,7 @@ function ModelPicker({
     <button
       type="button"
       onClick={() => pick(o.model)}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} ${owner && o.status === 2 ? "opacity-60" : ""}`}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} `}
     >
       <HeroAvatar hero={o.hero} />
       <span className="min-w-0 flex-1">
@@ -198,7 +206,7 @@ function ModelPicker({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-800 py-0.5 pl-0.5 pr-2.5 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
-        title={`${current}: ${heroDesc(value)}`}
+        title={isCharModel(value) ? `${current}: karakter buatanmu` : `${current}: ${heroDesc(value)}`}
         aria-label="Pilih hero"
       >
         <HeroAvatar hero={current} size={22} />
@@ -235,12 +243,41 @@ function ModelPicker({
                 )}
               </span>
             </button>
+            {mine.length > 0 && (
+              <div>
+                <div className="px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">Karakter buatanmu</div>
+                {mine.map((c) => {
+                  const v = `${CHAR_PREFIX}${c.id}`;
+                  const p = personaOf(c.name);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => pick(v)}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${value === v ? "bg-orange-500/10" : "hover:bg-zinc-800"}`}
+                    >
+                      <HeroAvatar hero={c.name} />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-[13px] font-semibold ${value === v ? "text-orange-400" : "text-zinc-200"}`}>
+                          {c.name}
+                          <span className="ml-1.5 text-[10.5px] font-medium text-zinc-500">
+                            {p.type} · {p.label}
+                          </span>
+                        </span>
+                        <span className="block truncate text-[11.5px] leading-snug text-zinc-400">{c.profile.role || "Karakter buatanmu"}</span>
+                      </span>
+                      <span className="shrink-0 rounded-md bg-orange-500/15 px-1.5 py-0.5 text-[9.5px] font-extrabold text-orange-400">MILIKMU</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <Group title={owner ? "Siap dipakai" : "Hero"} list={ready0} />
             <Group title="Belum dicoba" list={untried} />
             {off.length > 0 && (
               <div>
                 <button type="button" onClick={() => setShowOff((v) => !v)} className="w-full px-2 pb-1 pt-2 text-left text-[11.5px] font-semibold text-zinc-500 hover:text-zinc-300">
-                  {showOff ? "▾" : "▸"} {off.length} hero belum tersambung / lagi gagal
+                  {showOff ? "▾" : "▸"} {off.length} hero pakai mesin cadangan (karakter tetap)
                 </button>
                 {showOff && off.map((o) => <Row key={o.hero} o={o} />)}
               </div>
@@ -342,7 +379,55 @@ export default function AiChat({
   const stick = useRef(true);
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const hero = (id: string | null | undefined) => (id ? heroName(id) : SMART_HERO);
+  // karakter buatan sendiri (pribadi)
+  const [chars, setChars] = useState<CustomChar[]>([]);
+  const [charsLoaded, setCharsLoaded] = useState(false);
+  const [wizard, setWizard] = useState<"new" | CustomChar | null>(null);
+  const [brain, setBrain] = useState<CustomChar | null>(null);
+  const [teach, setTeach] = useState<{ id: AiMsg["id"]; kind: MemoryKind; text: string; saving?: boolean } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const flash = (t: string) => {
+    setToast(t);
+    setTimeout(() => setToast((x) => (x === t ? null : x)), 2600);
+  };
+  useEffect(() => {
+    supabase
+      .from("ai_characters")
+      .select("id, name, mbti, avatar, profile, created_at")
+      .order("created_at")
+      .then(({ data }) => {
+        const list = (data ?? []) as CustomChar[];
+        list.forEach(registerChar);
+        setChars(list);
+        setCharsLoaded(true);
+      });
+  }, [supabase]);
+  const plainAnswer = (content: string) => {
+    const sa = splitAnalysis(splitPlan(splitChart(splitAsk(content).text).text).text);
+    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + sa.text)
+      .replace(/\n---\n🌐[\s\S]*$/, "")
+      .trim();
+  };
+  const questionBefore = (id: AiMsg["id"]) => {
+    const i = msgs.findIndex((x) => x.id === id);
+    for (let k = i - 1; k >= 0; k--) if (msgs[k].role === "user") return msgs[k].content;
+    return "";
+  };
+  /** simpan ke otak karakter (contoh / koreksi / pengetahuan) dari tombol di bawah jawaban */
+  const remember = async (charId: string, kind: MemoryKind, title: string, content: string) => {
+    const c = charOf(charId);
+    const { error } = await supabase
+      .from("ai_character_memory")
+      .insert({ character_id: charId, kind, title: title.replace(/\s+/g, " ").trim().slice(0, 200) || null, content: content.slice(0, 60000) });
+    if (error) {
+      setErr(/ai_character_memory|schema cache/i.test(error.message) ? "Fitur otak belum aktif — admin perlu menjalankan supabase/migration-19-karakter-sendiri.sql." : error.message);
+      return false;
+    }
+    flash(`Tersimpan ke otak ${c?.name ?? "karakter"} ✓`);
+    return true;
+  };
+  const charOf = (id: string | null | undefined) => (id ? chars.find((c) => c.id === id || `${CHAR_PREFIX}${c.id}` === id) : undefined);
+  const hero = (id: string | null | undefined) => (!id ? SMART_HERO : isCharModel(id) ? (charOf(id)?.name ?? SMART_HERO) : heroName(id));
 
   // pilihan model & mode data tersimpan di browser
   useEffect(() => {
@@ -372,6 +457,11 @@ export default function AiChat({
       })
       .catch(() => setLoadError("koneksi"));
   };
+  // karakter yang tersimpan sudah dihapus -> kembali ke Layla otomatis
+  useEffect(() => {
+    if (charsLoaded && isCharModel(model) && !charOf(model)) pickModel(SMART);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charsLoaded, chars, model]);
   const pickModel = (m: string) => {
     setModel(m);
     try {
@@ -461,7 +551,8 @@ export default function AiChat({
       setErr(null);
       setLoadingMsgs(true);
       stick.current = true;
-      let r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", id).order("id");
+      let r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona, character_id").eq("conversation_id", id).order("id");
+      if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", id).order("id")) as typeof r;
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", id).order("id")) as typeof r;
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", id).order("id")) as typeof r;
       setMsgs((r.data ?? []) as AiMsg[]);
@@ -492,7 +583,7 @@ export default function AiChat({
         const last = base[base.length - 1];
         if (last?.role === "assistant") base = base.slice(0, -1);
       } else base = [...base, { id: `u${Date.now()}`, role: "user", content, images }];
-      return [...base, { id: tempId, role: "assistant", content: "", model: model === SMART ? null : model }];
+      return [...base, { id: tempId, role: "assistant", content: "", model: model === SMART ? null : model, character_id: isCharModel(model) ? model.slice(CHAR_PREFIX.length) : null }];
     });
     const ac = new AbortController();
     abortRef.current = ac;
@@ -813,7 +904,7 @@ export default function AiChat({
             🌐 Internet: {webMode === "auto" ? "Otomatis" : "Off"}
           </button>
         )}
-        <ModelPicker owner={owner} value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
+        <ModelPicker owner={owner} chars={chars} value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
         {busy ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop
@@ -906,6 +997,18 @@ export default function AiChat({
         {view === "chars" ? (
           <HeroGallery
             owner={owner}
+            chars={chars}
+            onNewChar={() => setWizard("new")}
+            onEditChar={(c) => setWizard(c)}
+            onBrain={(c) => setBrain(c)}
+            onDeleteChar={async (c) => {
+              setChars((x) => x.filter((y) => y.id !== c.id));
+              const { error } = await supabase.from("ai_characters").delete().eq("id", c.id);
+              if (error) {
+                setErr(error.message);
+                setChars((x) => [...x, c]);
+              } else flash(`${c.name} dihapus`);
+            }}
             opts={heroOpts}
             value={model}
             ready={ready}
@@ -1075,7 +1178,8 @@ export default function AiChat({
                                 return (
                                   <span>
                                     · ⚔️ {ph} <span className="text-zinc-600">({pp.type} {pp.label})</span>
-                                    {owner && engine !== ph && (
+                                    {owner && engine !== ph && personaOf(ph).custom && <span className="text-zinc-500"> · mesin {engine}</span>}
+                                    {owner && engine !== ph && !personaOf(ph).custom && (
                                       <span className="text-zinc-500" title={`${ph} lagi gagal / kuota habis, jadi jawaban ini dibantu ${engine} — gaya jawab tetap ${ph}.`}>
                                         {" "}· ↪ dibantu {engine}
                                       </span>
@@ -1083,6 +1187,79 @@ export default function AiChat({
                                   </span>
                                 );
                               })()}
+                              {!m.error && m.character_id && charOf(m.character_id) && (
+                                <span className="flex items-center gap-2.5">
+                                  <span className="text-zinc-700">|</span>
+                                  <button
+                                    type="button"
+                                    title="Bagus — simpan sebagai contoh jawaban"
+                                    className="hover:text-emerald-400"
+                                    onClick={() => {
+                                      const qx = questionBefore(m.id);
+                                      remember(m.character_id!, "example", qx.slice(0, 120), `Pertanyaan: ${qx.slice(0, 2000)}\nJawaban ideal: ${plainAnswer(m.content).slice(0, 6000)}`);
+                                    }}
+                                  >
+                                    👍
+                                  </button>
+                                  <button type="button" title="Kurang pas — kasih tahu apa yang salah" className="hover:text-red-400" onClick={() => setTeach({ id: m.id, kind: "correction", text: "" })}>
+                                    👎
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Simpan isi jawaban ini ke pengetahuan karakter"
+                                    className="hover:text-zinc-200"
+                                    onClick={() => setTeach({ id: m.id, kind: "knowledge", text: plainAnswer(m.content).slice(0, 8000) })}
+                                  >
+                                    🧠 Ingat ini
+                                  </button>
+                                  <button type="button" title="Koreksi jawaban ini" className="hover:text-zinc-200" onClick={() => setTeach({ id: m.id, kind: "correction", text: "" })}>
+                                    ✎ Koreksi
+                                  </button>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {teach && teach.id === m.id && m.character_id && (
+                            <div className="mt-2 space-y-2 rounded-xl border border-zinc-800 p-2.5">
+                              <div className="text-[12px] font-semibold text-zinc-300">
+                                {teach.kind === "correction"
+                                  ? `✎ Apa yang harus diperbaiki? ${charOf(m.character_id)?.name ?? "Karakter"} akan mengikuti koreksi ini di chat berikutnya.`
+                                  : `🧠 Simpan ke pengetahuan ${charOf(m.character_id)?.name ?? "karakter"} (boleh diedit / dipersingkat dulu):`}
+                              </div>
+                              <textarea
+                                autoFocus
+                                value={teach.text}
+                                onChange={(e) => setTeach({ ...teach, text: e.target.value })}
+                                rows={teach.kind === "correction" ? 3 : 6}
+                                placeholder={teach.kind === "correction" ? "mis. Payout cair 1–3 hari kerja, bukan hari itu juga. Jangan pakai kata 'pasti'." : ""}
+                                className="input resize-y py-1.5 text-[13px]"
+                              />
+                              <div className="flex justify-end gap-2">
+                                <button type="button" onClick={() => setTeach(null)} className="rounded-lg border border-zinc-800 px-3 py-1.5 text-[12px] font-bold text-zinc-300">
+                                  Batal
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!teach.text.trim() || teach.saving}
+                                  onClick={async () => {
+                                    setTeach({ ...teach, saving: true });
+                                    const qx = questionBefore(m.id);
+                                    const ok =
+                                      teach.kind === "correction"
+                                        ? await remember(
+                                            m.character_id!,
+                                            "correction",
+                                            qx.slice(0, 120),
+                                            `Saat ditanya: "${qx.slice(0, 600)}"\nJawaban sebelumnya (kurang pas): ${plainAnswer(m.content).slice(0, 500)}…\nKOREKSI: ${teach.text.trim()}`
+                                          )
+                                        : await remember(m.character_id!, "knowledge", qx.slice(0, 120) || "Dari chat", teach.text.trim());
+                                    setTeach(ok ? null : { ...teach, saving: false });
+                                  }}
+                                  className="rounded-lg bg-orange-500 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50"
+                                >
+                                  {teach.saving ? "Menyimpan…" : "Simpan ke otak"}
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1097,6 +1274,28 @@ export default function AiChat({
         )}
       </div>
 
+      {wizard && (
+        <CharacterWizard
+          initial={wizard === "new" ? null : wizard}
+          taken={chars.map((c) => c.name)}
+          onClose={() => setWizard(null)}
+          onSaved={(c) => {
+            const isNew = wizard === "new";
+            setChars((x) => (x.some((y) => y.id === c.id) ? x.map((y) => (y.id === c.id ? c : y)) : [...x, c]));
+            setWizard(null);
+            if (isNew) {
+              pickModel(`${CHAR_PREFIX}${c.id}`);
+              flash(`${c.name} siap ngobrol 🎉`);
+            } else flash(`${c.name} diperbarui ✓`);
+          }}
+        />
+      )}
+      {brain && <CharacterBrain char={brain} onClose={() => setBrain(null)} />}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-[80] -translate-x-1/2 rounded-full bg-zinc-100 px-4 py-2 text-[12.5px] font-semibold text-zinc-900 shadow-lg" role="status">
+          {toast}
+        </div>
+      )}
       {zoom && (
         <button type="button" onClick={() => setZoom(null)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" aria-label="Tutup gambar">
           {/* eslint-disable-next-line @next/next/no-img-element */}

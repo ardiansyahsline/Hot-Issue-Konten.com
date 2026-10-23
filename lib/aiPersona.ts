@@ -209,7 +209,19 @@ const hash = (s: string) => {
   return h;
 };
 
-export type Persona = TypeInfo & { hero: string; type: string; group: Group; hair: number; skin: string; hc: string; prop: Prop; role: string };
+export type Persona = TypeInfo & { hero: string; type: string; group: Group; hair: number; skin: string; hc: string; prop: Prop; role: string; img?: string; custom?: boolean };
+
+/* ---------- karakter buatan user (didaftarkan saat dimuat) ---------- */
+export type CustomLook = { type: string; hair: number; skin: string; hc: string; prop?: Prop; img?: string; label?: string; say?: string; style?: string; role?: string };
+const CUSTOM = new Map<string, CustomLook>();
+/** daftarkan karakter buatan user supaya avatar, tipe & kalimatnya dikenali di seluruh tab AI */
+export function registerCustom(name: string, look: CustomLook) {
+  CUSTOM.set(name, look);
+}
+export const isBuiltinHero = (name: string) => name in LOOKS || name === "Layla" || !!heroRole(name);
+export const CHIBI_SKINS = ["#f5c9a8", "#e8b48f", "#f1c27d", "#d9a27c", "#fbe3d0", "#c98b66", "#f6d2b3"];
+export const CHIBI_HAIRS = ["#111827", "#3b2a1e", "#7c2d12", "#e5e7eb", "#f59e0b", "#6366f1", "#0ea5e9", "#dc2626", "#0f766e", "#db2777"];
+export const CHIBI_PROPS: Prop[] = ["orb", "staff", "bow", "sword", "dagger", "shield", "gun", "umbrella", "spear", "fist"];
 
 export const typeGroup = (t: string): Group => (t[1] === "N" ? (t[2] === "T" ? "NT" : "NF") : t[3] === "J" ? "SJ" : "SP");
 
@@ -218,6 +230,27 @@ export function personaOf(heroIn: string): Persona {
   const hero = heroIn.replace(/ \d+$/, "");
   const role = heroRole(hero);
   const h = hash(hero);
+  const custom = CUSTOM.get(heroIn.trim()) ?? CUSTOM.get(hero);
+  if (custom) {
+    const hero = heroIn.trim();
+    const t = TYPES[custom.type] ?? TYPES.INFJ;
+    return {
+      ...t,
+      label: custom.label || t.label,
+      say: custom.say || t.say,
+      style: custom.style || t.style,
+      hero,
+      type: custom.type,
+      group: typeGroup(custom.type),
+      hair: custom.hair,
+      skin: custom.skin,
+      hc: custom.hc,
+      prop: custom.prop ?? "orb",
+      role: custom.role ?? "",
+      img: custom.img,
+      custom: true,
+    };
+  }
   const look: Look = LOOKS[hero] ?? {
     type: TYPE_KEYS[h % TYPE_KEYS.length],
     hair: h % 10,
@@ -244,6 +277,14 @@ const TABLE_VOICE: Record<Group, string> = {
   SJ: "tabelmu seperti checklist rapi (mis. No | Langkah | Status ✓ / Catatan); tegas soal aturan & batas.",
   SP: "tabelmu fokus aksi (mis. Situasi | Aksi | Hasil); bahasa singkat, energik, langsung ke praktik.",
 };
+
+/** gaya tabel & gaya analis per kelompok kepribadian (dipakai juga oleh karakter buatan user) */
+export const groupVoices = (type: string) => {
+  const g = typeGroup(type);
+  return { table: TABLE_VOICE[g], analyst: ANALYST_VOICE[g] };
+};
+export const typeInfo = (type: string) => TYPES[type] ?? TYPES.INFJ;
+export const MBTI_TYPES = Object.keys(TYPES);
 
 export function personaPrompt(hero: string) {
   const p = personaOf(hero);

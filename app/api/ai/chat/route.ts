@@ -5,6 +5,7 @@ import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
 import { personaIntro } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
+import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { SMART, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
@@ -154,6 +155,21 @@ export async function POST(req: NextRequest) {
   const models = catalog.ids;
   setVisionCatalog(catalog.vision);
   const chosen = String(body.model ?? "").trim().slice(0, 200) || cfg.model;
+  // karakter buatan sendiri ("char:<id>"): kepribadian + otak dari database (hanya milik user ini — RLS)
+  let custom: CustomChar | null = null;
+  let customMem: MemoryItem[] = [];
+  if (isCharModel(chosen)) {
+    const id = chosen.slice(CHAR_PREFIX.length);
+    const [c, m] = await Promise.all([
+      supabase.from("ai_characters").select("id, name, mbti, avatar, profile").eq("id", id).maybeSingle(),
+      supabase.from("ai_character_memory").select("id, character_id, kind, title, content, created_at").eq("character_id", id).order("created_at", { ascending: false }).limit(400),
+    ]);
+    if (c.data) {
+      custom = c.data as CustomChar;
+      customMem = (m.data ?? []) as MemoryItem[];
+      registerChar(custom);
+    }
+  }
   // katalog gagal terbaca (server AI lambat / putus sesaat) -> pakai model yang pernah terbukti jalan, bukan "auto"
   // model yang dipastikan sudah tidak ada (404 "does not exist", 410 "end of life") dilewati 3 hari
   const isDead = (m: string) => isDeadModel(health.get(m));
@@ -166,11 +182,16 @@ export async function POST(req: NextRequest) {
     .map((x) => x.m);
   let candidates: string[] = [];
   // hero pilihan user: karakternya dipertahankan walaupun mesinnya dialihkan
-  const chosenHero = chosen !== SMART && chosen !== "auto" ? heroName(chosen) : null;
+  const chosenHero = custom ? custom.name : chosen !== SMART && chosen !== "auto" && !isCharModel(chosen) ? heroName(chosen) : null;
   // mesin hero pilihan dicoba duluan, KECUALI baru gagal / sudah tidak ada -> langsung pakai mesin yang siap (karakter tetap hero pilihan)
   const chosenOk = chosen !== SMART && chosen !== "auto" && isChatModel(chosen) && (!models.length || models.includes(chosen)) && (!hasImages || isVisionModel(chosen)) && !isDeadModel(health.get(chosen));
   const chosenHealthy = chosenOk && !coolingDown(chosen) && healthRank(health.get(chosen)) !== 2;
   if (chosenHealthy) candidates.push(chosen);
+  // karakter buatan sendiri: mesin utamanya Claude Haiku (kalau tersedia & tidak sedang gagal)
+  if (custom && !hasImages) {
+    const hk = byHealth.find((m) => /haiku/i.test(m) && !coolingDown(m) && healthRank(health.get(m)) !== 2);
+    if (hk) candidates.push(hk);
+  }
   // varian lain dari hero yang sama dicoba dulu (mis. DeepSeek versi lain) sebelum pindah ke hero lain
   if (chosenHero) {
     const same = sameHeroVariants(byHealth, chosenHero)
@@ -287,6 +308,9 @@ export async function POST(req: NextRequest) {
   ];
   if (context) messages.push({ role: "system", content: context });
   if (web.context) messages.push({ role: "system", content: web.context });
+  // otak karakter buatan sendiri: koreksi + bagian catatan yang paling nyambung dengan pertanyaan
+  const brain = custom ? brainText(custom, customMem, 20000, lastText) : "";
+  if (brain) messages.push({ role: "system", content: brain });
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
   const tradeIntent = TRADE_INTENT.test(lastText) || answered;
   // pendekatan yang dipilih di kotak pertanyaan: "📌 Analisa ETHUSDT · Support & Resistance · TF 4H"
@@ -317,6 +341,7 @@ export async function POST(req: NextRequest) {
       if (m.role !== "system" || typeof m.content !== "string") return m;
       if (context && m.content === context) return { ...m, content: context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "") };
       if (web.context && m.content === web.context) return { ...m, content: web.lite ?? web.context.slice(0, 6000) };
+      if (brain && m.content === brain) return { ...m, content: custom ? brainText(custom, customMem, 6000, lastText) : brain.slice(0, 6000) };
       return m;
     });
     const firstHist = out.findIndex((m) => m.role !== "system");
@@ -367,7 +392,7 @@ export async function POST(req: NextRequest) {
   const msgsFor = (model: string) => {
     const useLite = forceLite || (providerOf(model) === "groq" && fullChars > 20_000);
     const arr = [...(useLite ? liteMessages : messages)];
-    arr[1] = { role: "system", content: personaPrompt(chosenHero ?? heroName(model)) };
+    arr[1] = { role: "system", content: custom ? customPrompt(custom) : personaPrompt(chosenHero ?? heroName(model)) };
     return arr;
   };
 
@@ -614,10 +639,11 @@ export async function POST(req: NextRequest) {
         model: usedModel,
         used_data: useData,
         persona: personaHero,
+        ...(custom ? { character_id: custom.id } : {}),
         ...(usage.in !== undefined ? { tokens_in: usage.in, tokens_out: usage.out ?? 0 } : {}),
       };
       // kolom baru belum ada (migration-18 / -16 / -14 belum dijalankan) -> simpan tanpa kolom itu
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         const { error } = await supabase.from("ai_messages").insert(row);
         if (!error) break;
         if (/tokens_(in|out)/.test(error.message) && "tokens_in" in row) {
@@ -625,6 +651,7 @@ export async function POST(req: NextRequest) {
           delete row.tokens_out;
         } else if (/persona/.test(error.message) && "persona" in row) delete row.persona;
         else if (/used_data/.test(error.message) && "used_data" in row) delete row.used_data;
+        else if (/character_id/.test(error.message) && "character_id" in row) delete row.character_id;
         else break;
       }
     }

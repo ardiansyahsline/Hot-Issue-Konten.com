@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { isAiOwner } from "@/lib/aiOwner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { heroName, providerOf, SMART_HERO } from "@/lib/aiModels";
+import { isBuiltinHero } from "@/lib/aiPersona";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Usage AI · CS Tracker" };
@@ -80,7 +81,8 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
   // ---- hitung ----
   const ok = rows.filter((r) => !r.error);
   const errors = rows.length - ok.length;
-  const helped = ok.filter((r) => r.persona && r.model && r.persona !== heroName(r.model) && r.persona !== SMART_HERO).length;
+  // karakter buatan user (bukan hero bawaan) memang selalu memakai mesin lain -> tidak dihitung "dibantu"
+  const helped = ok.filter((r) => r.persona && r.model && isBuiltinHero(r.persona) && r.persona !== heroName(r.model) && r.persona !== SMART_HERO).length;
   let tin = 0;
   let tout = 0;
   let cost = 0;

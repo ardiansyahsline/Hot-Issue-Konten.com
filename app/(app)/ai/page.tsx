@@ -10,6 +10,8 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const loadMsgs = async () => {
     if (!c) return { data: [] };
+    const p0 = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona, character_id").eq("conversation_id", c).order("id");
+    if (!p0.error) return p0;
     const p = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", c).order("id");
     if (!p.error) return p;
     const r = await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", c).order("id");
