@@ -7,6 +7,8 @@ const PRESETS: Preset[] = [
   { id: "piano", icon: "🎹", name: "Piano klasik santai", desc: "Piano solo lembut, tenang", prompts: [{ text: "gentle solo classical piano, calm, Chopin nocturne style, soft dynamics", weight: 1 }], bpm: 70, density: 0.35, brightness: 0.45 },
   { id: "strings", icon: "🎻", name: "String quartet", desc: "Biola & cello hangat", prompts: [{ text: "warm classical string quartet, relaxing, baroque, legato", weight: 1 }], bpm: 76, density: 0.45, brightness: 0.5 },
   { id: "focus", icon: "🧠", name: "Fokus kerja", desc: "Ambient klasik minim drum", prompts: [{ text: "minimal ambient classical, soft piano and strings, focus music, no percussion", weight: 1 }], bpm: 72, density: 0.3, brightness: 0.4 },
+  { id: "guitar", icon: "🎸", name: "Gitar akustik", desc: "Petikan gitar akustik hangat", prompts: [{ text: "warm acoustic guitar fingerpicking, mellow, relaxing, cozy coffee shop, steel string", weight: 1 }], bpm: 78, density: 0.4, brightness: 0.5 },
+  { id: "nylon", icon: "🪕", name: "Gitar klasik (nylon)", desc: "Gitar klasik lembut, ala Spanyol", prompts: [{ text: "solo classical nylon guitar, gentle, romantic, spanish guitar, calm", weight: 1 }], bpm: 72, density: 0.35, brightness: 0.45 },
   { id: "lofi", icon: "☕", name: "Lo-fi klasik", desc: "Klasik + beat santai", prompts: [{ text: "lofi hip hop with classical piano samples, chill, mellow", weight: 1 }], bpm: 80, density: 0.5, brightness: 0.45 },
 ];
 const KEY = "cs-music";
@@ -20,6 +22,11 @@ export default function MusicButton() {
   const [err, setErr] = useState<string | null>(null);
   const [preset, setPreset] = useState(PRESETS[0].id);
   const [vol, setVol] = useState(0.6);
+  // prompt sendiri: dipadukan dengan gaya yang dipilih (prompt sendiri lebih dominan)
+  const [custom, setCustom] = useState("");
+  const [active, setActive] = useState("");
+  const [bpm, setBpm] = useState<number | null>(null);
+  const [noDrums, setNoDrums] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -33,14 +40,20 @@ export default function MusicButton() {
       const s = JSON.parse(localStorage.getItem(KEY) ?? "{}");
       if (s.preset) setPreset(s.preset);
       if (typeof s.vol === "number") setVol(s.vol);
+      if (typeof s.custom === "string") {
+        setCustom(s.custom);
+        setActive(s.custom);
+      }
+      if (typeof s.bpm === "number") setBpm(s.bpm);
+      if (s.noDrums) setNoDrums(true);
     } catch {}
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ preset, vol }));
+      localStorage.setItem(KEY, JSON.stringify({ preset, vol, custom: active, bpm, noDrums }));
     } catch {}
     if (gain.current) gain.current.gain.value = vol;
-  }, [preset, vol]);
+  }, [preset, vol, active, bpm, noDrums]);
   useEffect(() => {
     if (!open) return;
     const r = btn.current?.getBoundingClientRect();
@@ -51,7 +64,8 @@ export default function MusicButton() {
   }, [open]);
   useEffect(() => () => stopAll(), []);
 
-  const cfgOf = (p: Preset) => ({ musicGenerationConfig: { bpm: p.bpm, density: p.density, brightness: p.brightness, guidance: 4.0, temperature: 1.1 } });
+  const cfgOf = (p: Preset, b = bpm, nd = noDrums) => ({ musicGenerationConfig: { bpm: b ?? p.bpm, density: p.density, brightness: p.brightness, guidance: 4.0, temperature: 1.1, muteDrums: nd } });
+  const promptsOf = (p: Preset, c = active) => (c.trim() ? [{ text: c.trim().slice(0, 400), weight: 1.4 }, ...p.prompts.map((x) => ({ ...x, weight: 0.5 }))] : p.prompts);
 
   // potongan audio PCM 16-bit -> dijadwalkan berurutan (ada jeda penyangga ±1 detik supaya tidak putus-putus)
   const playChunk = (b64: string, mime?: string) => {
@@ -120,7 +134,7 @@ export default function MusicButton() {
         },
       })) as unknown as Session;
       session.current = s;
-      await s.setWeightedPrompts({ weightedPrompts: p.prompts });
+      await s.setWeightedPrompts({ weightedPrompts: promptsOf(p) });
       await s.setMusicGenerationConfig(cfgOf(p));
       s.play();
       setState("playing");
@@ -150,8 +164,25 @@ export default function MusicButton() {
     const s = session.current;
     if (!s) return start(p);
     // ganti gaya: prompt baru + reset supaya tempo berubah
-    await s.setWeightedPrompts({ weightedPrompts: p.prompts });
+    await s.setWeightedPrompts({ weightedPrompts: promptsOf(p) });
     await s.setMusicGenerationConfig(cfgOf(p));
+    s.resetContext?.();
+  };
+  const cur = () => PRESETS.find((x) => x.id === preset) ?? PRESETS[0];
+  /** terapkan prompt sendiri (tanpa reset: transisi halus) */
+  const applyCustom = async (text: string) => {
+    setActive(text);
+    const s = session.current;
+    if (!s) return start(cur());
+    await s.setWeightedPrompts({ weightedPrompts: promptsOf(cur(), text) });
+  };
+  /** tempo / drum berubah -> perlu reset konteks (transisi agak mendadak) */
+  const applyCfg = async (b: number | null, nd: boolean) => {
+    setBpm(b);
+    setNoDrums(nd);
+    const s = session.current;
+    if (!s) return;
+    await s.setMusicGenerationConfig(cfgOf(cur(), b, nd));
     s.resetContext?.();
   };
 
@@ -169,7 +200,7 @@ export default function MusicButton() {
         {playing ? <span className="inline-block animate-pulse">🎵</span> : "🎵"}
       </button>
       {open && (
-        <div ref={box} className="fixed z-[90] w-[300px] rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left" style={{ top: pos.top, left: pos.left, boxShadow: "var(--shadow-pop), 0 20px 40px -16px rgba(0,0,0,.4)" }}>
+        <div ref={box} className="fixed z-[90] max-h-[calc(100vh-80px)] w-[300px] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left" style={{ top: pos.top, left: pos.left, boxShadow: "var(--shadow-pop), 0 20px 40px -16px rgba(0,0,0,.4)" }}>
           <div className="flex items-center gap-2">
             <b className="text-[14px]">🎵 Musik santai</b>
             <span className="text-[11px] text-zinc-500">dibuat AI langsung, tanpa jeda</span>
@@ -190,6 +221,61 @@ export default function MusicButton() {
                 {preset === p.id && playing && <span className="ml-auto text-[11px] font-bold text-emerald-400">▶ diputar</span>}
               </button>
             ))}
+          </div>
+          <div className="mt-2.5 rounded-xl border border-zinc-800 p-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">✍️ Setir sendiri</div>
+            <textarea
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  applyCustom(custom);
+                }
+              }}
+              rows={2}
+              maxLength={400}
+              placeholder="mis. gitar akustik hujan sore, lembut · gamelan modern santai · epic orchestral"
+              className="input mt-1 resize-none py-1.5 text-[12.5px]"
+            />
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <button type="button" onClick={() => applyCustom(custom)} disabled={!custom.trim() || state === "connecting"} className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[12px] font-bold text-white disabled:opacity-50">
+                {session.current ? "Terapkan" : "▶ Putar ini"}
+              </button>
+              {active && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustom("");
+                    applyCustom("");
+                  }}
+                  className="rounded-lg border border-zinc-800 px-2.5 py-1 text-[12px] font-semibold text-zinc-400"
+                >
+                  Hapus
+                </button>
+              )}
+              {active && <span className="truncate text-[11px] text-emerald-400">aktif: “{active.slice(0, 40)}{active.length > 40 ? "…" : ""}”</span>}
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[11.5px] text-zinc-500">
+              <span className="w-[66px] shrink-0">Tempo {bpm ?? cur().bpm}</span>
+              <input
+                type="range"
+                min={60}
+                max={160}
+                step={2}
+                value={bpm ?? cur().bpm}
+                onChange={(e) => setBpm(Number(e.target.value))}
+                onMouseUp={(e) => applyCfg(Number((e.target as HTMLInputElement).value), noDrums)}
+                onTouchEnd={(e) => applyCfg(Number((e.target as HTMLInputElement).value), noDrums)}
+                className="flex-1 accent-emerald-500"
+                aria-label="Tempo (BPM)"
+              />
+              <label className="flex shrink-0 items-center gap-1">
+                <input type="checkbox" checked={noDrums} onChange={(e) => applyCfg(bpm, e.target.checked)} className="accent-emerald-500" />
+                tanpa drum
+              </label>
+            </div>
+            <p className="mt-1 text-[10.5px] text-zinc-500">Bahasa Indonesia boleh, bahasa Inggris biasanya lebih pas. Instrumental saja (tanpa vokal).</p>
           </div>
           <div className="mt-3 flex items-center gap-2">
             {playing ? (

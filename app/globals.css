@@ -297,10 +297,17 @@ html:not(.light) .mkchar-tip::before { border-right-color: #fafafa; }
 html:not(.light) body::before {
   content: "";
   position: fixed;
-  inset: 0;
+  inset: -6%;
   z-index: -2;
   pointer-events: none;
   background: url("/aurora.svg") center / cover no-repeat;
+  will-change: transform;
+  animation: stars-drift 120s ease-in-out infinite alternate;
+}
+@keyframes stars-drift {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(-4%, 2.5%, 0) rotate(0.6deg); }
+  100% { transform: translate3d(3.5%, -2.5%, 0) rotate(-0.4deg); }
 }
 html:not(.light) body::after {
   content: "";
@@ -327,4 +334,4 @@ html:not(.light) body { background-image: none; }
   75%  { transform: translate3d(6vw, 34vh, 0) rotate(-2deg) scale(.9); opacity: .65; }
   100% { transform: translate3d(-38vw, 6vh, 0) rotate(-3deg) scale(.95); opacity: .75; }
 }
-@media (prefers-reduced-motion: reduce) { html:not(.light) body::after { animation: none; transform: translate3d(-36vw, 4vh, 0); } }
+@media (prefers-reduced-motion: reduce) { html:not(.light) body::after { animation: none; transform: translate3d(-36vw, 4vh, 0); } html:not(.light) body::before { animation: none; } }
