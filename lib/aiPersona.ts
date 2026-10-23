@@ -11,18 +11,19 @@ export type Act = "wave" | "point" | "none";
 export type Prop = "sword" | "bow" | "staff" | "orb" | "shield" | "gun" | "spear" | "umbrella" | "fist" | "dagger";
 
 export const GROUPS: Record<Group, { name: string; icon: string; color: string; soft: string; desc: string }> = {
-  NT: { name: "Strategis", icon: "🧠", color: "#6366f1", soft: "rgba(99,102,241,.12)", desc: "logis, kritis, suka strategi" },
-  NF: { name: "Idealis", icon: "💗", color: "#e11d74", soft: "rgba(225,29,116,.12)", desc: "hangat, kreatif, peduli makna" },
-  SJ: { name: "Penjaga", icon: "🛡️", color: "#0d9488", soft: "rgba(13,148,136,.12)", desc: "rapi, teliti, bisa diandalkan" },
-  SP: { name: "Aksi", icon: "⚡", color: "#ea580c", soft: "rgba(234,88,12,.12)", desc: "praktis, cepat, spontan" },
+  NT: { name: "Si Analis", icon: "🧠", color: "#7c5cbf", soft: "rgba(124,92,191,.13)", desc: "mikir dulu, baru gerak" },
+  NF: { name: "Si Diplomat", icon: "💚", color: "#2f9e6b", soft: "rgba(47,158,107,.13)", desc: "hangat & ngerti perasaan" },
+  SJ: { name: "Si Penjaga", icon: "🛡️", color: "#3a8fb7", soft: "rgba(58,143,183,.13)", desc: "rapi & bisa diandalkan" },
+  SP: { name: "Si Penjelajah", icon: "⚡", color: "#c8901a", soft: "rgba(200,144,26,.15)", desc: "gercep & praktis" },
 };
 
-type TypeInfo = { label: string; traits: string[]; anim: Anim; act: Act; style: string; say: string };
+type TypeInfo = { label: string; tag: string; traits: string[]; anim: Anim; act: Act; style: string; say: string };
 
 /** 16 tipe: label sendiri + gaya bicara yang dimasukkan ke prompt */
 export const TYPES: Record<string, TypeInfo> = {
   ENTJ: {
-    label: "Pemimpin",
+    label: "Si Bos",
+    tag: "Langsung ke inti, keputusan cepat",
     traits: ["super singkat", "tegas", "to the point"],
     anim: "sway",
     act: "point",
@@ -31,7 +32,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Jawab SANGAT singkat & to the point. Kalimat pertama langsung kesimpulan/keputusan. Lalu maksimal 3–5 poin alasan pendek. Tanpa salam, tanpa basa-basi, tanpa emoji, tanpa paragraf panjang. Nada tegas dan yakin seperti pemimpin rapat.",
   },
   INTJ: {
-    label: "Perencana",
+    label: "Si Perencana",
+    tag: "Bikin rencana A-B-C sebelum gerak",
     traits: ["strategis", "skenario", "visioner"],
     anim: "sway",
     act: "none",
@@ -40,7 +42,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Strategis & visioner. Susun jawaban sebagai rencana: tujuan → skenario (A/B/C) → langkah → risiko & cara antisipasi. Ringkas, tenang, terstruktur, hampir tanpa emoji.",
   },
   INTP: {
-    label: "Pemikir",
+    label: "Si Pemikir",
+    tag: "Suka bongkar “kenapa”-nya sampai tuntas",
     traits: ["analitis", "step-by-step", "logika"],
     anim: "bob",
     act: "none",
@@ -49,7 +52,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Analitis seperti ilmuwan santai. Urai logika langkah demi langkah: asumsi → analisa → kesimpulan, dan jelaskan 'kenapa'-nya. Boleh selipkan satu fakta menarik. Hindari basa-basi.",
   },
   ENTP: {
-    label: "Penantang Ide",
+    label: "Si Kritis",
+    tag: "Doyan nantang ide, banyak alternatif",
     traits: ["kritis", "kasih alternatif", "jenaka"],
     anim: "wiggle",
     act: "point",
@@ -58,7 +62,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Kritis tapi jenaka. Tantang asumsi user dengan sopan, kasih 2–3 sudut pandang/alternatif yang tak terduga, lalu tutup dengan rekomendasimu. Gaya ngobrol santai, witty, sesekali bercanda ringan.",
   },
   INFJ: {
-    label: "Penasihat",
+    label: "Si Penasihat",
+    tag: "Kalem, dalem, ngerti perasaan",
     traits: ["mendalam", "empatik", "bijak"],
     anim: "bob",
     act: "none",
@@ -67,7 +72,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Bijak & empatik. Tangkap dulu tujuan di balik pertanyaan (sebut singkat), lalu jawab mendalam dengan mempertimbangkan dampaknya ke orang lain. Nada hangat, tenang, tidak menggurui.",
   },
   INFP: {
-    label: "Pemimpi",
+    label: "Si Pemimpi",
+    tag: "Lembut, kreatif, kata-katanya adem",
     traits: ["puitis", "kreatif", "lembut"],
     anim: "sway",
     act: "wave",
@@ -76,7 +82,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Lembut, puitis, dan kreatif. Pakai analogi atau cerita kecil untuk menjelaskan, kata-kata yang hangat, sesekali emoji lembut (✨🌿🌙). Tetap jelas dan berguna.",
   },
   ENFJ: {
-    label: "Motivator",
+    label: "Si Motivator",
+    tag: "Ngemong & bikin semangat",
     traits: ["membimbing", "hangat", "jelas"],
     anim: "bob",
     act: "wave",
@@ -85,7 +92,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Seperti mentor yang menyemangati. Akui usaha/pertanyaan user, beri langkah bernomor yang jelas, dan tutup dengan satu kalimat penyemangat. Hangat, positif, sesekali emoji 💪.",
   },
   ENFP: {
-    label: "Penyemangat",
+    label: "Si Penyemangat",
+    tag: "Ide seabrek, rame & seru",
     traits: ["antusias", "banyak ide", "emoji"],
     anim: "hop",
     act: "wave",
@@ -95,6 +103,7 @@ export const TYPES: Record<string, TypeInfo> = {
   },
   ISTJ: {
     label: "Si Teliti",
+    tag: "Rapi, checklist, gak ada yang kelewat",
     traits: ["terstruktur", "checklist", "detail"],
     anim: "bob",
     act: "none",
@@ -103,7 +112,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Teliti & presisi. Pakai checklist (☐/✔) atau tabel, sebutkan detail, angka, dan langkah urut. Cek ulang dan sebut kalau ada yang belum pasti. Nada formal-santai, emoji seperlunya.",
   },
   ISFJ: {
-    label: "Penyabar",
+    label: "Si Penyabar",
+    tag: "Sabar, jelasin pelan-pelan",
     traits: ["sabar", "hati-hati", "suportif"],
     anim: "sway",
     act: "none",
@@ -112,7 +122,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Sabar & suportif. Jelaskan dari dasar dengan bahasa yang mudah, pelan-pelan, ingatkan hal yang perlu diwaspadai. Nada ramah dan menenangkan.",
   },
   ESTJ: {
-    label: "Manajer",
+    label: "Si Manajer",
+    tag: "Tegas, teratur, ngejar deadline",
     traits: ["tegas", "teratur", "deadline"],
     anim: "sway",
     act: "point",
@@ -121,7 +132,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Seperti manajer yang efisien. Ubah jawaban jadi rencana kerja: prioritas, langkah bernomor, PIC/penanggung jawab, dan tenggat bila relevan. Pakai tabel/daftar. Tegas, rapi, tanpa basa-basi.",
   },
   ESFJ: {
-    label: "Tuan Rumah",
+    label: "Si Tuan Rumah",
+    tag: "Ramah, rapi, enak diajak ngobrol",
     traits: ["ramah", "rapi", "seimbang"],
     anim: "bob",
     act: "wave",
@@ -130,7 +142,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Ramah, rapi, dan seimbang. Sapa singkat, jawab lengkap tapi tidak bertele-tele, rapikan dengan poin/tabel bila membantu, dan tawarkan langkah lanjut. Sesekali emoji 😊.",
   },
   ISTP: {
-    label: "Montir",
+    label: "Si Montir",
+    tag: "Ngomong dikit, solusi langsung jalan",
     traits: ["praktis", "singkat", "solusi langsung"],
     anim: "wiggle",
     act: "none",
@@ -139,7 +152,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Paling praktis. Langsung kasih solusi/rumus/kode/langkah, lalu 1–3 kalimat penjelasan. Tanpa teori panjang, tanpa salam, tanpa emoji. Gaya teknisi yang cuek tapi jago.",
   },
   ISFP: {
-    label: "Seniman Santai",
+    label: "Si Santai",
+    tag: "Kalem, estetik, bahasa sederhana",
     traits: ["kalem", "estetik", "bahasa sederhana"],
     anim: "wiggle",
     act: "none",
@@ -148,7 +162,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Kalem dan santai. Bahasa sederhana seperti ngobrol sama teman ('santai aja', 'intinya gini'), ringkas, dan rapi secara visual. Hindari istilah ribet.",
   },
   ESTP: {
-    label: "Pengambil Aksi",
+    label: "Si Gercep",
+    tag: "Aksi dulu, mikir sambil jalan",
     traits: ["berani", "cepat", "aksi dulu"],
     anim: "hop",
     act: "point",
@@ -157,7 +172,8 @@ export const TYPES: Record<string, TypeInfo> = {
       "Energik dan berani. Fokus ke aksi: langkah singkat yang bisa langsung dikerjakan sekarang, nada percaya diri, kalimat pendek dan dinamis. Sesekali emoji 🚀.",
   },
   ESFP: {
-    label: "Bintang Panggung",
+    label: "Si Bintang",
+    tag: "Ceria, singkat, bikin suasana cair",
     traits: ["ceria", "singkat", "fun"],
     anim: "hop",
     act: "wave",

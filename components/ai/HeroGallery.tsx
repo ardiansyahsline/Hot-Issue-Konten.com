@@ -86,6 +86,68 @@ export default function HeroGallery({
     });
   }, [chars, group, q]);
 
+  const card = (o: Opt) => {
+            const p = personaOf(o.hero);
+            const g = GROUPS[p.group];
+            const active = value === o.model || (o.model === SMART && value === SMART);
+            const auto = o.model === SMART;
+            return (
+              <div key={o.hero} className={`flex flex-col gap-2 rounded-2xl border p-3 transition hover:-translate-y-0.5 ${active ? "border-orange-500/60" : "border-zinc-800"} `}>
+                <div className="flex h-[116px] items-end justify-center rounded-xl" style={{ background: `linear-gradient(180deg, ${g.soft}, transparent)` }}>
+                  <HeroArt hero={o.hero} size={108} title={`${o.hero}, ${p.type} ${p.label}`} />
+                </div>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[15px] font-bold">
+                      {o.hero}
+                      {auto && <span className="ml-1 text-[11px] font-semibold text-orange-400">· otomatis</span>}
+                    </div>
+                    <div className="text-[11px] font-semibold text-zinc-500">
+                      {p.role || "Hero"}
+                      {o.vision && <span className="ml-1.5 text-sky-400">👁 bisa lihat gambar</span>}
+                    </div>
+                  </div>
+                  {!auto && owner && (
+                    <span
+                      className={`shrink-0 text-right text-[10.5px] font-semibold ${checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "text-emerald-400" : "text-amber-400") : (STATUS[o.status]?.cls ?? "")}`}
+                      title={checkOf(o.hero) ? (checkOf(o.hero)!.ok ? STATUS_TIP[0] : `${STATUS_TIP[2]}\n\nAlasan: ${checkOf(o.hero)!.reason ?? "-"}`) : STATUS_TIP[o.status]}
+                    >
+                      {checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "✅ Lulus cek" : "↪ Pakai mesin cadangan") : STATUS[o.status]?.text}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <div className="font-display text-[17px] font-extrabold leading-tight" style={{ color: g.color }}>
+                    {p.label}
+                  </div>
+                  <div className="text-[12px] text-zinc-400">
+                    {p.tag} <span className="text-zinc-500">· {p.type}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {p.traits.map((t) => (
+                    <span key={t} className="rounded-full bg-zinc-800/70 px-2 py-0.5 text-[10.5px] font-semibold text-zinc-400">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+                <p className="rounded-xl border border-dashed border-zinc-800 px-2.5 py-2 text-[12px] leading-snug text-zinc-300">
+                  {auto ? "Aku pilihkan hero terbaik untuk tiap pertanyaan — gaya jawabnya ikut hero yang kupilih." : `“${p.say}”`}
+                </p>
+                <p className="text-[11px] leading-snug text-zinc-500">{auto ? heroDesc(SMART) : heroDesc(o.model)}</p>
+                <button
+                  type="button"
+                  onClick={() => onPick(o.model)}
+                  disabled={active}
+                  className="mt-auto rounded-xl px-3 py-2 text-[12.5px] font-bold text-white transition disabled:opacity-60"
+                  style={{ background: active ? "#a1a1aa" : "#f97316" }}
+                >
+                  {active ? "Sedang dipakai" : `Ngobrol sama ${o.hero}`}
+                </button>
+              </div>
+            );
+  };
+
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4">
       <div className="mx-auto max-w-[1000px]">
@@ -171,9 +233,14 @@ export default function HeroGallery({
                   <div className="text-[15px] font-bold">{c.name}</div>
                   <div className="line-clamp-1 text-[11px] font-semibold text-zinc-500">{c.profile.role || "Karakter buatanmu"}</div>
                 </div>
-                <span className="w-fit rounded-full px-2.5 py-0.5 text-[11.5px] font-bold" style={{ background: g.soft, color: g.color }}>
-                  {g.icon} {p.type} · {p.label}
-                </span>
+                <div>
+                  <div className="font-display text-[17px] font-extrabold leading-tight" style={{ color: g.color }}>
+                    {p.label}
+                  </div>
+                  <div className="text-[12px] text-zinc-400">
+                    {p.tag} <span className="text-zinc-500">· {p.type}</span>
+                  </div>
+                </div>
                 {c.profile.catchphrase && (
                   <p className="rounded-xl border border-dashed border-zinc-800 px-2.5 py-2 text-[12px] leading-snug text-zinc-300">“{c.profile.catchphrase}”</p>
                 )}
@@ -214,63 +281,26 @@ export default function HeroGallery({
               </div>
             );
           })}
-          {list.map((o) => {
-            const p = personaOf(o.hero);
-            const g = GROUPS[p.group];
-            const active = value === o.model || (o.model === SMART && value === SMART);
-            const auto = o.model === SMART;
-            return (
-              <div key={o.hero} className={`flex flex-col gap-2 rounded-2xl border p-3 transition hover:-translate-y-0.5 ${active ? "border-orange-500/60" : "border-zinc-800"} `}>
-                <div className="flex h-[116px] items-end justify-center rounded-xl" style={{ background: `linear-gradient(180deg, ${g.soft}, transparent)` }}>
-                  <HeroArt hero={o.hero} size={108} title={`${o.hero}, ${p.type} ${p.label}`} />
-                </div>
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-[15px] font-bold">
-                      {o.hero}
-                      {auto && <span className="ml-1 text-[11px] font-semibold text-orange-400">· otomatis</span>}
-                    </div>
-                    <div className="text-[11px] font-semibold text-zinc-500">
-                      {p.role || "Hero"}
-                      {o.vision && <span className="ml-1.5 text-sky-400">👁 bisa lihat gambar</span>}
-                    </div>
-                  </div>
-                  {!auto && owner && (
-                    <span
-                      className={`shrink-0 text-right text-[10.5px] font-semibold ${checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "text-emerald-400" : "text-amber-400") : (STATUS[o.status]?.cls ?? "")}`}
-                      title={checkOf(o.hero) ? (checkOf(o.hero)!.ok ? STATUS_TIP[0] : `${STATUS_TIP[2]}\n\nAlasan: ${checkOf(o.hero)!.reason ?? "-"}`) : STATUS_TIP[o.status]}
-                    >
-                      {checkOf(o.hero) ? (checkOf(o.hero)!.ok ? "✅ Lulus cek" : "↪ Pakai mesin cadangan") : STATUS[o.status]?.text}
-                    </span>
-                  )}
-                </div>
-                <span className="w-fit rounded-full px-2.5 py-0.5 text-[11.5px] font-bold" style={{ background: g.soft, color: g.color }}>
-                  {g.icon} {p.type} · {p.label}
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {p.traits.map((t) => (
-                    <span key={t} className="rounded-full bg-zinc-800/70 px-2 py-0.5 text-[10.5px] font-semibold text-zinc-400">
-                      {t}
-                    </span>
-                  ))}
-                </div>
-                <p className="rounded-xl border border-dashed border-zinc-800 px-2.5 py-2 text-[12px] leading-snug text-zinc-300">
-                  {auto ? "Aku pilihkan hero terbaik untuk tiap pertanyaan — gaya jawabnya ikut hero yang kupilih." : `“${p.say}”`}
-                </p>
-                <p className="text-[11px] leading-snug text-zinc-500">{auto ? heroDesc(SMART) : heroDesc(o.model)}</p>
-                <button
-                  type="button"
-                  onClick={() => onPick(o.model)}
-                  disabled={active}
-                  className="mt-auto rounded-xl px-3 py-2 text-[12.5px] font-bold text-white transition disabled:opacity-60"
-                  style={{ background: active ? "#a1a1aa" : "#f97316" }}
-                >
-                  {active ? "Sedang dipakai" : `Ngobrol sama ${o.hero}`}
-                </button>
-              </div>
-            );
-          })}
+          {list.filter((o) => o.model === SMART).map(card)}
         </div>
+        {(Object.keys(GROUPS) as Group[]).map((gk) => {
+          const items = list.filter((o) => o.model !== SMART && personaOf(o.hero).group === gk);
+          if (!items.length) return null;
+          const G = GROUPS[gk];
+          return (
+            <section key={gk} className="mt-6">
+              <div className="flex items-baseline gap-2 rounded-xl px-3 py-2" style={{ background: G.soft }}>
+                <span className="font-display text-[16px] font-extrabold" style={{ color: G.color }}>
+                  {G.icon} {G.name}
+                </span>
+                <span className="text-[12px] font-medium" style={{ color: G.color, opacity: 0.85 }}>
+                  {G.desc}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{items.map(card)}</div>
+            </section>
+          );
+        })}
         {!list.length && !mine.length && <p className="mt-6 text-center text-[13px] text-zinc-500">Tidak ada hero yang cocok.</p>}
       </div>
     </div>

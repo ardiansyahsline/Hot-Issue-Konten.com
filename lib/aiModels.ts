@@ -52,7 +52,16 @@ export function heavyModelFrom(ids: string[]): string | null {
 }
 export const isHeavyModel = (id: string | null | undefined) => !!id && /sonnet/i.test(id);
 
-export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id) && !PRICEY(id);
+/**
+ * Provider yang dipakai website (default: Groq, Gemini, Claude "anth"). Mistral & provider lain dilewati supaya
+ * tidak membuang waktu mencoba model yang tidak tersambung. Bisa diubah lewat env AI_PROVIDERS (pisahkan koma).
+ */
+const ALLOWED = (process.env.AI_PROVIDERS ?? process.env.NEXT_PUBLIC_AI_PROVIDERS ?? "groq,gemini,anth")
+  .split(",")
+  .map((x) => x.trim().toLowerCase())
+  .filter(Boolean);
+const allowedProvider = (id: string) => ALLOWED.includes("*") || (id.includes("/") && ALLOWED.includes(id.split("/")[0].toLowerCase()));
+export const isChatModel = (id: string) => !!id && !HIDE.test(id) && !AGENT.test(id) && !blockedProvider(id) && !PRICEY(id) && !/mistral/i.test(id) && allowedProvider(id);
 let visionSet: Set<string> | null = null;
 /** daftar model yang menurut katalog OmniRoute bisa membaca gambar (lebih akurat dari tebakan nama) */
 export function setVisionCatalog(ids: string[] | null) {

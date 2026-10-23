@@ -16,7 +16,7 @@ import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
-import { personaOf, registerCustom } from "@/lib/aiPersona";
+import { GROUPS, personaOf, registerCustom, type Group as PGroup } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
 import CharacterWizard from "./CharacterWizard";
 import CharacterBrain from "./CharacterBrain";
@@ -178,36 +178,42 @@ function ModelPicker({
     setOpen(false);
     setQ("");
   };
-  const Row = ({ o }: { o: HeroOpt }) => (
-    <button
-      type="button"
-      onClick={() => pick(o.model)}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${current === o.hero && value !== SMART ? "bg-orange-500/10" : "hover:bg-zinc-800"} `}
-    >
-      <HeroAvatar hero={o.hero} />
-      <span className="min-w-0 flex-1">
-        <span className={`block text-[13px] font-semibold ${current === o.hero && value !== SMART ? "text-orange-400" : "text-zinc-200"}`}>
-          {o.hero}
-          {heroRole(o.hero) && <span className="ml-1.5 text-[10.5px] font-medium text-zinc-500">{heroRole(o.hero)}</span>}
+  const STATUS_DOT = ["#22c55e", "#a1a1aa", "#f59e0b"];
+  const Row = ({ o }: { o: HeroOpt }) => {
+    const p = personaOf(o.hero);
+    const g = GROUPS[p.group];
+    const on = current === o.hero && value !== SMART;
+    return (
+      <button
+        type="button"
+        onClick={() => pick(o.model)}
+        title={`${o.hero} · ${p.type} ${p.label} — ${heroDesc(o.model)}`}
+        className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left ${on ? "bg-orange-500/10" : "hover:bg-zinc-800"}`}
+      >
+        <span className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-[10px] border" style={{ background: g.soft, borderColor: `${g.color}55` }} aria-hidden>
+          <HeroArt hero={o.hero} size={36} still />
         </span>
-        <span className="block text-[11.5px] leading-snug text-zinc-400">{heroDesc(o.model)}</span>
-      </span>
-      {o.vision && (
-        <span className="shrink-0 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400" title="Bisa lihat gambar">
-          👁
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className={`text-[13px] font-semibold ${on ? "text-orange-400" : "text-zinc-200"}`}>{o.hero}</span>
+            <span className="rounded-full px-1.5 py-px text-[10.5px] font-bold" style={{ background: g.soft, color: g.color }}>
+              {p.label}
+            </span>
+          </span>
+          <span className="block truncate text-[11.5px] leading-snug text-zinc-400">{p.tag}</span>
         </span>
-      )}
-    </button>
-  );
-  const Group = ({ title, list }: { title: string; list: HeroOpt[] }) =>
-    list.length ? (
-      <div>
-        <div className="px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">{title}</div>
-        {list.map((o) => (
-          <Row key={o.hero} o={o} />
-        ))}
-      </div>
-    ) : null;
+        {owner && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: STATUS_DOT[o.status] ?? STATUS_DOT[1] }} title={["mesin siap", "belum dicoba", "pakai mesin cadangan"][o.status]} />}
+        {o.vision && (
+          <span className="shrink-0 text-[11px] opacity-60" title="Bisa lihat gambar">
+            👁
+          </span>
+        )}
+      </button>
+    );
+  };
+  const byGroup = (Object.keys(GROUPS) as PGroup[])
+    .map((g) => ({ g, list: opts.filter((o) => match(o) && personaOf(o.hero).group === g).sort((a, b) => a.hero.localeCompare(b.hero)) }))
+    .filter((x) => x.list.length);
 
   return (
     <div ref={ref} className="relative">
@@ -281,16 +287,16 @@ function ModelPicker({
                 })}
               </div>
             )}
-            <Group title={owner ? "Siap dipakai" : "Hero"} list={ready0} />
-            <Group title="Belum dicoba" list={untried} />
-            {off.length > 0 && (
-              <div>
-                <button type="button" onClick={() => setShowOff((v) => !v)} className="w-full px-2 pb-1 pt-2 text-left text-[11.5px] font-semibold text-zinc-500 hover:text-zinc-300">
-                  {showOff ? "▾" : "▸"} {off.length} hero pakai mesin cadangan (karakter tetap)
-                </button>
-                {showOff && off.map((o) => <Row key={o.hero} o={o} />)}
+            {byGroup.map(({ g, list }) => (
+              <div key={g}>
+                <div className="mx-1 mb-1 mt-2 rounded-lg px-2 py-1 text-[10.5px] font-extrabold uppercase tracking-wider" style={{ background: GROUPS[g].soft, color: GROUPS[g].color }}>
+                  {GROUPS[g].icon} {GROUPS[g].name} <span className="font-medium normal-case tracking-normal opacity-80">· {GROUPS[g].desc}</span>
+                </div>
+                {list.map((o) => (
+                  <Row key={o.hero} o={o} />
+                ))}
               </div>
-            )}
+            ))}
             {!ready && <p className="px-2.5 py-2 text-[12px] text-zinc-500">Server AI belum tersambung.</p>}
             {ready && !opts.length && (
               <p className="px-2.5 py-2 text-[12px] text-zinc-500">
@@ -489,7 +495,7 @@ export default function AiChat({
     try {
       const sc = await scanFolder(root);
       setFolder(sc);
-      flash(`📁 ${root.name} terhubung · ${sc.files.length.toLocaleString("id-ID")} file`);
+      flash(`💼 Cowork: ${root.name} terhubung · ${sc.files.length.toLocaleString("id-ID")} file`);
     } catch (e) {
       setErr(`Folder gagal dibaca: ${(e as Error).message}`);
     } finally {
@@ -931,36 +937,6 @@ export default function AiChat({
         >
           📊 Data CS Tracker: {dataMode === "auto" ? "Otomatis" : "Off"}
         </button>
-        {canFolder && (
-          <span className="flex items-center">
-            <button
-              type="button"
-              onClick={folder ? rescanFolder : connectFolder}
-              disabled={folderBusy || !!setupError}
-              className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
-                folder ? "rounded-r-none border-violet-500/40 bg-violet-500/10 text-violet-400" : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
-              }`}
-              title={
-                folder
-                  ? `Folder "${folder.root.name}" terhubung (${folder.files.length} file). AI bisa merapikan, ganti nama, cari duplikat, baca isi file & bikin laporan PPT. Semua perubahan kamu tinjau dulu sebelum dijalankan. Klik untuk pindai ulang.`
-                  : "Hubungkan folder di laptop (Chrome / Edge). AI bisa merapikan file, ganti nama massal, cari duplikat, membaca isi file & bikin laporan PPT."
-              }
-            >
-              {folderBusy ? "📁 Membaca folder…" : folder ? `📁 ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")}` : "📁 Folder laptop"}
-            </button>
-            {folder && (
-              <button
-                type="button"
-                onClick={() => setFolder(null)}
-                className="rounded-full rounded-l-none border border-l-0 border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[12px] font-semibold text-violet-400 hover:text-red-400"
-                aria-label="Putuskan folder"
-                title="Putuskan folder"
-              >
-                ✕
-              </button>
-            )}
-          </span>
-        )}
         {webReady && (
           <button
             type="button"
@@ -1023,17 +999,41 @@ export default function AiChat({
             ☰
           </button>
           <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
-            {(["chat", "chars"] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={`rounded-full px-2.5 py-1 ${view === v ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`}
-                aria-pressed={view === v}
-              >
-                {v === "chat" ? "💬 Chat" : "🎭 Karakter"}
-              </button>
-            ))}
+            <button type="button" onClick={() => setView("chat")} className={`rounded-full px-2.5 py-1 ${view === "chat" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat"}>
+              💬 Chat
+            </button>
+            {canFolder && (
+              <span className="group relative flex items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView("chat");
+                    if (folder) rescanFolder();
+                    else connectFolder();
+                  }}
+                  disabled={folderBusy || !!setupError}
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 ${folder ? "bg-violet-500/15 text-violet-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                  aria-label="Cowork: AI kerja langsung di folder laptop kamu"
+                >
+                  {folderBusy ? "⏳" : "💼"}
+                  <span className="max-w-[110px] truncate">{folder ? folder.root.name : "Cowork"}</span>
+                </button>
+                {folder && (
+                  <button type="button" onClick={() => setFolder(null)} className="-ml-1 rounded-full px-1.5 py-1 text-violet-400 hover:text-red-400" aria-label="Putuskan folder" title="Putuskan folder">
+                    ✕
+                  </button>
+                )}
+                <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-[230px] -translate-x-1/2 rounded-xl bg-zinc-100 px-3 py-2 text-[11.5px] font-medium leading-snug text-zinc-900 shadow-lg group-hover:block">
+                  <b>💼 Cowork</b> — AI bantu kerja langsung di folder laptop kamu: rapihin file, ganti nama, cari duplikat, baca Excel/CSV & bikin laporan PPT.
+                  <span className="mt-1 block text-zinc-500">
+                    {folder ? `Terhubung: ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")} file. Klik untuk baca ulang.` : "Klik untuk pilih folder (Chrome / Edge di laptop)."}
+                  </span>
+                </span>
+              </span>
+            )}
+            <button type="button" onClick={() => setView("chars")} className={`rounded-full px-2.5 py-1 ${view === "chars" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chars"}>
+              🎭 Karakter
+            </button>
           </span>
           <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
             <span className="mkchar-shine" aria-hidden />
