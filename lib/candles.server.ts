@@ -1,4 +1,5 @@
 import "server-only";
+import { detectPatterns } from "./chartPatterns";
 import { stockCandles, stockCode } from "./stockData.server";
 
 /**
@@ -171,6 +172,25 @@ export function summarizeCandles(label: string, body: CandleBody, tf: TF, levels
     `- ${Math.min(16, c.length)} candle ${L} terakhir (${intraday ? "tanggal jam WIB" : "tanggal"}: open/high/low/close):`,
     ...c.slice(-16).map((x) => `  ${wibTime(x.time, intraday)}: ${px(x.open)}/${px(x.high)}/${px(x.low)}/${px(x.close)}`),
     levels,
+    ...patternLines(all, intraday, px, L),
     `Analisa struktur, pola & trade plan pakai candle ${L} ini (bukan menebak). Untuk "pattern" salin waktu candle persis seperti tertulis di atas (${intraday ? '"YYYY-MM-DD HH:mm" WIB' : '"YYYY-MM-DD"'}).`,
   ].filter(Boolean);
+}
+
+/** hasil deteksi chart pattern otomatis (lib/chartPatterns) untuk AI: nama, arah, dan garisnya (siap disalin ke "pattern") */
+function patternLines(all: Candle[], intraday: boolean, px: (n: number) => string, L: string): string[] {
+  const pats = detectPatterns(all);
+  if (!pats.length) return [`POLA CHART OTOMATIS (candle ${L}): tidak ada pola klasik yang jelas — bilang jujur, jangan memaksakan pola.`];
+  const q = (t: number) => `"${wibTime(t, intraday)}"`;
+  const pt = ([t, p]: [number, number]) => `[${q(t)},${Number(p.toPrecision(8))}]`;
+  return [
+    `POLA CHART TERDETEKSI OTOMATIS (algoritma, candle ${L}; urut dari paling meyakinkan):`,
+    ...pats.map(
+      (p, i) =>
+        `${i + 1}) ${p.name} — ${p.bias} — ${p.note}. lines: [${p.lines.map((ln) => `[${ln.map(pt).join(",")}]`).join(",")}] · titik penting: ${p.points
+          .slice(-5)
+          .map(([t, v]) => `${wibTime(t, intraday)} ${px(v)}`)
+          .join("; ")}`
+    ),
+  ];
 }

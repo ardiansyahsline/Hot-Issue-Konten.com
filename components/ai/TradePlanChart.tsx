@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { decimalsFor, fmtPrice, pctFrom, rescalePlan, rr, type TradePlan } from "@/lib/tradePlan";
 import TradingChart from "./TradingChart";
 import { autoLevels } from "@/lib/chartLevels";
+import { detectPatterns } from "@/lib/chartPatterns";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
 
@@ -85,6 +86,29 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
   const [showLines, setShowLines] = useState(true);
   const srLevels = useMemo(() => (candles?.length ? autoLevels(candles) : []), [candles]);
   const patternPts = useMemo(() => snapPattern(plan.pattern?.points, candles), [plan.pattern, candles]);
+  // pola yang digambar: garis/titik dari AI kalau cocok dengan candle; kalau tidak ada -> deteksi otomatis
+  // (mirip indikator Auto Chart Patterns) dari candle timeframe yang sedang dibuka
+  const patternView = useMemo(() => {
+    if (!candles?.length) return null;
+    const step = Math.max(60, candles.length > 1 ? candles[candles.length - 1].time - candles[candles.length - 2].time : 86400);
+    const tA = candles[0].time - step;
+    const tZ = candles[candles.length - 1].time + step;
+    const lo = Math.min(...candles.map((c) => c.low)) * 0.8;
+    const hi = Math.max(...candles.map((c) => c.high)) * 1.2;
+    const snapT = (t: number) => candles.reduce((b, c) => (Math.abs(c.time - t) < Math.abs(b - t) ? c.time : b), candles[0].time);
+    const conv = (ln: [number, number][]) => {
+      if (ln.length !== 2 || ln.some(([t, v]) => t < tA || t > tZ || v < lo || v > hi)) return null;
+      const a = ln.map(([t, v]) => ({ time: snapT(t), value: v }));
+      return a[0].time < a[1].time ? a : null;
+    };
+    const ok = <T,>(x: T | null): x is T => x !== null;
+    const ai = plan.pattern;
+    const aiLines = (ai?.lines ?? []).map(conv).filter(ok);
+    if (ai && (aiLines.length || patternPts)) return { name: ai.name, auto: false, dots: patternPts ?? [], lines: aiLines };
+    const det = detectPatterns(candles)[0];
+    if (!det) return null;
+    return { name: det.name, auto: true, dots: det.points.slice(-6).map(([t, v]) => ({ time: t, value: v })), lines: det.lines.map(conv).filter(ok) };
+  }, [plan.pattern, candles, patternPts]);
 
   useEffect(() => {
     let off = false;
@@ -165,8 +189,9 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       const lvShown = showLines ? srLevels : [];
       for (const l of lvShown)
         series.createPriceLine({ price: l.price, color: l.kind === "resistance" ? PURPLE : TEAL, lineWidth: 1, lineStyle: 3, axisLabelVisible: false, title: "" });
-      const pat = showLines && patternPts ? patternPts : null;
-      if (pat) {
+      const pv = showLines ? patternView : null;
+      const pat = pv ? (pv.dots.length ? pv.dots : pv.lines.map((l) => l[0])) : null;
+      const lineOf = (pts: { time: number; value: number }[]) => {
         const ln = chart.addSeries(LC.LineSeries, {
           color: ORANGE,
           lineWidth: 2,
@@ -175,7 +200,12 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           crosshairMarkerVisible: false,
           autoscaleInfoProvider: () => null,
         });
-        ln.setData(pat.map((x) => ({ time: x.time as import("lightweight-charts").UTCTimestamp, value: x.value })));
+        ln.setData(pts.map((x) => ({ time: x.time as import("lightweight-charts").UTCTimestamp, value: x.value })));
+      };
+      // garis pola (atas & bawah wedge/triangle/channel, neckline …); pola dari AI tanpa garis -> sambungkan titiknya
+      if (pv) {
+        if (pv.lines.length) pv.lines.forEach(lineOf);
+        else if (pv.dots.length >= 2) lineOf(pv.dots);
       }
 
       // kotak posisi di kanan candle terakhir
@@ -208,13 +238,13 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         t.textContent = `${l.name} ${fmtPrice(l.price, d)}${l.touches >= 2 ? ` · ${l.touches}x` : ""}`;
         return t;
       });
-      const patDots = (pat ?? []).map(() => {
+      const patDots = (pv?.dots ?? []).map(() => {
         const z = mk("#fff");
         z.style.cssText += `;width:9px;height:9px;border-radius:50%;border:2px solid ${ORANGE};z-index:4`;
         return z;
       });
       const patTag = pat ? lbl(ORANGE) : null;
-      if (patTag) patTag.textContent = `Pola: ${plan.pattern?.name ?? ""}`;
+      if (patTag) patTag.textContent = `Pola: ${pv?.name ?? ""}${pv?.auto ? " (otomatis)" : ""}`;
       let alive = true;
       let prevKey = "";
       /**
@@ -250,6 +280,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         // titik pola + nama pola di atas titik pertama
         patXY.forEach(([px, py], i) => {
           const dot = patDots[i];
+          if (!dot) return;
           if (px == null || py == null) return void (dot.style.display = "none");
           Object.assign(dot.style, { display: "block", left: `${px - 4.5}px`, top: `${py - 4.5}px` });
         });
@@ -309,7 +340,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
       cancelled = true;
       dispose();
     };
-  }, [candles, live, plan, d, short, last, meta.interval, mismatch, showLines, srLevels, patternPts]);
+  }, [candles, live, plan, d, short, last, meta.interval, mismatch, showLines, srLevels, patternView]);
 
   const head = (
     <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-3 py-2 text-[12.5px]">
@@ -349,7 +380,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           </button>
         );
       })}
-      {!!candles?.length && !mismatch && (srLevels.length > 0 || !!patternPts) && (
+      {!!candles?.length && !mismatch && (srLevels.length > 0 || !!patternView) && (
         <button
           type="button"
           onClick={() => setShowLines((v) => !v)}
@@ -364,7 +395,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
           type="button"
           onClick={() => fitRef.current?.()}
           title="Kembalikan tampilan ke trade plan"
-          className={`${srLevels.length || patternPts ? "" : "ml-auto "}shrink-0 rounded-md px-2 py-0.5 font-semibold text-zinc-400 hover:bg-zinc-800`}
+          className={`${srLevels.length || patternView ? "" : "ml-auto "}shrink-0 rounded-md px-2 py-0.5 font-semibold text-zinc-400 hover:bg-zinc-800`}
         >
           🎯 Fokus plan
         </button>
@@ -436,7 +467,7 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
         </>
       )}
       {levels}
-      {showLines && !live && !mismatch && !!candles?.length && (srLevels.length > 0 || !!patternPts) && (
+      {showLines && !live && !mismatch && !!candles?.length && (srLevels.length > 0 || !!patternView) && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-2 text-[11.5px] text-zinc-500">
           <span>📏</span>
           {srLevels.some((l) => l.kind === "support") && (
@@ -457,9 +488,10 @@ function TradePlanChart({ symbol, plan: planIn, persona }: { symbol: string; pla
                 .join(" · ")}
             </span>
           )}
-          {patternPts && (
+          {patternView && (
             <span>
-              <b className="text-orange-600">Pola</b> {plan.pattern?.name}
+              <b className="text-orange-600">Pola</b> {patternView.name}
+              {patternView.auto && <span className="text-zinc-600"> (deteksi otomatis)</span>}
             </span>
           )}
           <span className="text-zinc-600">· S/R dihitung otomatis dari candle {meta.interval ?? ""}</span>

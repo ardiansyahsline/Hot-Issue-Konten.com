@@ -1,6 +1,6 @@
 /** Trade plan yang ditulis AI di akhir jawaban sebagai blok ```tradeplan {json}``` */
-/** pola chart dari AI: nama + titik [waktu unix detik, harga] */
-export type Pattern = { name: string; points: [number, number][] };
+/** pola chart dari AI: nama + titik [waktu unix detik, harga] dan/atau garis pola (tiap garis 2 titik, mis. atas & bawah wedge) */
+export type Pattern = { name: string; points: [number, number][]; lines?: [number, number][][] };
 export type TradePlan = { symbol?: string; side: "long" | "short"; entry: number; sl: number; tp: number[]; timeframe?: string; pattern?: Pattern };
 
 /** "2026-10-02" / "2026-10-02 14:00" / unix (detik/milidetik) -> unix detik */
@@ -12,19 +12,25 @@ const toTime = (v: unknown): number => {
   // tanggal saja = candle harian (00:00 UTC); tanggal + jam = waktu WIB dari data candle intraday
   return Math.floor(Date.parse(m[2] ? `${m[1]}T${m[2]}:00+07:00` : `${m[1]}T00:00:00Z`) / 1000);
 };
-function parsePattern(v: unknown): Pattern | undefined {
-  if (!v || typeof v !== "object") return undefined;
-  const o = v as { name?: unknown; points?: unknown };
-  const pts = (Array.isArray(o.points) ? o.points : [])
+const toPts = (arr: unknown, max: number): [number, number][] =>
+  (Array.isArray(arr) ? arr : [])
     .map((x): [number, number] => {
       const a = Array.isArray(x) ? x : [(x as { date?: unknown; time?: unknown })?.date ?? (x as { time?: unknown })?.time, (x as { price?: unknown })?.price];
       return [toTime(a[0]), num(a[1])];
     })
     .filter(([t, p]) => Number.isFinite(t) && !Number.isNaN(p))
     .sort((a, b) => a[0] - b[0])
-    .slice(0, 6);
-  if (pts.length < 2) return undefined;
-  return { name: String(o.name ?? "Pola").slice(0, 40), points: pts };
+    .slice(0, max);
+function parsePattern(v: unknown): Pattern | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as { name?: unknown; points?: unknown; lines?: unknown };
+  const pts = toPts(o.points, 6);
+  const lines = (Array.isArray(o.lines) ? o.lines : [])
+    .map((ln) => toPts(ln, 2))
+    .filter((ln) => ln.length === 2 && ln[0][0] < ln[1][0])
+    .slice(0, 3);
+  if (pts.length < 2 && !lines.length) return undefined;
+  return { name: String(o.name ?? "Pola").slice(0, 40), points: pts.length >= 2 ? pts : [], ...(lines.length ? { lines } : {}) };
 }
 
 const DONE = /```tradeplan\s*([\s\S]*?)```\s*/i;
@@ -95,6 +101,8 @@ export function rescalePlan(p: TradePlan, ref?: number, idx = false): TradePlan 
     entry: r(p.entry),
     sl: r(p.sl),
     tp: p.tp.map(r),
-    pattern: p.pattern ? { ...p.pattern, points: p.pattern.points.map(([t, v]): [number, number] => [t, r(v)]) } : undefined,
+    pattern: p.pattern
+      ? { ...p.pattern, points: p.pattern.points.map(([t, v]): [number, number] => [t, r(v)]), lines: p.pattern.lines?.map((ln) => ln.map(([t, v]): [number, number] => [t, r(v)])) }
+      : undefined,
   };
 }
