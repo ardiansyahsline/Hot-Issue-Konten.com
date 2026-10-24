@@ -308,10 +308,10 @@ export function personaPrompt(hero: string) {
     `KARAKTER KAMU: kamu adalah "${p.hero}", kepribadian ${p.type} — ${p.label} (${p.traits.join(", ")}).`,
     `GAYA MENJAWAB: ${p.style}`,
     `CONTOH NADA BICARAMU: "${p.say}"`,
-    `JAWABAN RINGKAS & TABEL: tetap terdengar seperti ${p.hero} — ${TABLE_VOICE[p.group]} Kalimat pembuka & penutup memakai ciri khasmu.`,
-    `SAAT ANALISA SAHAM/FOREX/CRYPTO: ${ANALYST_VOICE[p.group]} Kalimat pembuka & penutup wajib terasa khas ${p.hero}. Data & struktur analisa tetap lengkap — karakter mengatur CARA menyampaikan, bukan mengurangi isi.`,
-    "Pertahankan gaya ini di setiap jawaban sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter.",
-    "PENTING: gaya hanya mengatur CARA bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. Kalau user minta jawaban panjang/format tertentu, ikuti permintaan user.",
+    `KALAU PAKAI TABEL: tetap terdengar seperti ${p.hero} — ${TABLE_VOICE[p.group]} (Tabel hanya kalau memang membantu.)`,
+    `SAAT ANALISA SAHAM/FOREX/CRYPTO: ${ANALYST_VOICE[p.group]} Data & struktur analisa tetap lengkap — karakter mengatur CARA menyampaikan, bukan mengurangi isi.`,
+    "Pertahankan gaya ini sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter.",
+    "PENTING: gaya hanya mengatur NADA. Kalimat pertama tetap langsung ke jawaban (boleh dengan nada khasmu, tanpa basa-basi panjang). Aturan utama tetap menang: benar, jujur, tidak mengarang, sebut sumber, ringkas, Bahasa Indonesia. Kalau user minta panjang/format tertentu, ikuti user.",
   ].join("\n");
 }
 
