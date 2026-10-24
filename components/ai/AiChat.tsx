@@ -14,6 +14,8 @@ import ThinkingSteps from "./ThinkingSteps";
 import { tidyAnswer } from "@/lib/aiText";
 import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
+import ChoiceCard from "./ChoiceCard";
+import { splitChoice } from "@/lib/choiceCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
 import { GROUPS, personaOf, registerCustom, type Group as PGroup } from "@/lib/aiPersona";
@@ -652,7 +654,9 @@ export default function AiChat({
       // folder laptop: pindai ulang (selalu terbaru) + baca isi file kalau pertanyaannya butuh
       let folderBody: { name: string; listing: string; contents: string } | null = null;
       if (folder) {
-        const ask = content || [...msgs].reverse().find((x) => x.role === "user")?.content || "";
+        const prevAsk = [...msgs].reverse().find((x) => x.role === "user" && !x.content.startsWith("📌"))?.content || "";
+        // jawaban kartu pertanyaan ("📌 …") -> gabung dengan permintaan aslinya supaya file yang perlu tetap dibaca
+        const ask = content.startsWith("📌") ? `${prevAsk}\n${content}` : content || prevAsk;
         let sc = folder.root.readonly ? folder : await scanFolder(folder.root);
         if (/duplikat|kembar|dobel|double|sama persis|ganda/i.test(ask)) sc = { ...sc, dups: await findDuplicates(sc) };
         setFolder(sc);
@@ -1372,8 +1376,10 @@ export default function AiChat({
                                 const dk0 = splitDeck(fp.text);
                                 const rp = splitReports(dk0.text);
                                 const mu = splitMusic(rp.text);
+                                // kartu pertanyaan balik dari AI (```ask)
+                                const ch = splitChoice(mu.text);
                                 const dk = { ...dk0, partial: dk0.partial || rp.partial };
-                                const sa = { ...sa0, text: mu.text };
+                                const sa = { ...sa0, text: ch.text };
                                 const short = sa.text.replace(/\n---\n🌐[\s\S]*$/, "").length < 700;
                                 return (
                                   <>
@@ -1400,6 +1406,8 @@ export default function AiChat({
                                     {fp.plan && !streaming && <FilePlanCard plan={fp.plan} scan={folder} onConnect={connectFolder} onChanged={rescanFolder} />}
                                     {dk.deck && !streaming && <DeckCard deck={dk.deck} root={folder?.root ?? null} />}
                                     {!streaming && rp.reports.map((r, ri) => <ReportCard key={ri} report={r} root={folder?.root ?? null} />)}
+                                    {ch.partial && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ Menyiapkan pilihan…</p>}
+                                    {ch.choice && !streaming && <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />}
                                     {mu.cmd && !streaming && <MusicCmdCard id={String(m.id)} cmd={mu.cmd} fresh={m.id === lastAssistant?.id && !!m.doneAt && Date.now() - m.doneAt < 90000} />}
                                   </>
                                 );
@@ -1417,7 +1425,7 @@ export default function AiChat({
                                     navigator.clipboard?.writeText(
                                       (() => {
                                         const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
-                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitChoice(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text);
                                       })()
                                     ).then(() => {
                                       setCopied(m.id);
