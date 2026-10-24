@@ -1,19 +1,17 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { personaOf, personaTagline } from "@/lib/aiPersona";
 
 const BASE = 11.5; // ukuran huruf normal (px)
-const MIN = 7; // batas terkecil supaya tetap terbaca; kalau masih tidak muat -> bisa digeser ke samping (tidak dipotong)
+const MIN = 4; // batas pengaman saja — teks selalu dikecilkan sampai muat 1 baris (tidak dipotong / menabrak)
 
 /**
  * Keterangan siapa yang menjawab, di atas jawaban: "👋 Kamu dibantu oleh Yve · INTJ Si Perencana — strategis, rapi, …".
- * Selalu SATU baris & utuh (tidak dipotong): kalau tidak muat (HP), hurufnya otomatis diperkecil;
- * kalau sudah sekecil batas terbaca tapi masih panjang, barisnya bisa digeser ke samping (ujung kanan memudar sebagai tanda).
+ * Selalu SATU baris & utuh: kalau tidak muat (HP), hurufnya otomatis diperkecil sampai pas — tidak dipotong, tidak menabrak.
  */
 export default function HelperLine({ hero, via }: { hero: string; via?: string | null }) {
   const ref = useRef<HTMLSpanElement>(null);
-  const [more, setMore] = useState(false); // masih ada teks di kanan (perlu digeser)
   const t = personaTagline(hero);
   // mode otomatis: Layla si tuan rumah yang memilihkan hero penjawab
   const picker = via && via !== t.name ? personaOf(via) : null;
@@ -27,15 +25,13 @@ export default function HelperLine({ hero, via }: { hero: string; via?: string |
     const fit = () => {
       el.style.fontSize = `${BASE}px`;
       const room = box.clientWidth;
-      setMore(false);
       if (!room || el.offsetWidth <= room) return;
       // padding & border tidak ikut mengecil -> hitung skala dari lebar teksnya saja, lalu rapikan sampai benar-benar muat
       const cs = getComputedStyle(el);
       const fixed = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
       let size = Math.max(MIN, (BASE * (room - fixed)) / (el.offsetWidth - fixed));
       el.style.fontSize = `${size}px`;
-      for (let i = 0; i < 12 && size > MIN && el.offsetWidth > room; i++) el.style.fontSize = `${(size = Math.max(MIN, size - 0.2))}px`;
-      setMore(el.offsetWidth > room + 1 && box.scrollLeft < box.scrollWidth - room - 2);
+      for (let i = 0; i < 40 && size > MIN && el.offsetWidth > room; i++) el.style.fontSize = `${(size = Math.max(MIN, size - 0.1))}px`;
     };
     fit();
     // ukur ulang setelah font selesai dimuat (lebar teks berubah)
@@ -46,14 +42,7 @@ export default function HelperLine({ hero, via }: { hero: string; via?: string |
   }, [t.name, t.kind, t.sifat, lead]);
 
   return (
-    <div
-      className="mb-1.5 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      onScroll={(e) => {
-        const b = e.currentTarget;
-        setMore(b.scrollLeft < b.scrollWidth - b.clientWidth - 2);
-      }}
-      style={more ? { maskImage: "linear-gradient(to right, #000 85%, transparent)", WebkitMaskImage: "linear-gradient(to right, #000 85%, transparent)" } : undefined}
-    >
+    <div className="mb-1.5 min-w-0 overflow-hidden">
       <span
         ref={ref}
         title={`${lead} ${t.name}${tail} · ${t.kind} — ${t.sifat}`}

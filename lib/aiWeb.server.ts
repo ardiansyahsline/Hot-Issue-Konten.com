@@ -576,7 +576,7 @@ export function compactGuide(chart: string, approach: "sr" | "pattern" | "full" 
   const how: Record<string, string> = {
     sr: "PENDEKATAN DIPILIH USER: SUPPORT & RESISTANCE — dasar entry/SL/TP adalah level S/R otomatis di data (sebut jumlah sentuhannya). Masukkan metrik 'Support' dan 'Resistance'.",
     pattern:
-      "PENDEKATAN DIPILIH USER: CHART PATTERN — cari pola paling jelas dari candle di data (double top/bottom, triangle, flag, channel, head & shoulders, trendline, higher low/lower high). WAJIB isi \"pattern\" di blok tradeplan dengan titik dari candle, dan masukkan metrik 'Pola' (nama + status: sudah breakout / menunggu konfirmasi). Kalau tidak ada pola yang jelas, katakan jujur dan pakai S/R.",
+      "PENDEKATAN DIPILIH USER: CHART PATTERN — pakai daftar POLA CHART TERDETEKSI OTOMATIS di data (hasil algoritma dari candle asli), pilih yang paling meyakinkan & relevan dengan harga sekarang, jelaskan cara tradingnya (titik breakout, target pola = tinggi pola diproyeksikan, invalidasi). WAJIB isi \"pattern\" di blok tradeplan dengan \"lines\" dari pola itu, dan masukkan metrik 'Pola' (nama + status: sudah breakout / menunggu konfirmasi). Kalau daftar bilang tidak ada pola, katakan jujur dan pakai S/R — jangan mengarang pola.",
     full: "PENDEKATAN DIPILIH USER: LENGKAP — buat kartu ringkas dulu, lalu SETELAH blok tradeplan tulis analisa lengkap mengikuti KERANGKA di bawah (heading pendek, ringkas per bagian).",
     auto: "Pilih pendekatan yang paling cocok dengan data (biasanya support & resistance).",
   };
@@ -964,7 +964,7 @@ export async function buildWebContext(
       ? [
           "TRADE PLAN: kalau jawabanmu berisi rencana trading (entry/SL/TP), WAJIB tutup jawaban dengan blok kode berlabel tradeplan berisi JSON satu baris, contoh:",
           '```tradeplan\n{"symbol":"PUMPUSDT","side":"short","entry":0.00461,"sl":0.00505,"tp":[0.00424,0.0038],"timeframe":"1D"}\n```',
-          'Opsional "pattern": kalau di data RIWAYAT HARGA terlihat pola chart (mis. trendline turun/naik, double top/bottom, higher low, breakout), tambahkan {"name":"nama pola singkat","points":[["YYYY-MM-DD",harga],["YYYY-MM-DD",harga]]} — 2 sampai 5 titik, tanggal & harga WAJIB diambil dari candle di data (high untuk puncak, low untuk lembah). Contoh: "pattern":{"name":"Lower high","points":[["2026-09-22",4172],["2026-10-10",4143]]}. Kalau tidak ada pola yang jelas, jangan tulis "pattern".',
+          'Opsional "pattern": kalau ada POLA CHART TERDETEKSI OTOMATIS di data, PILIH yang paling cocok (biasanya nomor 1) dan salin persis: {"name":"Falling Wedge","lines":[[["waktu",harga],["waktu",harga]],[["waktu",harga],["waktu",harga]]]} — website menggambar garis-garisnya di chart. Jangan selalu memakai pola yang sama; nama pola harus sesuai hasil deteksi (Falling/Rising Wedge, Ascending/Descending/Symmetrical Triangle, Channel, Rectangle, Double Top/Bottom, Head & Shoulders, Bull/Bear Flag, dll.). Kalau tidak ada yang terdeteksi tapi kamu melihat struktur jelas, boleh {"name":"…","points":[["waktu",harga],…]} 2–5 titik dari candle di data. Kalau tidak ada pola yang jelas, jangan tulis "pattern".',
           ...(tf
             ? tf !== "1d" && !tfHist.some((l) => l.startsWith("RIWAYAT HARGA"))
               ? [`Timeframe trade plan: data candle ${tfLabel(tf)} tidak ada, jadi isi "timeframe":"1D" dan pakai level harian.`]

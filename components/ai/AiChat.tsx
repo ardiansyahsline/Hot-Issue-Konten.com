@@ -16,6 +16,7 @@ import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
 import ChoiceCard from "./ChoiceCard";
 import HelperLine from "./HelperLine";
+import AnsweredCard, { parseCardAnswer } from "./AnsweredCard";
 import { splitChoice } from "@/lib/choiceCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
@@ -459,6 +460,18 @@ export default function AiChat({
     return true;
   };
   const charOf = (id: string | null | undefined) => (id ? chars.find((c) => c.id === id || `${CHAR_PREFIX}${c.id}` === id) : undefined);
+  // kartu pertanyaan yang sudah dijawab: jawaban = pesan user "📌 …" tepat sesudahnya
+  const cardAnswerAfter = (id: AiMsg["id"]) => {
+    const i = msgs.findIndex((x) => x.id === id);
+    const nx = i >= 0 ? msgs[i + 1] : undefined;
+    return nx?.role === "user" ? parseCardAnswer(nx.content) : null;
+  };
+  // pesan user "📌 …" yang menjawab kartu tidak perlu ditampilkan lagi sebagai gelembung (sudah ada di kartu)
+  const answersCard = (m: AiMsg) => {
+    if (m.role !== "user" || !m.content.startsWith("📌") || !parseCardAnswer(m.content)) return false;
+    const prev = msgs[msgs.findIndex((x) => x.id === m.id) - 1];
+    return !!prev && prev.role === "assistant" && /\[\[ask:|```ask/.test(prev.content);
+  };
   const hero = (id: string | null | undefined) => (!id ? SMART_HERO : isCharModel(id) ? (charOf(id)?.name ?? SMART_HERO) : heroName(id));
 
   // pilihan model & mode data tersimpan di browser
@@ -1321,7 +1334,7 @@ export default function AiChat({
               ) : (
                 <div className="mx-auto max-w-[720px] space-y-6">
                   {msgs.map((m) =>
-                    m.role === "user" ? (
+                    answersCard(m) ? null : m.role === "user" ? (
                       <div key={m.id} className="flex flex-col items-end gap-1.5">
                         {(m.images?.length ?? 0) > 0 && (
                           <div className="flex flex-wrap justify-end gap-1.5">
@@ -1378,7 +1391,10 @@ export default function AiChat({
                                       {!!m.steps?.length && (
                                         <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps} live={false} startedAt={m.startedAt} doneAt={m.doneAt} />
                                       )}
-                                      <AskCard title={sk.text} info={sk.ask} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />
+                                      {(() => {
+                                        const ans = cardAnswerAfter(m.id);
+                                        return ans ? <AnsweredCard title={sk.text} answer={ans} /> : <AskCard title={sk.text} info={sk.ask} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />;
+                                      })()}
                                     </>
                                   );
                                 }
@@ -1400,6 +1416,12 @@ export default function AiChat({
                                     {!!m.steps?.length && (
                                       <ThinkingSteps hero={m.persona || hero(m.model ?? model)} steps={m.steps} live={false} startedAt={m.startedAt} doneAt={m.doneAt} />
                                     )}
+                                    {/* chart dulu, tabel/kartu analisa di bawahnya */}
+                                    {chart && sp.plan && !streaming ? (
+                                      <TradePlanChart symbol={chart} plan={sp.plan} persona={m.persona || hero(m.model)} />
+                                    ) : chart ? (
+                                      <TradingChart symbol={chart} />
+                                    ) : null}
                                     {sa.card && (
                                       <AnalysisCard
                                         card={sa.card}
@@ -1410,18 +1432,18 @@ export default function AiChat({
                                         }
                                       />
                                     )}
-                                    {chart && sp.plan && !streaming ? (
-                                      <TradePlanChart symbol={chart} plan={sp.plan} persona={m.persona || hero(m.model)} />
-                                    ) : chart ? (
-                                      <TradingChart symbol={chart} />
-                                    ) : null}
                                     <Markdown text={tidyAnswer(sa.text)} />
                                     {(fp.partial || dk.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ Menyusun {fp.partial ? "rencana file" : rp.partial ? "halaman report" : "slide laporan"}…</p>}
                                     {fp.plan && !streaming && <FilePlanCard plan={fp.plan} scan={folder} onConnect={connectFolder} onChanged={rescanFolder} />}
                                     {dk.deck && !streaming && <DeckCard deck={dk.deck} root={folder?.root ?? null} />}
                                     {!streaming && rp.reports.map((r, ri) => <ReportCard key={ri} report={r} root={folder?.root ?? null} />)}
                                     {ch.partial && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ Menyiapkan pilihan…</p>}
-                                    {ch.choice && !streaming && <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />}
+                                    {ch.choice &&
+                                      !streaming &&
+                                      (() => {
+                                        const ans = cardAnswerAfter(m.id);
+                                        return ans ? <AnsweredCard title={ch.choice.title} answer={ans} /> : <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />;
+                                      })()}
                                     {mu.cmd && !streaming && <MusicCmdCard id={String(m.id)} cmd={mu.cmd} fresh={m.id === lastAssistant?.id && !!m.doneAt && Date.now() - m.doneAt < 90000} />}
                                   </>
                                 );
