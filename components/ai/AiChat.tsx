@@ -1346,9 +1346,9 @@ export default function AiChat({
                         </span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                           {/* keterangan penjawab (hero per jawaban — ganti hero di tengah chat tidak mengubah jawaban lama) + badge sumber data */}
-                          {(m.persona || m.model || m.used_data || m.used_web) && !m.error && (
+                          {(m.persona || m.model) && !m.error && <HelperLine hero={m.persona || hero(m.model)} />}
+                          {(m.used_data || m.used_web || m.content?.includes("🌐 **Sumber:**")) && !m.error && (
                             <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-                              {(m.persona || m.model) && <HelperLine hero={m.persona || hero(m.model)} />}
                               {m.used_data && <span className="inline-block shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>}
                               {(m.used_web || m.content?.includes("🌐 **Sumber:**")) && (
                                 <span className="inline-block shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-400">🌐 pakai internet</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ChatThread, { Avatar } from "./ChatThread";
 import ChatMembers, { sortByPresence } from "./ChatMembers";
 import { isOnline, lastSeenText } from "@/components/UserAvatar";
@@ -35,6 +35,21 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
   const [q, setQ] = useState("");
   const [panel, setPanel] = useState<"none" | "dm" | "room">("none");
   const [mobileList, setMobileList] = useState(!initialRoom);
+  // tinggi kotak chat = sisa layar di bawah posisinya (header di HP lebih tinggi, jadi tidak bisa angka tetap) —
+  // supaya kolom ketik & tombol Kirim selalu kelihatan tanpa scroll halaman
+  const cardRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const fit = () => {
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      const bottom = window.innerWidth < 640 ? 12 : 24;
+      el.style.height = `${Math.max(window.innerWidth < 640 ? 380 : 480, window.innerHeight - top - bottom)}px`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
 
   // pesan dianggap "dibaca" hanya saat tab browser terlihat
   useEffect(() => {
@@ -111,11 +126,12 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
 
   return (
     <div
-      className="card relative grid overflow-hidden md:grid-cols-[280px_1fr] xl:grid-cols-[280px_1fr_250px]"
-      style={{ height: "calc(100vh - 210px)", minHeight: 480 }}
+      ref={cardRef}
+      className="card relative grid grid-cols-1 overflow-hidden md:grid-cols-[280px_1fr] xl:grid-cols-[280px_1fr_250px]"
+      style={{ height: "calc(100dvh - 210px)" }}
     >
       {/* Sidebar: room & pesan pribadi */}
-      <aside className={`min-h-0 flex-col border-r border-zinc-800/80 ${mobileList ? "flex" : "hidden md:flex"}`}>
+      <aside className={`min-h-0 min-w-0 flex-col border-r border-zinc-800/80 ${mobileList ? "flex" : "hidden md:flex"}`}>
         <div className="p-3">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari orang / room…" className="input" />
         </div>
@@ -171,10 +187,10 @@ export default function ChatPage({ meId, initialRoom }: { meId: string; initialR
       </aside>
 
       {/* Percakapan */}
-      <section className={`min-h-0 flex-col ${mobileList ? "hidden md:flex" : "flex"}`}>
+      <section className={`min-h-0 min-w-0 flex-col ${mobileList ? "hidden md:flex" : "flex"}`}>
         {c.room ? (
           <>
-            <header className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-3.5">
+            <header className="flex items-center gap-3 border-b border-zinc-800/80 px-3 py-3 sm:px-5 sm:py-3.5">
               <button onClick={() => setMobileList(true)} className="text-zinc-400 md:hidden" aria-label="Kembali">←</button>
               {c.room.kind === "direct" ? (
                 <Avatar name={roomTitle(c.room, c.peopleMap)} url={other?.avatar_url} online={isOnline(other?.last_seen_at)} size={34} />
