@@ -231,6 +231,60 @@ const LOOKS: Record<string, Look> = {
   Fanny: { type: "ESTP", hair: 4, skin: "#f6d3b8", hc: "#0c4a6e", prop: "dagger" },
 };
 
+/**
+ * Julukan, keterangan & sifat KHAS tiap hero (tidak ada yang kembar walau tipe MBTI-nya sama).
+ * Gaya bicara (style/say) tetap dari tipe MBTI; yang ditampilkan di galeri & keterangan "Kamu dibantu oleh …" dari sini.
+ */
+const HERO_FLAVOR: Record<string, { label: string; tag: string; sifat: string[] }> = {
+  Layla: { label: "Si Tuan Rumah", tag: "Tuan rumah AI — dia yang milihin hero paling pas buat bantu kamu", sifat: ["ramah", "jeli milih partner", "sigap melayani"] },
+  Gord: { label: "Si Profesor Logika", tag: "Bongkar soal rumit sampai ke akar rumusnya", sifat: ["analitis", "logis", "teliti hitungan"] },
+  Harith: { label: "Si Pengacak Ide", tag: "Suka membalik cara pikir biar ketemu jalan pintas", sifat: ["kritis", "lincah berpikir", "usil cerdas"] },
+  Tigreal: { label: "Si Perisai Sabar", tag: "Jelasin pelan dari dasar, jagain kamu biar nggak salah langkah", sifat: ["sabar", "melindungi", "telaten"] },
+  Saber: { label: "Si Eksekutor Kilat", tag: "Satu tebasan, satu solusi — tanpa basa-basi", sifat: ["ringkas", "tajam", "langsung solusi"] },
+  Granger: { label: "Si Penembak Presisi", tag: "Angka & langkah dicek ulang sebelum ditembak", sifat: ["presisi", "disiplin", "detail"] },
+  Miya: { label: "Si Bintang Ceria", tag: "Jawaban singkat, ringan, bikin suasana cair", sifat: ["ceria", "ringan", "seru"] },
+  Lesley: { label: "Si Sniper Strategi", tag: "Bidik dari jauh: siapkan skenario A-B-C sebelum eksekusi", sifat: ["strategis", "kalem membidik", "mikir jangka panjang"] },
+  Pharsa: { label: "Si Penasihat Bijak", tag: "Pahami tujuanmu dulu, baru kasih arahan yang dalam", sifat: ["bijak", "empatik", "mendalam"] },
+  Nana: { label: "Si Peri Penuh Ide", tag: "Lempar ide seabrek dengan semangat yang menular", sifat: ["antusias", "imajinatif", "ekspresif"] },
+  Kagura: { label: "Si Penyair Lembut", tag: "Kata-katanya adem, penjelasannya kayak cerita kecil", sifat: ["lembut", "puitis", "hangat"] },
+  Zilong: { label: "Si Tombak Gercep", tag: "Aksi duluan — langkah singkat yang bisa langsung jalan", sifat: ["gercep", "berani", "fokus aksi"] },
+  Lunox: { label: "Si Mentor Hangat", tag: "Bimbing langkah demi langkah sambil terus menyemangati", sifat: ["membimbing", "positif", "jelas"] },
+  Alucard: { label: "Si Bos Tegas", tag: "Langsung ke kesimpulan, keputusan cepat tanpa ragu", sifat: ["tegas", "to the point", "cepat ambil keputusan"] },
+  Valir: { label: "Si Manajer Api", tag: "Prioritas, PIC, deadline — semua dibikin rapi & membara", sifat: ["teratur", "berapi-api", "fokus deadline"] },
+  Chou: { label: "Si Petarung Santai", tag: "Kalem, bahasa sederhana, tapi pukulannya pas sasaran", sifat: ["santai", "sederhana", "tepat sasaran"] },
+  Yve: { label: "Si Perencana Galaksi", tag: "Petakan gambaran besar, lalu susun rencana yang rapi", sifat: ["visioner", "rapi", "terencana"] },
+  Gusion: { label: "Si Penantang Kilat", tag: "Tantang asumsimu & kasih alternatif yang tak terduga", sifat: ["skeptis sehat", "jenaka", "banyak alternatif"] },
+  Johnson: { label: "Si Mesin Turbo", tag: "Tancap gas — solusi praktis secepat kilat", sifat: ["ngebut", "praktis", "pede"] },
+  Hayabusa: { label: "Si Ninja Senyap", tag: "Ngomong seperlunya, solusinya muncul diam-diam", sifat: ["senyap", "efisien", "teknis"] },
+  Atlas: { label: "Si Penjaga Sistem", tag: "Checklist lengkap, nggak ada yang kelewat", sifat: ["terstruktur", "kokoh", "sistematis"] },
+  Estes: { label: "Si Penyembuh Telaten", tag: "Tenangkan dulu, lalu bantu beresin pelan-pelan", sifat: ["menenangkan", "peduli", "penuh perhatian"] },
+  Harley: { label: "Si Pesulap Ide", tag: "Trik kreatif & ide nyeleneh yang ternyata jalan", sifat: ["kreatif", "spontan", "penuh kejutan"] },
+  Beatrix: { label: "Si Komandan Rapi", tag: "Bagi tugas jelas, target terukur, eksekusi tertib", sifat: ["tertib", "terukur", "lugas"] },
+  Fanny: { label: "Si Akrobat Lincah", tag: "Lompat cepat dari masalah ke solusi", sifat: ["lincah", "nekat terukur", "cekatan"] },
+  Balmond: { label: "Si Raksasa Lembut", tag: "Badan besar, hati lembut — dengerin dulu baru bantu", sifat: ["tulus", "pengertian", "rendah hati"] },
+  Bruno: { label: "Si Kapten Penyemangat", tag: "Bakar semangat tim dengan langkah yang jelas", sifat: ["suportif", "energik", "kompak"] },
+  Clint: { label: "Si Koboi Pembimbing", tag: "Santai tapi ngarahin, kayak senior yang baik", sifat: ["ramah santai", "mengarahkan", "sabar mengajari"] },
+  Eudora: { label: "Si Petir Disiplin", tag: "Cepat, tegas, dan semuanya sesuai aturan", sifat: ["sigap", "patuh aturan", "tegas waktu"] },
+  Franco: { label: "Si Pengait Inti", tag: "Tarik inti masalah dengan cara yang halus", sifat: ["halus", "reflektif", "tenang menyimak"] },
+  Karina: { label: "Si Ratu Eksekusi", tag: "Target jelas, langsung sikat sampai beres", sifat: ["ambisius", "fokus target", "tuntas"] },
+  Lolita: { label: "Si Perisai Imut", tag: "Manis & kalem, jawabannya rapi enak dilihat", sifat: ["manis", "rapi visual", "adem"] },
+  Minotaur: { label: "Si Banteng Semangat", tag: "Semangat meledak-ledak, bikin kerjaan terasa ringan", sifat: ["bersemangat", "heboh", "pantang mundur"] },
+  Rafaela: { label: "Si Malaikat Pemimpin", tag: "Pimpin arah dengan tegas tapi tetap peduli", sifat: ["memimpin", "welas asih", "mantap"] },
+  Sun: { label: "Si Kera Serba Bisa", tag: "Pecah masalah jadi bagian kecil, beresin satu-satu", sifat: ["serba bisa", "cerdik", "bertahap"] },
+  Alpha: { label: "Si Pendobrak", tag: "Dobrak kebuntuan dengan langkah berani", sifat: ["nekat", "dinamis", "fokus hasil"] },
+  Hilda: { label: "Si Pemburu Teliti", tag: "Telusuri jejak data sampai ketemu sumbernya", sifat: ["tekun", "teliti sumber", "bisa diandalkan"] },
+  Aurora: { label: "Si Ratu Es", tag: "Dingin, jernih, keputusan berbasis data", sifat: ["jernih", "dingin kepala", "berbasis data"] },
+  Freya: { label: "Si Valkyrie Taktis", tag: "Taktik matang sebelum turun ke lapangan", sifat: ["taktis", "fokus", "matang"] },
+  Selena: { label: "Si Pemburu Peluang", tag: "Jeli lihat celah & peluang, langsung dimanfaatkan", sifat: ["jeli", "oportunis", "cepat bereaksi"] },
+  Martis: { label: "Si Jenderal", tag: "Atur strategi menang, bagi peran, lalu gas", sifat: ["komando", "percaya diri", "berani ambil risiko"] },
+  Esmeralda: { label: "Si Penjaga Keseimbangan", tag: "Timbang semua sisi sebelum kasih saran", sifat: ["seimbang", "intuitif", "teduh"] },
+  Ling: { label: "Si Pendekar Inspiratif", tag: "Ngajak naik level dengan contoh yang gampang diikuti", sifat: ["inspiratif", "gesit", "mudah diikuti"] },
+  Khufra: { label: "Si Penjaga Gurun", tag: "Tenang di segala cuaca, jawabannya membumi", sifat: ["stabil", "tahan banting", "membumi"] },
+  Angela: { label: "Si Pendukung Cerdas", tag: "Dukung dari belakang tapi tetap pegang arah", sifat: ["koordinatif", "sigap dukung", "pegang arah"] },
+  Kaja: { label: "Si Penangkap Inti", tag: "Tangkap poin penting, buang yang nggak perlu", sifat: ["ringkas padat", "fokus inti", "kalem"] },
+  "Yu Zhong": { label: "Si Naga Pengayom", tag: "Mengayomi & kasih arah besar dengan murah hati", sifat: ["mengayomi", "berwibawa", "murah hati"] },
+};
+
 const TYPE_KEYS = Object.keys(TYPES);
 const SKINS = ["#f5c9a8", "#e8b48f", "#f1c27d", "#d9a27c", "#fbe3d0", "#c98b66", "#f6d2b3"];
 const HAIRS = ["#111827", "#3b2a1e", "#7c2d12", "#e5e7eb", "#f59e0b", "#6366f1", "#0ea5e9", "#dc2626"];
@@ -292,7 +346,8 @@ export function personaOf(heroIn: string): Persona {
     hc: HAIRS[(h >> 5) % HAIRS.length],
   };
   const info = TYPES[look.type];
-  return { ...info, hero, type: look.type, group: typeGroup(look.type), hair: look.hair, skin: look.skin, hc: look.hc, prop: look.prop ?? ROLE_PROP[role] ?? "orb", role };
+  const f = HERO_FLAVOR[hero];
+  return { ...info, ...(f ? { label: f.label, tag: f.tag, traits: f.sifat, sifat: f.sifat } : {}), hero, type: look.type, group: typeGroup(look.type), hair: look.hair, skin: look.skin, hc: look.hc, prop: look.prop ?? ROLE_PROP[role] ?? "orb", role };
 }
 
 /** potongan prompt gaya menjawab untuk hero yang sedang menjawab */
@@ -410,7 +465,15 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
     })[e.k] ?? e.k,
 };
 
-/** keterangan penjawab: "Yve · INTJ Si Perencana — strategis, rapi, mikir jangka panjang" */
+/** penanda di akhir jawaban tersimpan: hero ini dipilihkan oleh Layla (mode otomatis) — tidak ditampilkan */
+const VIA = /\n*\[\[via:([^\]]{1,40})\]\]\s*$/;
+export const viaMarker = (picker: string) => `\n\n[[via:${picker}]]`;
+export function splitVia(content: string): { content: string; via: string | null } {
+  const m = content.match(VIA);
+  return m ? { content: content.replace(VIA, ""), via: m[1] } : { content, via: null };
+}
+
+/** keterangan penjawab: "Yve · INTJ Si Perencana Galaksi — visioner, rapi, terencana" */
 export function personaTagline(heroIn: string): { name: string; kind: string; sifat: string } {
   const p = personaOf(heroIn);
   return { name: p.hero, kind: `${p.type} ${p.label}`, sifat: p.sifat.slice(0, 5).join(", ") };
