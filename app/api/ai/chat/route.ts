@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
-import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, systemPrompt } from "@/lib/ai.server";
+import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
+import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
 import { personaIntro, personaOf, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
@@ -16,7 +16,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const HISTORY = 40; // pesan terakhir yang dikirim ke AI sebagai konteks
+const HISTORY = 40; // pesan terakhir yang dibaca dari database (untuk deteksi lanjutan, gambar, dll.)
+const SEND_HISTORY = 16; // pesan terakhir yang benar-benar dikirim ke AI (hemat token)
+const HIST_CHARS = 24000; // batas total huruf riwayat yang dikirim
 const MAX_INPUT = 20000;
 const MAX_IMAGES = 4;
 const IMAGE_TURNS = 2; // gambar dari 2 pesan terakhir saja yang ikut dikirim ulang
@@ -267,6 +269,9 @@ export async function POST(req: NextRequest) {
   // 5b) internet (Tavily): AI cepat "mikir dulu" perlu browsing atau tidak + kata kuncinya (pakai konteks percakapan),
   //     lalu website mencari & membaca halamannya. Jalan bareng dengan pengambilan data CS Tracker.
   const webOn = webConfig().ok && body.web !== "off" && (!folder || /\b(internet|browsing|cari di web|google|berita|terbaru)\b/i.test(lastText));
+  // hemat 1 panggilan AI "perencana": sapaan / terima kasih, dan pertanyaan data internal yang jelas tidak butuh internet
+  const smallTalk = !hasImages && lastText.length <= 40 && SMALL_TALK.test(lastText.trim());
+  const needPlanner = !smallTalk && !(useData && !looksNeedWeb(lastText) && !extractUrls(lastText).length);
   const textRank = rankTextModels(pool);
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
@@ -286,7 +291,9 @@ export async function POST(req: NextRequest) {
           .catch(() => "")
           .finally(() => step("data", "done"))
       : Promise.resolve(""),
-    webOn
+    webOn && !needPlanner
+      ? Promise.resolve(noWeb).finally(() => step("decide", "skip"))
+      : webOn
       ? planWebSearch({
           base: cfg.base,
           headers: aiHeaders(cfg.key),
@@ -352,22 +359,17 @@ export async function POST(req: NextRequest) {
     const buf = Buffer.from(await data.arrayBuffer());
     return `data:${data.type || "image/jpeg"};base64,${buf.toString("base64")}`;
   };
-  const messages: { role: string; content: string | { type: string; text?: string; image_url?: { url: string } }[] }[] = [
-    { role: "system", content: systemPrompt(profile?.full_name || "anggota tim") },
-    // [1] = kepribadian hero yang sedang menjawab (diisi ulang tiap ganti hero)
-    { role: "system", content: "" },
-  ];
-  if (context) messages.push({ role: "system", content: context });
-  if (web.context) messages.push({ role: "system", content: web.context });
+  // Susunan pesan (urut dari yang paling TETAP ke yang paling berubah, supaya bagian depan bisa di-cache provider):
+  //   [aturan utama — sama untuk semua user]  [data CS Tracker / folder — sama selama percakapan]
+  //   [karakter + tanggal + aturan khusus & hasil browsing giliran ini]  [riwayat chat yang sudah dipangkas]
   // otak karakter buatan sendiri: koreksi + bagian catatan yang paling nyambung dengan pertanyaan
   const brain = custom ? brainText(custom, customMem, 20000, lastText) : "";
-  if (brain) messages.push({ role: "system", content: brain });
+  const turnRules: string[] = [];
   // standar desain Konten.com (skill konten-report-designer) untuk semua permintaan desain / laporan / PPT / report
-  if (DESIGN_INTENT.test(lastText)) messages.push({ role: "system", content: DESIGN_RULES });
+  if (DESIGN_INTENT.test(lastText)) turnRules.push(DESIGN_RULES);
   // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
-  if (MUSIC_INTENT.test(lastText)) messages.push({ role: "system", content: MUSIC_RULES });
+  if (MUSIC_INTENT.test(lastText)) turnRules.push(MUSIC_RULES);
   const folderMsg = folder ? folderPrompt(folder) : "";
-  if (folderMsg) messages.push({ role: "system", content: folderMsg });
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
   const tradeIntent = TRADE_INTENT.test(lastText) || answered;
   // pendekatan yang dipilih di kotak pertanyaan: "📌 Analisa ETHUSDT · Support & Resistance · TF 4H"
@@ -382,7 +384,7 @@ export async function POST(req: NextRequest) {
   // 🧠 tugas berat & penting (PPT/laporan, report campaign, analisa lengkap, baca data folder, teks panjang, atau diminta):
   //    + analisa trading / trade plan. Jawaban ditulis mesin Sonnet; Haiku tetap jadi "perencana" (mikir dulu, browsing) + cadangan.
   //    Dibatasi per user per hari. Di halaman Usage pemakaiannya digabung ke baris Haiku.
-  const heavyWhy = heavyReason(lastText, { approach, folderData: !!folder?.contents, design: DESIGN_INTENT.test(lastText), trade: tradeIntent && !!web.chart });
+  const heavyWhy = smallTalk ? null : heavyReason(lastText, { approach, folderData: !!folder?.contents, design: DESIGN_INTENT.test(lastText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
   let heavyOn = false;
   if (heavyWhy) {
     const hm = heavyModelFrom(models);
@@ -393,45 +395,46 @@ export async function POST(req: NextRequest) {
     }
   }
   if (tradeIntent && web.chart) {
-    messages.push({
-      role: "system",
-      content: [
+    turnRules.push(
+      [
         `USER MEMINTA ANALISA / TRADE PLAN untuk ${web.chart}.`,
         "WAJIB beri trade plan dengan ANGKA KONKRET: arah (long/short atau wait & see dengan level pemicunya), entry (boleh area), stop loss, TP1, TP2, timeframe, dan alasan singkat berdasarkan data.",
         "Patokan harga: pakai harga live / candle kalau ada; kalau tidak ada, pakai harga paling baru dari hasil browsing dan sebut tanggalnya ('per 23 Okt'). JANGAN minta user memberikan harga, JANGAN menjawab hanya dengan persentase.",
         "Tutup jawaban dengan blok ```tradeplan berisi JSON (symbol, side, entry, sl, tp[], timeframe) — website menggambarnya di chart. Untuk entry berupa area, isi entry dengan titik tengah area.",
         ...(approach === "full" ? [compactGuide(web.chart, approach, userNote), analysisGuide(web.chart)] : [compactGuide(web.chart, approach, userNote)]),
-      ].join("\n"),
-    });
+      ].join("\n")
+    );
   }
-  // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413).
-  // Data harga / candle / instruksi trade plan tetap utuh; yang dipangkas: isi artikel, data CS, riwayat chat lama.
-  const liteOf = (src: typeof messages): typeof messages => {
-    const out = src.map((m) => {
-      if (m.role !== "system" || typeof m.content !== "string") return m;
-      if (context && m.content === context) return { ...m, content: context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "") };
-      if (web.context && m.content === web.context) return { ...m, content: web.lite ?? web.context.slice(0, 6000) };
-      if (folderMsg && m.content === folderMsg) return { ...m, content: folderPrompt({ ...folder!, listing: folder!.listing.slice(0, 6000), contents: folder!.contents.slice(0, 6000) }) };
-      if (brain && m.content === brain) return { ...m, content: custom ? brainText(custom, customMem, 6000, lastText) : brain.slice(0, 6000) };
-      return m;
-    });
-    const firstHist = out.findIndex((m) => m.role !== "system");
-    if (firstHist > 0 && out.length - firstHist > 6) out.splice(firstHist, out.length - firstHist - 6);
-    return out;
-  };
-  for (const [i, m] of hist.entries()) {
+  // riwayat chat: hanya pesan terakhir, jawaban lama dipangkas (blok deck/tradeplan/sumber lama dibuang) — hemat token
+  type Part = { type: string; text?: string; image_url?: { url: string }; cache_control?: { type: "ephemeral" } };
+  type Msg = { role: string; content: string | Part[] };
+  const histMsgs: Msg[] = [];
+  const start = Math.max(0, hist.length - SEND_HISTORY);
+  for (let i = start; i < hist.length; i++) {
+    const m = hist[i];
     const imgs = m.images ?? [];
+    const text = compactMsg(m.content, m.role, i >= hist.length - 3);
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
       const urls = (await Promise.all(imgs.map(toDataUrl))).filter((u): u is string => !!u);
-      messages.push({
-        role: "user",
-        content: [{ type: "text", text: m.content || "Tolong jelaskan gambar ini." }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))],
-      });
+      histMsgs.push({ role: "user", content: [{ type: "text", text: text || "Tolong jelaskan gambar ini." }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))] });
     } else {
-      messages.push({ role: m.role, content: m.content.replace(/\[\[ask:[\s\S]*?\]\]/g, "(menanyakan pendekatan analisa)") + (imgs.length ? `\n[${imgs.length} gambar dilampirkan sebelumnya]` : "") });
+      histMsgs.push({ role: m.role, content: text + (imgs.length ? `\n[${imgs.length} gambar dilampirkan sebelumnya]` : "") });
     }
   }
-
+  // batas total huruf: buang pesan paling lama (pesan terakhir user selalu ikut); riwayat dimulai dari pesan user
+  const lenOf = (m: Msg) => (typeof m.content === "string" ? m.content.length : m.content.reduce((n, p) => n + (p.text?.length ?? 0), 0));
+  let histLen = histMsgs.reduce((n, m) => n + lenOf(m), 0);
+  while (histMsgs.length > 2 && histLen > HIST_CHARS) histLen -= lenOf(histMsgs.shift()!);
+  while (histMsgs.length > 1 && histMsgs[0].role !== "user") histMsgs.shift();
+  // versi ringkas untuk model berbatas kecil (Groq gratis dll menolak permintaan terlalu besar: 413).
+  // Data harga / candle / instruksi trade plan tetap utuh; yang dipangkas: isi artikel, data CS, folder, riwayat chat lama.
+  const histLite = histMsgs.slice(-6);
+  while (histLite.length > 1 && histLite[0].role !== "user") histLite.shift();
+  const ctxLite = context ? context.slice(0, 4000) + (context.length > 4000 ? "\n… (data diringkas)" : "") : "";
+  const folderLite = folder ? folderPrompt({ ...folder, listing: folder.listing.slice(0, 6000), contents: folder.contents.slice(0, 6000) }) : "";
+  const brainLite = custom ? brainText(custom, customMem, 6000, lastText) : "";
+  const userName = profile?.full_name || "anggota tim";
+  const rules = systemPrompt();
   const saveError = async (msg: string) => {
     await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: msg, error: true, model: candidates[0] });
     emit({ t: "error", message: msg });
@@ -455,27 +458,40 @@ export async function POST(req: NextRequest) {
   // (kuota habis TIDAK dihitung: kuota gratis Gemini dll dihitung per model, model lain bisa masih ada jatah)
   const deadProv = new Set<string>();
   const PROVIDER_DOWN = /authenticat|authorization|invalid api key|api key not valid|missing api key|reconnect|decrypt|unauthori[sz]ed|forbidden/i;
+  // Prompt caching (Claude): bagian depan yang sama ditandai cache_control -> dibaca ulang ±10% harga. Kalau server AI
+  // menolak format ini, otomatis diulang tanpa cache. AI_PROMPT_CACHE=off mematikan.
+  let useCache = (process.env.AI_PROMPT_CACHE ?? "").toLowerCase() !== "off";
+  const sys = (text: string, cache: boolean): Msg => ({ role: "system", content: cache ? [{ type: "text", text, cache_control: { type: "ephemeral" } }] : text });
+  const build = (model: string, lite: boolean): Msg[] => {
+    const cache = useCache && isClaudeModel(model);
+    const session = (lite ? [ctxLite, folderLite] : [context, folderMsg]).filter(Boolean).join("\n\n");
+    const turn = [
+      custom ? customPrompt(custom) : personaPrompt(heroOf(model)),
+      sessionPrompt(userName),
+      lite ? brainLite : brain,
+      ...turnRules,
+      lite ? (web.lite ?? web.context.slice(0, 6000)) : web.context,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return [sys(rules, cache), ...(session ? [sys(session, cache && session.length > 3000)] : []), sys(turn, false), ...(lite ? histLite : histMsgs)];
+  };
   // permintaan besar: Groq gratis membatasi token per menit (413) -> kirim versi ringkas
-  const charsOf = (arr: typeof messages) => arr.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length), 0);
-  const fullChars = charsOf(messages);
+  const charsOf = (arr: Msg[]) => arr.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length), 0);
+  const fullChars = charsOf(build(candidates[0], false));
   let forceLite = false;
   let useUsage = true;
-  const liteMessages = liteOf(messages);
-  const msgsFor = (model: string) => {
-    const useLite = forceLite || (providerOf(model) === "groq" && fullChars > 20_000);
-    const arr = [...(useLite ? liteMessages : messages)];
-    arr[1] = { role: "system", content: custom ? customPrompt(custom) : personaPrompt(heroOf(model)) };
-    return arr;
-  };
+  const msgsFor = (model: string) => build(model, forceLite || (providerOf(model) === "groq" && fullChars > 20_000));
 
   type Res =
     | { ok: true; model: string; events: AsyncGenerator<SseEvent>; first: string }
-    | { ok: false; model: string; why: string; status?: number; detail?: string; tooBig?: boolean; noUsage?: boolean; fatal?: string };
+    | { ok: false; model: string; why: string; status?: number; detail?: string; tooBig?: boolean; noUsage?: boolean; noCache?: boolean; fatal?: string };
 
   /** satu percobaan: kirim ke server AI lalu baca ±160 huruf pertama (error / kosong / huruf asing = gagal) */
   const attempt = async (model: string, ac: AbortController): Promise<Res> => {
     let upstream: Response | null = null;
     let netErr: unknown = null;
+    const cacheSent = useCache && isClaudeModel(model);
     // koneksi ke server AI kadang putus sesaat -> coba ulang sekali
     for (let a = 0; a < 2 && !upstream && !ac.signal.aborted; a++) {
       try {
@@ -514,7 +530,9 @@ export async function POST(req: NextRequest) {
       }
       const tooBig = upstream.status === 413 || /too large|context length|maximum context|tokens per minute|TPM/i.test(detail);
       const noUsage = useUsage && upstream.status >= 400 && upstream.status < 500 && /stream_options|include_usage/i.test(detail);
-      return { ok: false, model, why: `${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`, status: upstream.status, detail: String(detail), tooBig, noUsage };
+      // format cache (system berupa array + cache_control) ditolak -> ulangi sekali tanpa cache
+      const noCache = cacheSent && !noUsage && (upstream.status === 400 || upstream.status === 422);
+      return { ok: false, model, why: `${upstream.status}${detail ? `: ${String(detail).slice(0, 80)}` : ""}`, status: upstream.status, detail: String(detail), tooBig, noUsage, noCache };
     }
     const events = sse(upstream.body);
     let first = "";
@@ -637,6 +655,12 @@ export async function POST(req: NextRequest) {
       if (running.size < 2) startNext();
       continue;
     }
+    if (r.noCache && useCache) {
+      useCache = false;
+      queue.unshift(r.model);
+      if (running.size < 2) startNext();
+      continue;
+    }
     // terlalu besar -> ulangi model yang sama dengan konteks ringkas (sekali)
     if (r.tooBig && !forceLite) {
       forceLite = true;
@@ -677,7 +701,7 @@ export async function POST(req: NextRequest) {
     fallback: failures.length > 0,
   });
   let full = "";
-  let usage: { in?: number; out?: number } = {};
+  let usage: { in?: number; out?: number; cached?: number } = {};
   const { events, first } = opened;
   try {
     full += first;
@@ -694,6 +718,7 @@ export async function POST(req: NextRequest) {
         controller.enqueue(enc.encode(e));
       }
     }
+    if (usage.cached) console.log(`[ai] cache: ${usage.cached}/${usage.in} token input dibaca dari cache (${usedModel})`);
     // chart live (TradingView) ditandai di akhir jawaban supaya tetap tampil saat riwayat dibuka lagi
     const foot = sourcesFooter(web.sources) + (web.chart ? `\n\n[[chart:${web.chart}]]` : "");
     if (foot && full.trim()) {
@@ -732,7 +757,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-type SseEvent = { piece?: string; error?: string; usage?: { in?: number; out?: number } };
+type SseEvent = { piece?: string; error?: string; usage?: { in?: number; out?: number; cached?: number } };
 
 /** baca aliran SSE format OpenAI -> potongan teks / error */
 async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
@@ -756,7 +781,14 @@ async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> 
           const piece: string = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content ?? "";
           if (piece) yield { piece };
           const u = j.usage ?? j.x_groq?.usage;
-          if (u && (u.prompt_tokens !== undefined || u.input_tokens !== undefined)) yield { usage: { in: Number(u.prompt_tokens ?? u.input_tokens) || 0, out: Number(u.completion_tokens ?? u.output_tokens) || 0 } };
+          if (u && (u.prompt_tokens !== undefined || u.input_tokens !== undefined))
+            yield {
+              usage: {
+                in: Number(u.prompt_tokens ?? u.input_tokens) || 0,
+                out: Number(u.completion_tokens ?? u.output_tokens) || 0,
+                cached: Number(u.prompt_tokens_details?.cached_tokens ?? u.cache_read_input_tokens) || 0,
+              },
+            };
           if (j.error) yield { error: String(j.error.message ?? j.error) };
         } catch {
           // baris bukan JSON — abaikan
@@ -795,7 +827,7 @@ function groupsFor(text: string, hasImages: boolean): PGroup[] {
 }
 
 /** alasan sebuah pertanyaan dianggap "tugas berat & penting" (null = tugas biasa, pakai mesin hemat) */
-function heavyReason(text: string, o: { approach: string; folderData: boolean; design: boolean; trade: boolean }): string | null {
+function heavyReason(text: string, o: { approach: string; folderData: boolean; design: boolean; trade: boolean; data: boolean; web: boolean }): string | null {
   if (/\b(pakai sonnet|mode berat|mode teliti|analisa mendalam|riset mendalam|penting banget|super teliti)\b/i.test(text)) return "diminta";
   if (/\b(ppt|pptx|powerpoint|presentasi|slide|deck|report campaign|one.?pager|portfolio|portofolio)\w*/i.test(text)) return "ppt/report";
   if (/\b(buat|bikin|buatin|bikinin|susun|susunin)\w*\s+(\w+\s+){0,3}laporan/i.test(text)) return "laporan";
@@ -803,7 +835,45 @@ function heavyReason(text: string, o: { approach: string; folderData: boolean; d
   if (o.trade) return "analisa trading";
   if (o.folderData) return "data folder";
   if (text.length > 4000) return "teks panjang";
-  return null;
+  // pertanyaan sulit / butuh analisa (skor >= 2). Obrolan ringan & pertanyaan sederhana tetap di mesin hemat.
+  if (text.length < 25) return null;
+  let score = 0;
+  if (HARD_TASK.test(text)) score += 2;
+  if (THINK_WORDS.test(text)) score += 1;
+  if ((o.data || o.web) && AGGREGATE.test(text)) score += 1;
+  if (text.length > 1200) score += 1;
+  if ((text.match(/\?/g)?.length ?? 0) >= 3 || (text.match(/^\s*(\d+[.)]|[-*•])\s/gm)?.length ?? 0) >= 3) score += 1;
+  if (/```|\b(function|const|select .* from|def |class )\b/i.test(text)) score += 1;
+  return score >= 2 ? "analisa/sulit" : null;
+}
+
+/** kata kerja tugas yang butuh penalaran berat */
+const HARD_TASK =
+  /\b(analisa|analisis|analisi[sz]|analyze|bandingkan|perbandingan|bandingin|evaluasi|evaluate|strategi|rencana kerja|roadmap|akar masalah|root cause|diagnosa|prioritaskan|susun prioritas|insight|proyeksi|forecast|optimasi|optimalkan|audit|review mendalam|kritisi|rancang|desain sistem|debug)\w*/i;
+/** sinyal "mikir dulu": alasan, sebab-akibat, langkah demi langkah */
+const THINK_WORDS = /\b(kenapa|mengapa|gimana bisa|apa penyebab|penyebab|dampak|pengaruh|kelebihan|kekurangan|pro kontra|step by step|langkah demi langkah|secara detail|detail|mendalam|rekomendasi|solusi terbaik|sebaiknya)\b/i;
+/** rangkuman / tren dari data (CS Tracker atau hasil browsing) */
+const AGGREGATE = /\b(rangkum|ringkas|rekap|report|tren|trend|terbanyak|paling banyak|pola|minggu ini|bulan ini|per (pic|kategori|minggu)|dibanding|naik|turun|statistik|persen)\w*/i;
+
+/** sapaan / terima kasih (bukan "iya"/"oke" — itu bisa jawaban atas pertanyaan AI) — tidak perlu perencana internet atau mesin berat */
+const SMALL_TALK =
+  /^(hai+|halo+|hallo|helo|hi+|hey|hei|pagi|siang|sore|malam|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks?|thx|tq|mantap\w*|keren|nice|wkwk\w*|haha\w*|hehe\w*)([\s,!.]+(ya|kak|bro|sis|min|banget|deh|nih|semua|banyak|hehe|wkwk))*[\s!.]*$/i;
+
+/** model Claude (mendukung prompt caching lewat cache_control) */
+const isClaudeModel = (m: string) => /claude|anthropic|haiku|sonnet|opus|^anth\//i.test(m);
+
+/**
+ * Rapikan satu pesan riwayat sebelum dikirim ulang ke AI.
+ * 3 pesan terakhir dikirim utuh; yang lebih lama: buang daftar sumber, blok data besar (deck/tradeplan/fileplan…), lalu dipotong.
+ */
+function compactMsg(text: string, role: string, recent: boolean): string {
+  let t = text.replace(/\[\[ask:[\s\S]*?\]\]/g, "(menanyakan pendekatan analisa)").replace(/\n*\[\[chart:[^\]]*\]\]/g, "");
+  if (recent) return t;
+  t = t
+    .replace(/\n+---\n🌐 \*\*Sumber:\*\*[\s\S]*$/, "")
+    .replace(/```(deck|report|tradeplan|fileplan|music|srt)\b[\s\S]*?(```|$)/g, (_, k: string) => `(blok ${k} sudah dikirim sebelumnya)`);
+  const max = role === "user" ? 3000 : 1500;
+  return t.length > max ? `${t.slice(0, max)} …(dipotong)` : t;
 }
 
 /** batas pemakaian mesin tugas berat per user per hari (AI_HEAVY_DAILY_LIMIT, default 15; pemilik tidak dibatasi) */

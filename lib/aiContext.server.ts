@@ -41,7 +41,7 @@ export async function buildSiteContext(supabase: DB): Promise<string> {
   const d30 = dayWib(now - 29 * 86400000);
   const iso14 = new Date(now - 14 * 86400000).toISOString();
 
-  const [active, resolved, reports, vr, sg] = await Promise.all([
+  const [active, resolved, reports, vr, sg, activeTotal] = await Promise.all([
     supabase
       .from("issue_list")
       .select("id, title, description, category, status, priority, is_hot, report_count, max_contact_reports_30d, pic_name, campaign, created_at, updated_at")
@@ -57,10 +57,13 @@ export async function buildSiteContext(supabase: DB): Promise<string> {
     supabase.from("issue_reports").select("issue_id, note, created_at").gte("created_at", iso14).order("created_at", { ascending: false }).limit(200),
     supabase.from("video_reviews").select("report_date, category, status, explanation").gte("report_date", d30).order("report_date", { ascending: false }).limit(1500),
     supabase.from("suggestions").select("id, title, category, status, created_at").order("created_at", { ascending: false }).limit(25),
+    supabase.from("issue_list").select("id", { count: "exact", head: true }).neq("status", "resolved"),
   ]);
 
   const out: string[] = [];
-  out.push(`=== DATA CS TRACKER (diambil ${wib(new Date().toISOString())} WIB; kontak clipper disensor) ===`);
+  // jam dibulatkan (bukan menit) supaya blok data sama persis antar-pesan -> bisa di-cache provider
+  const asOf = new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "short", hour: "2-digit", timeZone: "Asia/Jakarta" }).format(new Date(now));
+  out.push(`=== DATA CS TRACKER (data per ${asOf}.00 WIB; kontak clipper disensor) ===`);
 
   // Hot Issue aktif
   const act = (active.data ?? []) as {
@@ -69,7 +72,8 @@ export async function buildSiteContext(supabase: DB): Promise<string> {
   }[];
   const hot = (i: (typeof act)[number]) => i.is_hot || i.max_contact_reports_30d >= HOT_THRESHOLD || (i.report_count ?? 1) >= REPORT_HOT_THRESHOLD;
   act.sort((a, b) => Number(hot(b)) - Number(hot(a)) || (b.report_count ?? 1) - (a.report_count ?? 1));
-  out.push(`\n## Hot Issue AKTIF (${act.length} ditampilkan; open + in progress; "laporan" = jumlah clipper yang melaporkan kasus yang sama)`);
+  const total = activeTotal.count ?? act.length;
+  out.push(`\n## Hot Issue AKTIF (total ${total} di database, ${act.length} ditampilkan${total > act.length ? " — yang lain tidak ikut terkirim" : ""}; open + in progress; "laporan" = jumlah clipper yang melaporkan kasus yang sama)`);
   for (const i of act) {
     out.push(
       `- #${i.id} ${scrub(i.title, 120)} | ${i.category} | ${i.status} | prioritas ${i.priority} | ${i.report_count ?? 1} laporan${hot(i) ? " | HOT" : ""} | PIC ${i.pic_name ?? "-"}${i.campaign ? ` | campaign ${scrub(i.campaign, 60)}` : ""} | dibuat ${wib(i.created_at)} | update ${wib(i.updated_at)}${i.description ? ` | ${scrub(i.description, 140)}` : ""}`
