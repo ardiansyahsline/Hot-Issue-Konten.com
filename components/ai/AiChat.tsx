@@ -15,6 +15,7 @@ import { tidyAnswer } from "@/lib/aiText";
 import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
 import ChoiceCard from "./ChoiceCard";
+import HelperLine from "./HelperLine";
 import { splitChoice } from "@/lib/choiceCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
@@ -1344,11 +1345,15 @@ export default function AiChat({
                           <HeroArt hero={m.persona || hero(m.model ?? model)} size={42} talk={busy && m.id === lastAssistant?.id} still={!(busy && m.id === lastAssistant?.id)} />
                         </span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
-                          {m.used_data && (
-                            <span className="mb-1.5 mr-1.5 inline-block rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>
-                          )}
-                          {(m.used_web || (!m.error && m.content?.includes("🌐 **Sumber:**"))) && (
-                            <span className="mb-1.5 inline-block rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-400">🌐 pakai internet</span>
+                          {/* keterangan penjawab (hero per jawaban — ganti hero di tengah chat tidak mengubah jawaban lama) + badge sumber data */}
+                          {(m.persona || m.model || m.used_data || m.used_web) && !m.error && (
+                            <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                              {(m.persona || m.model) && <HelperLine hero={m.persona || hero(m.model)} />}
+                              {m.used_data && <span className="inline-block shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>}
+                              {(m.used_web || m.content?.includes("🌐 **Sumber:**")) && (
+                                <span className="inline-block shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-400">🌐 pakai internet</span>
+                              )}
+                            </div>
                           )}
                           {m.content ? (
                             m.error ? (
@@ -1445,14 +1450,14 @@ export default function AiChat({
                               {m.model && (() => {
                                 const ph = m.persona || hero(m.model);
                                 const engine = hero(m.model);
-                                const pp = personaOf(ph);
+                                // nama & tipe hero sudah tampil di atas jawaban — di sini cuma info mesin untuk pemilik
+                                if (!owner || engine === ph) return null;
                                 return (
                                   <span>
-                                    · ⚔️ {ph} <span className="text-zinc-600">({pp.type} {pp.label})</span>
-                                    {owner && engine !== ph && personaOf(ph).custom && <span className="text-zinc-500"> · mesin {engine}</span>}
+                                    {personaOf(ph).custom && <span className="text-zinc-500">· mesin {engine}</span>}
                                     {owner && engine !== ph && !personaOf(ph).custom && (
                                       <span className="text-zinc-500" title={`${ph} lagi gagal / kuota habis, jadi jawaban ini dibantu ${engine} — gaya jawab tetap ${ph}.`}>
-                                        {" "}· ↪ dibantu {engine}
+                                        · ↪ dibantu {engine}
                                       </span>
                                     )}
                                   </span>
