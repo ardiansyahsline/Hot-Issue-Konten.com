@@ -281,7 +281,16 @@ export default function ChatThread({
     }
   }
 
-  const pad = compact ? "px-4" : "px-5";
+  const pad = compact ? "px-4" : "px-3 sm:px-5";
+  // layar sempit (HP): placeholder pendek supaya tidak terpotong jadi 2 baris
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
 
   return (
     <div
@@ -573,7 +582,12 @@ export default function ChatThread({
               <path d="m21.4 11.6-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
             </svg>
           </button>
-          {!compact && <EmojiInsertButton onPick={insertEmoji} className="h-[42px] w-[42px] shrink-0 border border-zinc-700/80" />}
+          {/* HP: tombol emoji disembunyikan (keyboard HP sudah punya emoji) supaya kolom ketik & tombol Kirim muat */}
+          {!compact && (
+            <span className="hidden shrink-0 sm:inline-flex">
+              <EmojiInsertButton onPick={insertEmoji} className="h-[42px] w-[42px] shrink-0 border border-zinc-700/80" />
+            </span>
+          )}
           <textarea
             ref={input}
             value={text}
@@ -617,14 +631,14 @@ export default function ChatThread({
             rows={1}
             maxLength={4000}
             disabled={disabled}
-            placeholder={compact ? "Tulis pesan…" : "Tulis pesan… (Enter kirim · Shift+Enter baris baru · Ctrl+V screenshot)"}
-            className="input max-h-32 min-h-[42px] resize-none"
+            placeholder={compact || narrow ? "Tulis pesan…" : "Tulis pesan… (Enter kirim · Shift+Enter baris baru · Ctrl+V screenshot)"}
+            className="input max-h-32 min-h-[42px] min-w-0 flex-1 resize-none"
             aria-label="Tulis pesan"
           />
           {compact && <EmojiInsertButton onPick={insertEmoji} alignRight className="h-[42px] w-9 shrink-0" />}
           <button
             disabled={disabled || sending || up.uploading > 0 || (!text.trim() && !up.done.length)}
-            className="btn-primary h-[42px] shrink-0 px-4"
+            className={`btn-primary h-[42px] shrink-0 ${compact ? "px-4" : "px-3.5 sm:px-4"}`}
             aria-label="Kirim"
           >
             {compact ? (
@@ -632,7 +646,10 @@ export default function ChatThread({
             ) : up.uploading ? (
               "Upload…"
             ) : (
-              "Kirim"
+              <>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className="sm:hidden"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
+                <span className="hidden sm:inline">Kirim</span>
+              </>
             )}
           </button>
         </div>

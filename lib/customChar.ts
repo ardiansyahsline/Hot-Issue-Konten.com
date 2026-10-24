@@ -195,7 +195,17 @@ export function registerChar(c: CustomChar) {
     say: c.profile.catchphrase || t.say,
     style: c.profile.style || t.style,
     role: "Buatanmu",
+    sifat: charSifat(c),
   });
+}
+
+/** sifat karakter buatan user dari jawaban wizard-nya (energi, gaya kerja, cara memutuskan) */
+function charSifat(c: CustomChar): string[] | undefined {
+  const a = c.profile.answers ?? {};
+  const parts = (id: string) => val(a, id).split(/,|&|;/).map((x) => x.trim().toLowerCase()).filter((x) => x && x.length <= 24);
+  const tf = val(a, "tf") ? (/data|logika/i.test(val(a, "tf")) ? "berbasis data" : "peka perasaan") : "";
+  const out = [...new Set([...parts("energy").slice(0, 2), ...parts("jp").slice(0, 2), tf].filter(Boolean))].slice(0, 5);
+  return out.length >= 2 ? out : undefined;
 }
 
 /** prompt kepribadian karakter buatan user */

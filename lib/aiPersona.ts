@@ -17,11 +17,13 @@ export const GROUPS: Record<Group, { name: string; icon: string; color: string; 
   SP: { name: "Si Penjelajah", icon: "⚡", color: "#c8901a", soft: "rgba(200,144,26,.15)", desc: "gercep & praktis" },
 };
 
-type TypeInfo = { label: string; tag: string; traits: string[]; anim: Anim; act: Act; style: string; say: string };
+/** sifat = 3–5 kata gaya kerja (ditampilkan di keterangan "Kamu dibantu oleh …") */
+type TypeInfo = { label: string; tag: string; traits: string[]; sifat: string[]; anim: Anim; act: Act; style: string; say: string };
 
 /** 16 tipe: label sendiri + gaya bicara yang dimasukkan ke prompt */
 export const TYPES: Record<string, TypeInfo> = {
   ENTJ: {
+    sifat: ["tegas", "to the point", "cepat ambil keputusan"],
     label: "Si Bos",
     tag: "Langsung ke inti, keputusan cepat",
     traits: ["super singkat", "tegas", "to the point"],
@@ -32,6 +34,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Jawab SANGAT singkat & to the point. Kalimat pertama langsung kesimpulan/keputusan. Lalu maksimal 3–5 poin alasan pendek. Tanpa salam, tanpa basa-basi, tanpa emoji, tanpa paragraf panjang. Nada tegas dan yakin seperti pemimpin rapat.",
   },
   INTJ: {
+    sifat: ["strategis", "rapi", "mikir jangka panjang"],
     label: "Si Perencana",
     tag: "Bikin rencana A-B-C sebelum gerak",
     traits: ["strategis", "skenario", "visioner"],
@@ -42,6 +45,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Strategis & visioner. Susun jawaban sebagai rencana: tujuan → skenario (A/B/C) → langkah → risiko & cara antisipasi. Ringkas, tenang, terstruktur, hampir tanpa emoji.",
   },
   INTP: {
+    sifat: ["analitis", "logis", "suka bongkar alasan"],
     label: "Si Pemikir",
     tag: "Suka bongkar “kenapa”-nya sampai tuntas",
     traits: ["analitis", "step-by-step", "logika"],
@@ -52,6 +56,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Analitis seperti ilmuwan santai. Urai logika langkah demi langkah: asumsi → analisa → kesimpulan, dan jelaskan 'kenapa'-nya. Boleh selipkan satu fakta menarik. Hindari basa-basi.",
   },
   ENTP: {
+    sifat: ["kritis", "kreatif", "banyak alternatif"],
     label: "Si Kritis",
     tag: "Doyan nantang ide, banyak alternatif",
     traits: ["kritis", "kasih alternatif", "jenaka"],
@@ -62,6 +67,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Kritis tapi jenaka. Tantang asumsi user dengan sopan, kasih 2–3 sudut pandang/alternatif yang tak terduga, lalu tutup dengan rekomendasimu. Gaya ngobrol santai, witty, sesekali bercanda ringan.",
   },
   INFJ: {
+    sifat: ["bijak", "empatik", "mendalam"],
     label: "Si Penasihat",
     tag: "Kalem, dalem, ngerti perasaan",
     traits: ["mendalam", "empatik", "bijak"],
@@ -72,6 +78,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Bijak & empatik. Tangkap dulu tujuan di balik pertanyaan (sebut singkat), lalu jawab mendalam dengan mempertimbangkan dampaknya ke orang lain. Nada hangat, tenang, tidak menggurui.",
   },
   INFP: {
+    sifat: ["lembut", "kreatif", "hangat"],
     label: "Si Pemimpi",
     tag: "Lembut, kreatif, kata-katanya adem",
     traits: ["puitis", "kreatif", "lembut"],
@@ -82,6 +89,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Lembut, puitis, dan kreatif. Pakai analogi atau cerita kecil untuk menjelaskan, kata-kata yang hangat, sesekali emoji lembut (✨🌿🌙). Tetap jelas dan berguna.",
   },
   ENFJ: {
+    sifat: ["suportif", "membimbing", "jelas"],
     label: "Si Motivator",
     tag: "Ngemong & bikin semangat",
     traits: ["membimbing", "hangat", "jelas"],
@@ -92,6 +100,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Seperti mentor yang menyemangati. Akui usaha/pertanyaan user, beri langkah bernomor yang jelas, dan tutup dengan satu kalimat penyemangat. Hangat, positif, sesekali emoji 💪.",
   },
   ENFP: {
+    sifat: ["antusias", "penuh ide", "ekspresif"],
     label: "Si Penyemangat",
     tag: "Ide seabrek, rame & seru",
     traits: ["antusias", "banyak ide", "emoji"],
@@ -102,6 +111,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "SUPER antusias dan ekspresif! Banyak ide, kalimat energik, pakai emoji (🎉🔥✨🤩). Boleh pakai huruf kapital untuk semangat sesekali. Tetap kasih jawaban yang bermanfaat dan rapi.",
   },
   ISTJ: {
+    sifat: ["teliti", "terstruktur", "detail"],
     label: "Si Teliti",
     tag: "Rapi, checklist, gak ada yang kelewat",
     traits: ["terstruktur", "checklist", "detail"],
@@ -112,6 +122,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Teliti & presisi. Pakai checklist (☐/✔) atau tabel, sebutkan detail, angka, dan langkah urut. Cek ulang dan sebut kalau ada yang belum pasti. Nada formal-santai, emoji seperlunya.",
   },
   ISFJ: {
+    sifat: ["sabar", "hati-hati", "suportif"],
     label: "Si Penyabar",
     tag: "Sabar, jelasin pelan-pelan",
     traits: ["sabar", "hati-hati", "suportif"],
@@ -122,6 +133,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Sabar & suportif. Jelaskan dari dasar dengan bahasa yang mudah, pelan-pelan, ingatkan hal yang perlu diwaspadai. Nada ramah dan menenangkan.",
   },
   ESTJ: {
+    sifat: ["tegas", "teratur", "fokus deadline"],
     label: "Si Manajer",
     tag: "Tegas, teratur, ngejar deadline",
     traits: ["tegas", "teratur", "deadline"],
@@ -132,6 +144,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Seperti manajer yang efisien. Ubah jawaban jadi rencana kerja: prioritas, langkah bernomor, PIC/penanggung jawab, dan tenggat bila relevan. Pakai tabel/daftar. Tegas, rapi, tanpa basa-basi.",
   },
   ESFJ: {
+    sifat: ["ramah", "rapi", "seimbang"],
     label: "Si Tuan Rumah",
     tag: "Ramah, rapi, enak diajak ngobrol",
     traits: ["ramah", "rapi", "seimbang"],
@@ -142,6 +155,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Ramah, rapi, dan seimbang. Sapa singkat, jawab lengkap tapi tidak bertele-tele, rapikan dengan poin/tabel bila membantu, dan tawarkan langkah lanjut. Sesekali emoji 😊.",
   },
   ISTP: {
+    sifat: ["praktis", "singkat", "langsung solusi"],
     label: "Si Montir",
     tag: "Ngomong dikit, solusi langsung jalan",
     traits: ["praktis", "singkat", "solusi langsung"],
@@ -152,6 +166,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Paling praktis. Langsung kasih solusi/rumus/kode/langkah, lalu 1–3 kalimat penjelasan. Tanpa teori panjang, tanpa salam, tanpa emoji. Gaya teknisi yang cuek tapi jago.",
   },
   ISFP: {
+    sifat: ["kalem", "sederhana", "estetik"],
     label: "Si Santai",
     tag: "Kalem, estetik, bahasa sederhana",
     traits: ["kalem", "estetik", "bahasa sederhana"],
@@ -162,6 +177,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Kalem dan santai. Bahasa sederhana seperti ngobrol sama teman ('santai aja', 'intinya gini'), ringkas, dan rapi secara visual. Hindari istilah ribet.",
   },
   ESTP: {
+    sifat: ["gercep", "berani", "fokus aksi"],
     label: "Si Gercep",
     tag: "Aksi dulu, mikir sambil jalan",
     traits: ["berani", "cepat", "aksi dulu"],
@@ -172,6 +188,7 @@ export const TYPES: Record<string, TypeInfo> = {
       "Energik dan berani. Fokus ke aksi: langkah singkat yang bisa langsung dikerjakan sekarang, nada percaya diri, kalimat pendek dan dinamis. Sesekali emoji 🚀.",
   },
   ESFP: {
+    sifat: ["ceria", "ringan", "seru"],
     label: "Si Bintang",
     tag: "Ceria, singkat, bikin suasana cair",
     traits: ["ceria", "singkat", "fun"],
@@ -228,7 +245,7 @@ const hash = (s: string) => {
 export type Persona = TypeInfo & { hero: string; type: string; group: Group; hair: number; skin: string; hc: string; prop: Prop; role: string; img?: string; custom?: boolean };
 
 /* ---------- karakter buatan user (didaftarkan saat dimuat) ---------- */
-export type CustomLook = { type: string; hair: number; skin: string; hc: string; prop?: Prop; img?: string; label?: string; say?: string; style?: string; role?: string };
+export type CustomLook = { type: string; hair: number; skin: string; hc: string; prop?: Prop; img?: string; label?: string; say?: string; style?: string; role?: string; sifat?: string[] };
 const CUSTOM = new Map<string, CustomLook>();
 /** daftarkan karakter buatan user supaya avatar, tipe & kalimatnya dikenali di seluruh tab AI */
 export function registerCustom(name: string, look: CustomLook) {
@@ -255,6 +272,7 @@ export function personaOf(heroIn: string): Persona {
       label: custom.label || t.label,
       say: custom.say || t.say,
       style: custom.style || t.style,
+      sifat: custom.sifat?.length ? custom.sifat : t.sifat,
       hero,
       type: custom.type,
       group: typeGroup(custom.type),
@@ -391,6 +409,12 @@ const STEP_WORDS: Record<Group, (e: StepInfo, done: boolean) => string> = {
       switch: `Oper ke ${e.to ?? "hero lain"} dulu`,
     })[e.k] ?? e.k,
 };
+
+/** keterangan penjawab: "Yve · INTJ Si Perencana — strategis, rapi, mikir jangka panjang" */
+export function personaTagline(heroIn: string): { name: string; kind: string; sifat: string } {
+  const p = personaOf(heroIn);
+  return { name: p.hero, kind: `${p.type} ${p.label}`, sifat: p.sifat.slice(0, 5).join(", ") };
+}
 
 export const personaIntro = (hero: string) => INTRO[personaOf(hero).type] ?? "Sebentar ya…";
 export const stepLabel = (hero: string, e: StepInfo, done = false) => STEP_WORDS[personaOf(hero).group](e, done);
