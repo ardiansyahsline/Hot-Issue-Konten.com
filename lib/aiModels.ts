@@ -191,7 +191,7 @@ const DESC: [RegExp, string][] = [
 
 /** keterangan singkat: hero ini jago apa */
 export function heroDesc(id: string | null | undefined): string {
-  if (!id || id === SMART) return "Paling umum — otomatis pilih yang terbaik; pindah ke yang bisa lihat gambar kalau ada gambar";
+  if (!id || id === SMART) return "Tuan rumah — Layla yang milihin hero paling pas buat bantu kamu (otomatis pindah ke yang bisa lihat gambar kalau ada gambar)";
   for (const [re, d] of DESC) if (re.test(id)) return d;
   return isVisionModel(id) ? "Bisa lihat gambar" : "Model teks umum";
 }

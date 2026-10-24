@@ -3,12 +3,12 @@ import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, mentionsAsset, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
-import { personaIntro, personaOf, type Group as PGroup } from "@/lib/aiPersona";
+import { personaIntro, personaOf, splitVia, viaMarker, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
 import { MUSIC_INTENT, MUSIC_RULES } from "@/lib/musicCmd";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
-import { SMART, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
+import { SMART, SMART_HERO, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
 import { personaPrompt } from "@/lib/aiPersona";
 
@@ -96,7 +96,10 @@ export async function POST(req: NextRequest) {
   // 3) riwayat percakapan
   let histRes = await supabase.from("ai_messages").select("role, content, error, images, used_data").eq("conversation_id", convId).order("id", { ascending: false }).limit(HISTORY);
   if (histRes.error) histRes = (await supabase.from("ai_messages").select("role, content, error").eq("conversation_id", convId).order("id", { ascending: false }).limit(HISTORY)) as typeof histRes;
-  const hist = ((histRes.data ?? []) as Row[]).reverse().filter((m) => !m.error && (m.content || (m.images?.length ?? 0) > 0));
+  const hist = ((histRes.data ?? []) as Row[])
+    .reverse()
+    .filter((m) => !m.error && (m.content || (m.images?.length ?? 0) > 0))
+    .map((m) => ({ ...m, content: splitVia(m.content ?? "").content }));
   const lastUser = [...hist].reverse().find((m) => m.role === "user");
   const lastText = lastUser?.content ?? content;
   // gambar hanya ikut dikirim kalau ada di 3 pesan user terakhir (maks 2 pesan bergambar)
@@ -252,6 +255,8 @@ export async function POST(req: NextRequest) {
     if (pickFrom.length) fixedHero = pickFrom[Math.floor(Math.random() * pickFrom.length)];
   }
   step("understand", "done", { hero: heroOf(candidates[0] === "auto" ? SMART : candidates[0]) });
+  // 🎯 mode otomatis: Layla (tuan rumah) yang memilihkan hero penjawab -> ditandai supaya tampil "Layla milihin …"
+  const via = !chosenHero && (chosen === SMART || chosen === "auto") ? SMART_HERO : null;
 
   const lastUserText = content || ([...hist].reverse().find((m) => m.role === "user")?.content ?? "");
   // jawaban kartu pertanyaan (```ask): "📌 Jawaban — …" / "📌 Lewati pertanyaan — …" -> gabung dengan permintaan aslinya
@@ -370,9 +375,9 @@ export async function POST(req: NextRequest) {
     };
     const q = rnd(Q[g]);
     const text = `${personaIntro(askHero).replace(/[.…]+$/, "")} — ${q}\n\n[[ask:${JSON.stringify(info)}]]`;
-    emit({ t: "meta", model: candidates[0] === "auto" ? "" : candidates[0], persona: askHero, data: false, web: false, chart: null, fallback: false });
+    emit({ t: "meta", model: candidates[0] === "auto" ? "" : candidates[0], persona: askHero, data: false, web: false, chart: null, fallback: false, via });
     controller.enqueue(enc.encode(text));
-    await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: text, model: candidates[0], persona: askHero });
+    await supabase.from("ai_messages").insert({ conversation_id: convId, role: "assistant", content: text + (via ? viaMarker(via) : ""), model: candidates[0], persona: askHero });
     await supabase.from("ai_conversations").update({ updated_at: new Date().toISOString() }).eq("id", convId);
     return;
   }
@@ -734,6 +739,7 @@ export async function POST(req: NextRequest) {
     web: web.sources.length > 0,
     chart: web.chart ?? null,
     fallback: failures.length > 0,
+    via,
   });
   let full = "";
   let usage: { in?: number; out?: number; cached?: number } = {};
@@ -767,7 +773,7 @@ export async function POST(req: NextRequest) {
       const row: Record<string, unknown> = {
         conversation_id: convId,
         role: "assistant",
-        content: full.slice(0, 100000),
+        content: full.slice(0, 100000) + (via ? viaMarker(via) : ""),
         model: usedModel,
         used_data: useData,
         persona: personaHero,

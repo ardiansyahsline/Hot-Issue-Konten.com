@@ -19,7 +19,7 @@ import HelperLine from "./HelperLine";
 import { splitChoice } from "@/lib/choiceCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
-import { GROUPS, personaOf, registerCustom, type Group as PGroup } from "@/lib/aiPersona";
+import { GROUPS, personaOf, registerCustom, splitVia, type Group as PGroup } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
 import CharacterWizard from "./CharacterWizard";
 import CharacterBrain from "./CharacterBrain";
@@ -54,6 +54,14 @@ export type AiMsg = {
   switched?: boolean;
   /** jawaban dari karakter buatan sendiri (untuk 👍 / koreksi / ingat ini) */
   character_id?: string | null;
+  /** hero penjawab dipilihkan oleh Layla (mode otomatis) */
+  via?: string | null;
+};
+/** buang penanda [[via:Layla]] dari isi jawaban tersimpan -> jadi kolom via */
+const normMsg = (m: AiMsg): AiMsg => {
+  if (m.role !== "assistant" || !m.content) return m;
+  const v = splitVia(m.content);
+  return v.via ? { ...m, content: v.content, via: v.via } : m;
 };
 type Pending = { key: string; preview: string; status: "uploading" | "done" | "error"; path?: string };
 
@@ -345,7 +353,7 @@ export default function AiChat({
   const supabase = useMemo(() => createClient(), []);
   const [convs, setConvs] = useState(initialConvs);
   const [activeId, setActiveId] = useState<string | null>(initialId);
-  const [msgs, setMsgs] = useState<AiMsg[]>(initialMsgs);
+  const [msgs, setMsgs] = useState<AiMsg[]>(() => initialMsgs.map(normMsg));
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -617,7 +625,7 @@ export default function AiChat({
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data, persona").eq("conversation_id", id).order("id")) as typeof r;
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at, images, used_data").eq("conversation_id", id).order("id")) as typeof r;
       if (r.error) r = (await supabase.from("ai_messages").select("id, role, content, model, error, created_at").eq("conversation_id", id).order("id")) as typeof r;
-      setMsgs((r.data ?? []) as AiMsg[]);
+      setMsgs(((r.data ?? []) as AiMsg[]).map(normMsg));
       setLoadingMsgs(false);
     },
     [supabase, busy]
@@ -712,6 +720,7 @@ export default function AiChat({
             used_data: !!f.data,
             used_web: !!f.web,
             persona: (f.persona as string) || null,
+            via: (f.via as string) || null,
             chart: (f.chart as string) || null,
             switched,
             doneAt: Date.now(),
@@ -1346,7 +1355,7 @@ export default function AiChat({
                         </span>
                         <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                           {/* keterangan penjawab (hero per jawaban — ganti hero di tengah chat tidak mengubah jawaban lama) + badge sumber data */}
-                          {(m.persona || m.model) && !m.error && <HelperLine hero={m.persona || hero(m.model)} />}
+                          {(m.persona || m.model) && !m.error && <HelperLine hero={m.persona || hero(m.model)} via={m.via} />}
                           {(m.used_data || m.used_web || m.content?.includes("🌐 **Sumber:**")) && !m.error && (
                             <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
                               {m.used_data && <span className="inline-block shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">📊 pakai data CS Tracker</span>}
