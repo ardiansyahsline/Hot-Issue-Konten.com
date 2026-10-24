@@ -473,6 +473,9 @@ function guessAsset(text: string): Asset | null {
   return null;
 }
 
+/** pesan menyebut aset pasar tertentu (BTC, EURUSD, BBCA, emas, …) */
+export const mentionsAsset = (text: string) => !!guessAsset(text);
+
 /** aset dari chart jawaban sebelumnya ([[chart:IDX:BBRI]] / [[chart:PUMPUSDT]] / [[chart:OANDA:XAUUSD]]) */
 function assetFromChart(sym: string): Asset | null {
   if (/^IDX:/.test(sym)) return { market: "saham_id", symbol: sym.slice(4) };
@@ -486,8 +489,8 @@ function assetFromChart(sym: string): Asset | null {
  * Permintaan analisa / trade plan WAJIB pakai data harga & chart. Kalau perencana AI bilang tidak perlu browsing
  * atau lupa mengisi aset, aset ditebak dari pesan ini -> pesan user sebelumnya -> chart di jawaban sebelumnya.
  */
-export function ensureTradePlan(plan: WebPlan | null, question: string, history: { role: string; content: string }[]): WebPlan | null {
-  if (!TRADE_INTENT.test(question)) return plan;
+export function ensureTradePlan(plan: WebPlan | null, question: string, history: { role: string; content: string }[], force = false): WebPlan | null {
+  if (!TRADE_INTENT.test(question) && !force) return plan;
   if (plan && plan.market !== "none" && plan.symbols.length) return plan;
   let a = guessAsset(question);
   const recent = history.slice(-8).reverse();
@@ -635,7 +638,11 @@ function relevanceTest(plan: WebPlan): ((text: string) => boolean) | null {
 
 export type StepFn = (k: string, s: "run" | "done" | "skip", extra?: Record<string, unknown>) => void;
 
-export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}, opts: { offline?: boolean } = {}): Promise<{ context: string; lite?: string; sources: Source[]; error?: string; chart?: string | null }> {
+export async function buildWebContext(
+  plan: WebPlan,
+  onStep: StepFn = () => {},
+  opts: { offline?: boolean } = {}
+): Promise<{ context: string; lite?: string; sources: Source[]; error?: string; chart?: string | null; live?: boolean }> {
   const cfg = webConfig();
   // offline = Internet dimatikan / kunci Tavily belum ada: tetap ambil data harga, candle & derivatif (gratis), tanpa pencarian artikel
   const offline = !!opts.offline || !cfg.ok;
@@ -914,6 +921,7 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}, 
       sources: [],
       error: error || "tidak ada hasil",
       chart,
+      live: false,
     };
   }
   // sumber terbaru di atas
@@ -976,7 +984,8 @@ export async function buildWebContext(plan: WebPlan, onStep: StepFn = () => {}, 
   const context = build(hasMarket ? 8000 : 12000);
   // versi ringkas (untuk model berbatas kecil / saat 413): data pasar & instruksi tetap utuh, artikel dipangkas
   const lite = build(hasMarket ? 2000 : 4000);
-  return { context, lite, sources, error: error || undefined, chart };
+  // live = ada data harga asli (harga live / candle) — dipakai untuk aturan "jangan sebut harga dari ingatan"
+  return { context, lite, sources, error: error || undefined, chart, live: live.length > 0 || history.length > 0 || tfHist.length > 0 };
 }
 
 /** daftar sumber yang ditempel di akhir jawaban (ikut tersimpan di riwayat chat) */

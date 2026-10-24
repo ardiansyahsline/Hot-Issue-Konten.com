@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
+import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, mentionsAsset, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
 import { personaIntro, personaOf, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
@@ -254,6 +254,10 @@ export async function POST(req: NextRequest) {
   step("understand", "done", { hero: heroOf(candidates[0] === "auto" ? SMART : candidates[0]) });
 
   const lastUserText = content || ([...hist].reverse().find((m) => m.role === "user")?.content ?? "");
+  // jawaban kartu pertanyaan (```ask): "📌 Jawaban — …" / "📌 Lewati pertanyaan — …" -> gabung dengan permintaan aslinya
+  const cardAnswer = /^📌\s*(Jawaban|Lewati pertanyaan)/i.test(lastText);
+  const prevRequest = [...hist].reverse().find((m) => m.role === "user" && m !== lastUser && !/^📌/.test(m.content))?.content ?? "";
+  const taskText = cardAnswer ? `${prevRequest}\n${lastText}` : lastText;
 
   // 5) data CS Tracker (otomatis kalau pertanyaannya soal isi website / lanjutan dari jawaban yang memakai data)
   const prevAssistant = [...hist].reverse().find((m) => m.role === "assistant");
@@ -264,34 +268,46 @@ export async function POST(req: NextRequest) {
     body.folder && typeof body.folder.listing === "string"
       ? { name: String(body.folder.name ?? "folder").slice(0, 120), listing: body.folder.listing.slice(0, 160_000), contents: String(body.folder.contents ?? "").slice(0, 140_000) }
       : null;
-  const aboutSiteToo = /\b(cs tracker|hot issue|video review|catatan (&|dan) saran)\b/i.test(lastText);
-  const useData = body.data !== "off" && (looksAboutSite(lastText) || followUp) && (!folder || aboutSiteToo);
+  const aboutSiteToo = /\b(cs tracker|hot issue|video review|catatan (&|dan) saran)\b/i.test(taskText);
+  // laporan / PPT soal tim atau periode kerja (tanpa folder) -> butuh data CS Tracker juga
+  const teamReport = !folder && /\b(laporan|report|ppt|presentasi|slide|rekap)\w*/i.test(taskText) && /\b(tim|team|performa|kinerja|cs|harian|mingguan|bulanan|minggu|bulan)\b/i.test(taskText);
+  const useData = body.data !== "off" && (looksAboutSite(taskText) || followUp || teamReport || (cardAnswer && !!prevAssistant?.used_data)) && (!folder || aboutSiteToo);
   // 5b) internet (Tavily): AI cepat "mikir dulu" perlu browsing atau tidak + kata kuncinya (pakai konteks percakapan),
   //     lalu website mencari & membaca halamannya. Jalan bareng dengan pengambilan data CS Tracker.
   const webOn = webConfig().ok && body.web !== "off" && (!folder || /\b(internet|browsing|cari di web|google|berita|terbaru)\b/i.test(lastText));
   // hemat 1 panggilan AI "perencana": sapaan / terima kasih, dan pertanyaan data internal yang jelas tidak butuh internet
   const smallTalk = !hasImages && lastText.length <= 40 && SMALL_TALK.test(lastText.trim());
-  const needPlanner = !smallTalk && !(useData && !looksNeedWeb(lastText) && !extractUrls(lastText).length);
+  // kata waktu ("minggu ini", "terbaru") pada pertanyaan data internal bukan alasan browsing
+  const needPlanner = !smallTalk && !(useData && !looksNeedWeb(taskText.replace(/\b(hari ini|kemarin|minggu ini|bulan ini|saat ini|terbaru|terkini|terupdate)\b/gi, " ")) && !extractUrls(lastText).length);
+  // pertanyaan pasar (harga/kondisi suatu aset) -> data harga live wajib diambil walaupun bukan permintaan trade plan
+  const assetAsk = !hasImages && !folder && mentionsAsset(lastText);
   const textRank = rankTextModels(pool);
   const textHm = healthMap(textRank, health);
   const planners = textRank.filter((m) => textHm.get(m) === 0 && !coolingDown(m) && !isVisionOnlyRisk(m));
-  const noWeb: { context: string; lite?: string; sources: { title: string; url: string }[]; chart?: string | null } = { context: "", sources: [] };
+  const noWeb: { context: string; lite?: string; sources: { title: string; url: string }[]; chart?: string | null; live?: boolean } = { context: "", sources: [] };
   // permintaan analisa / trade plan: tanya pendekatan dulu (S/R, chart pattern, lengkap) — kecuali ini jawaban dari kotak pertanyaan
   const answered = /^📌\s*(Analisa|Detail lengkap)/i.test(lastText);
+  // kartu pendekatan TIDAK muncul kalau permintaannya sudah jelas (timeframe + cara/tujuan disebut) atau aset ini sudah ditanya barusan
+  const alreadyClear = !!detectTimeframe(lastText) && /\b(support|resist\w*|s\/r|pattern|pola|lengkap|scalp\w*|swing|intraday|entry|sl|tp\d?|trade ?plan|investasi)\b/i.test(lastText);
+  const askedBefore = (sym: string) => hist.slice(-8).some((m) => m.role === "user" && m.content.startsWith(`📌 Analisa ${sym.replace(/^[A-Z_]+:/, "")}`));
+  const wantsAsk = (plan: WebPlan | null) => {
+    const sym = plan ? chartSymbol(plan) : null;
+    return !!sym && !answered && !hasImages && TRADE_INTENT.test(lastText) && !alreadyClear && !askedBefore(sym);
+  };
   let askFor: WebPlan | null = null;
   const cleanHist = hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content.replace(/\[\[ask:[\s\S]*?\]\]/g, "") }));
   if (useData) step("data", "run");
   if (webOn) step("decide", "run");
   // Internet dimatikan (atau kunci Tavily belum ada) tapi user minta analisa / trade plan:
   // data harga, candle & derivatif tetap diambil (gratis, tanpa kredit Tavily) — hanya pencarian artikel yang dilewati
-  const marketOnly = !webOn && !hasImages && !folder ? ensureTradePlan(null, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content }))) : null;
+  const marketOnly = !webOn && !hasImages && !folder ? ensureTradePlan(null, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })), assetAsk) : null;
   const [context, web] = await Promise.all([
     useData
       ? buildSiteContext(supabase)
           .catch(() => "")
           .finally(() => step("data", "done"))
       : Promise.resolve(""),
-    webOn && !needPlanner
+    webOn && !needPlanner && !assetAsk
       ? Promise.resolve(noWeb).finally(() => step("decide", "skip"))
       : webOn
       ? planWebSearch({
@@ -303,9 +319,9 @@ export async function POST(req: NextRequest) {
         })
           .then((p) => {
             // analisa / trade plan suatu aset selalu pakai data harga & chart (kecuali sedang membahas gambar yang dikirim)
-            const plan = hasImages ? p : ensureTradePlan(p, lastText, cleanHist);
+            const plan = hasImages ? p : ensureTradePlan(p, lastText, cleanHist, assetAsk);
             step("decide", plan ? "done" : "skip");
-            if (plan && !answered && !hasImages && TRADE_INTENT.test(lastText) && chartSymbol(plan)) {
+            if (wantsAsk(plan)) {
               askFor = plan;
               return noWeb;
             }
@@ -315,7 +331,7 @@ export async function POST(req: NextRequest) {
       : marketOnly
         ? (() => {
             const plan = marketOnly;
-            if (!answered && TRADE_INTENT.test(lastText) && chartSymbol(plan)) {
+            if (wantsAsk(plan)) {
               askFor = plan;
               return Promise.resolve(noWeb);
             }
@@ -336,14 +352,23 @@ export async function POST(req: NextRequest) {
     const g = personaOf(askHero).group;
     const short = /^(1M|5M|15M|30M|1H)$/.test(tf);
     const rec = short ? rnd(["sr", "sr", "extra"]) : tf === "1W" || /^saham/.test(plan.market) ? rnd(["full", "pattern", "sr"]) : g === "NT" ? rnd(["full", "pattern"]) : g === "SJ" ? rnd(["sr", "full"]) : rnd(["sr", "pattern", "extra"]);
-    const info = { sym, label, market: plan.market, tf, hero: askHero, rec, v: Math.floor(Math.random() * 3), x: Math.floor(Math.random() * 4) };
-    const q = rnd([
-      `${label} mau dianalisa pakai pendekatan apa?`,
-      `Biar pas, ${label} mau dibedah dari sisi mana dulu?`,
-      `Oke, ${label}! Mau fokus ke strategi yang mana?`,
-      `Untuk ${label}, kamu lebih suka cara baca yang mana?`,
-      `Siap bedah ${label} — pilih dulu gaya analisanya ya`,
-    ]);
+    // tujuan yang paling mungkin dari kalimat user (ditandai di kartu)
+    const goal = /\b(berita|news|kabar|sentimen)\b/i.test(lastText)
+      ? "berita"
+      : /\b(layak|worth|investasi|jangka panjang|prospek|fundamental)\b/i.test(lastText)
+        ? "kondisi"
+        : /\b(entry|entri|trade ?plan|tp\d?|sl|stop ?loss|beli di|jual di|masuk di|setup|sinyal|signal|long|short)\b/i.test(lastText)
+          ? "entry"
+          : "kondisi";
+    const info = { sym, label, market: plan.market, tf: goal === "kondisi" && /^saham/.test(plan.market) && /layak|investasi|jangka panjang/i.test(lastText) ? "1W" : tf, hero: askHero, rec, goal, v: Math.floor(Math.random() * 3), x: Math.floor(Math.random() * 4) };
+    // kalimat pertanyaan ikut kelompok kepribadian hero yang aktif
+    const Q: Record<PGroup, string[]> = {
+      NT: [`${label}: tujuan & timeframe-nya apa? Biar analisanya tepat sasaran.`, `Sebelum bedah ${label}, tentukan dulu parameternya.`, `${label} — kita main di timeframe mana, dan targetnya apa?`],
+      NF: [`Biar pas sama kebutuhanmu, ${label} mau dilihat dari sisi mana dulu?`, `Yuk bedah ${label} bareng — kamu lagi cari apa nih?`, `${label} ya! Ceritain dulu tujuanmu, biar aku sesuaikan.`],
+      SJ: [`Untuk ${label}, mohon pilih tujuan, timeframe & pendekatannya dulu.`, `${label} — biar rapi, kita tetapkan dulu tujuan dan timeframe-nya.`, `Sebelum analisa ${label}, cek dulu tiga hal ini ya.`],
+      SP: [`${label}? Gas! Mau entry, analisa, atau cek berita?`, `Oke ${label} — scalping, swing, atau investasi nih?`, `Langsung aja: ${label} mau dipakai buat apa?`],
+    };
+    const q = rnd(Q[g]);
     const text = `${personaIntro(askHero).replace(/[.…]+$/, "")} — ${q}\n\n[[ask:${JSON.stringify(info)}]]`;
     emit({ t: "meta", model: candidates[0] === "auto" ? "" : candidates[0], persona: askHero, data: false, web: false, chart: null, fallback: false });
     controller.enqueue(enc.encode(text));
@@ -366,12 +391,22 @@ export async function POST(req: NextRequest) {
   const brain = custom ? brainText(custom, customMem, 20000, lastText) : "";
   const turnRules: string[] = [];
   // standar desain Konten.com (skill konten-report-designer) untuk semua permintaan desain / laporan / PPT / report
-  if (DESIGN_INTENT.test(lastText)) turnRules.push(DESIGN_RULES);
+  if (DESIGN_INTENT.test(taskText)) turnRules.push(DESIGN_RULES);
   // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
   if (MUSIC_INTENT.test(lastText)) turnRules.push(MUSIC_RULES);
   const folderMsg = folder ? folderPrompt(folder) : "";
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
-  const tradeIntent = TRADE_INTENT.test(lastText) || answered;
+  // tujuan "Berita & sentimen" dari kartu pasar -> rangkum kabar, tanpa trade plan
+  const goalNews = answered && /Tujuan Berita/i.test(lastText);
+  const tradeIntent = (TRADE_INTENT.test(lastText) || answered) && !goalNews;
+  // ===== aturan per mode (hanya dimuat saat dipakai, supaya hemat token) =====
+  const marketMode = !!web.chart || !!marketOnly || assetAsk || answered;
+  if (marketMode) turnRules.push(marketRules(!!web.live, goalNews));
+  const coworkMode = !!folder || DESIGN_INTENT.test(taskText) || COWORK_INTENT.test(taskText);
+  if (coworkMode) turnRules.push(coworkRules(!folder && /\b(ppt|pptx|powerpoint|presentasi|slide|deck)\w*/i.test(taskText)));
+  // obrolan ringan / pertanyaan konsep singkat -> jangan pernah pakai kartu
+  if (smallTalk || (lastText.length < 160 && CONCEPT_Q.test(lastText.trim()))) turnRules.push("Pesan ini obrolan ringan / pertanyaan konsep: jawab langsung, JANGAN pakai kartu ```ask.");
+  if (cardAnswer) turnRules.push(/Lewati/i.test(lastText) ? "USER MELEWATI KARTU PERTANYAAN: langsung kerjakan permintaan sebelumnya pakai asumsi paling masuk akal (sebut asumsinya 1 baris). JANGAN bertanya lagi." : "USER SUDAH MENJAWAB KARTU PERTANYAAN (pesan terakhir): langsung kerjakan permintaan sebelumnya sesuai jawaban itu. JANGAN bertanya lagi.");
   // pendekatan yang dipilih di kotak pertanyaan: "📌 Analisa ETHUSDT · Support & Resistance · TF 4H"
   const approach: "sr" | "pattern" | "full" | "auto" = /Detail lengkap|Lengkap ala analis/i.test(lastText)
     ? "full"
@@ -384,7 +419,7 @@ export async function POST(req: NextRequest) {
   // 🧠 tugas berat & penting (PPT/laporan, report campaign, analisa lengkap, baca data folder, teks panjang, atau diminta):
   //    + analisa trading / trade plan. Jawaban ditulis mesin Sonnet; Haiku tetap jadi "perencana" (mikir dulu, browsing) + cadangan.
   //    Dibatasi per user per hari. Di halaman Usage pemakaiannya digabung ke baris Haiku.
-  const heavyWhy = smallTalk ? null : heavyReason(lastText, { approach, folderData: !!folder?.contents, design: DESIGN_INTENT.test(lastText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
+  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: DESIGN_INTENT.test(taskText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
   let heavyOn = false;
   if (heavyWhy) {
     const hm = heavyModelFrom(models);
@@ -859,6 +894,9 @@ const AGGREGATE = /\b(rangkum|ringkas|rekap|report|tren|trend|terbanyak|paling b
 const SMALL_TALK =
   /^(hai+|halo+|hallo|helo|hi+|hey|hei|pagi|siang|sore|malam|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks?|thx|tq|mantap\w*|keren|nice|wkwk\w*|haha\w*|hehe\w*)([\s,!.]+(ya|kak|bro|sis|min|banget|deh|nih|semua|banyak|hehe|wkwk))*[\s!.]*$/i;
 
+/** pertanyaan konsep / definisi yang cukup dijawab langsung */
+const CONCEPT_Q = /^(apa (itu|bedanya|perbedaan|beda|arti|artinya|maksud|maksudnya|sih)|bedanya|perbedaan|definisi|pengertian|arti (dari|kata)|jelasin|jelaskan|kenapa|mengapa|gimana cara|bagaimana cara|cara)\b/i;
+
 /** model Claude (mendukung prompt caching lewat cache_control) */
 const isClaudeModel = (m: string) => /claude|anthropic|haiku|sonnet|opus|^anth\//i.test(m);
 
@@ -871,7 +909,7 @@ function compactMsg(text: string, role: string, recent: boolean): string {
   if (recent) return t;
   t = t
     .replace(/\n+---\n🌐 \*\*Sumber:\*\*[\s\S]*$/, "")
-    .replace(/```(deck|report|tradeplan|fileplan|music|srt)\b[\s\S]*?(```|$)/g, (_, k: string) => `(blok ${k} sudah dikirim sebelumnya)`);
+    .replace(/```(deck|report|tradeplan|fileplan|music|srt|ask)\b[\s\S]*?(```|$)/g, (_, k: string) => `(blok ${k} sudah dikirim sebelumnya)`);
   const max = role === "user" ? 3000 : 1500;
   return t.length > max ? `${t.slice(0, max)} …(dipotong)` : t;
 }
@@ -883,8 +921,52 @@ async function heavyQuotaOk(supabase: Awaited<ReturnType<typeof getCurrentUser>>
   if (!Number.isFinite(limit) || limit <= 0) return limit !== 0;
   const wib = new Date(Date.now() + 7 * 3600_000);
   const start = new Date(Date.UTC(wib.getUTCFullYear(), wib.getUTCMonth(), wib.getUTCDate()) - 7 * 3600_000).toISOString();
-  const { count, error } = await supabase.from("ai_messages").select("id", { count: "exact", head: true }).eq("role", "assistant").ilike("model", "%sonnet%").gte("created_at", start);
+  const { count, error } = await supabase.from("ai_messages").select("id", { count: "exact", head: true }).eq("role", "assistant").ilike("model", "%sonnet%").not("content", "ilike", "%```ask%").gte("created_at", start);
   return error ? true : (count ?? 0) < limit;
+}
+
+/** format blok ```deck (PowerPoint gaya Konten.com) — dipakai mode Cowork dengan / tanpa folder */
+const DECK_SPEC = [
+  'Format: {"title":"Laporan Divisi …","subtitle":"…","period":"Oktober 2026","label":"LAPORAN DIVISI CS","slides":[ … ]}. Jenis slide:',
+  '   {"type":"cover","title":"…","subtitle":"…"}',
+  '   {"type":"section","title":"Divisi CS","subtitle":"…"}  (pembatas per divisi / bagian)',
+  '   {"type":"kpi","title":"…","kpis":[{"label":"Total Views","value":"19,8 jt","note":"+12% vs bulan lalu","tone":"green"}, … maks 6],"bullets":["…"],"source":"nama-file.xlsx"}',
+  '   {"type":"chart","title":"…","chart":{"kind":"bar|barh|line|pie|doughnut","labels":["Sen","Sel"],"series":[{"name":"Tiket","values":[12,18]}]},"kpis":[maks 3 angka pendamping],"source":"…"}',
+  '   {"type":"table","title":"…","table":{"columns":["Agent","Tiket","CSAT"],"rows":[["Alif","120","4,8"]]},"source":"…"}  (maks 12 baris)',
+  '   {"type":"bullets","title":"Kesimpulan & Rekomendasi","bullets":["…"]}',
+  "   tone: green = angka utama/positif, orange = 1 angka sorotan per slide, red = negatif/masalah, neutral = biasa. Tiap slide data WAJIB punya \"source\" (nama file asal, atau \"CS Tracker\" untuk data website).",
+];
+
+/** permintaan bikin file / dokumen / laporan (mode Cowork tanpa folder pun tetap dapat aturan kerja) */
+const COWORK_INTENT =
+  /\b(bikin|buat|buatin|bikinin|susun|susunin|tulis|tuliskan|rapikan|rapihin|siapin|siapkan)\w*\s+(\w+\s+){0,3}(laporan|report|ppt|presentasi|slide|deck|dokumen|file|excel|tabel|surat|proposal|rangkuman|notulen|sop|template|rencana|jadwal|checklist)\b/i;
+
+/** aturan mode Cowork (tugas / bikin file) */
+function coworkRules(deckSpec: boolean) {
+  return [
+    "MODE COWORK (tugas / bikin file). Alur: pahami tujuan → kartu ```ask kalau perlu → rencana singkat → kerjakan → cek ulang → serahkan.",
+    "- Info penting belum ada (periode, sumber data, untuk siapa, format/jumlah slide) dan salah tebak bikin kerja ulang → kirim kartu ```ask DULU, jangan langsung bikin file panjang. Sudah jelas / user sudah jawab kartu → langsung kerjakan.",
+    "- Hasil SIAP PAKAI pakai fitur website: blok ```deck untuk PPT, ```report untuk report campaign, ```fileplan untuk rapikan file, tabel/teks rapi untuk dokumen. Jangan menceritakan proses panjang.",
+    "- Sebelum menyerahkan, cek ulang: angka cocok dengan data, tidak ada placeholder (…, XX, [isi]), jumlah slide/poin sesuai permintaan, JSON valid.",
+    "- Buka dengan 1–2 kalimat ringkasan hasil (gaya karaktermu); tutup dengan TEPAT 1 saran langkah berikutnya.",
+    "- Laporan/PPT dari data CS Tracker: semua angka dari blok DATA CS TRACKER (sebut periodenya). Data tidak ada → bilang, jangan mengarang.",
+    ...(deckSpec ? ["", "FORMAT PPT — tutup jawaban dengan SATU blok ```deck berisi JSON (website mengubahnya jadi PowerPoint bergaya Konten.com):", ...DECK_SPEC] : []),
+  ].join("\n");
+}
+
+/** aturan mode pasar (crypto / saham / forex) — live = data harga asli berhasil diambil */
+function marketRules(live: boolean, news: boolean) {
+  return [
+    "MODE PASAR (crypto / saham / forex):",
+    live
+      ? "- Harga, level & angka HANYA dari blok data di atas (DATA HARGA LIVE / RIWAYAT HARGA / candle / hasil browsing). Sebut sumber & waktu datanya (mis. \"64.210 per 24 Okt 14.05 WIB, sumber [1]\")."
+      : "- ⚠️ DATA HARGA LIVE GAGAL / TIDAK DIAMBIL untuk pesan ini. Bilang jujur di awal jawaban bahwa data live tidak tersedia. JANGAN menyebut harga, level, atau persentase dari ingatan. Boleh jelaskan faktor & kerangka yang perlu dicek, lalu sarankan coba lagi / nyalakan 🌐 Internet.",
+    "- Kalau tidak ada format kartu ringkas di bawah, susun: 1) Kondisi sekarang 2) Level penting 3) Skenario naik / turun (pemicu & batal) 4) Risiko 5) Yang perlu dipantau. Ringkas, boleh tabel.",
+    "- Pisahkan FAKTA (dari data, + sumber) dan OPINI/analisa (tandai \"menurutku\", \"skenario\", \"kemungkinan\").",
+    "- Tutup dengan pengingat risiko SATU baris saja. Jangan pernah menjanjikan profit atau kepastian arah.",
+    "- Tujuan (entry / analisa / berita), timeframe, atau gaya (scalping / swing / investasi) belum jelas dan kartu pendekatan belum muncul → boleh kirim kartu ```ask berisi pertanyaan itu.",
+    ...(news ? ["- TUJUAN USER: BERITA & SENTIMEN — rangkum 3–5 kabar terbaru (tanggal + [sumber]) lalu dampaknya ke harga (naik / turun / netral). Tanpa trade plan dan tanpa blok tradeplan."] : []),
+  ].join("\n");
 }
 
 /** instruksi + data folder laptop user (rapikan file / baca isi / bikin laporan PPT) */
@@ -908,14 +990,8 @@ function folderPrompt(f: { name: string; listing: string; contents: string }) {
     "",
     "KALAU USER MINTA LAPORAN / PPT / PRESENTASI / SLIDE dari data folder:",
     "1. Tulis ringkasan singkat (3–6 poin temuan penting) lalu tutup dengan SATU blok ```deck berisi JSON. Website mengubahnya jadi PowerPoint bergaya laporan Konten.com (latar hitam, angka hijau, aksen oranye). Kalau datanya data campaign Konten.com (views, spent, budget, CPM per campaign), boleh tambah blok ```report per campaign (halaman Campaign Performance PNG).",
-    '2. Format: {"title":"Laporan Divisi …","subtitle":"…","period":"Oktober 2026","label":"LAPORAN DIVISI CS","slides":[ … ]}. Jenis slide:',
-    '   {"type":"cover","title":"…","subtitle":"…"}',
-    '   {"type":"section","title":"Divisi CS","subtitle":"…"}  (pembatas per divisi / bagian)',
-    '   {"type":"kpi","title":"…","kpis":[{"label":"Total Views","value":"19,8 jt","note":"+12% vs bulan lalu","tone":"green"}, … maks 6],"bullets":["…"],"source":"nama-file.xlsx"}',
-    '   {"type":"chart","title":"…","chart":{"kind":"bar|barh|line|pie|doughnut","labels":["Sen","Sel"],"series":[{"name":"Tiket","values":[12,18]}]},"kpis":[maks 3 angka pendamping],"source":"…"}',
-    '   {"type":"table","title":"…","table":{"columns":["Agent","Tiket","CSAT"],"rows":[["Alif","120","4,8"]]},"source":"…"}  (maks 12 baris)',
-    '   {"type":"bullets","title":"Kesimpulan & Rekomendasi","bullets":["…"]}',
-    "   tone: green = angka utama/positif, orange = 1 angka sorotan per slide, red = negatif/masalah, neutral = biasa. Tiap slide data WAJIB punya \"source\" (nama file asal).",
+    "2. Format blok deck:",
+    ...DECK_SPEC,
     "3. Kalau folder berisi subfolder per divisi/bagian, buat section per divisi lalu slide KPI/grafiknya. Urutan: cover → ringkasan eksekutif (kpi) → per divisi → kesimpulan & rekomendasi. Umumnya 6–14 slide.",
     "4. SEMUA ANGKA HARUS dari ISI FILE / PROFIL DATA. Dilarang mengarang angka, persentase perubahan, atau target yang tidak ada di data. Format angka Indonesia (1.234.567 · 12,5% · Rp 2,4 jt).",
     "5. Kalau isi file belum terbaca (tidak ada di bawah), minta user menyebut nama file / subfolder datanya, jangan membuat deck kosong.",
