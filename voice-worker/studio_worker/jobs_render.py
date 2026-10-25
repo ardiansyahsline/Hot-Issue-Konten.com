@@ -207,10 +207,14 @@ def copy_assets(repo: Path, public: Path) -> int:
 
 
 def builtin_ids(repo: Path) -> set[str]:
+    """id SFX bawaan = SFX_BUILTIN di lib/studio/sfxMeta.ts (sama dengan website & komposisi: extraSfxOf / sfxById), BUKAN sfx.json —
+    SFX dari `tambah_sfx.py --juga-json` masuk sfx.json tapi bagi komposisi tetap SFX tambahan (studio_sfx → props.sfxExtra)"""
     try:
-        return {x["id"] for x in json.loads((repo / "assets" / "audio" / "sfx" / "sfx.json").read_text(encoding="utf-8"))}
-    except Exception:
-        return set()
+        src = (repo / "lib" / "studio" / "sfxMeta.ts").read_text(encoding="utf-8")
+    except OSError:
+        return set()  # tidak terbaca: semua id dicari di studio_sfx (aman, sfxById tetap mengutamakan bawaan)
+    m = re.search(r"SFX_BUILTIN\b[^=]*=\s*\[(.*?)^\];", src, re.S | re.M)
+    return set(re.findall(r"""[{,]\s*id\s*:\s*["'`]([^"'`]+)["'`]""", m.group(1))) if m else set()
 
 
 def extra_sfx(supa, tl: dict, public: Path, repo: Path) -> list[dict]:

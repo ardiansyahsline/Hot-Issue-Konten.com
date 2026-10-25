@@ -14,6 +14,17 @@ import threading
 import time
 from pathlib import Path
 
+# pythonw.exe (Task Scheduler / pasang-otomatis.ps1, tanpa jendela): sys.stdout & sys.stderr = None → progress bar tqdm
+# (unduh model HuggingFace, "Sampling" Chatterbox) crash "'NoneType' object has no attribute 'write'".
+# Arahkan ke os.devnull & matikan progress bar SEBELUM library berat di-import.
+if sys.stdout is None or sys.stderr is None:
+    os.environ.setdefault("TQDM_DISABLE", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from studio_worker import config  # noqa: E402  (harus pertama: batas thread & folder cache)

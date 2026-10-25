@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { createVoiceJob, useStudioJob, useStudioStatus, type VoiceJob } from "@/lib/studio/client";
+import { cancelVoiceJob, createVoiceJob, friendlyStudioError, useStudioJob, useStudioStatus, type VoiceJob } from "@/lib/studio/client";
 import { MAX_TOTAL, type Music, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 
@@ -22,6 +22,28 @@ export function beatsSrcOf(src: string | null | undefined): string | null {
 
 /** musik yang belum punya BPM / ketukan -> perlu dideteksi di laptop */
 const needsBeats = (m: Music | undefined): m is Music => !!m && m.src !== "none" && m.src !== "bed" && !m.bpm && (m.beats?.length ?? 0) < 2;
+
+/** musik yang ketukannya memang tidak terdeteksi (per src, di localStorage) -> muat ulang halaman tidak minta job lagi */
+const NO_BEATS_KEY = "studio:noBeats";
+const NO_BEATS_MAX = 100;
+
+function loadNoBeats(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(NO_BEATS_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+function rememberNoBeats(src: string) {
+  try {
+    const all = [...loadNoBeats()].filter((x) => x !== src);
+    all.push(src);
+    localStorage.setItem(NO_BEATS_KEY, JSON.stringify(all.slice(-NO_BEATS_MAX)));
+  } catch {
+    /* mode privat: abaikan */
+  }
+}
 
 /** hasil job 'beats' -> nilai music yang valid (rentang sama dengan normalizeTimeline) */
 export function beatsOf(r: VoiceJob["result"]): Found {
@@ -44,7 +66,10 @@ export function useBeats(tl: Timeline | null, projectId: string | null, tlRef: R
   const status = useStudioStatus();
   const online = !!status?.worker.online;
   const [pend, setPend] = useState<{ id: string; src: string } | null>(null);
-  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  /** ketukan memang tidak terdeteksi (hasil analisis) -> tidak diminta ulang */
+  const [failed, setFailed] = useState<ReadonlySet<string>>(loadNoBeats);
+  /** gagal sementara (insert / job gagal di laptop) -> dicoba lagi saat laptop nyala lagi atau musik diganti */
+  const [err, setErr] = useState<{ src: string; msg: string | null } | null>(null);
   /** musik yang sudah dimintakan job-nya (sesi ini) */
   const asked = useRef(new Set<string>());
   /** hasil per musik (dipakai lagi kalau user balik ke musik yang sama) */
@@ -52,6 +77,7 @@ export function useBeats(tl: Timeline | null, projectId: string | null, tlRef: R
   const pendRef = useRef(pend);
   pendRef.current = pend;
   const gen = useRef(0);
+  const alive = useRef(true);
   const cb = useRef(onChange);
   cb.current = onChange;
 
@@ -68,44 +94,71 @@ export function useBeats(tl: Timeline | null, projectId: string | null, tlRef: R
     cb.current({ ...t, music: { ...t.music, bpm: f.bpm ?? t.music.bpm ?? null, beats: f.beats ?? t.music.beats ?? null, lufs: t.music.lufs ?? f.lufs } });
   };
 
+  // musik diganti / laptop nyala lagi -> kegagalan sementara dicoba ulang
+  useEffect(() => setErr(null), [src, online]);
+
   // musik baru tanpa ketukan + laptop nyala -> masukkan job 'beats'
   useEffect(() => {
-    if (!key || failed.has(src)) return;
+    if (!key || failed.has(src) || err?.src === src) return;
     const hit = found.current.get(src);
     if (hit) return apply(src, hit);
     if (!online || asked.current.has(src)) return;
     asked.current.add(src);
-    // cuma satu job yang dipantau: job musik sebelumnya yang belum selesai dilepas (boleh diminta lagi nanti)
+    // cuma satu job yang dipantau: job musik sebelumnya yang belum selesai dibatalkan (boleh diminta lagi nanti)
     const prev = pendRef.current;
-    if (prev) asked.current.delete(prev.src);
+    if (prev) {
+      asked.current.delete(prev.src);
+      void cancelVoiceJob(prev.id).catch(() => {});
+    }
     setPend(null);
     const g = ++gen.current;
     createVoiceJob({ kind: "beats", project_id: projectId, settings: { src: key } })
       .then((j) => {
-        if (g === gen.current) setPend({ id: j.id, src });
-        else asked.current.delete(src);
+        if (g === gen.current && alive.current) return setPend({ id: j.id, src });
+        // musik sudah diganti / Studio ditutup selama job dibuat -> jangan menumpuk di antrian laptop
+        asked.current.delete(src);
+        void cancelVoiceJob(j.id).catch(() => {});
       })
-      .catch(() => {
-        if (g === gen.current) setFailed((f) => new Set(f).add(src));
+      .catch((e) => {
+        asked.current.delete(src);
+        if (g === gen.current) setErr({ src, msg: e instanceof Error ? e.message : friendlyStudioError(e) });
       });
     // apply membaca ref terbaru
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, src, online, failed, projectId]);
+  }, [key, src, online, failed, err, projectId]);
+
+  // keluar dari Studio -> job yang masih dipantau dibatalkan
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      const p = pendRef.current;
+      if (p) void cancelVoiceJob(p.id).catch(() => {});
+    };
+  }, []);
 
   // ---------------- pantau job 'beats' ----------------
   const { job, missing } = useStudioJob<VoiceJob>("studio_voice_jobs", pend?.id ?? null);
   useEffect(() => {
     if (!pend) return;
-    const fail = () => {
-      setFailed((f) => new Set(f).add(pend.src));
+    // gagal sementara (job hilang / gagal / dibatalkan) -> boleh diminta lagi nanti, pesan laptop ditampilkan
+    const retry = (msg?: string | null) => {
+      asked.current.delete(pend.src);
+      setErr({ src: pend.src, msg: msg || null });
       setPend(null);
     };
-    if (missing) return fail();
+    if (missing) return retry();
     if (!job || job.id !== pend.id) return;
-    if (job.status === "gagal" || job.status === "batal") return fail();
+    if (job.status === "gagal" || job.status === "batal") return retry(job.message);
     if (job.status !== "selesai") return;
     const f = beatsOf(job.result);
-    if (!f.bpm && !f.beats) return fail(); // ketukan tidak jelas -> tidak diminta ulang terus
+    if (!f.bpm && !f.beats) {
+      // ketukan tidak jelas -> diingat per musik, tidak diminta ulang terus (juga setelah muat ulang)
+      rememberNoBeats(pend.src);
+      setFailed((s) => new Set(s).add(pend.src));
+      setPend(null);
+      return;
+    }
     found.current.set(pend.src, f);
     setPend(null);
     apply(pend.src, f);
@@ -116,5 +169,6 @@ export function useBeats(tl: Timeline | null, projectId: string | null, tlRef: R
   if (failed.has(src)) return "Ketukan musik ini tidak terdeteksi — potongan tidak bisa ditempel ke ketukan";
   if (status === null) return null;
   if (!online) return pend?.src === src ? "Laptop mati — deteksi ketukan musik menunggu laptop nyala" : "Laptop harus nyala untuk mendeteksi ketukan musik ini";
+  if (err?.src === src) return `Deteksi ketukan musik gagal${err.msg ? ` (${err.msg.replace(/\.$/, "")})` : ""} — dicoba lagi saat laptop nyala ulang atau musik diganti`;
   return "Lagi mendeteksi ketukan musik di laptop…";
 }

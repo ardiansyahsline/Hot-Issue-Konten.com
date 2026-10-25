@@ -258,7 +258,7 @@ class ChatterboxEngine:
                 if attempt:
                     raise EngineFailed("VRAM GPU penuh") from e
                 log.warning("VRAM penuh, coba sekali lagi…")
-            except (RuntimeError, AssertionError) as e:
+            except Exception as e:  # RuntimeError/AssertionError model, juga error lain (mis. AttributeError) → EngineFailed → pindah ke pocket
                 self._ref = None
                 if attempt:
                     raise EngineFailed(f"Chatterbox error: {e}") from e

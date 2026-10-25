@@ -42,7 +42,8 @@ export async function GET() {
   return NextResponse.json(
     {
       worker: { online, lastSeen, gpu: str(info.gpu), engine: str(info.engine), queue },
-      engines: { bank: online, edge: true, elevenlabs: elevenEnabled() },
+      // bank suara hanya kalau worker melaporkan mesin yang siap (engine kosong = chatterbox & pocket sama-sama mati)
+      engines: { bank: online && !!str(info.engine), edge: true, elevenlabs: elevenEnabled() },
       freesound: !!process.env.FREESOUND_API_KEY?.trim(),
       renderWorker: online && info.render === true,
     },

@@ -76,7 +76,7 @@ function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooL
 
 /**
  * Panel suara VO: pilih suara (bank suara di laptop / cadangan Edge / premium ElevenLabs / tanpa VO),
- * atur ekspresi, lalu bikin VO. Worker mati -> otomatis pakai cadangan (label "VO sementara").
+ * atur ekspresi, lalu bikin VO. Worker mati / gagal -> otomatis pakai cadangan (label "VO sementara").
  */
 export default function VoPanel({ timeline: tl, onChange, projectId }: { timeline: Timeline; onChange: (tl: Timeline) => void; projectId: string | null }) {
   const uid = useId();
@@ -184,7 +184,9 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     } else if (job.status === "gagal") {
       handled.current = job.id;
       rememberJob(jobKey, null);
-      setRun({ s: "error", msg: "Mesin suara di laptop gagal bikin VO.", detail: job.message ?? undefined, fallback: true });
+      // mesin laptop gagal -> otomatis cadangan Edge (sama seperti saat laptop mati); pesan umum laptop ("…pakai cadangan") tidak diulang
+      const why = job.message && !/cadangan/i.test(job.message) ? ` (${job.message.slice(0, 160).replace(/\.$/, "")})` : "";
+      void genTts("edge", `Mesin suara laptop gagal bikin VO${why} — sementara pakai suara cadangan (VO sementara). Suara bank bisa dicoba lagi nanti lewat "Generate ulang VO".`);
     }
     // applyJob membaca ref terbaru, cukup dipicu perubahan job
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -272,7 +274,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const m = preferBank ? "bank" : mode;
     if (m === "bank") {
       if (workerOn && bankVoice) return void genBank(bankVoice);
-      return void genTts("edge", !workerOn ? "Mesin suara laptop mati — sementara pakai suara cadangan." : "Belum ada suara siap di bank — sementara pakai suara cadangan.");
+      return void genTts("edge", !workerOn ? `Mesin suara laptop ${status?.worker.online ? "belum bisa dipakai" : "mati"} — sementara pakai suara cadangan.` : "Belum ada suara siap di bank — sementara pakai suara cadangan.");
     }
     if (m === "elevenlabs") return void genTts(eleven ? "elevenlabs" : "edge", eleven ? undefined : "Premium belum aktif — pakai suara cadangan.");
     return void genTts("edge");
@@ -338,7 +340,9 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
             ? "Cek mesin suara laptop…"
             : workerOn
               ? `Mesin suara laptop: nyala${gpu ? ` (GPU ${gpu})` : ""}${queue ? ` · ${queue} antrian` : ""}`
-              : "Mesin suara laptop: mati — pakai cadangan"}
+              : status.worker.online
+                ? "Mesin suara laptop: belum bisa dipakai — pakai cadangan"
+                : "Mesin suara laptop: mati — pakai cadangan"}
         </span>
       </div>
 
@@ -416,7 +420,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
                 ↺ Pakai saran
               </button>
             )}
-            {!workerOn && status !== null && <p className="text-[11px] text-amber-400">Laptop mati — sementara dibikin pakai suara cadangan.</p>}
+            {!workerOn && status !== null && <p className="text-[11px] text-amber-400">{status.worker.online ? "Mesin suara laptop belum bisa dipakai" : "Laptop mati"} — sementara dibikin pakai suara cadangan.</p>}
           </div>,
         )}
         {opt(

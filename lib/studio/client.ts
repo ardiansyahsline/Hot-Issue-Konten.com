@@ -98,7 +98,8 @@ async function statusFromTable(): Promise<StudioStatus> {
     return {
       ...OFFLINE_STATUS,
       worker: { online, lastSeen: row.last_seen, gpu: txt(info.gpu), engine: txt(info.engine), queue: Math.max(0, Number(info.antrian ?? info.queue) || 0) },
-      engines: { bank: online, edge: true, elevenlabs: false },
+      // sama dengan route status: bank suara hanya kalau worker melaporkan mesin yang siap
+      engines: { bank: online && !!txt(info.engine), edge: true, elevenlabs: false },
       renderWorker: online && info.render === true,
     };
   } catch {

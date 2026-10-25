@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import beats
 from . import log as vlog
 from .jobctx import JobCtx, JobError
+from .jobs_render import owner_can_read
+from .supa import norm_path
 
 log = vlog.get("beats")
 
@@ -47,6 +49,13 @@ def run(ctx: JobCtx) -> None:
             if not path.exists():
                 raise JobError("File musik tidak ada di folder assets/audio laptop (repo belum di-update?).")
         else:
+            # service role bisa baca semua: batasi ke file yang boleh dibuka pemilik job (aturan sama dengan render)
+            try:
+                allowed = owner_can_read(rt.supa, ctx.job.get("created_by"))(norm_path(ref))
+            except ValueError as e:
+                raise JobError("Sumber musik kosong / tidak valid.") from e
+            if not allowed:
+                raise JobError("File musik tidak boleh dibaca.")
             ctx.progress(0.1, "Mengunduh musik…", force=True)
             path = work / ("musik" + (Path(ref).suffix or ".mp3"))
             try:
