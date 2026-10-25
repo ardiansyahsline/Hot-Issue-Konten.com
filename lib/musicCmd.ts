@@ -19,8 +19,9 @@ export type MusicCmd = {
 
 export const MUSIC_PRESET_IDS = ["piano", "strings", "focus", "guitar", "nylon", "lofi"] as const;
 
+// kata kerja pakai akar kata (putar-kan, puter-in, muter-in, setel-in, nyala-kan, dengerin…) supaya imbuhan apa pun tetap kena
 export const MUSIC_INTENT =
-  /\b(putar|puterin|puter|putarin|setel|setelin|nyalain|nyalakan|mainkan|mainin|play|stop|stopin|matiin|matikan|pause|jeda|ganti|lanjut(?:in|kan)?)\b[\s\S]{0,50}\b(musik(?:nya)?|music|lagu(?:nya)?|song|playlist|youtube|yt|piano|gitar|lofi|lo-fi|instrumental)\b|\b(musik|lagu|song)\b[\s\S]{0,30}\b(dong|donk|yuk|trending|santai|buat kerja)\b/i;
+  /\b(putar|puter|muter|setel|nyala|main|play|stop|mati|pause|jeda|ganti|lanjut|denger|dengar)\w*\b[\s\S]{0,60}\b(musik|music|lagu|song|playlist|youtube|yt|piano|gitar|lofi|lo-fi|instrumental)\w*\b|\b(musik|lagu|song)\w*\b[\s\S]{0,30}\b(dong|donk|yuk|trending|santai|buat kerja)\b/i;
 
 export const MUSIC_RULES = `🎵 PEMUTAR MUSIK WEBSITE (kamu BISA memutar musik untuk user)
 Website punya pemutar musik di menu 🎵: (1) YouTube / YouTube Music (lagu apa saja, ada vokal), (2) Musik AI (instrumental yang dibuat langsung).
