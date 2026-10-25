@@ -289,7 +289,8 @@ function useAutoFill(designs: Design[], on: boolean) {
         // kata kunci adegan dari AI dulu; kosong -> foto utama artikel berita sumbernya (beda slide, beda foto)
         void (sl.bg ? findPhotos(sl.bg) : Promise.resolve([] as PhotoItem[])).then(async (items) => {
           let list = items.map(toPic);
-          if (!list.length) {
+          // foto utama artikel berita sering berisi judul/angka tertulis -> tidak dipakai di cover bertokoh (angka bisa dobel)
+          if (!list.length && !(sl.type === "cover" && (sl.person || sl.big))) {
             const news = await deckNews(deck);
             list = news.length ? [...news.slice(d.tws!.index % news.length), ...news.slice(0, d.tws!.index % news.length)] : [];
           }

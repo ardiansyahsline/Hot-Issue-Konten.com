@@ -137,6 +137,7 @@ const BASE_CSS = `
 .tokoh img{height:100%;width:auto;max-width:none;display:block;filter:drop-shadow(0 0 34px rgba(61,110,247,.38)) drop-shadow(0 30px 40px rgba(0,0,0,.6))}
 .kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.5)}
 .udara{position:absolute;left:0;right:0;top:0;height:760px;z-index:2}
+.grade{position:absolute;inset:0;z-index:4;mix-blend-mode:soft-light;pointer-events:none}
 .big3d{position:absolute;left:0;right:0;top:0;z-index:3}
 .judul{position:absolute;left:68px;right:52px;bottom:110px;z-index:10;margin:0;font-weight:800;line-height:1.12;letter-spacing:-.02em;text-transform:uppercase;text-shadow:0 2px 18px rgba(0,0,0,.45)}
 .judul span{display:block;white-space:nowrap}
@@ -197,40 +198,57 @@ function numLayout(text: string, side: NumSide) {
   return { size, cx, w };
 }
 
-function big3d(text: string, tone: TwsTone, ambient?: string, side: NumSide = "center"): string {
+const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(",")},${a})`;
+
+function big3d(text: string, tone: TwsTone, ambient?: string, side: NumSide = "center", env?: string): string {
   const t = TONE3D[tone];
   const amb = ambient && /^#[0-9a-f]{6}$/i.test(ambient) ? ambient : null;
   const { size, cx } = numLayout(text, side);
   const y = NUM_BASE;
-  const id = `n${tone}`;
+  // id unik per angka (beberapa SVG di satu halaman tidak boleh saling pinjam gradien / potongan)
+  const id = `n${tone}${[...`${text}|${side}|${ambient ?? ""}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36)}`;
   const txt = esc(text);
   const attrs = `text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${(-size * 0.04).toFixed(1)}"`;
-  // sisi tebal: dari warna sisi (sedikit kena warna lingkungan) di depan ke hampir hitam di belakang
+  // warna angka "dibasuh" cahaya adegan: makin bawah makin kena warna lingkungan -> tidak menabrak latar
+  const tint = (c: string, o: number) => (amb ? mix(c, amb, o < 0.3 ? 0.16 : o < 0.6 ? 0.26 : 0.38) : c);
+  const stops = t.face.map(([o, c]) => `<stop offset="${o}" stop-color="${tint(c, o)}"/>`).join("");
+  // sisi tebal: dari warna sisi (kena warna lingkungan) di depan ke bayangan gelap lingkungan di belakang
   const layers = 14;
   const dx = size * 0.0028, dy = size * 0.006;
-  const sideFront = amb ? mix(t.side, amb, 0.22) : t.side;
+  const sideFront = amb ? mix(t.side, amb, 0.32) : t.side;
+  const shade = amb ? mix(amb, "#000000", 0.88) : "#050505";
   const depth = Array.from({ length: layers }, (_, i) => layers - i)
-    .map((k) => `<text ${attrs} x="${(cx + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, "#050505", (k / layers) * 0.85)}">${txt}</text>`)
+    .map((k) => `<text ${attrs} x="${(cx + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, shade, (k / layers) * 0.85)}">${txt}</text>`)
     .join("");
   const rim = amb ? mix(amb, "#ffffff", 0.35) : t.edge;
+  const glow = amb ? rgba(mix(t.face[1][1], amb, 0.5), 0.5) : t.glow;
+  const fog = amb ? mix(amb, "#000000", 0.55) : "#000000";
   const h = NUM_BASE + Math.round(size * 0.3) + 40;
-  const stops = t.face.map(([o, c]) => `<stop offset="${o}" stop-color="${amb && o > 0.5 ? mix(c, amb, 0.12) : c}"/>`).join("");
+  const clip = `<clipPath id="${id}c"><text ${attrs} x="${cx}" y="${y}">${txt}</text></clipPath>`;
   return `<svg width="1080" height="${h}" viewBox="0 0 1080 ${h}" style="display:block;overflow:visible"><defs>
 <linearGradient id="${id}f" x1="0" y1="0" x2="0.18" y2="1">${stops}</linearGradient>
-<linearGradient id="${id}e" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.edge}" stop-opacity=".95"/><stop offset=".35" stop-color="${t.edge}" stop-opacity=".25"/><stop offset="1" stop-color="${t.edge}" stop-opacity="0"/></linearGradient>
+<linearGradient id="${id}e" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.edge}" stop-opacity=".9"/><stop offset=".35" stop-color="${t.edge}" stop-opacity=".2"/><stop offset="1" stop-color="${t.edge}" stop-opacity="0"/></linearGradient>
 <linearGradient id="${id}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".7" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity=".55"/></linearGradient>
+<linearGradient id="${id}h" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${fog}" stop-opacity="0"/><stop offset=".55" stop-color="${fog}" stop-opacity="0"/><stop offset="1" stop-color="${fog}" stop-opacity=".55"/></linearGradient>
 <mask id="${id}k" maskUnits="userSpaceOnUse" x="0" y="0" width="1080" height="${h}"><rect width="1080" height="${h}" fill="url(#${id}m)"/></mask>
+${clip}
 <filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="${Math.round(size * 0.13)}"/></filter>
 <filter id="${id}s" x="-20%" y="-40%" width="140%" height="200%"><feGaussianBlur stdDeviation="${Math.round(size * 0.07)}"/></filter>
+<filter id="${id}r"><feGaussianBlur stdDeviation="3"/></filter>
 <filter id="${id}t" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
 </defs><g transform="rotate(-3 ${cx} ${Math.round(y - size * 0.35)})" mask="url(#${id}k)">
-<text ${attrs} x="${cx + 16}" y="${(y + size * 0.14).toFixed(1)}" fill="#000" opacity=".65" filter="url(#${id}s)">${txt}</text>
-<text ${attrs} x="${cx}" y="${(y + size * 0.04).toFixed(1)}" fill="${t.glow}" opacity=".8" filter="url(#${id}g)">${txt}</text>
+<text ${attrs} x="${cx + 16}" y="${(y + size * 0.14).toFixed(1)}" fill="${shade}" opacity=".7" filter="url(#${id}s)">${txt}</text>
+<text ${attrs} x="${cx}" y="${(y + size * 0.04).toFixed(1)}" fill="${glow}" filter="url(#${id}g)">${txt}</text>
 ${depth}
 <text ${attrs} x="${cx}" y="${y}" fill="url(#${id}f)">${txt}</text>
-<text ${attrs} x="${cx}" y="${y}" fill="#fff" opacity=".07" filter="url(#${id}t)">${txt}</text>
-<text ${attrs} x="${cx}" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.011).toFixed(1)}">${txt}</text>
-<text ${attrs} x="${(cx - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".55" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
+${
+  // pantulan lingkungan: foto latar "terpantul" samar di permukaan logam -> angka & latar satu adegan
+  env ? `<image href="${esc(env)}" x="0" y="0" width="1080" height="1350" preserveAspectRatio="xMidYMid slice" clip-path="url(#${id}c)" opacity=".34" filter="url(#${id}r)" style="mix-blend-mode:overlay"/>` : ""
+}
+<text ${attrs} x="${cx}" y="${y}" fill="#fff" opacity=".06" filter="url(#${id}t)">${txt}</text>
+<rect x="0" y="${Math.round(y - size * 0.75)}" width="1080" height="${Math.round(size * 0.8)}" fill="url(#${id}h)" clip-path="url(#${id}c)"/>
+<text ${attrs} x="${cx}" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.01).toFixed(1)}">${txt}</text>
+<text ${attrs} x="${(cx - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".5" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
 </g></svg>`;
 }
 
@@ -361,7 +379,10 @@ function photoBox(face: NonNullable<Img["face"]>, frame: TwsSlide["frame"]): { s
   const target = face.cx * w < 540 ? GOLD_L : GOLD_R;
   const left = Math.min(0, Math.max(1080 - w, target - face.cx * w));
   const top = Math.min(440, Math.max(1350 - 160 - h, HEAD_PHOTO - face.top * h));
-  return { style: `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px`, faceX: left + face.cx * w };
+  // tepi atas foto dipudarkan, tapi tidak sampai menutupi kepala (kepala yang mepet tepi foto -> pudar pendek)
+  const fade = Math.round(Math.max(90, Math.min(200, face.top * h * 0.8)));
+  const mask = `-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 ${fade}px);mask-image:linear-gradient(180deg,transparent 0,#000 ${fade}px)`;
+  return { style: `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px;${mask}`, faceX: left + face.cx * w };
 }
 
 function cover(sl: TwsSlide, img: Img): string {
@@ -381,7 +402,7 @@ function cover(sl: TwsSlide, img: Img): string {
   // kabut gelap + rona warna angka di belakang angka: angka tampak "berada" di adegan, bukan ditempel
   const at = nl ? `${Math.round((nl.cx / 1080) * 100)}% 17%` : "50% 17%";
   const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 62% 38% at ${at},rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 52% 30% at ${at},${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".2)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
-  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient, side)}</div>` : "";
+  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient, side, base.bg)}</div>` : "";
   // tokoh terpotong: ujung kepala di HEAD_CUT, tinggi sesuai pembingkaian, sedikit ke kanan (garis emas); memudar tepat di atas judul
   const ph = CUT_H[sl.frame ?? "half"];
   const fadeFrom = Math.round(((1000 - HEAD_CUT) / ph) * 100), fadeTo = Math.min(100, Math.round(((1160 - HEAD_CUT) / ph) * 100));
@@ -392,11 +413,14 @@ function cover(sl: TwsSlide, img: Img): string {
   const bgLayer = drop
     ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div><div data-layer="Latar" class="latar">${
         pb
-          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${pb.style};${fadeTop}">`
+          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${pb.style}">`
           : `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;left:0;top:300px;height:auto;min-height:1050px;${fadeTop}">`
       }</div>`
     : latar(base, sl, "", cut ? "redup" : "");
-  return `<div class="art">${bgLayer}<div class="vign" data-layer="Vignette"></div>${air}${big}${person}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
+  // color grading: satu warna cahaya untuk latar, angka, dan tokoh (soft-light) -> semuanya terasa satu foto
+  const gradeCol = img.ambient && /^#[0-9a-f]{6}$/i.test(img.ambient) ? img.ambient : TONE3D[tone].face[1][1];
+  const grade = base.bg || sl.big ? `<div class="grade" data-layer="Color Grading" style="background:linear-gradient(180deg,${rgba(gradeCol, 0.55)} 0%,${rgba(gradeCol, 0.25)} 45%,rgba(0,0,0,0) 75%)"></div>` : "";
+  return `<div class="art">${bgLayer}<div class="vign" data-layer="Vignette"></div>${air}${big}${person}${grade}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
 }
 
 /** ukuran kalimat besar slide isi: pendek = besar sekali (seperti referensi), panjang = mengecil */
@@ -564,7 +588,7 @@ export function twsRules(asOf: string, brand = false): string {
     "   - cover: title 2–3 baris HURUF BESAR (maks ±20 huruf/baris, singkat & padat), hl = nomor baris yang disorot kotak biru (biasanya baris terakhir = inti beritanya). big = angka utama SANGAT pendek (\"-11%\", \"5,75%\", \"RP1,2 T\", \"40x\", maks 7 karakter). tone: gold netral/positif, red turun/bahaya, green naik.",
     "   - person (WAJIB di cover, pikir seperti redaktur berita): tokoh publik yang PALING dikaitkan publik dengan berita itu, tulis NAMA LENGKAP resmi. Contoh: kebijakan pemerintah / IHSG anjlok / MSCI turunkan status Indonesia → \"Prabowo Subianto\" (atau Menkeu kalau beritanya soal APBN/pajak); BI Rate / rupiah → \"Perry Warjiyo\"; OJK → Ketua OJK; perusahaan → CEO-nya (\"Jensen Huang\", \"Elon Musk\"); crypto → tokoh yang disebut berita (\"Michael Saylor\", \"Changpeng Zhao\"); The Fed → Ketua The Fed. Kosongkan HANYA kalau memang tidak ada tokoh yang relevan (mis. harga emas harian). Website mencari foto tokoh itu sendiri di internet lalu memotong latarnya — user TIDAK perlu upload. Kamu tidak menggambar wajah.",
     "   - frame (pembingkaian tokoh, pahami konteks fotonya): \"half\" (default: kepala s.d. pinggang — pakai kalau tokoh biasanya tampil memegang/menunjuk sesuatu yang penting untuk berita, mis. koin bitcoin, dokumen, emas), \"close\" (wajah besar, untuk berita yang menonjolkan ekspresi/pernyataan tokoh), \"full\" (badan, mis. tokoh sedang berpidato/berjalan).",
-    "   - bg = kata kunci foto adegan dalam Bahasa Inggris yang spesifik & dramatis sesuai isi slide (mis. \"indonesia stock exchange building jakarta\", \"stock market screen red numbers crash\", \"gold bars vault\", \"bitcoin coins dark\"). Isi bg di cover DAN tiap slide text supaya tiap slide punya foto berbeda. graphic = cadangan latar grafis: chart-up | chart-down | coins | exchange | bank | arrows | globe.",
+    "   - bg = kata kunci foto adegan dalam Bahasa Inggris yang spesifik & dramatis sesuai isi slide (mis. \"indonesia stock exchange building jakarta\", \"stock market screen red numbers crash\", \"gold bars vault\", \"bitcoin coins dark\"). Isi bg di cover DAN tiap slide text supaya tiap slide punya foto berbeda. Pilih ADEGAN tanpa tulisan (hindari kata poster/thumbnail/headline/infographic) supaya angka & judul tidak dobel dengan tulisan di foto. graphic = cadangan latar grafis: chart-up | chart-down | coins | exchange | bank | arrows | globe.",
     "   - text: 1 kalimat besar maks ±14 kata (pendek = huruf makin besar & makin mirip referensi), **kata kunci** 2–5 kata. caption = 1 kalimat kecil penjelas. Pakai rows hanya kalau ada 2–3 angka pembanding.",
     "   - Satu gambar → 1 slide cover. Carousel → 3–6 slide: cover → isi → (infografis) → cta.",
     "   - sources: daftar sumber berita/data yang benar-benar dipakai (judul + url ASLI dari hasil browsing) — foto utama artikel ini juga dipakai website sebagai cadangan foto.",
