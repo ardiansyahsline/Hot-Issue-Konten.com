@@ -2,13 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
-import { TRADE_INTENT, analysisGuide, buildWebContext, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, mentionsAsset, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
+import { TRADE_INTENT, analysisGuide, buildWebContext, newsPlan, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, mentionsAsset, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
 import { personaIntro, personaOf, splitVia, viaMarker, type Group as PGroup } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
 import { MUSIC_INTENT, MUSIC_RULES } from "@/lib/musicCmd";
 import { PHOTO_INTENT, PHOTO_OF_ATTACHMENT, VISUAL_COMPLEX, VISUAL_INTENT, visualRules } from "@/lib/visual";
 import { photoQuery, searchPhotos, type PhotoResult } from "@/lib/photos.server";
+import { TWS_INTENT, twsRules } from "@/lib/tws";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { SMART, SMART_HERO, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -269,9 +270,14 @@ export async function POST(req: NextRequest) {
   // 5a) VISUAL: desain (HTML/CSS/SVG → PNG) & foto asli dari internet — tanpa model pembuat gambar
   const lastAssistantText = [...hist].reverse().find((m) => m.role === "assistant")?.content ?? "";
   // lanjutan desain: pilih opsi / revisi / pakai foto, atau pesan pendek setelah jawaban berisi desain ("ganti warna jadi biru")
+  // konten TWS (berita/update ekonomi, saham, crypto, forex, makro / sebut TWS-Suli) atau revisinya
+  const twsFollow = /```tws/.test(lastAssistantText) && (/^✏️ Revisi (slide|desain)/.test(lastText) || (lastText.length < 240 && !SMALL_TALK.test(lastText.trim()) && DESIGN_EDIT.test(lastText)));
+  const twsMode = !hasImages && (twsFollow || TWS_INTENT.test(taskText));
+  // riset web hanya untuk konten baru (revisi cukup pakai isi sebelumnya)
+  const twsResearch = twsMode && !twsFollow;
   const designFollow = /```design/.test(lastAssistantText) && (/^(📌 (Pilih desain|Pakai foto)|✏️ Revisi desain)/.test(lastText) || (lastText.length < 240 && !TRADE_INTENT.test(lastText) && !SMALL_TALK.test(lastText.trim()) && DESIGN_EDIT.test(lastText)));
-  const visualMode = !hasImages && (designFollow || (VISUAL_INTENT.test(taskText) && !/\b(ppt|pptx|powerpoint|presentasi|slide|deck|report campaign|campaign performance|one.?pager|portfolio|portofolio|laporan)\w*/i.test(taskText)));
-  const photoMode = !hasImages && !/^(📌 (Pakai foto|Foto asli)|✏️)/.test(lastText) && PHOTO_INTENT.test(taskText) && !PHOTO_OF_ATTACHMENT.test(lastText);
+  const visualMode = !hasImages && !twsMode && (designFollow || (VISUAL_INTENT.test(taskText) && !/\b(ppt|pptx|powerpoint|presentasi|slide|deck|report campaign|campaign performance|one.?pager|portfolio|portofolio|laporan)\w*/i.test(taskText)));
+  const photoMode = !hasImages && !twsMode && !/^(📌 (Pakai foto|Foto asli)|✏️)/.test(lastText) && PHOTO_INTENT.test(taskText) && !PHOTO_OF_ATTACHMENT.test(lastText);
   const photoQ = photoMode ? photoQuery(cardAnswer ? prevRequest : lastText) : "";
   // dicari bareng langkah lain; tidak pernah error (kunci kosong / gagal -> daftar kosong)
   const photosP: Promise<PhotoResult | null> = photoQ ? searchPhotos(photoQ, 6).catch(() => null) : Promise.resolve(null);
@@ -295,7 +301,7 @@ export async function POST(req: NextRequest) {
   // hemat 1 panggilan AI "perencana": sapaan / terima kasih, dan pertanyaan data internal yang jelas tidak butuh internet
   const smallTalk = !hasImages && lastText.length <= 40 && SMALL_TALK.test(lastText.trim());
   // kata waktu ("minggu ini", "terbaru") pada pertanyaan data internal bukan alasan browsing
-  const needPlanner = !smallTalk && !(useData && !looksNeedWeb(taskText.replace(/\b(hari ini|kemarin|minggu ini|bulan ini|saat ini|terbaru|terkini|terupdate)\b/gi, " ")) && !extractUrls(lastText).length);
+  const needPlanner = twsResearch || (!smallTalk && !(useData && !looksNeedWeb(taskText.replace(/\b(hari ini|kemarin|minggu ini|bulan ini|saat ini|terbaru|terkini|terupdate)\b/gi, " ")) && !extractUrls(lastText).length));
   // pertanyaan pasar (harga/kondisi suatu aset) -> data harga live wajib diambil walaupun bukan permintaan trade plan
   const assetAsk = !hasImages && !folder && mentionsAsset(lastText);
   const textRank = rankTextModels(pool);
@@ -309,7 +315,7 @@ export async function POST(req: NextRequest) {
   const askedBefore = (sym: string) => hist.slice(-8).some((m) => m.role === "user" && m.content.startsWith(`📌 Analisa ${sym.replace(/^[A-Z_]+:/, "")}`));
   const wantsAsk = (plan: WebPlan | null) => {
     const sym = plan ? chartSymbol(plan) : null;
-    return !!sym && !answered && !hasImages && TRADE_INTENT.test(lastText) && !alreadyClear && !askedBefore(sym);
+    return !!sym && !twsMode && !answered && !hasImages && TRADE_INTENT.test(lastText) && !alreadyClear && !askedBefore(sym);
   };
   let askFor: WebPlan | null = null;
   const cleanHist = hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content.replace(/\[\[ask:[\s\S]*?\]\]/g, "") }));
@@ -336,7 +342,9 @@ export async function POST(req: NextRequest) {
         })
           .then((p) => {
             // analisa / trade plan suatu aset selalu pakai data harga & chart (kecuali sedang membahas gambar yang dikirim)
-            const plan = hasImages ? p : ensureTradePlan(p, lastText, cleanHist, assetAsk);
+            // konten TWS wajib berdasar berita terbaru: perencana bilang "tidak perlu" pun tetap dicari
+            const base = hasImages ? p : ensureTradePlan(p, lastText, cleanHist, assetAsk);
+            const plan = !twsResearch ? base : !base ? newsPlan(lastText) : base.queries.length ? base : { ...base, queries: newsPlan(lastText).queries };
             step("decide", plan ? "done" : "skip");
             if (wantsAsk(plan)) {
               askFor = plan;
@@ -411,6 +419,13 @@ export async function POST(req: NextRequest) {
   if (DESIGN_INTENT.test(taskText) && !visualMode) turnRules.push(DESIGN_RULES);
   // desain visual (poster, banner, thumbnail, infografis, diagram, mockup …) -> blok ```design dirender jadi PNG
   if (visualMode) turnRules.push(visualRules());
+  // konten TWS: isi dari hasil riset web, desain dari template
+  if (twsMode) {
+    const asOf = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
+    turnRules.push(twsRules(asOf));
+    if (twsResearch && !web.sources.length && !web.live)
+      turnRules.push("⚠️ HASIL BROWSING TIDAK ADA untuk konten TWS ini (internet mati / kunci pencarian belum diisi / gagal). Bilang jujur di awal. JANGAN tulis angka, tanggal, atau kejadian dari ingatan; buat versi tanpa angka (judul umum + slide edukasi) atau sarankan nyalakan 🌐 Internet lalu coba lagi.");
+  }
   const photos = await photosP;
   if (photoMode) turnRules.push(photoRules(photoQ, photos, visualMode));
   // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
@@ -419,11 +434,11 @@ export async function POST(req: NextRequest) {
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
   // tujuan "Berita & sentimen" dari kartu pasar -> rangkum kabar, tanpa trade plan
   const goalNews = answered && /Tujuan Berita/i.test(lastText);
-  const tradeIntent = (TRADE_INTENT.test(lastText) || answered) && !goalNews;
+  const tradeIntent = (TRADE_INTENT.test(lastText) || answered) && !goalNews && !twsMode;
   // ===== aturan per mode (hanya dimuat saat dipakai, supaya hemat token) =====
   const marketMode = !!web.chart || !!marketOnly || assetAsk || answered;
   if (marketMode) turnRules.push(marketRules(!!web.live, goalNews));
-  const coworkMode = !visualMode && (!!folder || DESIGN_INTENT.test(taskText) || COWORK_INTENT.test(taskText));
+  const coworkMode = !visualMode && !twsMode && (!!folder || DESIGN_INTENT.test(taskText) || COWORK_INTENT.test(taskText));
   if (coworkMode) turnRules.push(coworkRules(!folder && /\b(ppt|pptx|powerpoint|presentasi|slide|deck)\w*/i.test(taskText)));
   // obrolan ringan / pertanyaan konsep singkat -> jangan pernah pakai kartu
   if (smallTalk || (lastText.length < 160 && CONCEPT_Q.test(lastText.trim()))) turnRules.push("Pesan ini obrolan ringan / pertanyaan konsep: jawab langsung, JANGAN pakai kartu ```ask.");
@@ -440,7 +455,7 @@ export async function POST(req: NextRequest) {
   // 🧠 tugas berat & penting (PPT/laporan, report campaign, analisa lengkap, baca data folder, teks panjang, atau diminta):
   //    + analisa trading / trade plan. Jawaban ditulis mesin Sonnet; Haiku tetap jadi "perencana" (mikir dulu, browsing) + cadangan.
   //    Dibatasi per user per hari. Di halaman Usage pemakaiannya digabung ke baris Haiku.
-  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: visualMode && VISUAL_COMPLEX.test(designFollow ? `${prevRequest}\n${lastText}` : taskText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
+  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: twsResearch || (visualMode && VISUAL_COMPLEX.test(designFollow ? `${prevRequest}\n${lastText}` : taskText)), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
   let heavyOn = false;
   if (heavyWhy) {
     const hm = heavyModelFrom(models);
@@ -467,11 +482,13 @@ export async function POST(req: NextRequest) {
   const histMsgs: Msg[] = [];
   const start = Math.max(0, hist.length - SEND_HISTORY);
   // desain terakhir tetap dikirim utuh (revisi bertahap butuh kodenya), desain lama dipangkas
-  const lastDesignAt = hist.map((m) => m.role === "assistant" && /```design/.test(m.content)).lastIndexOf(true);
+  // + carousel lengkap terakhir (revisi satu slide butuh semua slidenya)
+  const isDesign = hist.map((m) => m.role === "assistant" && /```(design|tws)/.test(m.content));
+  const keepAt = new Set([isDesign.lastIndexOf(true), hist.map((m, i) => isDesign[i] && /```tws|```design[^\n]*\|\s*slide\s*1\b/i.test(m.content)).lastIndexOf(true)]);
   for (let i = start; i < hist.length; i++) {
     const m = hist[i];
     const imgs = m.images ?? [];
-    const text = compactMsg(m.content, m.role, i >= hist.length - 3, i === lastDesignAt);
+    const text = compactMsg(m.content, m.role, i >= hist.length - 3, keepAt.has(i));
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
       const urls = (await Promise.all(imgs.map(toDataUrl))).filter((u): u is string => !!u);
       histMsgs.push({ role: "user", content: [{ type: "text", text: text || "Tolong jelaskan gambar ini." }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))] });
@@ -755,7 +772,7 @@ export async function POST(req: NextRequest) {
     persona: personaHero,
     data: useData,
     web: web.sources.length > 0,
-    chart: web.chart ?? null,
+    chart: twsMode ? null : (web.chart ?? null),
     fallback: failures.length > 0,
     via,
   });
@@ -779,7 +796,7 @@ export async function POST(req: NextRequest) {
     }
     if (usage.cached) console.log(`[ai] cache: ${usage.cached}/${usage.in} token input dibaca dari cache (${usedModel})`);
     // chart live (TradingView) ditandai di akhir jawaban supaya tetap tampil saat riwayat dibuka lagi
-    const foot = sourcesFooter(web.sources) + (web.chart ? `\n\n[[chart:${web.chart}]]` : "");
+    const foot = sourcesFooter(web.sources) + (web.chart && !twsMode ? `\n\n[[chart:${web.chart}]]` : "");
     if (foot && full.trim()) {
       full += foot;
       controller.enqueue(enc.encode(foot));
@@ -892,7 +909,7 @@ function heavyReason(text: string, o: { approach: string; folderData: boolean; d
   if (/\b(buat|bikin|buatin|bikinin|susun|susunin)\w*\s+(\w+\s+){0,3}laporan/i.test(text)) return "laporan";
   if (o.approach === "full") return "analisa lengkap";
   // desain visual kompleks (infografis, alur, diagram, mockup, A4) -> mesin berat; poster/thumbnail biasa tetap mesin hemat
-  if (o.design) return "desain kompleks";
+  if (o.design) return "desain kompleks / riset konten";
   if (o.trade) return "analisa trading";
   if (o.folderData) return "data folder";
   if (text.length > 4000) return "teks panjang";
@@ -935,7 +952,7 @@ const isClaudeModel = (m: string) => /claude|anthropic|haiku|sonnet|opus|^anth\/
  */
 function compactMsg(text: string, role: string, recent: boolean, keepDesign = false): string {
   let t = text.replace(/\[\[ask:[\s\S]*?\]\]/g, "(menanyakan pendekatan analisa)").replace(/\n*\[\[chart:[^\]]*\]\]/g, "");
-  if (!keepDesign) t = t.replace(/```design[ \t]*([^\n]*)\n[\s\S]*?(```|$)/g, (_, h: string) => `(desain "${h.trim()}" sudah dikirim sebelumnya)`);
+  if (!keepDesign) t = t.replace(/```design[ \t]*([^\n]*)\n[\s\S]*?(```|$)/g, (_, h: string) => `(desain "${h.trim()}" sudah dikirim sebelumnya)`).replace(/```tws\b[\s\S]*?(```|$)/g, "(konten TWS sudah dikirim sebelumnya)");
   if (recent || keepDesign) return t;
   t = t
     .replace(/\n+---\n🌐 \*\*Sumber:\*\*[\s\S]*$/, "")

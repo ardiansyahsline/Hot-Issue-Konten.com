@@ -32,9 +32,10 @@ import { splitReports } from "@/lib/kontenDesign";
 import { splitDeck } from "@/lib/deck";
 import { splitMusic } from "@/lib/musicCmd";
 import MusicCmdCard from "./MusicCmdCard";
-import DesignCard from "./DesignCard";
+import DesignCard, { mergeSlides } from "./DesignCard";
 import PhotoGrid from "./PhotoGrid";
-import { splitDesigns, splitPhotos } from "@/lib/visual";
+import { splitDesigns, splitPhotos, type Design } from "@/lib/visual";
+import { splitTws, twsDesigns } from "@/lib/tws";
 import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, scanFromFiles, splitFilePlan, type Scan } from "@/lib/localFolder";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -455,7 +456,7 @@ export default function AiChat({
   }, [supabase]);
   const plainAnswer = (content: string) => {
     const sa = splitAnalysis(splitPlan(splitChart(splitAsk(content).text).text).text);
-    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitPhotos(splitDesigns(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text)
+    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitPhotos(splitDesigns(splitTws(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text).text)
       .replace(/\n---\n🌐[\s\S]*$/, "")
       .trim();
   };
@@ -478,6 +479,18 @@ export default function AiChat({
     return true;
   };
   const charOf = (id: string | null | undefined) => (id ? chars.find((c) => c.id === id || `${CHAR_PREFIX}${c.id}` === id) : undefined);
+  // carousel desain dari jawaban AI sebelumnya (untuk revisi per slide)
+  const prevDesigns = (id: AiMsg["id"]): Design[] | null => {
+    const i = msgs.findIndex((x) => x.id === id);
+    // hanya untuk jawaban atas "✏️ Revisi slide …" (carousel baru tidak digabung dengan yang lama)
+    if (!(msgs[i - 1]?.role === "user" && /^✏️ Revisi slide/.test(msgs[i - 1].content))) return null;
+    for (let k = i - 2; k >= 0; k--) {
+      if (msgs[k].role !== "assistant") continue;
+      const ds = splitDesigns(msgs[k].content).designs;
+      if (ds.some((d) => d.slide)) return mergeSlides(ds, null);
+    }
+    return null;
+  };
   // kartu pertanyaan yang sudah dijawab: jawaban = pesan user "📌 …" tepat sesudahnya
   const cardAnswerAfter = (id: AiMsg["id"]) => {
     const i = msgs.findIndex((x) => x.id === id);
@@ -1430,8 +1443,11 @@ export default function AiChat({
                                 const rp = splitReports(dk0.text);
                                 const mu = splitMusic(rp.text);
                                 // desain (```design → PNG) & foto asli (```photos)
-                                const dz = splitDesigns(mu.text);
+                                // template TWS (```tws) & desain bebas (```design); revisi satu slide carousel digabung dengan carousel sebelumnya
+                                const tw = splitTws(mu.text);
+                                const dz = splitDesigns(tw.text);
                                 const ph = splitPhotos(dz.text);
+                                const slides = tw.deck ? twsDesigns(tw.deck) : mergeSlides(dz.designs, prevDesigns(m.id));
                                 // kartu pertanyaan balik dari AI (```ask)
                                 const ch = splitChoice(ph.text);
                                 const dk = { ...dk0, partial: dk0.partial || rp.partial };
@@ -1470,9 +1486,9 @@ export default function AiChat({
                                         const ans = cardAnswerAfter(m.id);
                                         return ans ? <AnsweredCard title={ch.choice.title} answer={ans} /> : <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />;
                                       })()}
-                                    {(dz.partial || ph.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ {dz.partial ? `Menggambar desain${dz.designs.length ? ` (opsi ${dz.designs.length + 1})` : ""}…` : "Mencari foto…"}</p>}
+                                    {(dz.partial || ph.partial || tw.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ {tw.partial ? "Menyusun konten TWS…" : dz.partial ? `Menggambar desain${dz.designs.length ? ` (${dz.designs.some((d) => d.slide) ? "slide" : "opsi"} ${dz.designs.length + 1})` : ""}…` : "Mencari foto…"}</p>}
                                     {ph.photos && !streaming && <PhotoGrid ask={ph.photos} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
-                                    {dz.designs.length > 0 && !streaming && <DesignCard designs={dz.designs} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
+                                    {slides.length > 0 && !streaming && <DesignCard designs={slides} deck={tw.deck ?? undefined} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
                                     {mu.cmd && !streaming && <MusicCmdCard id={String(m.id)} cmd={mu.cmd} fresh={m.id === lastAssistant?.id && !!m.doneAt && Date.now() - m.doneAt < 90000} />}
                                   </>
                                 );
@@ -1490,7 +1506,7 @@ export default function AiChat({
                                     navigator.clipboard?.writeText(
                                       (() => {
                                         const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
-                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitChoice(splitPhotos(splitDesigns(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text).text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitChoice(splitPhotos(splitDesigns(splitTws(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text).text).text);
                                       })()
                                     ).then(() => {
                                       setCopied(m.id);

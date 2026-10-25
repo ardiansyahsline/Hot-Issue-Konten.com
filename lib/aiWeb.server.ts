@@ -489,6 +489,31 @@ function assetFromChart(sym: string): Asset | null {
  * Permintaan analisa / trade plan WAJIB pakai data harga & chart. Kalau perencana AI bilang tidak perlu browsing
  * atau lupa mengisi aset, aset ditebak dari pesan ini -> pesan user sebelumnya -> chart di jawaban sebelumnya.
  */
+/**
+ * Rencana pencarian berita paksa (konten TWS wajib berdasar berita & data terbaru walau perencana bilang tidak perlu):
+ * kata kunci = permintaan user tanpa kata perintah desain + bulan & tahun sekarang.
+ */
+export function newsPlan(question: string): WebPlan {
+  const month = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
+  const q = clip(
+    question
+      .replace(URL_RE, " ")
+      .replace(/\b(buat(in|kan)?|bikin(in)?|tolong|dong|ya|tws|trade with suli|suli|carousel|slide|\d+\s*slide|poster|cover|konten|post(ingan)?|feed|infografis|desain|gambar)\b/gi, " ")
+      .replace(/[()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    160
+  );
+  const market: Market = /\b(btc|bitcoin|eth|ethereum|crypto|kripto|solana|sol|bnb|xrp|doge)\b/i.test(q)
+    ? "crypto"
+    : /\b(xau|emas|gold|forex|kurs|usd\/?idr|dolar|rupiah)\b/i.test(q)
+      ? "forex"
+      : /\b(saham|ihsg|idx|bei|emiten|msci)\b/i.test(q)
+        ? "saham_id"
+        : "none";
+  return { queries: [`${q || "berita ekonomi"} ${month}`], urls: [], topic: market !== "none" ? "finance" : "news", market, fresh: "week", symbols: [], by: "aturan" };
+}
+
 export function ensureTradePlan(plan: WebPlan | null, question: string, history: { role: string; content: string }[], force = false): WebPlan | null {
   if (!TRADE_INTENT.test(question) && !force) return plan;
   if (plan && plan.market !== "none" && plan.symbols.length) return plan;

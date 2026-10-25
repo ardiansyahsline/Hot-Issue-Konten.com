@@ -13,7 +13,15 @@ export const SIZES: Record<DesignSize, { w: number; h: number; label: string }> 
   "16:9": { w: 1920, h: 1080, label: "Thumbnail 16:9" },
   A4: { w: 1240, h: 1754, label: "A4" },
 };
-export type Design = { size: DesignSize; name: string; html: string };
+export type Design = {
+  size: DesignSize;
+  name: string;
+  html: string;
+  /** nomor slide (carousel); tanpa nomor = opsi desain yang dipilih salah satu */
+  slide?: number;
+  /** slide dari template TWS (dirender ulang dari spec saat gambar latar / foto tokoh diganti) */
+  tws?: { deck: import("./tws").TwsDeck; index: number };
+};
 export type PhotoAsk = { query: string; count: number };
 
 const DESIGN_DONE = /```design[ \t]*([^\n]*)\n([\s\S]*?)```/gi;
@@ -32,9 +40,13 @@ function sizeOf(s: string): DesignSize {
 export function splitDesigns(text: string): { text: string; designs: Design[]; partial: boolean } {
   const designs: Design[] = [];
   let rest = text.replace(DESIGN_DONE, (_, head: string, body: string) => {
-    const [sz, ...name] = head.split("|");
+    // header: "<ukuran> | <nama> | slide <n>" (slide = carousel)
+    const parts = head.split("|").map((x) => x.trim());
+    const slidePart = parts.findIndex((x, i) => i > 0 && /^slide\s*\d+/i.test(x));
+    const slide = slidePart > 0 ? Number(parts[slidePart].match(/\d+/)![0]) : undefined;
+    const name = parts.filter((_, i) => i > 0 && i !== slidePart).join(" | ");
     const html = body.trim();
-    if (html) designs.push({ size: sizeOf(sz || ""), name: name.join("|").trim().slice(0, 60) || `Opsi ${String.fromCharCode(65 + designs.length)}`, html: html.slice(0, 60000) });
+    if (html) designs.push({ size: sizeOf(parts[0] || ""), name: name.slice(0, 60) || (slide ? `Slide ${slide}` : `Opsi ${String.fromCharCode(65 + designs.length)}`), html: html.slice(0, 60000), slide });
     return "";
   });
   const open = rest.search(/```design\b/i);
@@ -107,12 +119,15 @@ export function visualRules(): string {
     "2) Desain BARU → buat 2–3 OPSI yang benar-benar beda (tata letak/gaya/warna), masing-masing satu blok:",
     "```design 1:1 | Bold Oranye\n<style>.art{…}</style>\n<div class=\"art\">…</div>\n```",
     `   Ukuran: ${sizes}. Kanvas tetap sebesar itu (px); elemen paling luar <div class="art"> width:100%;height:100%;position:relative;overflow:hidden. Tulis CSS di <style> (pakai class), boleh inline SVG.`,
-    "3) User MEMILIH opsi / minta REVISI (\"ganti warna\", \"teks lebih besar\") → kirim SATU blok ```design saja: salin desain terakhir lalu ubah HANYA bagian yang diminta (nama tetap). Jangan mulai dari nol.",
+    "   CAROUSEL (user minta beberapa slide, 3–6): satu blok per slide dengan penanda slide di header, ukuran & gaya sama: ```design 4:5 | Cover | slide 1``` … ```design 4:5 | Penutup | slide 5```. Carousel TIDAK perlu 2–3 opsi.",
+    "3) User MEMILIH opsi / minta REVISI (\"ganti warna\", \"teks lebih besar\") → kirim SATU blok ```design saja: salin desain terakhir lalu ubah HANYA bagian yang diminta (nama tetap). Jangan mulai dari nol. Revisi satu slide carousel (\"✏️ Revisi slide 2 …\") → kirim HANYA blok slide itu (header sama, \"| slide 2\"); slide lain otomatis tetap.",
     "4) KUALITAS (cek ulang sebelum kirim): hierarki jelas — 1 judul besar (2–8 kata), 1 sub, 1 info/CTA; maks 3 ukuran huruf; kontras teks ≥ 4.5:1 (teks di atas foto → lapisan gradasi gelap); jarak kelipatan 8px & konsisten; margin sisi ≥ 6% lebar; TIDAK ada teks kepotong (jangan beri tinggi tetap pada kotak teks, judul panjang → kecilkan huruf); rata & sejajar.",
     "   Font: 'Neue Montreal' (brand), 'Plus Jakarta Sans Variable' (judul), 'Inter Variable' (isi) — sudah tersedia, JANGAN memuat font/CSS dari luar. Logo Konten.com: <img src=\"/konten-logo-report.png\"> (tulisan putih, untuk latar gelap, rasio 640×59) atau <img src=\"/konten-logo.png\"> (ikon oranye kotak).",
     "   Infografis/alur/diagram: langkah bernomor dalam kotak + panah SVG, ikon sederhana dari SVG. Chart: batang/garis SVG dengan label angka — angka HANYA dari data user (tanpa data → pakai label contoh & bilang itu contoh). Mockup UI: bingkai HP/laptop dari CSS.",
     "   DILARANG: <script>, event on*, link/font/CSS/gambar dari luar. Gambar hanya: /konten-logo*.png, data:image, atau URL foto Unsplash/Pexels yang diberikan di blok HASIL CARI FOTO (wajib tulis kredit kecil \"Foto: Nama / Unsplash\" di pojok desain). Foto hasil web umum TIDAK BOLEH dimasukkan ke desain.",
-    "5) Setelah blok: 1–2 kalimat (gaya karaktermu) bedanya tiap opsi, lalu ajak pilih/revisi. Jangan jelaskan kodenya.",
+    "   LAYER (untuk unduhan SVG siap Figma): beri atribut data-layer pada elemen utama — data-layer=\"Logo\", \"Judul\", \"Sorotan\", \"Angka 3D\", \"Foto\", \"Latar\", \"Tombol\", \"Kredit Foto\". Teks tulis sebagai teks HTML biasa (jangan gambar teks di SVG).",
+    "   SLOT GAMBAR: kalau desain butuh foto yang belum ada (latar / tokoh), pakai <img data-slot=\"bg\" src=\"/brand/placeholder.svg\"> atau data-slot=\"person\" — user bisa upload / website mengisi. Jangan pernah menggambar wajah orang.",
+    "5) Setelah blok: 1–2 kalimat (gaya karaktermu) bedanya tiap opsi, lalu ajak pilih/revisi. Jangan jelaskan kodenya. Untuk konten sosmed, tambahkan caption siap copas + 5–10 hashtag di teks jawaban.",
     "6) TOLAK bagian ini saja (tawarkan versi aman): logo/karakter merek lain (mis. Nike, Pikachu, Shopee), konten dewasa/vulgar, wajah/nama tokoh nyata untuk materi promosi. Alasannya 1 kalimat, lalu langsung beri alternatif desain.",
   ].join("\n");
 }
