@@ -76,7 +76,8 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   // 00:00 WIB tanggal prevFrom (untuk ambil Hot Issue 14 hari terakhir)
   const prevFromIso = new Date(new Date(`${prevFrom}T00:00:00Z`).getTime() - 7 * 3600 * 1000).toISOString();
 
-  const [issuesRes, counts, hotContactsRes, vrRes, agentRes] = await Promise.all([
+  const AGENT_COLS = "id, title, category, status, priority, is_hot, max_contact_reports_30d, report_count, pic_name, created_at";
+  const [issuesRes, counts, hotContactsRes, vrRes, agentRes, activeRes, resolvedTotalRes] = await Promise.all([
     query,
     loadCounts(),
     supabase
@@ -94,9 +95,13 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .limit(5000),
     supabase
       .from("issue_list")
-      .select("id, title, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
+      .select(AGENT_COLS)
       .gte("created_at", prevFromIso)
       .limit(5000),
+    // issue yang masih aktif (HOT walau laporannya sudah lama tetap bisa masuk Top 3)
+    supabase.from("issue_list").select(AGENT_COLS).neq("status", "resolved").order("updated_at", { ascending: false }).limit(300),
+    // total issue yang sudah resolved (kartu "Resolved total")
+    supabase.from("issues").select("id", { count: "exact", head: true }).eq("status", "resolved"),
   ]);
 
   // laporan tambahan (migration-11) ikut dihitung: tiap laporan = 1, dengan kategori / status topiknya
@@ -108,7 +113,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   if (missing.length) {
     const { data: more } = await supabase
       .from("issue_list")
-      .select("id, title, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
+      .select(AGENT_COLS)
       .in("id", missing.slice(0, 500));
     for (const r of (more ?? []) as AgentIssueRow[]) topicById.set(r.id, r);
   }
@@ -122,7 +127,11 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
 
   const vrAll = topIssues((vrRes.data ?? []) as VrSummaryRow[], weekFrom, prevFrom, 100);
   const top = vrAll.slice(0, 3);
-  const agentTop = topAgentIssues(agentAll, weekFrom, prevFrom);
+  const agentTop = topAgentIssues(agentAll, weekFrom, prevFrom, {
+    active: (activeRes.data ?? []) as AgentIssueRow[],
+    hotThreshold: HOT_THRESHOLD,
+    reportHot: REPORT_HOT_THRESHOLD,
+  });
   const vrRows: TopCardData[] = top.map((t) => ({
     summary: buildRangkuman(t.rows),
     title: t.category,
@@ -135,7 +144,8 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
     summary: agentRangkuman(t, HOT_THRESHOLD, REPORT_HOT_THRESHOLD),
     title: t.title,
     count: t.count,
-    diff: t.count - t.prev,
+    // masuk karena masih HOT/aktif tanpa laporan baru -> tidak dibandingkan dengan minggu lalu
+    diff: t.quiet ? 0 : t.count - t.prev,
     // satu topik -> buka issue-nya langsung; gabungan beberapa topik -> daftar issue kategori itu
     href: t.topics.length === 1 && t.topics[0].id != null ? `/issues/${t.topics[0].id}` : `/?status=all&category=${encodeURIComponent(t.category)}`,
     segments: [
@@ -170,7 +180,14 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
     { label: "Urgent aktif", value: counts.urgent, href: "/?priority=urgent", tone: "orange", icon: "alert", footer: ofActive(counts.urgent) },
     { label: "Open", value: counts.open, href: "/?status=open", tone: "sky", icon: "inbox", footer: ofActive(counts.open) },
     { label: "In Progress", value: counts.in_progress, href: "/?status=in_progress", tone: "amber", icon: "clock", footer: ofActive(counts.in_progress) },
-    { label: "Resolved hari ini", value: counts.resolved_today, href: "/?status=resolved", tone: "emerald", icon: "check", footer: "diselesaikan hari ini" },
+    {
+      label: "Resolved total",
+      value: resolvedTotalRes.count ?? 0,
+      href: "/?status=resolved",
+      tone: "emerald",
+      icon: "check",
+      footer: counts.resolved_today ? `${counts.resolved_today} diselesaikan hari ini` : "semua issue yang sudah selesai",
+    },
   ] as const;
 
   return (

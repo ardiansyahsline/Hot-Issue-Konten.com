@@ -11,6 +11,7 @@ export type AgentIssueRow = {
   max_contact_reports_30d: number | null;
   pic_name: string | null;
   created_at: string;
+  priority?: "low" | "medium" | "high" | "urgent" | null;
 };
 export type AgentTop = {
   category: string;
@@ -21,7 +22,10 @@ export type AgentTop = {
   rows: AgentIssueRow[];
   /** topik (issue) di dalam kelompok ini, urut dari laporan terbanyak */
   topics: { id?: number; title: string; count: number }[];
+  /** tidak ada laporan baru 7 hari ini (masuk karena masih HOT / aktif) — count = total laporan topiknya */
+  quiet?: boolean;
 };
+const PRIO: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 
 const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 /** tanggal WIB (YYYY-MM-DD) dari timestamp */
@@ -54,9 +58,16 @@ const tidyTitle = (t: string) => {
  * Bukan per kategori ("Lainnya", "Campaign" kurang jelas): laporan dikelompokkan per TOPIK issue, lalu topik yang
  * judulnya mirip (kata kunci sama) digabung. Nama kelompok = judul topik dengan laporan terbanyak.
  */
-export function topAgentIssues(rows: AgentIssueRow[], from: string, prevFrom: string, limit = 3): AgentTop[] {
-  type T = { key: string; id?: number; title: string; category: string; cur: AgentIssueRow[]; prev: number; w: string[] };
+export function topAgentIssues(
+  rows: AgentIssueRow[],
+  from: string,
+  prevFrom: string,
+  opts: { limit?: number; active?: AgentIssueRow[]; hotThreshold?: number; reportHot?: number } = {}
+): AgentTop[] {
+  const { limit = 3, active = [], hotThreshold = 2, reportHot = 3 } = opts;
+  type T = { key: string; id?: number; title: string; category: string; cur: AgentIssueRow[]; prev: number; w: string[]; info: AgentIssueRow };
   const byTopic = new Map<string, T>();
+  const isHot = (r: AgentIssueRow) => r.status !== "resolved" && (r.is_hot || (r.max_contact_reports_30d ?? 0) >= hotThreshold || (r.report_count ?? 1) >= reportHot);
   for (const r of rows) {
     const d = wibDay(r.created_at);
     if (d < prevFrom) continue;
@@ -64,11 +75,17 @@ export function topAgentIssues(rows: AgentIssueRow[], from: string, prevFrom: st
     let t = byTopic.get(key);
     if (!t) {
       const title = tidyTitle(r.title || r.category);
-      t = { key, id: r.id, title, category: r.category, cur: [], prev: 0, w: words(r.title || r.category) };
+      t = { key, id: r.id, title, category: r.category, cur: [], prev: 0, w: words(r.title || r.category), info: r };
       byTopic.set(key, t);
     }
     if (d >= from) t.cur.push(r);
     else t.prev++;
+  }
+  // issue yang masih aktif (mis. HOT tapi laporannya sudah lama) tetap jadi calon Top 3
+  for (const r of active) {
+    const key = r.id != null ? `#${r.id}` : `${r.category}|${r.title ?? ""}`;
+    if (!byTopic.has(key)) byTopic.set(key, { key, id: r.id, title: tidyTitle(r.title || r.category), category: r.category, cur: [], prev: 0, w: words(r.title || r.category), info: r });
+    else byTopic.get(key)!.info = r; // status / HOT terbaru
   }
   // gabungkan topik yang mirip (kategori sama & ≥50% kata kunci sama, atau ≥75% kata kunci sama walau beda kategori)
   const groups: T[][] = [];
@@ -85,18 +102,28 @@ export function topAgentIssues(rows: AgentIssueRow[], from: string, prevFrom: st
     .map((g) => {
       const cur = g.flatMap((t) => t.cur);
       const lead = g[0];
+      const infos = g.map((t) => t.info);
+      // urutan: HOT & masih aktif dulu, lalu aktif biasa, yang sudah resolved paling akhir
+      const tier = infos.some(isHot) ? 0 : infos.some((r) => r.status !== "resolved") ? 1 : 2;
+      const prio = Math.min(...infos.map((r) => PRIO[r.priority ?? "medium"] ?? 2));
+      const total = infos.reduce((n, r) => n + (r.report_count ?? 1), 0);
       return {
         category: lead.category,
         title: lead.title,
-        count: cur.length,
+        count: cur.length || total,
         prev: g.reduce((n, t) => n + t.prev, 0),
-        rows: cur,
-        topics: g.filter((t) => t.cur.length).map((t) => ({ id: t.id, title: t.title, count: t.cur.length })),
+        rows: cur.length ? cur : infos,
+        topics: g.map((t) => ({ id: t.id, title: t.title, count: t.cur.length })),
+        quiet: !cur.length,
+        tier,
+        prio,
+        fresh: cur.length,
       };
     })
-    .filter((x) => x.count > 0)
-    .sort((a, b) => b.count - a.count || a.prev - b.prev || a.title.localeCompare(b.title))
-    .slice(0, limit);
+    .filter((x) => x.fresh > 0 || x.tier < 2)
+    .sort((a, b) => a.tier - b.tier || b.fresh - a.fresh || a.prio - b.prio || b.count - a.count || a.title.localeCompare(b.title))
+    .slice(0, limit)
+    .map(({ tier, prio, fresh, ...x }) => (void tier, void prio, void fresh, x));
 }
 
 /** Rangkuman dari data (tidak mengarang) */
@@ -109,7 +136,9 @@ export function agentRangkuman(t: AgentTop, hotThreshold: number, reportHot = 3)
   const first = days[0];
   const last = days[days.length - 1];
   const what = topics.length < t.count ? `${t.count} laporan (${topics.length} topik)` : `${t.count} issue`;
-  const parts = [first === last ? `${what} pada ${tgl(first)}.` : `${what} dari ${tgl(first)} sampai ${tgl(last)}.`];
+  const parts = t.quiet
+    ? [`Belum ada laporan baru 7 hari terakhir, tapi masih aktif (total ${t.count} laporan).`]
+    : [first === last ? `${what} pada ${tgl(first)}.` : `${what} dari ${tgl(first)} sampai ${tgl(last)}.`];
   // topik lain yang digabung karena mirip (judul pertama sudah jadi nama kartu)
   const others = t.topics.slice(1, 3).map((x) => `"${x.title}"`);
   if (others.length) parts.push(`Termasuk topik serupa: ${others.join(", ")}${t.topics.length > 3 ? ` +${t.topics.length - 3} lainnya` : ""}.`);
