@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import YtMusic from "./YtMusic";
 import Meteors from "./Meteors";
-import type { MusicCmd } from "@/lib/musicCmd";
+import { setMusicState, type MusicCmd } from "@/lib/musicCmd";
 
 type Preset = { id: string; icon: string; name: string; desc: string; prompts: { text: string; weight: number }[]; bpm: number; density: number; brightness: number };
 const PRESETS: Preset[] = [
@@ -15,6 +15,9 @@ const PRESETS: Preset[] = [
   { id: "lofi", icon: "☕", name: "Lo-fi klasik", desc: "Klasik + beat santai", prompts: [{ text: "lofi hip hop with classical piano samples, chill, mellow", weight: 1 }], bpm: 80, density: 0.5, brightness: 0.45 },
 ];
 const KEY = "cs-music";
+/** penjaga: kalau pemutar ter-render lebih dari satu, hanya satu yang menjalankan perintah dari chat (anti suara dobel) */
+let owner: number | null = null;
+let seq = 0;
 
 type Session = { setWeightedPrompts(p: object): Promise<void>; setMusicGenerationConfig(p: object): Promise<void>; play(): void; pause(): void; stop(): void; close(): void; resetContext?(): void };
 
@@ -311,12 +314,21 @@ export default function MusicButton() {
     setYtCmd({ ...c, n: Date.now() });
   };
   useEffect(() => {
-    const h = (e: Event) => onCmd.current((e as CustomEvent<MusicCmd>).detail ?? {});
+    const me = ++seq;
+    if (owner === null) owner = me;
+    const h = (e: Event) => owner === me && onCmd.current((e as CustomEvent<MusicCmd>).detail ?? {});
     window.addEventListener("cs-music", h);
-    return () => window.removeEventListener("cs-music", h);
+    return () => {
+      window.removeEventListener("cs-music", h);
+      if (owner === me) owner = null;
+    };
   }, []);
 
   const playing = state === "playing";
+  // kabari kartu musik di chat: sedang main / berhenti, sumbernya apa, dan tempo (untuk animasi)
+  useEffect(() => {
+    setMusicState({ playing: playing || ytOn, source: playing ? "ai" : ytOn ? "yt" : null, bpm: playing ? (bpm ?? PRESETS.find((p) => p.id === preset)?.bpm ?? null) : null });
+  }, [playing, ytOn, bpm, preset]);
   return (
     <>
       <button
