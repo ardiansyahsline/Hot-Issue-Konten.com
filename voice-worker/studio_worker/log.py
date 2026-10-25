@@ -66,6 +66,8 @@ class DailyFileHandler(logging.Handler):
 def setup(log_dir: Path, prefix: str = "worker", level: int = logging.INFO) -> logging.Logger:
     # konsol Windows sering cp1252 → paksa utf-8 supaya "…" / huruf aneh tidak bikin crash
     for s in (sys.stdout, sys.stderr):
+        if s is None:  # pythonw.exe (Task Scheduler) tidak punya konsol
+            continue
         try:
             s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
         except Exception:
@@ -76,12 +78,18 @@ def setup(log_dir: Path, prefix: str = "worker", level: int = logging.INFO) -> l
     for h in list(root.handlers):
         root.removeHandler(h)
     fmt = logging.Formatter(FMT, "%Y-%m-%d %H:%M:%S")
-    con = logging.StreamHandler(sys.stdout)
-    con.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    if sys.stdout is not None:
+        con = logging.StreamHandler(sys.stdout)
+        con.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        root.addHandler(con)
     fh = DailyFileHandler(log_dir, prefix)
     fh.setFormatter(fmt)
-    root.addHandler(con)
     root.addHandler(fh)
+    # peringatan dari library (torch, chatterbox, pocket-tts, …) ikut masuk file log
+    lib = logging.getLogger()
+    lib.setLevel(logging.WARNING)
+    if not any(isinstance(h, DailyFileHandler) for h in lib.handlers):
+        lib.addHandler(fh)
     # log library yang cerewet cukup level WARNING
     for noisy in ("httpx", "httpcore", "urllib3", "numba", "matplotlib", "faster_whisper", "huggingface_hub", "filelock"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

@@ -559,10 +559,12 @@ export async function requestTts(
   }
   const j = (await r.json().catch(() => null)) as Partial<TtsResult> & { error?: string } | null;
   if (!r.ok || !j || typeof j.src !== "string") {
+    // pesan dari server (mis. "kunci premium belum diset") lebih jelas daripada pesan umum per status
+    if (j?.error && j.error.length < 160) throw new Error(j.error);
     if (r.status === 404) throw new Error("Layanan suara belum terpasang di website.");
     if (r.status === 401 || r.status === 403) throw new Error("Kamu belum punya akses Studio untuk ini.");
     if (r.status === 503) throw new Error("Layanan suara sedang tidak bisa dihubungi. Coba lagi sebentar lagi.");
-    throw new Error(j?.error && j.error.length < 160 ? j.error : "Gagal bikin suara. Coba lagi.");
+    throw new Error("Gagal bikin suara. Coba lagi.");
   }
   const engine = j.engine === "elevenlabs" ? "elevenlabs" : "edge";
   return {

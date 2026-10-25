@@ -59,6 +59,7 @@ class Config:
     render: bool
     render_concurrency: int
     render_timeout_min: int
+    render_browser: str
     df_atten_db: float
     takes: int
     preload: bool
@@ -146,6 +147,7 @@ def load(env_file: Path | None = None) -> Config:
         render=_bool("RENDER_ENABLED", True),
         render_concurrency=_int("RENDER_CONCURRENCY", 2, 1, 8),
         render_timeout_min=_int("RENDER_TIMEOUT_MIN", 40, 5, 240),
+        render_browser=_env("REMOTION_BROWSER"),
         df_atten_db=_float("DF_ATTEN_DB", 18, 6, 30),
         takes=_int("TAKES", 2, 1, 4),
         preload=_bool("PRELOAD", False),

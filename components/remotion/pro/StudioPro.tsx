@@ -6,7 +6,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject
 import { StudioVideo, studioMeta } from "@/components/remotion/studio/StudioVideo";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { FORMATS, defaultTimeline, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
+import { FORMATS, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
@@ -51,6 +51,20 @@ type Job = { id: string | null; tl: Timeline };
  * Studio Pro: proyek + chat Harley + kartu rencana (kiri) dan preview, timeline, suara, export (kanan, sticky).
  * Timeline disimpan otomatis ke studio_projects.timeline (jeda 1,5 dtk) lewat Supabase client (RLS).
  */
+/** file VO utuh (untuk unduh MP3) basi kalau posisi adegan yang bersuara bergeser -> dibuang, unduh VO lalu dirender ulang */
+function dropStaleFullVo(prev: Timeline | null, next: Timeline): Timeline {
+  const vo = next.vo;
+  if (!vo?.full || !prev?.vo || prev.vo.full !== vo.full) return next; // file baru dari generate -> biarkan
+  const at = (tl: Timeline) => {
+    const st = sceneStartSecs(tl);
+    return new Map(tl.scenes.map((s, i) => [s.id, st[i]]));
+  };
+  const a = at(prev);
+  const b = at(next);
+  const moved = vo.lines.length !== prev.vo.lines.length || vo.lines.some((l) => Math.abs((a.get(l.sceneId) ?? -1) - (b.get(l.sceneId) ?? -2)) > 1e-3);
+  return moved ? { ...next, vo: { ...vo, full: null } } : next;
+}
+
 export default function StudioPro({ active = true }: { active?: boolean }) {
   const sb = useMemo(() => createClient(), []);
   const catalog = useStudioCatalog();
@@ -164,7 +178,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
   /** semua perubahan timeline dari editor (rencana, timeline, suara) */
   const change = useCallback(
-    (tl: Timeline) => {
+    (next: Timeline) => {
+      const tl = dropStaleFullVo(tlRef.current, next);
       tlRef.current = tl;
       setTimeline(tl);
       queueSave(tl);

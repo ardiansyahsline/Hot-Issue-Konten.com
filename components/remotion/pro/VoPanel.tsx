@@ -20,6 +20,9 @@ import {
 import { MAX_DUR, MAX_TOTAL, sceneStartSecs, type EdgeVoice, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 
+/** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
+const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis Pocket TTS dari Kyutai";
+
 /** VO mulai 0,15 dtk setelah adegan mulai; adegan minimal selesai 0,25 dtk setelah VO */
 const VO_AT = 0.15;
 const TAIL = 0.25;
@@ -439,6 +442,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
           <div className="mt-0.5 text-zinc-500">
             {tl.vo.lines.length}/{voScenes.length || tl.vo.lines.length} adegan bersuara
           </div>
+          {tl.vo.engine === "pocket" && <div className="mt-0.5 text-zinc-500">Kredit suara: {POCKET_CREDIT}</div>}
           {tl.vo.temp && workerOn && bankVoice && !busy && (
             <div className="mt-2 rounded-lg bg-emerald-500/10 px-2.5 py-2 text-emerald-300">
               Mesin suara laptop sudah nyala. Ganti ke suara asli dari bank biar lebih natural.

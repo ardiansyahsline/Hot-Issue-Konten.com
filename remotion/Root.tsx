@@ -8,7 +8,7 @@
  * Remotion (bawaan assets/audio, bisa diganti `--public-dir=<folder>`):
  *   /api/studio/asset/sfx/<file>   → <public>/sfx/<file>      (SFX bawaan repo)
  *   /api/studio/asset/music/<file> → <public>/music/<file>    (musik repo)
- *   /api/studio/file?p=<path>      → <public>/storage/<path>  (VO, upload user — worker mengunduhnya dulu ke sini)
+ *   /api/studio/file?p=<path>      → <public>/storage/<path>  (worker sendiri menulis ulang URL ini jadi /public/st/<hash>.<ext>)
  *   /public/<path>                 → <public>/<path>
  */
 import "@fontsource-variable/inter";

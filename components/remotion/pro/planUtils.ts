@@ -15,7 +15,7 @@ import {
   type TransitionKind,
   type VoiceMode,
 } from "@/lib/studio/timeline";
-import type { Catalog } from "@/lib/studio/client";
+import { extraSfxOf, type Catalog } from "@/lib/studio/client";
 
 export const LAYOUT_LABEL: Record<LayoutKind, string> = {
   kinetic: "🔤 Teks bergerak",
@@ -94,7 +94,7 @@ export const VOICE_LABEL: Record<VoiceMode, string> = {
 const BUILTIN = new Set(SFX_BUILTIN.map((s) => s.id));
 
 /** SFX katalog yang bukan bawaan (Freesound / tambahan) — diteruskan ke StudioVideo & normalizeTimeline */
-export const sfxExtraOf = (c: Catalog | null): SfxMeta[] => (c ? c.sfx.filter((s) => !BUILTIN.has(s.id)) : []);
+export const sfxExtraOf = extraSfxOf;
 
 /** placeholder untuk id SFX tambahan saat katalog belum termuat (supaya cue-nya tidak ikut terbuang) */
 const keepMeta = (id: string): SfxMeta => ({ id, file: "", cat: "ui", tags: [], dur: 1, lufs: -20, tp: -3, hit: 0, peak: 0, use: "" });

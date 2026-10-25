@@ -148,7 +148,8 @@ function voiceLabel(tl: Timeline): string {
 function voStatus(tl: Timeline): string {
   if (tl.voice.mode === "none" || tl.muteVo) return "";
   if (!tl.vo?.lines.length) return "VO belum dibuat";
-  return `${tl.vo.temp ? "VO sementara" : "VO jadi"}${tl.vo.label ? ` · ${tl.vo.label}` : ""}`;
+  const credit = tl.vo.engine === "pocket" ? " · kredit: pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0)" : "";
+  return `${tl.vo.temp ? "VO sementara" : "VO jadi"}${tl.vo.label ? ` · ${tl.vo.label}` : ""}${credit}`;
 }
 
 function musicLabel(tl: Timeline): string {

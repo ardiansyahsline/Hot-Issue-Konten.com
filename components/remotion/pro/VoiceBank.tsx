@@ -204,7 +204,7 @@ export default function VoiceBank() {
         ) : error ? (
           <div className="card p-4 text-sm text-amber-400">{error}</div>
         ) : !voices.length ? (
-          <div className="card p-6 text-center text-sm text-zinc-500">Bank suara masih kosong. Tambah rekaman di samping, atau nyalakan mesin suara laptop.</div>
+          <div className="card p-6 text-center text-sm text-zinc-500">Bank suara masih kosong. Tambah rekaman lewat form “Tambah suara”, atau nyalakan mesin suara laptop.</div>
         ) : (
           voices.map((v) => {
             const st = STATUS[v.status] ?? STATUS.baru;

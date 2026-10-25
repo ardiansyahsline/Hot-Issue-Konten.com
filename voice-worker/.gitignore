@@ -1,0 +1,10 @@
+# rahasia & data lokal laptop — JANGAN di-commit
+.env
+.env.*
+!.env.example
+.venv/
+data/
+__pycache__/
+*.pyc
+*.log
+.ruff_cache/
