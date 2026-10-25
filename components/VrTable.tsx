@@ -19,7 +19,7 @@ function EditRow({ r, onDone }: { r: VideoReviewRow; onDone: () => void }) {
 
   return (
     <tr>
-      <td colSpan={8} className="p-2.5">
+      <td colSpan={99} className="p-2.5">
         <form action={action} className="rounded-2xl border-2 border-orange-400/70 bg-orange-500/5 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <span className="text-[13px] font-semibold">Edit kasus #{r.id}</span>
@@ -64,7 +64,23 @@ function Clamp({ text, className = "" }: { text: string | null; className?: stri
   );
 }
 
-export default function VrTable({ rows, canWrite, numberFrom, descending }: { rows: VideoReviewRow[]; canWrite: boolean; numberFrom: number; descending: boolean }) {
+/**
+ * compact = tabel "kasus terakhir" di tab Input: tanpa kolom Penjelasan (isinya sama dengan kategori),
+ * kategori & status sejajar, plus nama penginput (data gabungan semua anggota).
+ */
+export default function VrTable({
+  rows,
+  canWrite,
+  numberFrom,
+  descending,
+  compact = false,
+}: {
+  rows: VideoReviewRow[];
+  canWrite: boolean;
+  numberFrom: number;
+  descending: boolean;
+  compact?: boolean;
+}) {
   const [editing, setEditing] = useState<number | null>(null);
   const no = (i: number) => (descending ? numberFrom - i : i + 1);
 
@@ -72,21 +88,33 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
     <>
       {/* Desktop: semua kolom muat satu layar, tanpa geser ke samping */}
       <table className="hidden w-full table-fixed text-left text-[12.5px] md:table">
-        <colgroup>
-          <col style={{ width: 44 }} />
-          <col style={{ width: 74 }} />
-          <col style={{ width: "16%" }} />
-          <col style={{ width: "18%" }} />
-          <col style={{ width: "15%" }} />
-          <col style={{ width: "27%" }} />
-          <col style={{ width: "16%" }} />
-          <col style={{ width: 60 }} />
-        </colgroup>
+        {compact ? (
+          <colgroup>
+            <col style={{ width: 44 }} />
+            <col style={{ width: 96 }} />
+            <col style={{ width: "21%" }} />
+            <col style={{ width: "20%" }} />
+            <col style={{ width: "21%" }} />
+            <col style={{ width: "30%" }} />
+            <col style={{ width: 60 }} />
+          </colgroup>
+        ) : (
+          <colgroup>
+            <col style={{ width: 44 }} />
+            <col style={{ width: 74 }} />
+            <col style={{ width: "16%" }} />
+            <col style={{ width: "18%" }} />
+            <col style={{ width: "15%" }} />
+            <col style={{ width: "27%" }} />
+            <col style={{ width: "16%" }} />
+            <col style={{ width: 60 }} />
+          </colgroup>
+        )}
         <thead>
           <tr className="border-y border-zinc-800/80 bg-zinc-950/40 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">
             <th className="px-2.5 py-2.5 text-right">No</th>
             <th className="px-2.5 py-2.5">Tgl</th>
-            <th className="px-2.5 py-2.5">Penjelasan</th>
+            {!compact && <th className="px-2.5 py-2.5">Penjelasan</th>}
             <th className="px-2.5 py-2.5">Email/link</th>
             <th className="px-2.5 py-2.5">Penyelesaian</th>
             <th className="px-2.5 py-2.5">Catatan</th>
@@ -103,25 +131,37 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
                 <td className="px-2.5 py-3 text-right tabular-nums text-zinc-500">
                   <Link href={`/video-review/${r.id}`} className="hover:text-orange-400" title={`Buka kasus #${r.id}`}>{no(i)}</Link>
                 </td>
-                <td className="whitespace-nowrap px-2.5 py-3 tabular-nums">{ddmmyy(r.report_date)}</td>
-                <td className="px-2.5 py-3 font-semibold leading-snug">
-                  <Link href={`/video-review/${r.id}`} className="hover:text-orange-400">{r.explanation}</Link>
+                <td className="whitespace-nowrap px-2.5 py-3 tabular-nums">
+                  {ddmmyy(r.report_date)}
+                  {compact && r.created_by_name && <span className="block truncate text-[11px] text-zinc-500" title={`Diinput ${r.created_by_name}`}>{r.created_by_name}</span>}
                 </td>
+                {!compact && (
+                  <td className="px-2.5 py-3 font-semibold leading-snug">
+                    <Link href={`/video-review/${r.id}`} className="hover:text-orange-400">{r.explanation}</Link>
+                  </td>
+                )}
                 <td className="overflow-hidden px-2.5 py-3">{r.links.length ? <VrLinks links={r.links} max={3} /> : <Empty />}</td>
                 <td className="px-2.5 py-3 leading-relaxed text-zinc-300"><Clamp text={r.resolution} /></td>
                 <td className="px-2.5 py-3 leading-relaxed text-zinc-400"><VrNotes text={r.notes} clamp /></td>
-                <td className="space-y-1.5 px-2.5 py-3">
-                  {canWrite ? (
-                    <>
-                      <VrCategorySelect id={r.id} category={r.category} />
-                      <div><VrStatusSelect id={r.id} status={r.status} /></div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-zinc-300">{r.category ?? "—"}</div>
-                      <VrStatusBadge status={r.status} />
-                    </>
-                  )}
+                <td className={`px-2.5 py-3 ${compact ? "" : "space-y-1.5"}`}>
+                  {/* compact: kategori & status sejajar dalam satu baris */}
+                  <div className={compact ? "flex flex-wrap items-center gap-2" : "space-y-1.5"}>
+                    {canWrite ? (
+                      <>
+                        <div className={compact ? "min-w-0 flex-1" : ""}>
+                          <VrCategorySelect id={r.id} category={r.category} />
+                        </div>
+                        <div className="shrink-0">
+                          <VrStatusSelect id={r.id} status={r.status} />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-zinc-300">{r.category ?? "—"}</div>
+                        <VrStatusBadge status={r.status} />
+                      </>
+                    )}
+                  </div>
                 </td>
                 <td className="px-2 py-3 text-right">
                   {canWrite && (
@@ -148,8 +188,17 @@ export default function VrTable({ rows, canWrite, numberFrom, descending }: { ro
               <span>{ddmmyy(r.report_date)}</span>
               <span className="ml-auto"><VrStatusBadge status={r.status} /></span>
             </div>
-            <Link href={`/video-review/${r.id}`} className="block font-semibold">{r.explanation}</Link>
-            <div className="text-xs text-zinc-400">{r.category ?? "—"}</div>
+            {compact ? (
+              <Link href={`/video-review/${r.id}`} className="block font-semibold">
+                {r.category ?? r.explanation}
+                {r.created_by_name && <span className="ml-1.5 text-xs font-normal text-zinc-500">· {r.created_by_name}</span>}
+              </Link>
+            ) : (
+              <>
+                <Link href={`/video-review/${r.id}`} className="block font-semibold">{r.explanation}</Link>
+                <div className="text-xs text-zinc-400">{r.category ?? "—"}</div>
+              </>
+            )}
             {r.links.length > 0 && <VrLinks links={r.links} max={2} />}
             {r.resolution && <p className="text-zinc-300">{r.resolution}</p>}
             {r.notes && <div className="text-xs text-zinc-400"><VrNotes text={r.notes} clamp /></div>}

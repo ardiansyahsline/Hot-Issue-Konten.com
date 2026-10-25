@@ -1,7 +1,9 @@
-// Top issue dari agent: laporan Hot Issue (issue baru + laporan tambahan) per kategori, 7 hari terakhir vs 7 hari sebelumnya
+// Top issue dari agent: laporan Hot Issue (issue baru + laporan tambahan) per topik (judul mirip digabung), 7 hari terakhir vs 7 hari sebelumnya
 export type AgentIssueRow = {
   /** id topik (issue) */
   id?: number;
+  /** judul issue yang diinput agent (dipakai untuk menyimpulkan nama topik) */
+  title?: string | null;
   report_count?: number | null;
   category: string;
   status: "open" | "in_progress" | "resolved";
@@ -10,7 +12,16 @@ export type AgentIssueRow = {
   pic_name: string | null;
   created_at: string;
 };
-export type AgentTop = { category: string; count: number; prev: number; rows: AgentIssueRow[] };
+export type AgentTop = {
+  category: string;
+  /** nama topik hasil simpulan dari judul issue (bukan nama kategori) */
+  title: string;
+  count: number;
+  prev: number;
+  rows: AgentIssueRow[];
+  /** topik (issue) di dalam kelompok ini, urut dari laporan terbanyak */
+  topics: { id?: number; title: string; count: number }[];
+};
 
 const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 /** tanggal WIB (YYYY-MM-DD) dari timestamp */
@@ -20,19 +31,71 @@ const tgl = (d: string) => {
   return `${day} ${BULAN[m - 1]}`;
 };
 
+/* ---------- menyimpulkan topik dari judul issue ---------- */
+const STOP = new Set(
+  "yang dan di ke dari untuk dengan pada ini itu ada tidak belum sudah udah tapi atau juga karena saat jadi lagi masih bisa gak ga nggak tak sih nya dong kak min bro mohon tolong minta user clipper kreator akun saya aku kami kita mereka the a of to is and".split(" ")
+);
+const words = (t: string) => [...new Set((t.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((w) => !STOP.has(w)))];
+const similar = (a: string[], b: string[]) => {
+  if (!a.length || !b.length) return 0;
+  const B = new Set(b);
+  const inter = a.filter((w) => B.has(w)).length;
+  return inter / Math.min(a.length, b.length);
+};
+/** judul issue jadi nama topik yang rapi: huruf depan kapital, tanpa titik/spasi berlebih, maks 60 huruf */
+const tidyTitle = (t: string) => {
+  const s = t.replace(/\s+/g, " ").replace(/[.!?\s]+$/, "").trim();
+  const c = s.charAt(0).toUpperCase() + s.slice(1);
+  return c.length > 60 ? `${c.slice(0, 57).trimEnd()}…` : c;
+};
+
+/**
+ * Top topik dari agent, 7 hari terakhir vs 7 hari sebelumnya.
+ * Bukan per kategori ("Lainnya", "Campaign" kurang jelas): laporan dikelompokkan per TOPIK issue, lalu topik yang
+ * judulnya mirip (kata kunci sama) digabung. Nama kelompok = judul topik dengan laporan terbanyak.
+ */
 export function topAgentIssues(rows: AgentIssueRow[], from: string, prevFrom: string, limit = 3): AgentTop[] {
-  const cur = new Map<string, AgentIssueRow[]>();
-  const prev = new Map<string, number>();
+  type T = { key: string; id?: number; title: string; category: string; cur: AgentIssueRow[]; prev: number; w: string[] };
+  const byTopic = new Map<string, T>();
   for (const r of rows) {
     const d = wibDay(r.created_at);
-    if (d >= from) {
-      if (!cur.has(r.category)) cur.set(r.category, []);
-      cur.get(r.category)!.push(r);
-    } else if (d >= prevFrom) prev.set(r.category, (prev.get(r.category) ?? 0) + 1);
+    if (d < prevFrom) continue;
+    const key = r.id != null ? `#${r.id}` : `${r.category}|${r.title ?? ""}`;
+    let t = byTopic.get(key);
+    if (!t) {
+      const title = tidyTitle(r.title || r.category);
+      t = { key, id: r.id, title, category: r.category, cur: [], prev: 0, w: words(r.title || r.category) };
+      byTopic.set(key, t);
+    }
+    if (d >= from) t.cur.push(r);
+    else t.prev++;
   }
-  return [...cur.entries()]
-    .map(([category, list]) => ({ category, count: list.length, prev: prev.get(category) ?? 0, rows: list }))
-    .sort((a, b) => b.count - a.count || a.prev - b.prev || a.category.localeCompare(b.category))
+  // gabungkan topik yang mirip (kategori sama & ≥50% kata kunci sama, atau ≥75% kata kunci sama walau beda kategori)
+  const groups: T[][] = [];
+  for (const t of [...byTopic.values()].sort((a, b) => b.cur.length - a.cur.length || b.prev - a.prev)) {
+    const g = groups.find((gr) => {
+      const head = gr[0];
+      const sim = similar(t.w, head.w);
+      return (head.category === t.category && sim >= 0.5) || sim >= 0.75;
+    });
+    if (g) g.push(t);
+    else groups.push([t]);
+  }
+  return groups
+    .map((g) => {
+      const cur = g.flatMap((t) => t.cur);
+      const lead = g[0];
+      return {
+        category: lead.category,
+        title: lead.title,
+        count: cur.length,
+        prev: g.reduce((n, t) => n + t.prev, 0),
+        rows: cur,
+        topics: g.filter((t) => t.cur.length).map((t) => ({ id: t.id, title: t.title, count: t.cur.length })),
+      };
+    })
+    .filter((x) => x.count > 0)
+    .sort((a, b) => b.count - a.count || a.prev - b.prev || a.title.localeCompare(b.title))
     .slice(0, limit);
 }
 
@@ -45,8 +108,11 @@ export function agentRangkuman(t: AgentTop, hotThreshold: number, reportHot = 3)
   const days = t.rows.map((r) => wibDay(r.created_at)).sort();
   const first = days[0];
   const last = days[days.length - 1];
-  const what = topics.length < t.count ? `${t.count} laporan ${t.category} (${topics.length} topik)` : `${t.count} issue ${t.category}`;
+  const what = topics.length < t.count ? `${t.count} laporan (${topics.length} topik)` : `${t.count} issue`;
   const parts = [first === last ? `${what} pada ${tgl(first)}.` : `${what} dari ${tgl(first)} sampai ${tgl(last)}.`];
+  // topik lain yang digabung karena mirip (judul pertama sudah jadi nama kartu)
+  const others = t.topics.slice(1, 3).map((x) => `"${x.title}"`);
+  if (others.length) parts.push(`Termasuk topik serupa: ${others.join(", ")}${t.topics.length > 3 ? ` +${t.topics.length - 3} lainnya` : ""}.`);
   const st = [
     [n("open"), "masih open"],
     [n("in_progress"), "in progress"],
