@@ -58,6 +58,7 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
     { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: true },
     { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: true },
     { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: true },
+    { href: "/remotion", label: "🎞️ Remotion", icon: "🎞️", short: "Studio", show: role === "admin" },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
   // pemutar musik cukup SATU di halaman (kalau dua, perintah "putar" diterima dua pemutar -> suara dobel):
