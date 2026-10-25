@@ -13,6 +13,8 @@ const nextConfig = {
   outputFileTracingIncludes: {
     "/api/studio/asset/**": ["./assets/audio/**/*"],
     "/api/studio/catalog": ["./assets/audio/**/*"],
+    // daftar musik di assets/audio/music ikut dibaca AI Sutradara
+    "/api/studio/chat": ["./assets/audio/music/**/*"],
   },
   // pptxgenjs (bikin PowerPoint di browser) menyebut modul Node "node:fs"/"node:https" yang tidak dipakai di browser
   webpack(config, { isServer, webpack }) {

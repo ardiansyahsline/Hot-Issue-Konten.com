@@ -10,12 +10,15 @@
  * - SFX keras maks 2 yang pukulannya berdekatan; SFX keras yang jatuh saat VO bicara diturunkan 3 dB.
  * - Puncak gabungan (SFX + VO + musik yang puncaknya berdekatan) dijaga ≤ -1 dBTP dengan menurunkan SFX.
  * - Musik berhenti tepat di ketukan terakhir (ekor pendek) lalu hening ±0,3–0,5 dtk sebelum video habis.
+ * - Limiter dihitung di muka: selubung puncak tiap SFX per frame (lib/studio/sfxEnv) dijumlah bersama musik & VO;
+ *   kalau melewati -1,5 dBFS, musik & SFX diturunkan sebentar (VO tidak) — renderer browser tidak punya limiter.
  */
 import { Audio } from "@remotion/media";
 import { useMemo } from "react";
 import { Sequence, useVideoConfig } from "remotion";
 import { SFX_BUILTIN, sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
 import { beatGrid, dbToGain, DUCK_DB, isLoudSfx, MUSIC_LEVEL_DB, sceneStarts, secToFrames, sfxGain, TARGET_LUFS, totalFrames, type MusicLevel, type Timeline, type VoTrack } from "@/lib/studio/timeline";
+import { sfxEnv } from "@/lib/studio/sfxEnv";
 import { sfxSrc } from "@/lib/studio/urls";
 import { clamp, clamp01, useSrc } from "./theme";
 
@@ -36,6 +39,14 @@ const VO_PEAK = dbToGain(-3);
 const CEIL = dbToGain(-1);
 /** perkiraan puncak file musik user (master komersial ≈ -1 dBTP) */
 const TRACK_PEAK = dbToGain(-1);
+/** batas limiter (sisakan ruang untuk encoder AAC/MP3 & puncak antar-sampel) */
+const LIM_CEIL = dbToGain(-1.2);
+/** penurunan maksimal limiter */
+const LIM_FLOOR = dbToGain(-12);
+/** penyesuaian akhir musik & SFX supaya mix mendekati -14 LUFS (VO tetap); puncaknya tetap dijaga limiter di bawah */
+const MASTER_TRIM = dbToGain(2.3);
+/** penjumlahan puncak beberapa suara: jumlah linear (boom/braam/pulse dominan bass & sefase — terukur cocok dengan hasil render) */
+const PNORM = 1;
 
 const BUILTIN_IDS = new Set(SFX_BUILTIN.map((s) => s.id));
 /** alamat file SFX: bawaan → route aset repo, tambahan → src dari katalog */
@@ -276,7 +287,53 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
     if (pow + fixed <= CEIL * CEIL || amp[i] <= 0) return 1;
     return clamp(Math.sqrt(Math.max(0, CEIL * CEIL - fixed) / pow), 0.2, 1);
   });
-  kept.forEach((e, i) => clips.push({ ...e.clip, vol: e.clip.vol * scale[i] }));
+  const sfxClips = kept.map((e, i) => ({ ...e.clip, vol: e.clip.vol * scale[i] * MASTER_TRIM }));
+  for (const l of loops) for (let f = 0; f < N; f++) l.vol[f] *= MASTER_TRIM;
+
+  // ---------- limiter dihitung di muka ----------
+  const rest = new Float64Array(N); // Σ puncak^p musik + SFX
+  const voPk = new Float32Array(N);
+  const vg = useVo && tl.vo ? voGain(tl.vo.engine) : 0;
+  for (let f = 0; f < N; f++) voPk[f] = speak[f] ? VO_PEAK * vg : 0;
+  const addEnv = (env: Float32Array | null, tpLin: number, vol: (f: number) => number, from: number, len: number, offset: number, loop: boolean) => {
+    for (let k = 0; k < len; k++) {
+      const f = from + k;
+      if (f >= N) break;
+      const idx = offset + k;
+      const pk = env ? (loop ? env[idx % env.length] : env[idx] ?? 0) : tpLin;
+      const a = pk * vol(f);
+      if (a > 0) rest[f] += Math.pow(a, PNORM);
+    }
+  };
+  for (const c of sfxClips) {
+    const id = c.key.split("-").pop() ?? "";
+    const m = kept.find((e) => e.clip.key === c.key);
+    const meta = m ? sfxById(m.id, extra) : sfxById(id, extra);
+    addEnv(meta ? sfxEnv(meta.id) : null, meta ? dbToGain(meta.tp) : TRACK_PEAK, (f) => c.vol * at(gate, f), c.from, c.dur, c.trim, false);
+  }
+  for (const l of loops) {
+    const id = l.key.startsWith("bed-") ? l.key.slice(4) : "";
+    const env = id ? sfxEnv(id) : null;
+    addEnv(env, TRACK_PEAK, (f) => l.vol[f], 0, Math.min(N, l.end), 0, true);
+  }
+  const raw = new Float32Array(N);
+  for (let f = 0; f < N; f++) {
+    const r = Math.pow(rest[f], 1 / PNORM);
+    raw[f] = r <= 0 ? 1 : clamp((LIM_CEIL - voPk[f]) / r, LIM_FLOOR, 1);
+  }
+  // lihat-depan 2 frame (turun sebelum pukulan), lepas pelan ±0,3 dtk
+  const lim = new Float32Array(N);
+  const relStep = 1 / Math.max(1, Math.round(0.3 * fps));
+  let g = 1;
+  for (let f = 0; f < N; f++) {
+    let want = raw[f];
+    for (let k = 1; k <= 2 && f + k < N; k++) want = Math.min(want, raw[f + k]);
+    g = want < g ? want : Math.min(want, g + relStep * (1 - g) + relStep * 0.02);
+    lim[f] = g;
+  }
+  for (let f = 0; f < N; f++) gate[f] *= lim[f];
+  for (const l of loops) for (let f = 0; f < N; f++) l.vol[f] *= lim[f];
+  clips.push(...sfxClips);
   return { clips, loops, gate, stop };
 }
 
