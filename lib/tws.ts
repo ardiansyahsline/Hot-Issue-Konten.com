@@ -18,7 +18,7 @@ export const TWS_FONTS = ["Inter Tight"];
 export type TwsTone = "gold" | "red" | "green" | "blue" | "white";
 export type TwsGraphic = "chart-up" | "chart-down" | "coins" | "exchange" | "arrows" | "bank" | "globe";
 /** isian gambar dari website: latar, foto tokoh (cut = latarnya sudah dihapus), kredit foto kecil di pojok */
-export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string; /** logo TWS hanya kalau user memang minta konten TWS */ brand?: boolean };
+export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string; /** logo TWS hanya kalau user memang minta konten TWS */ brand?: boolean; /** warna rata-rata foto latar (#rrggbb) — angka 3D ikut disinari warna ini */ ambient?: string };
 type Img = TwsImg;
 export type TwsRow = { label: string; value?: string; note?: string; icon?: string };
 export type TwsItem = { label: string; a?: string; b?: string; pct?: string; value?: string; top?: string; icon?: string };
@@ -132,7 +132,8 @@ const BASE_CSS = `
 .tokoh{position:absolute;z-index:4;bottom:236px;height:870px;left:50%;transform:translateX(-47%);-webkit-mask-image:linear-gradient(180deg,#000 78%,transparent 100%);mask-image:linear-gradient(180deg,#000 78%,transparent 100%)}
 .tokoh img{height:100%;width:auto;max-width:none;display:block;filter:drop-shadow(0 0 34px rgba(61,110,247,.38)) drop-shadow(0 30px 40px rgba(0,0,0,.6))}
 .kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.5)}
-.big3d{position:absolute;left:0;right:0;top:60px;z-index:3}
+.udara{position:absolute;left:0;right:0;top:0;height:760px;z-index:2}
+.big3d{position:absolute;left:0;right:0;top:56px;z-index:3}
 .judul{position:absolute;left:68px;right:52px;bottom:110px;z-index:10;margin:0;font-weight:800;line-height:1.12;letter-spacing:-.02em;text-transform:uppercase;text-shadow:0 2px 18px rgba(0,0,0,.45)}
 .judul span{display:block;white-space:nowrap}
 .judul em{font-style:normal;display:inline-block;background:linear-gradient(180deg,#4a7dff 0%,#2a56ea 100%);padding:3px 16px 1px;margin:3px 0 3px -16px;border-radius:5px;text-shadow:none;box-shadow:0 10px 28px rgba(42,86,234,.35)}
@@ -145,29 +146,64 @@ const BASE_CSS = `
 `;
 
 const kredit = (img: Img) => (img.credit && img.bg ? `<div class="kredit" data-layer="Kredit Foto">${esc(img.credit)}</div>` : "");
-/** angka besar 3D sebagai vektor SVG (gradasi + tumpukan lapisan = ketebalan) — ikut rapi di PNG & SVG Figma */
-const TONE3D: Record<TwsTone, { top: string; mid: string; low: string; depth: string[]; glow: string }> = {
-  gold: { top: "#fff7d6", mid: "#f3c85e", low: "#a8721c", depth: ["#8a5d16", "#7a5212", "#6a470f", "#5a3c0c", "#4a3109", "#3a2607"], glow: "rgba(255,190,70,.35)" },
-  red: { top: "#ffd6d6", mid: "#ff4646", low: "#b5121a", depth: ["#8d0d12", "#7d0a0e", "#6b080c", "#5a070a", "#4a0508", "#3a0406"], glow: "rgba(255,40,40,.45)" },
-  green: { top: "#d9ffe3", mid: "#45ee75", low: "#0f9a3a", depth: ["#0b7a2d", "#096a27", "#075e22", "#06501d", "#054217", "#043512"], glow: "rgba(40,255,110,.38)" },
-  blue: { top: "#dde8ff", mid: "#6c95ff", low: "#2a57de", depth: ["#24479f", "#1f3e8c", "#1a3478", "#152b64", "#112350", "#0d1a3d"], glow: "rgba(70,120,255,.45)" },
-  white: { top: "#ffffff", mid: "#e4e4e7", low: "#a1a1aa", depth: ["#71717a", "#5c5c64", "#52525b", "#3f3f46", "#2f2f35", "#27272a"], glow: "rgba(255,255,255,.25)" },
+/**
+ * Angka 3D sebagai vektor SVG — dibuat seperti benda logam yang DISINARI adegan fotonya (bukan stiker):
+ * permukaan metalik berlapis (pantulan terang-gelap-terang), sisi tebal yang makin gelap ke belakang,
+ * bayangan jatuh ke latar, cahaya pinggir berwarna lingkungan (ambient dari foto latar), tekstur halus,
+ * dan bagian bawah sedikit tenggelam ke kabut supaya menyatu dengan foto.
+ */
+type Tone3D = { face: [number, string][]; side: string; glow: string; edge: string };
+const TONE3D: Record<TwsTone, Tone3D> = {
+  gold: { face: [[0, "#fff4c8"], [0.2, "#f2cf6c"], [0.42, "#b98425"], [0.56, "#ffe7a0"], [0.78, "#a46d18"], [1, "#5e3c0b"]], side: "#5a3a0a", glow: "rgba(255,186,70,.55)", edge: "#fff1c2" },
+  red: { face: [[0, "#ffd0cc"], [0.2, "#ff5b52"], [0.42, "#b3141b"], [0.56, "#ff7d72"], [0.78, "#8e0c12"], [1, "#4a0508"]], side: "#4a0609", glow: "rgba(255,46,46,.6)", edge: "#ffc2bc" },
+  green: { face: [[0, "#dcffe7"], [0.2, "#5cf08c"], [0.42, "#119a3f"], [0.56, "#8ef9b0"], [0.78, "#0a7029"], [1, "#043a16"]], side: "#053a17", glow: "rgba(46,255,120,.5)", edge: "#d2ffe0" },
+  blue: { face: [[0, "#e4ecff"], [0.2, "#80a6ff"], [0.42, "#2b57e0"], [0.56, "#a9c1ff"], [0.78, "#1c3da4"], [1, "#0b1a4d"]], side: "#0d1d52", glow: "rgba(70,125,255,.6)", edge: "#dce6ff" },
+  white: { face: [[0, "#ffffff"], [0.2, "#eef1f5"], [0.42, "#9aa3ae"], [0.56, "#f7f9fb"], [0.78, "#6e7884"], [1, "#363c45"]], side: "#2b3038", glow: "rgba(170,200,255,.45)", edge: "#ffffff" },
 };
-function big3d(text: string, tone: TwsTone): string {
+
+/** campur dua warna hex (t = porsi b) */
+function mix(a: string, b: string, t: number): string {
+  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const x = p(a), y = p(b);
+  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function big3d(text: string, tone: TwsTone, ambient?: string): string {
   const t = TONE3D[tone];
-  // angka sebesar mungkin (±900 px lebar) seperti poster referensi; makin panjang teksnya makin kecil
-  const size = Math.round(Math.max(130, Math.min(300, 900 / (Math.max(3, text.length) * 0.6))));
-  const y = 40 + size * 0.86;
+  const amb = ambient && /^#[0-9a-f]{6}$/i.test(ambient) ? ambient : null;
+  // angka besar (±900 px lebar), makin panjang teksnya makin kecil
+  const size = Math.round(Math.max(130, Math.min(320, 900 / (Math.max(3, text.length) * 0.6))));
+  const y = 46 + size * 0.86;
   const id = `n${tone}`;
-  const attrs = `text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${-size * 0.045}"`;
-  // ekstrusi tebal: banyak lapisan bergeser ke kanan-bawah, warnanya makin gelap ke belakang
-  const layers = 18;
-  const dx = size * 0.0035, dy = size * 0.0075;
+  const txt = esc(text);
+  const attrs = `text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${(-size * 0.04).toFixed(1)}"`;
+  // sisi tebal: dari warna sisi (sedikit kena warna lingkungan) di depan ke hampir hitam di belakang
+  const layers = 20;
+  const dx = size * 0.003, dy = size * 0.0068;
+  const sideFront = amb ? mix(t.side, amb, 0.22) : t.side;
   const depth = Array.from({ length: layers }, (_, i) => layers - i)
-    .map((k) => `<text ${attrs} x="${(540 + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${t.depth[Math.min(t.depth.length - 1, Math.floor((k / layers) * t.depth.length))]}">${esc(text)}</text>`)
+    .map((k) => `<text ${attrs} x="${(540 + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, "#050505", (k / layers) * 0.85)}">${txt}</text>`)
     .join("");
-  const h = Math.round(size * 1.2) + 60;
-  return `<svg width="1080" height="${h}" viewBox="0 0 1080 ${h}" style="display:block;overflow:visible"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.top}"/><stop offset=".42" stop-color="${t.mid}"/><stop offset="1" stop-color="${t.low}"/></linearGradient><filter id="${id}b" x="-20%" y="-40%" width="140%" height="180%"><feGaussianBlur stdDeviation="${Math.round(size * 0.12)}"/></filter></defs><g transform="rotate(-3 540 ${Math.round(y - size * 0.35)})"><text ${attrs} x="540" y="${y + size * 0.06}" fill="${t.glow}" filter="url(#${id}b)">${esc(text)}</text>${depth}<text ${attrs} x="540" y="${y}" fill="url(#${id})">${esc(text)}</text><text ${attrs} x="540" y="${y}" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${esc(text)}</text></g></svg>`;
+  const rim = amb ? mix(amb, "#ffffff", 0.35) : t.edge;
+  const h = Math.round(size * 1.25) + 80;
+  const stops = t.face.map(([o, c]) => `<stop offset="${o}" stop-color="${amb && o > 0.5 ? mix(c, amb, 0.12) : c}"/>`).join("");
+  return `<svg width="1080" height="${h}" viewBox="0 0 1080 ${h}" style="display:block;overflow:visible"><defs>
+<linearGradient id="${id}f" x1="0" y1="0" x2="0.18" y2="1">${stops}</linearGradient>
+<linearGradient id="${id}e" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.edge}" stop-opacity=".95"/><stop offset=".35" stop-color="${t.edge}" stop-opacity=".25"/><stop offset="1" stop-color="${t.edge}" stop-opacity="0"/></linearGradient>
+<linearGradient id="${id}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".7" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity=".55"/></linearGradient>
+<mask id="${id}k" maskUnits="userSpaceOnUse" x="0" y="0" width="1080" height="${h}"><rect width="1080" height="${h}" fill="url(#${id}m)"/></mask>
+<filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="${Math.round(size * 0.16)}"/></filter>
+<filter id="${id}s" x="-20%" y="-40%" width="140%" height="200%"><feGaussianBlur stdDeviation="${Math.round(size * 0.07)}"/></filter>
+<filter id="${id}t" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
+</defs><g transform="rotate(-3 540 ${Math.round(y - size * 0.35)})" mask="url(#${id}k)">
+<text ${attrs} x="560" y="${(y + size * 0.16).toFixed(1)}" fill="#000" opacity=".7" filter="url(#${id}s)">${txt}</text>
+<text ${attrs} x="540" y="${(y + size * 0.04).toFixed(1)}" fill="${t.glow}" filter="url(#${id}g)">${txt}</text>
+${depth}
+<text ${attrs} x="540" y="${y}" fill="url(#${id}f)">${txt}</text>
+<text ${attrs} x="540" y="${y}" fill="#fff" opacity=".07" filter="url(#${id}t)">${txt}</text>
+<text ${attrs} x="540" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.011).toFixed(1)}">${txt}</text>
+<text ${attrs} x="${(540 - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".55" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
+</g></svg>`;
 }
 
 /** logo TWS hanya untuk konten TWS (user menyebut TWS); selain itu tanpa logo */
@@ -284,9 +320,17 @@ function cover(sl: TwsSlide, img: Img): string {
   const cut = !!(img.person && img.cut);
   const useBg = !!img.bg && (cut || !img.person);
   const base: Img = { ...img, bg: useBg ? img.bg : img.person ?? img.bg, credit: useBg ? img.credit : undefined };
-  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone)}</div>` : "";
+  // kabut gelap + rona warna angka di bagian atas foto: angka tampak "berada" di adegan, bukan ditempel
+  const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 70% 42% at 50% 17%,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 60% 34% at 50% 20%,${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".22)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
+  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient)}</div>` : "";
   const person = cut ? `<div data-layer="Foto Tokoh" class="tokoh"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>` : "";
-  return `<div class="art">${latar(base, sl, "", cut ? "redup" : "")}<div class="vign" data-layer="Vignette"></div>${big}${person}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
+  // foto tokoh utuh (belum terpotong) + ada angka: foto diturunkan supaya wajah di bawah angka, bagian atasnya diisi
+  // versi buram foto yang sama -> warnanya nyambung, angka "melayang" di atas kepala seperti referensi
+  const drop = !!(sl.big && img.person && !cut && base.bg === img.person);
+  const bgLayer = drop
+    ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div>${latar(base, sl, "top:250px;-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 26%);mask-image:linear-gradient(180deg,transparent 0,#000 26%)")}`
+    : latar(base, sl, "", cut ? "redup" : "");
+  return `<div class="art">${bgLayer}<div class="vign" data-layer="Vignette"></div>${air}${big}${person}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
 }
 
 /** ukuran kalimat besar slide isi: pendek = besar sekali (seperti referensi), panjang = mengecil */

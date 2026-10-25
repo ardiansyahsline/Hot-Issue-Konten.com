@@ -130,7 +130,7 @@ function fitText(doc: Document): Check {
 
 /* ---------- isian gambar (latar & foto tokoh) — disimpan per slide selama halaman terbuka, ikut ke revisi berikutnya ---------- */
 type Pic = { src: string; label?: string; page?: string; credit?: string; download?: string; web?: boolean };
-type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; personList?: Pic[]; personAt?: number; tried?: { bg?: boolean; person?: boolean } };
+type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; personList?: Pic[]; personAt?: number; ambient?: string; ambientSrc?: string; tried?: { bg?: boolean; person?: boolean } };
 const fills = new Map<string, Fill>();
 const listeners = new Set<() => void>();
 const setFill = (k: string, f: Partial<Fill>) => {
@@ -169,7 +169,7 @@ async function findPhotos(q: string, web = false): Promise<PhotoItem[]> {
 function htmlOf(d: Design, f: Fill | undefined): string {
   if (d.tws) {
     const sl = d.tws.deck.slides[d.tws.index];
-    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit, brand: d.tws.deck.brand === "tws" });
+    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit, brand: d.tws.deck.brand === "tws", ambient: f?.ambient });
   }
   let h = d.html;
   if (f?.bg && !f.graphic) h = h.replace(/<img([^>]*?)data-slot="bg"([^>]*?)>/g, (_m, a: string, b: string) => `<img${(a + b).replace(/\ssrc="[^"]*"/, "")} data-slot="bg" src="${f.bg!.src}">`);
@@ -192,6 +192,65 @@ function deckNews(deck: TwsDeck): Promise<Pic[]> {
     newsCache.set(k, p);
   }
   return p;
+}
+
+/**
+ * warna cahaya lingkungan foto latar (bagian atas, tempat angka 3D): rata-rata yang condong ke warna terang & jenuh
+ * (lampu, grafik, api) -> dipakai untuk cahaya pinggir & sisi angka supaya angka menyatu dengan fotonya.
+ */
+const ambientCache = new Map<string, Promise<string | null>>();
+function ambientOf(src: string): Promise<string | null> {
+  let p = ambientCache.get(src);
+  if (!p) {
+    p = new Promise<string | null>((res) => {
+      const im = new Image();
+      im.crossOrigin = "anonymous";
+      im.onload = () => {
+        try {
+          const c = document.createElement("canvas");
+          c.width = 32;
+          c.height = 20;
+          const g = c.getContext("2d")!;
+          g.drawImage(im, 0, 0, im.naturalWidth, im.naturalHeight * 0.6, 0, 0, 32, 20);
+          const px = g.getImageData(0, 0, 32, 20).data;
+          let r = 0, gg = 0, b = 0, w = 0;
+          for (let i = 0; i < px.length; i += 4) {
+            const mx = Math.max(px[i], px[i + 1], px[i + 2]), mn = Math.min(px[i], px[i + 1], px[i + 2]);
+            const wt = Math.pow(mx ? (mx - mn) / mx : 0, 1.5) * (mx / 255) + 0.03;
+            r += px[i] * wt;
+            gg += px[i + 1] * wt;
+            b += px[i + 2] * wt;
+            w += wt;
+          }
+          const avg = [r / w, gg / w, b / w];
+          const k = 225 / Math.max(1, ...avg); // dicerahkan: ini warna cahaya, bukan warna bayangan
+          res(`#${avg.map((v) => Math.min(255, Math.round(v * k)).toString(16).padStart(2, "0")).join("")}`);
+        } catch {
+          res(null); // gambar tanpa izin CORS -> tanpa ambient
+        }
+      };
+      im.onerror = () => res(null);
+      im.src = src;
+    });
+    ambientCache.set(src, p);
+  }
+  return p;
+}
+
+/** hitung ulang ambient tiap kali foto latar cover (yang ada angka 3D-nya) berganti */
+function useAmbient(designs: Design[]) {
+  const store = useFills();
+  useEffect(() => {
+    designs.forEach((d) => {
+      if (!d.tws || !d.tws.deck.slides[d.tws.index].big) return;
+      const k = keyOf(d);
+      const f = store.get(k);
+      const src = f?.person && !f.person.cut ? f.person.src : f?.graphic ? undefined : f?.bg?.src;
+      if (!src || f?.ambientSrc === src) return;
+      setFill(k, { ambientSrc: src, ambient: undefined });
+      void ambientOf(src).then((a) => fills.get(k)?.ambientSrc === src && a && setFill(k, { ambient: a }));
+    });
+  });
 }
 
 const PERSON_LABEL = "Foto tokoh dicari otomatis dari web · cek hak cipta & pastikan orangnya benar";
@@ -669,6 +728,7 @@ function Viewer({ designs, deck, disabled, onSend }: { designs: Design[]; deck?:
 
 export default function DesignCard({ designs, deck, disabled, onSend }: { designs: Design[]; deck?: TwsDeck; disabled?: boolean; onSend: (t: string) => void }) {
   useAutoFill(designs, true);
+  useAmbient(designs);
   const slides = !!deck || designs.some((d) => d.slide);
   const options = !slides && designs.length > 1;
   const wide = designs.every((d) => SIZES[d.size].w > SIZES[d.size].h);
