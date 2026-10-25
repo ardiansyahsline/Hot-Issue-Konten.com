@@ -12,20 +12,25 @@ const TABS: [Tab, string][] = [
 const isTab = (v: string | null): v is Tab => v === "pro" || v === "lama" || v === "suara";
 
 /**
- * Tab halaman Studio. Studio Pro tetap terpasang saat pindah tab (chat & editan tidak hilang);
- * template lama & bank suara dipasang hanya saat dibuka (pemutarnya ikut berhenti saat ditinggal).
+ * Tab halaman Studio. Tiap tab baru dipasang saat pertama dibuka, lalu tetap terpasang saat pindah tab
+ * (chat, editan "Ubah teks", form bank suara & render yang sedang jalan tidak hilang); pemutarnya berhenti saat ditinggal.
  */
 export default function StudioTabs() {
   const [tab, setTab] = useState<Tab>("pro");
+  const [seen, setSeen] = useState<ReadonlySet<Tab>>(() => new Set<Tab>(["pro"]));
   const btns = useRef<(HTMLButtonElement | null)[]>([]);
 
+  const show = (t: Tab) => {
+    setTab(t);
+    setSeen((s) => (s.has(t) ? s : new Set(s).add(t)));
+  };
   // ?tab=lama / ?tab=suara bisa dibagikan sebagai link
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (isTab(t)) setTab(t);
+    if (isTab(t)) show(t);
   }, []);
   const pick = (t: Tab) => {
-    setTab(t);
+    show(t);
     try {
       const u = new URL(window.location.href);
       if (t === "pro") u.searchParams.delete("tab");
@@ -76,13 +81,13 @@ export default function StudioTabs() {
       <div id="studio-panel-pro" role="tabpanel" aria-labelledby="studio-tab-pro" hidden={tab !== "pro"}>
         <StudioPro active={tab === "pro"} />
       </div>
-      {tab === "lama" && (
-        <div id="studio-panel-lama" role="tabpanel" aria-labelledby="studio-tab-lama">
-          <RemotionStudio />
+      {seen.has("lama") && (
+        <div id="studio-panel-lama" role="tabpanel" aria-labelledby="studio-tab-lama" hidden={tab !== "lama"}>
+          <RemotionStudio active={tab === "lama"} />
         </div>
       )}
-      {tab === "suara" && (
-        <div id="studio-panel-suara" role="tabpanel" aria-labelledby="studio-tab-suara">
+      {seen.has("suara") && (
+        <div id="studio-panel-suara" role="tabpanel" aria-labelledby="studio-tab-suara" hidden={tab !== "suara"}>
           <VoiceBank />
         </div>
       )}
