@@ -215,3 +215,11 @@ export function useScene(): SceneCtxValue {
 
 /** id unik yang aman dipakai di url(#id) SVG */
 export const svgId = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "");
+
+/**
+ * Pengubah alamat media (audio, gambar, video). Bawaan: apa adanya (website — route /api/studio/…).
+ * Render di laptop (remotion/Root.tsx) memetakan alamat website ke staticFile() karena route website tidak bisa diakses di sana.
+ */
+export type SrcResolver = (src: string) => string;
+export const SrcCtx = createContext<SrcResolver>((s) => s);
+export const useSrc = () => useContext(SrcCtx);

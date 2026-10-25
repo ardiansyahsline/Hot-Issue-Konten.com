@@ -50,12 +50,62 @@ export type KineticProps = {
   lh?: number;
   ease?: Ease;
   font?: string;
+  /** false = jangan pecah baris otomatis (baris sudah diatur sendiri) */
+  wrap?: boolean;
 };
 
 /** ukuran huruf KineticText untuk kotak w × h (dipakai juga untuk mengatur tata letak) */
 export function kineticSize(lines: string[], w: number, h: number, max = 150, min = 30, lh = 1.12, emph?: (w: string) => boolean): number {
   const widest = Math.max(1, ...lines.map((l) => textEm(l) + (emph ? l.split(/\s+/).filter(emph).length * 0.3 : 0)));
   return Math.round(clamp(Math.min(w / widest, h / Math.max(1, lines.length * lh), max), min, max));
+}
+
+/** belah satu baris jadi dua, masing-masing ≥ 2 kata, dengan baris terpanjang sesempit mungkin (null kalau < 4 kata) */
+function split2(line: string): [string, string] | null {
+  const w = line.split(/\s+/).filter(Boolean);
+  if (w.length < 4) return null;
+  let best: [string, string] | null = null;
+  let bw = Infinity;
+  for (let k = 2; k <= w.length - 2; k++) {
+    const a = w.slice(0, k).join(" ");
+    const b = w.slice(k).join(" ");
+    const m = Math.max(textEm(a), textEm(b));
+    if (m < bw) {
+      bw = m;
+      best = [a, b];
+    }
+  }
+  return best;
+}
+
+/**
+ * Pecah baris panjang supaya huruf lebih besar (gaya kinetic: 2–4 kata per baris, tidak ada baris 1 kata hasil pecahan).
+ * Baris terlebar dibelah dua selama ukuran huruf bertambah jelas (≥ 8%), maks `maxLines` baris.
+ */
+export function rewrap(lines: string[], w: number, h: number, max = 150, min = 30, lh = 1.12, emph?: (w: string) => boolean, maxLines = 4): string[] {
+  let cur = lines.filter(Boolean);
+  let size = kineticSize(cur, w, h, max, min, lh, emph);
+  while (cur.length < maxLines && size < max) {
+    let wi = -1;
+    let ww = 0;
+    let parts: [string, string] | null = null;
+    for (let i = 0; i < cur.length; i++) {
+      const e = textEm(cur[i]);
+      const sp = e > ww ? split2(cur[i]) : null;
+      if (sp) {
+        ww = e;
+        wi = i;
+        parts = sp;
+      }
+    }
+    if (wi < 0 || !parts) break;
+    const next = [...cur.slice(0, wi), ...parts, ...cur.slice(wi + 1)];
+    const ns = kineticSize(next, w, h, max, min, lh, emph);
+    if (ns < size * 1.08) break;
+    cur = next;
+    size = ns;
+  }
+  return cur;
 }
 
 export function KineticText(p: KineticProps) {
@@ -70,8 +120,11 @@ export function KineticText(p: KineticProps) {
   const accent = p.accent ?? brand.primary;
   const lh = p.lh ?? 1.12;
   const isEmph = useMemo(() => emphasisMatcher(p.emphasis), [p.emphasis]);
-  const lines = p.lines.map((l) => l.split(/\s+/).filter(Boolean)).filter((l) => l.length);
-  const size = kineticSize(lines.map((l) => l.join(" ")), p.w, p.h, p.max ?? 150, p.min ?? 30, lh, isEmph);
+  const max = p.max ?? 150;
+  const min = p.min ?? 30;
+  const src = useMemo(() => (p.wrap === false ? p.lines : rewrap(p.lines, p.w, p.h, max, min, lh, isEmph)), [p.lines, p.wrap, p.w, p.h, max, min, lh, isEmph]);
+  const lines = src.map((l) => l.split(/\s+/).filter(Boolean)).filter((l) => l.length);
+  const size = kineticSize(lines.map((l) => l.join(" ")), p.w, p.h, max, min, lh, isEmph);
   const start = p.start ?? 0;
   const N = lines.reduce((a, l) => a + l.length, 0);
   const total = Math.max(6, p.span ?? Math.round(dur * 0.45));

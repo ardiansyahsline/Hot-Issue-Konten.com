@@ -1,0 +1,10 @@
+# Paket dasar voice-worker (tanpa PyTorch). PyTorch CUDA 12.8 + mesin suara dipasang install.ps1
+# lewat requirements-gpu.txt (urutannya penting, jangan `pip install` file ini sendirian di laptop baru).
+numpy>=2.0,<2.4
+scipy>=1.11,<2
+soundfile>=0.12.1
+librosa==0.11.0
+pyloudnorm>=0.1.1
+httpx>=0.27,<1
+python-dotenv>=1.0
+faster-whisper==1.2.1

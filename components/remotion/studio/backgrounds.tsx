@@ -10,7 +10,7 @@ import { AbsoluteFill, Img, random, useCurrentFrame, useVideoConfig } from "remo
 import type { Background, Brand } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 import { blurCss, Glow, Scrim, useSvgId } from "./fx";
-import { mix, rgba } from "./theme";
+import { mix, rgba, useSrc } from "./theme";
 
 const VIDEO_EXT = new Set(["mp4", "webm", "mov", "m4v", "mkv", "ogv"]);
 
@@ -24,8 +24,9 @@ export function isVideoSrc(src: string | null | undefined): boolean {
 
 /** foto / video yang menutupi kotak induk (video selalu tanpa suara: suara diatur lewat mix Studio) */
 export function MediaFill({ src, fit = "cover", style }: { src: string; fit?: "cover" | "contain"; style?: CSSProperties }) {
+  const res = useSrc();
   const css: CSSProperties = { width: "100%", height: "100%", objectFit: fit, display: "block", ...style };
-  return isVideoSrc(src) ? <Video src={src} muted loop objectFit={fit} style={css} /> : <Img src={src} style={css} />;
+  return isVideoSrc(src) ? <Video src={res(src)} muted loop objectFit={fit} style={css} /> : <Img src={res(src)} style={css} />;
 }
 
 const palette = (bg: Background, brand: Brand) => {

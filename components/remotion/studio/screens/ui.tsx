@@ -8,6 +8,7 @@
 import { useId, type CSSProperties, type ReactNode } from "react";
 import { Easing, interpolate, spring } from "remotion";
 import HeroArt from "@/components/ai/HeroArt";
+import { personaTagline } from "@/lib/aiPersona";
 import type { Brand, ScreenKind } from "@/lib/studio/timeline";
 import { DISPLAY, FONT } from "../../ugc/kit";
 
@@ -70,6 +71,24 @@ export function rgba(hex: string, a: number) {
 }
 /** id unik aman untuk url(#id) di SVG */
 export const useSid = (p: string) => p + useId().replace(/[^a-zA-Z0-9_-]/g, "");
+
+const hex6 = (c: string) => {
+  let h = c.trim().replace("#", "");
+  if (h.length === 3 || h.length === 4) h = h.split("").map((x) => x + x).join("");
+  return /^[0-9a-f]{6,8}$/i.test(h) ? [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) : null;
+};
+/** campur dua warna hex (k = porsi b); warna bukan hex -> a apa adanya */
+export function mixHex(a: string, b: string, k: number) {
+  const x = hex6(a);
+  const y = hex6(b);
+  if (!x || !y) return a;
+  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * clamp01(k)).toString(16).padStart(2, "0")).join("")}`;
+}
+/** perkiraan terang warna (0 gelap .. 1 terang) */
+export const lumOf = (c: string) => {
+  const x = hex6(c);
+  return x ? (0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2]) / 255 : 0.5;
+};
 
 // ------------------------------------------------------------------ waktu ------------------------------------------------------------------
 /**
@@ -141,7 +160,7 @@ export function splitStat(s: string): { label: string; n: number; suf: string } 
   return f ? { label: m[1].trim(), n: f.n, suf: m[3] ?? "" } : null;
 }
 /** isi daftar: teks dari user dulu, sisanya contoh bawaan */
-export const fill = (items: string[], defs: string[], n = defs.length) => [...items, ...defs.slice(items.length)].slice(0, Math.max(n, 0));
+export const fill = <T,>(items: T[], defs: T[], n = defs.length): T[] => [...items, ...defs.slice(items.length)].slice(0, Math.max(n, 0));
 /** inisial nama: 2 kata -> huruf depan masing-masing, 1 kata -> 2 huruf pertama ("Alif" -> "AL") */
 export const initials = (name: string) => {
   const w = name.split(/\s+/).map((x) => x.replace(/^[^A-Za-z0-9]+/, "")).filter(Boolean);
@@ -593,6 +612,138 @@ export function Pointer({ t, keys, wide }: { t: Clock; keys: PKey[]; wide: boole
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Jari (HP) / panah mouse (laptop) yang datang ke titik di dalam elemen induk (induk wajib position: relative),
+ * mengetuk di frame `at`, tetap menekan selama `hold` frame (mis. menggeser slider), lalu menghilang.
+ * Posisi mengikuti elemen, jadi tetap tepat walau tata letak berubah.
+ */
+export function TapAt({ t, at, wide, x = "50%", y = "50%", from = [70, 110], hold = 0 }: { t: Clock; at: number; wide: boolean; x?: string | number; y?: string | number; from?: [number, number]; hold?: number }) {
+  const op = ramp(t, at - 22, at - 12) * (1 - ramp(t, at + hold + 14, at + hold + 24));
+  if (op <= 0.001) return null;
+  const m = 1 - ramp(t, at - 20, at - 2, 0, 1, Easing.bezier(0.45, 0, 0.2, 1));
+  const dx = from[0] * m;
+  const dy = from[1] * m;
+  const press = t.f >= at - 3 && t.f <= at + hold + 2 ? 0.82 : 1;
+  const ring = t.f >= at && t.f < at + 22 ? (t.f - at) / 22 : -1;
+  return (
+    <span style={{ position: "absolute", left: x, top: y, width: 0, height: 0, zIndex: 60, pointerEvents: "none", opacity: op }}>
+      {ring >= 0 && (
+        <span style={{ position: "absolute", left: -18, top: -18, width: 36, height: 36, borderRadius: 999, border: `3px solid rgba(255,255,255,${0.85 * (1 - ring)})`, transform: `scale(${1 + ring * 1.6})` }} />
+      )}
+      {wide ? (
+        <svg width="26" height="30" viewBox="0 0 26 30" style={{ position: "absolute", left: dx - 3, top: dy - 2, transform: `scale(${press})`, transformOrigin: "3px 2px" }} aria-hidden>
+          <path d="M3 2 L3 24 L9 18.5 L13 28 L17 26.3 L13 17 L21 17 Z" fill="#fff" stroke="#111" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <span
+          style={{
+            position: "absolute",
+            left: dx - 17,
+            top: dy - 17,
+            width: 34,
+            height: 34,
+            borderRadius: 999,
+            background: "rgba(255,255,255,0.82)",
+            border: "2px solid rgba(255,255,255,0.95)",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
+            transform: `scale(${press})`,
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+// ------------------------------------------------------------------ teks kaya ------------------------------------------------------------------
+type Seg = { s: string; b: boolean };
+/** pecah "**tebal**" jadi potongan teks */
+export const segs = (text: string): Seg[] => text.split(/(\*\*[^*]+\*\*)/).filter(Boolean).map((s) => (s.startsWith("**") && s.endsWith("**") ? { s: s.slice(2, -2), b: true } : { s, b: false }));
+/** teks tanpa tanda ** (untuk menghitung panjang ketikan) */
+export const plain = (text: string) => segs(text).map((x) => x.s).join("");
+/** teks dengan **tebal** yang diketik sampai `n` huruf; `bold` = gaya kata tebal */
+export function Rich({ text, n = Infinity, bold }: { text: string; n?: number; bold?: CSSProperties }) {
+  let left = n;
+  return (
+    <>
+      {segs(text).map((x, i) => {
+        if (left <= 0) return null;
+        const chars = Array.from(x.s);
+        const part = chars.slice(0, Math.max(0, Math.floor(left))).join("");
+        left -= chars.length;
+        return x.b ? (
+          <b key={i} style={{ fontWeight: 750, color: Z[50], ...bold }}>
+            {part}
+          </b>
+        ) : (
+          <span key={i}>{part}</span>
+        );
+      })}
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ AI (hero, keterangan penjawab) ------------------------------------------------------------------
+/** foto hero di samping jawaban AI (lingkaran oranye tipis, chibi sedikit lebih besar dari lingkarannya) */
+export function HeroAvatar({ t, hero = "Harley", size = 36, acc = "#f97316", talk }: { t: Clock; hero?: string; size?: number; acc?: string; talk?: boolean }) {
+  const y = talk ? Math.abs(Math.sin(t.f / 3.2)) * -size * 0.04 : 0;
+  return (
+    <span style={{ width: size, height: size, flex: "none", borderRadius: 999, overflow: "hidden", display: "inline-flex", alignItems: "flex-end", justifyContent: "center", background: rgba(acc, 0.1) }}>
+      <span style={{ display: "inline-flex", transform: `translateY(${y}px)` }}>
+        <HeroArt hero={hero} size={size * 1.17} still />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Keterangan penjawab (HelperLine website): "👋 Kamu dibantu oleh Harley · ENFP Si Pesulap Ide — kreatif, …".
+ * Selalu 1 baris: huruf diperkecil kalau tidak muat di `max` px (perkiraan lebar huruf, tanpa mengukur DOM).
+ */
+export function HelperChip({ hero = "Harley", max, p = 1, glow = 0, acc = "#f97316" }: { hero?: string; max: number; p?: number; glow?: number; acc?: string }) {
+  const tg = personaTagline(hero);
+  const text = `👋 Kamu dibantu oleh ${tg.name} · ${tg.kind} — ${tg.sifat}`;
+  const est = Array.from(text).length * 0.53 + 2;
+  const fs = Math.max(6.5, Math.min(11.5, (max - 20) / est));
+  return (
+    <div style={{ marginBottom: 6, minWidth: 0, overflow: "hidden", maxWidth: max, opacity: clamp01(p * 1.4), transform: `translateY(${(1 - p) * 6}px) scale(${0.94 + 0.06 * p})`, transformOrigin: "0 50%" }}>
+      <span
+        style={{
+          display: "inline-block",
+          whiteSpace: "nowrap",
+          borderRadius: 12,
+          border: `1px solid ${glow > 0 ? rgba(acc, 0.35 + glow * 0.5) : Z[800]}`,
+          background: Z[900],
+          padding: "4px 9px",
+          fontSize: fs,
+          lineHeight: 1.25,
+          color: Z[400],
+          boxShadow: `0 1px 2px rgba(0,0,0,0.4)${glow > 0 ? `, 0 0 0 ${glow * 4}px ${rgba(acc, 0.18 * glow)}` : ""}`,
+        }}
+      >
+        👋 Kamu dibantu oleh <b style={{ fontWeight: 650, color: Z[100] }}>{tg.name}</b> · {tg.kind} — {tg.sifat}
+      </span>
+    </div>
+  );
+}
+
+/** percikan bintang kecil yang menyebar sekali (mis. saat hero muncul) */
+export function Sparkles({ t, at, color = "#fde68a", n = 7, r = 40 }: { t: Clock; at: number; color?: string; n?: number; r?: number }) {
+  const k = (t.f - at) / 22;
+  if (k < 0 || k > 1) return null;
+  return (
+    <svg width={r * 3} height={r * 3} viewBox={`0 0 ${r * 3} ${r * 3}`} style={{ position: "absolute", left: -r * 1.5, top: -r * 1.5, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+      {Array.from({ length: n }, (_, i) => {
+        const a = (i / n) * Math.PI * 2 + 0.4;
+        const d = r * (0.4 + 0.9 * Easing.out(Easing.cubic)(k));
+        const s = (3.2 + (i % 3)) * (1 - k);
+        const cx = r * 1.5 + Math.cos(a) * d;
+        const cy = r * 1.5 + Math.sin(a) * d;
+        return <path key={i} d={`M${cx} ${cy - s * 2}L${cx + s * 0.5} ${cy - s * 0.5}L${cx + s * 2} ${cy}L${cx + s * 0.5} ${cy + s * 0.5}L${cx} ${cy + s * 2}L${cx - s * 0.5} ${cy + s * 0.5}L${cx - s * 2} ${cy}L${cx - s * 0.5} ${cy - s * 0.5}Z`} fill={i % 2 ? color : "#fff"} opacity={1 - k} />;
+      })}
+    </svg>
   );
 }
 

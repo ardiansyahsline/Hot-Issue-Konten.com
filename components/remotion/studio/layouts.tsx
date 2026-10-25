@@ -13,7 +13,7 @@ import { Laptop, LAPTOP, laptopFit, Phone, PHONE, phoneFit } from "./devices";
 import { Glow, Scrim, Shine, splitShadow, TextShine, useSplit, useSvgId } from "./fx";
 import { AppScreen } from "./screens";
 import { emphasisMatcher, KineticText } from "./text";
-import { autoLines, clamp, clamp01, DOWN, EASE, ease, fitSize, fmtNum, ink, mix, pulse, rgba, textEm, UP, useScene, useStudio, type Box } from "./theme";
+import { autoLines, clamp, clamp01, DOWN, EASE, ease, fitSize, fmtNum, ink, mix, pulse, rgba, textEm, UP, useScene, useSrc, useStudio, type Box } from "./theme";
 
 /** blur latar (depth of field) per jenis tata letak: makin banyak isi di depan, makin buram latarnya */
 export function dofFor(kind: LayoutKind | undefined): number {
@@ -409,8 +409,9 @@ function DeviceL({ kind }: { kind: "phone" | "laptop" }) {
   // anticipation: turun sedikit sebelum naik masuk
   const pre = f < T(3) ? (f / Math.max(1, T(3))) * 8 : 0;
   const ty = (1 - p) * devBox.h * 0.6 + pre;
+  const res = useSrc();
   const screenKind = L.screen ?? (L.src ? "media" : "dashboard");
-  const screen = <AppScreen kind={screenKind} brand={brand} items={L.items} title={L.title} src={L.src ?? null} start={T(14)} dur={dur} compact={kind === "phone"} />;
+  const screen = <AppScreen kind={screenKind} brand={brand} items={L.items} title={L.title} src={L.src ? res(L.src) : null} start={T(14)} dur={dur} compact={kind === "phone"} />;
   return (
     <>
       {textBox && (
@@ -441,6 +442,7 @@ function DeviceL({ kind }: { kind: "phone" | "laptop" }) {
 function LogoL() {
   const { scene, box, enter, f, T } = useT();
   const { brand, display, portrait } = useStudio();
+  const res = useSrc();
   const split = useSplit();
   const L = scene.layout;
   const name = L.title ?? brand.name;
@@ -483,7 +485,7 @@ function LogoL() {
           }}
         >
           {brand.logo ? (
-            <Img src={brand.logo} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            <Img src={res(brand.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           ) : (
             <span style={{ fontFamily: display, fontWeight: 800, fontSize: G * 0.56, color: ink(brand.primary), lineHeight: 1 }}>{Array.from(name.trim())[0]?.toUpperCase() ?? "K"}</span>
           )}
@@ -699,6 +701,7 @@ function FeaturesL() {
 function CtaL() {
   const { scene, box, enter, f, T, dur } = useT();
   const { brand, display, portrait, beat } = useStudio();
+  const res = useSrc();
   const L = scene.layout;
   const title = L.title ?? scene.text[0] ?? "Coba sekarang";
   const button = L.button ?? "Mulai sekarang";
@@ -717,7 +720,7 @@ function CtaL() {
   return (
     <Area box={box} gap={36}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, opacity: enter(0, 12), fontFamily: display, fontWeight: 800, fontSize: 34, color: rgba(brand.text, 0.85) }}>
-        {brand.logo ? <Img src={brand.logo} style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 16 }} /> : <span style={{ width: 22, height: 22, borderRadius: 7, background: brand.primary, boxShadow: `0 0 20px ${brand.primary}` }} />}
+        {brand.logo ? <Img src={res(brand.logo)} style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 16 }} /> : <span style={{ width: 22, height: 22, borderRadius: 7, background: brand.primary, boxShadow: `0 0 20px ${brand.primary}` }} />}
         {brand.name}
       </div>
       <KineticText lines={lines} emphasis={L.emphasis} style={L.style ?? "punch"} w={box.w} h={box.h * 0.4} max={portrait ? 140 : 130} start={T(2)} />
@@ -808,7 +811,7 @@ function QuoteL() {
       <svg width={Q} height={Q * 0.8} viewBox="0 0 100 80" style={{ transform: `scale(${clamp(qp, 0, 1.2).toFixed(4)}) rotate(${((1 - qp) * -20).toFixed(2)}deg)`, transformOrigin: "0 100%", opacity: clamp01(qp * 2), filter: `drop-shadow(0 0 24px ${rgba(brand.primary, 0.55)})` }}>
         <path d="M8 76 C8 46 18 22 42 8 L46 16 C32 26 27 38 27 48 L42 48 L42 76 Z M58 76 C58 46 68 22 92 8 L96 16 C82 26 77 38 77 48 L92 48 L92 76 Z" fill={brand.primary} />
       </svg>
-      <KineticText lines={lines} emphasis={L.emphasis} style="rise" w={box.w} h={box.h * 0.6} max={portrait ? 92 : 84} weight={700} align="left" lh={1.18} start={T(6)} />
+      <KineticText lines={lines} emphasis={L.emphasis} style="rise" w={box.w} h={box.h * 0.6} max={portrait ? 92 : 84} weight={700} align="left" lh={1.18} start={T(6)} wrap={false} />
       {by && (
         <div style={{ display: "flex", alignItems: "center", gap: 18, opacity: enter(byAt, 14), transform: `translateX(${((1 - enter(byAt, 14)) * -24).toFixed(1)}px)`, fontFamily: display, fontWeight: 700, fontSize: portrait ? 38 : 34, color: rgba(brand.text, 0.8) }}>
           <span style={{ width: 56 * clamp01(enter(byAt, 14)), height: 5, borderRadius: 9, background: brand.primary }} />

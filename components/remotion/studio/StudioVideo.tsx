@@ -18,7 +18,7 @@ import { Grain, SafeZoneOverlay, Vignette } from "./fx";
 import { dofFor, SceneLayout } from "./layouts";
 import { subsOn, subsReserve, Subtitles } from "./text";
 import { BODY, clamp, fontOf, SceneCtx, StudioCtx, useStudio, type Box, type SceneCtxValue, type StudioCtxValue } from "./theme";
-import { CameraRig, Layer, SceneTransition, trFrames, type Tr } from "./transitions";
+import { CameraRig, camSafeBox, Layer, SceneTransition, trFrames, type Tr } from "./transitions";
 
 export type StudioVideoProps = {
   timeline: Timeline;
@@ -96,12 +96,13 @@ export const StudioVideo: FC<StudioVideoProps> = ({ timeline, showSafeZone = fal
   }, [tl, fps]);
 
   const subs = useMemo(() => tl.scenes.map((_, i) => subsOn(tl, i, audio)), [tl, audio]);
-  // area isi per adegan = zona aman, dikurangi ruang subtitle kalau subtitle tampil
+  // area isi per adegan = zona aman, dikurangi ruang subtitle kalau subtitle tampil,
+  // lalu diperkecil sesuai gerak kamera supaya isi tetap di zona aman saat kamera membesar / bergeser
   const boxes = useMemo<Box[]>(() => {
     const reserve = subsReserve(tl.ratio) * k;
     const { safe } = ctx;
-    return subs.map((on) => ({ x: safe.left, y: safe.top, w: W - safe.left - safe.right, h: H - safe.top - safe.bottom - (on ? reserve : 0) }));
-  }, [subs, tl.ratio, k, ctx, W, H]);
+    return tl.scenes.map((sc, i) => camSafeBox(sc.camera, { x: safe.left, y: safe.top, w: W - safe.left - safe.right, h: H - safe.top - safe.bottom - (subs[i] ? reserve : 0) }, W, H));
+  }, [tl.scenes, subs, tl.ratio, k, ctx, W, H]);
 
   return (
     <StudioCtx.Provider value={ctx}>

@@ -9,6 +9,11 @@ const nextConfig = {
     staleTimes: { dynamic: 30, static: 180 },
   },
   poweredByHeader: false,
+  // SFX & musik Studio disajikan lewat route API (bukan public/) -> pastikan filenya ikut ter-deploy
+  outputFileTracingIncludes: {
+    "/api/studio/asset/**": ["./assets/audio/**/*"],
+    "/api/studio/catalog": ["./assets/audio/**/*"],
+  },
   // pptxgenjs (bikin PowerPoint di browser) menyebut modul Node "node:fs"/"node:https" yang tidak dipakai di browser
   webpack(config, { isServer, webpack }) {
     if (!isServer) {

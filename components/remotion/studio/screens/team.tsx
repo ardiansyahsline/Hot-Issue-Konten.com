@@ -1,11 +1,9 @@
 "use client";
 
 /** Layar tim: Chat tim (bubble, reaksi, lampiran) & pemutar musik kerja (dibuat ulang dari website). */
-import type { ReactNode } from "react";
 import { Easing } from "remotion";
 import {
   Avatar,
-  Badge,
   Blur,
   Btn,
   Caret,
@@ -13,10 +11,9 @@ import {
   Grow,
   LiveDot,
   ME,
-  Pointer,
   Shell,
+  TapAt,
   Z,
-  avatarColor,
   bt,
   card,
   clamp01,
@@ -29,7 +26,6 @@ import {
   typeOut,
   type Clock,
   type Env,
-  type PKey,
 } from "./ui";
 
 // ================================================================== CHAT TIM ==================================================================
@@ -375,7 +371,9 @@ export function MusicScreen({ e }: { e: Env }) {
   const connecting = t.f >= tap && t.f < startAt;
   const on = ramp(t, startAt, startAt + 12);
   const playing = t.f >= startAt;
-  const vol = ramp(t, bt(t, 0.62), bt(t, 0.72), 0.5, 0.82, Easing.inOut(Easing.quad));
+  const volAt = bt(t, 0.62);
+  const volEnd = bt(t, 0.72);
+  const vol = ramp(t, volAt + 4, volEnd, 0.5, 0.82, Easing.inOut(Easing.quad));
   const secs = playing ? 72 + Math.floor((t.f - startAt) / t.fps) : 0;
   const clock = `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
   const cur = list[picked];
@@ -392,6 +390,7 @@ export function MusicScreen({ e }: { e: Env }) {
           <div
             key={i}
             style={{
+              position: "relative",
               display: "flex",
               alignItems: "center",
               gap: 10,
@@ -412,6 +411,7 @@ export function MusicScreen({ e }: { e: Env }) {
             </span>
             {sel && playing && <span style={{ fontSize: 11, fontWeight: 750, color: "#34d399", whiteSpace: "nowrap" }}>▶ diputar</span>}
             {sel && connecting && <span style={{ fontSize: 11, fontWeight: 650, color: Z[400], whiteSpace: "nowrap" }}>menyambung{".".repeat(1 + (Math.floor(t.f / 6) % 3))}</span>}
+            {i === target && <TapAt t={t} at={tap} wide={wide} x="40%" />}
           </div>
         );
       })}
@@ -452,6 +452,8 @@ export function MusicScreen({ e }: { e: Env }) {
         <div style={{ position: "relative", flex: 1, height: 5, borderRadius: 3, background: Z[800] }}>
           <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${vol * 100}%`, borderRadius: 3, background: EM }} />
           <span style={{ position: "absolute", left: `${vol * 100}%`, top: -5, width: 15, height: 15, marginLeft: -7, borderRadius: 999, background: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,0.5)" }} />
+          {/* jari menggeser volume */}
+          <TapAt t={t} at={volAt} hold={volEnd - volAt} wide={wide} x={`${vol * 100}%`} from={[40, 70]} />
         </div>
       </div>
     </div>
@@ -466,24 +468,6 @@ export function MusicScreen({ e }: { e: Env }) {
       </div>
     </div>
   );
-
-  // jari mengetuk preset, lalu menggeser volume
-  const volX = wide ? 0 : 0;
-  const keys: PKey[] = wide
-    ? [
-        { f: tap - 16, x: 900, y: 220 },
-        { f: tap, x: 980, y: 104 + 22 + 12 + target * (rowH + 3) + rowH / 2 + 60, click: true },
-        { f: bt(t, 0.6), x: 360, y: 552 },
-        { f: bt(t, 0.62), x: 300 + 0.5 * 200, y: 552, click: true },
-        { f: bt(t, 0.72), x: 300 + 0.82 * 200, y: 552 },
-      ]
-    : [
-        { f: tap - 16, x: 250, y: 600 },
-        { f: tap, x: 200, y: 54 + 112 + 14 + 14 + listTop + target * (rowH + 3) + rowH / 2, click: true },
-        { f: bt(t, 0.6) - 6, x: 300, y: 54 + 112 + 14 + 196 },
-        { f: bt(t, 0.62), x: 210 + volX + 0.5 * 120, y: 54 + 112 + 14 + 196, click: true },
-        { f: bt(t, 0.72), x: 210 + 0.82 * 120, y: 54 + 112 + 14 + 196 },
-      ];
 
   return (
     <Shell e={e} nav="music" fill>
@@ -510,18 +494,6 @@ export function MusicScreen({ e }: { e: Env }) {
           <div style={{ position: "absolute", left: 10, right: 10, top: listTop }}>{presetList}</div>
         </div>
       )}
-      <MusicPointer e={e} keys={keys} />
     </Shell>
   );
 }
-
-/** jari di atas seluruh layar (koordinat layar, bukan koordinat isi) */
-function MusicPointer({ e, keys }: { e: Env; keys: PKey[] }): ReactNode {
-  return (
-    <div style={{ position: "absolute", left: e.wide ? -28 : -14, top: -(e.top + (e.wide ? 64 : 112)) - (e.wide ? 22 : 14) }}>
-      <Pointer t={e.t} keys={keys} wide={e.wide} />
-    </div>
-  );
-}
-
-export const _badge = Badge;

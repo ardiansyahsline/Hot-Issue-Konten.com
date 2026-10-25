@@ -70,7 +70,16 @@ function lookIn(t: Tr, f: number, fps: number, W: number, H: number, accent: str
       return { style: { opacity: clamp01(p * 1.5), transform: `scale(${s})`, filter: blurCss((1 - p) * 12) }, split: 0, overlay: null };
     }
     case "mask": {
-      // lingkaran membesar dari sisi asal gerakan + cincin warna brand di tepinya
+      if (vy) {
+        // atas/bawah: tirai inset membuka searah gerakan + garis cahaya warna brand di tepinya
+        const edge = vy < 0 ? H * (1 - p) : H * p;
+        const clip = vy < 0 ? `inset(${edge.toFixed(1)}px 0 0 0)` : `inset(0 0 ${(H - edge).toFixed(1)}px 0)`;
+        const line = p < 1 ? (
+          <div style={{ position: "absolute", left: 0, right: 0, top: edge - 3, height: 6, background: accent, opacity: 0.9 * (1 - p), boxShadow: `0 0 40px ${rgba(accent, 0.8)}` }} />
+        ) : null;
+        return { style: { clipPath: clip, transform: `scale(${1.06 - 0.06 * p})` }, split: 0, overlay: line };
+      }
+      // kiri/kanan: lingkaran membesar dari sisi asal gerakan + cincin warna brand di tepinya
       const cx = W * (0.5 - vx * 0.3);
       const cy = H * (0.5 - vy * 0.3);
       const R = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy)) * 1.02;
@@ -182,24 +191,45 @@ export function SceneTransition({ inT, outT, dur, accent, children }: { inT: Tr 
 type Cam = { x: number; y: number; s: number; r: number };
 const CamCtx = createContext<Cam>({ x: 0, y: 0, s: 1, r: 0 });
 
+/** gerak kamera per jenis: skala awal → akhir + geser maksimal (bagian dari lebar/tinggi video). Halus ala Apple. */
+const CAM: Record<Camera, { s0: number; s1: number; px: number; py: number; rot: number }> = {
+  none: { s0: 1, s1: 1, px: 0, py: 0, rot: 0 },
+  push: { s0: 1, s1: 1.045, px: 0, py: 0, rot: 0 },
+  pull: { s0: 1.05, s1: 1, px: 0, py: 0, rot: 0 },
+  pan: { s0: 1.04, s1: 1.04, px: 0.02, py: 0, rot: 0 },
+  tilt: { s0: 1.035, s1: 1.035, px: 0, py: 0.016, rot: 0.35 },
+};
+/** goyang mikro (px) supaya gambar terasa "hidup" */
+const SHAKE = 2.5;
+
 /** posisi kamera untuk progres t (0..1 sepanjang adegan) */
 export function camAt(kind: Camera, t: number, f: number, W: number, H: number): Cam {
+  const c = CAM[kind];
+  if (!c || kind === "none") return { x: 0, y: 0, s: 1, r: 0 };
   const e = EASE.soft(clamp01(t));
-  // goyang mikro supaya gambar terasa "hidup" (tidak untuk kamera diam)
-  const dx = kind === "none" ? 0 : Math.sin(f / 41) * 2.5;
-  const dy = kind === "none" ? 0 : Math.cos(f / 53) * 2.5;
-  switch (kind) {
-    case "push":
-      return { x: dx, y: dy, s: 1 + 0.06 * e, r: 0 };
-    case "pull":
-      return { x: dx, y: dy, s: 1.07 - 0.07 * e, r: 0 };
-    case "pan":
-      return { x: (0.5 - e) * 0.05 * W + dx, y: dy, s: 1.06, r: 0 };
-    case "tilt":
-      return { x: dx, y: (0.5 - e) * 0.04 * H + dy, s: 1.05, r: (0.5 - e) * 0.4 };
-    default:
-      return { x: 0, y: 0, s: 1, r: 0 };
-  }
+  const dx = Math.sin(f / 41) * SHAKE;
+  const dy = Math.cos(f / 53) * SHAKE;
+  return { x: (0.5 - e) * 2 * c.px * W + dx, y: (0.5 - e) * 2 * c.py * H + dy, s: c.s0 + (c.s1 - c.s0) * e, r: (0.5 - e) * c.rot };
+}
+
+/**
+ * Kotak isi yang tetap berada di dalam `safe` walau kamera membesar / bergeser
+ * (kebalikan transform kamera: titik p tampil di c + (p − c)·s + geser).
+ */
+export function camSafeBox(kind: Camera, box: { x: number; y: number; w: number; h: number }, W: number, H: number) {
+  const c = CAM[kind];
+  if (!c || kind === "none") return box;
+  const s = Math.max(c.s0, c.s1);
+  const rot = Math.abs(Math.sin((c.rot * Math.PI) / 360)); // miring maks ±rot/2 derajat
+  const mx = c.px * W + SHAKE + (rot * H) / 2;
+  const my = c.py * H + SHAKE + (rot * W) / 2;
+  const cx = W / 2;
+  const cy = H / 2;
+  const l = cx + (box.x + mx - cx) / s;
+  const r = cx + (box.x + box.w - mx - cx) / s;
+  const t = cy + (box.y + my - cy) / s;
+  const b = cy + (box.y + box.h - my - cy) / s;
+  return { x: l, y: t, w: Math.max(1, r - l), h: Math.max(1, b - t) };
 }
 
 /** pasang kamera adegan; `len` = frame total adegan tampil (termasuk perpanjangan transisi) */
