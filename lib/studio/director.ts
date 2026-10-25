@@ -10,7 +10,7 @@ import { splitChoice, type Choice } from "@/lib/choiceCard";
 import { SFX_BUILTIN, type SfxMeta } from "./sfxMeta";
 import {
   FORMATS,
-  LAYOUTS,
+  PLAN_LAYOUTS,
   MAX_DUR,
   MAX_SCENES,
   MAX_TOTAL,
@@ -217,12 +217,13 @@ const LAYOUT_PROPS: Record<LayoutKind, string> = {
   cta: "ajakan penutup + tombol. Props: title, subtitle, button",
   media: "gambar/klip upload user (cover + ken burns). Props: src (dari LAMPIRAN USER), fit cover|contain, kenburns",
   quote: "kutipan besar (kutipan asli dari user saja!). Props: title (isi kutipan), by",
+  teaser: "JANGAN DIPAKAI — adegan premium buatan tangan khusus teaser resmi",
 };
 
 const SCREEN_DESC: Record<ScreenKind, string> = {
   dashboard: "ringkasan CS Tracker (kartu angka, grafik kecil)",
   hotIssue: "daftar Hot Issue + badge HOT naik peringkat",
-  videoReview: "kartu Video Review + status (Rilis/Banding/Menunggu)",
+  videoReview: "kartu kasus Video Review + status (Menunggu → Diproses → Disetujui/Ditolak)",
   chat: "chat tim real-time (bubble, reaksi, lampiran)",
   ai: "chat AI: kartu pertanyaan, langkah berpikir, jawaban",
   design: "desain konten berita (cover, carousel, unduh)",
@@ -285,7 +286,7 @@ export function directorCatalog(): string {
     ...sfx,
     "",
     "## KATALOG LAYOUT (layout.kind — fungsi & props)",
-    ...LAYOUTS.map((k) => `- ${k}: ${LAYOUT_PROPS[k]}`),
+    ...PLAN_LAYOUTS.map((k) => `- ${k}: ${LAYOUT_PROPS[k]}`),
     "",
     "## LAYAR MOCKUP (layout.screen untuk phone/laptop — UI website asli yang beranimasi, bukan screenshot)",
     ...SCREENS.map((k) => `- ${k}: ${SCREEN_DESC[k]}`),

@@ -51,6 +51,7 @@ const LAYOUT_LABEL: Record<LayoutKind, string> = {
   cta: "Ajakan penutup (CTA)",
   media: "Video / foto upload",
   quote: "Kutipan",
+  teaser: "Adegan premium teaser",
 };
 const TR_LABEL: Record<TransitionKind, string> = { cut: "Potong langsung", fade: "Memudar", slide: "Geser", zoom: "Zoom", mask: "Sapuan bentuk", whip: "Kibas cepat", glitch: "Glitch" };
 const DIR_LABEL: Record<Dir, string> = { left: "ke kiri", right: "ke kanan", up: "ke atas", down: "ke bawah" };

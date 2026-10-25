@@ -44,8 +44,14 @@ export type Transition = { kind: TransitionKind; dir?: Dir; dur?: number };
 export type ScreenKind = "dashboard" | "hotIssue" | "videoReview" | "chat" | "ai" | "design" | "trainAi" | "studio" | "music" | "report" | "website" | "media";
 export const SCREENS: ScreenKind[] = ["dashboard", "hotIssue", "videoReview", "chat", "ai", "design", "trainAi", "studio", "music", "report", "website", "media"];
 
-export type LayoutKind = "kinetic" | "title" | "lowerThird" | "counter" | "chart" | "phone" | "laptop" | "logo" | "split" | "features" | "cta" | "media" | "quote";
-export const LAYOUTS: LayoutKind[] = ["kinetic", "title", "lowerThird", "counter", "chart", "phone", "laptop", "logo", "split", "features", "cta", "media", "quote"];
+export type LayoutKind = "kinetic" | "title" | "lowerThird" | "counter" | "chart" | "phone" | "laptop" | "logo" | "split" | "features" | "cta" | "media" | "quote" | "teaser";
+export const LAYOUTS: LayoutKind[] = ["kinetic", "title", "lowerThird", "counter", "chart", "phone", "laptop", "logo", "split", "features", "cta", "media", "quote", "teaser"];
+/** tata letak yang boleh dipakai AI Sutradara & editor biasa ("teaser" = adegan premium buatan tangan, khusus teaser resmi) */
+export const PLAN_LAYOUTS: LayoutKind[] = LAYOUTS.filter((k) => k !== "teaser");
+
+/** adegan premium teaser CS Tracker (components/remotion/studio/teaser) — urutan sesuai cue sheet assets/audio/teaser/cue-sheet.md */
+export type TeaserShot = "hook" | "reveal" | "dashboard" | "videoReview" | "chat" | "ai" | "tws" | "trainAi" | "musicReport" | "montage" | "outro";
+export const TEASER_SHOTS: TeaserShot[] = ["hook", "reveal", "dashboard", "videoReview", "chat", "ai", "tws", "trainAi", "musicReport", "montage", "outro"];
 
 export type Card = { icon?: string; title: string; desc?: string };
 export type Side = { title: string; items?: string[]; tone?: "bad" | "good" | "neutral" };
@@ -65,6 +71,7 @@ export type ChartData = { kind: "line" | "bar" | "area"; values: number[]; label
  * - cta: ajakan penutup + tombol
  * - media: klip / gambar upload user (cover, ken burns)
  * - quote: kutipan besar
+ * - teaser: adegan premium teaser resmi CS Tracker (`shot`), UI dibuat ulang dari komponen website + kamera virtual
  */
 export type Layout = {
   kind: LayoutKind;
@@ -94,6 +101,7 @@ export type Layout = {
   fit?: "cover" | "contain";
   kenburns?: boolean;
   by?: string;
+  shot?: TeaserShot;
 };
 
 export type BgKind = "gradient" | "particles" | "solid" | "grid" | "media";
@@ -362,6 +370,7 @@ function normLayout(v: unknown, text: string[]): Layout {
     fit: oneOf(o.fit, ["cover", "contain"] as const, "cover"),
     kenburns: o.kenburns === undefined ? true : !!o.kenburns,
     by: str(o.by, 60) || undefined,
+    shot: kind === "teaser" ? oneOf(o.shot, TEASER_SHOTS, "hook") : undefined,
   };
 }
 

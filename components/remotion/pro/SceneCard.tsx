@@ -6,6 +6,7 @@ import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import {
   LAYOUTS,
+  PLAN_LAYOUTS,
   MAX_DUR,
   MAX_LINES,
   MAX_WORDS_PER_LINE,
@@ -229,7 +230,7 @@ export default function SceneCard({
               <Field label="Jenis tampilan">
                 {(id) => (
                   <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
-                    {LAYOUTS.map((k) => (
+                    {(s.layout.kind === "teaser" ? LAYOUTS : PLAN_LAYOUTS).map((k) => (
                       <option key={k} value={k}>
                         {LAYOUT_LABEL[k]}
                       </option>

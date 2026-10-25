@@ -12,6 +12,7 @@ import { MediaFill } from "./backgrounds";
 import { Laptop, LAPTOP, laptopFit, Phone, PHONE, phoneFit } from "./devices";
 import { Glow, Scrim, Shine, splitShadow, TextShine, useSplit, useSvgId } from "./fx";
 import { AppScreen } from "./screens";
+import { TeaserL } from "./teaser";
 import { emphasisMatcher, KineticText } from "./text";
 import { autoLines, clamp, clamp01, DOWN, EASE, ease, fitSize, fmtNum, ink, mix, pulse, rgba, textEm, UP, useScene, useSrc, useStudio, type Box } from "./theme";
 
@@ -856,6 +857,8 @@ export function SceneLayout() {
       return <MediaL />;
     case "quote":
       return <QuoteL />;
+    case "teaser":
+      return <TeaserL />;
     default:
       return <KineticL />;
   }
