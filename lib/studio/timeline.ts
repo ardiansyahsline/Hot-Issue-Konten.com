@@ -33,6 +33,15 @@ export const BRANDS: Record<"konten" | "tws", Brand> = {
   konten: { id: "konten", name: "Konten.com", primary: "#f97316", accent: "#fb8a3c", bg: "#09090b", text: "#fafafa", font: "jakarta", logo: PRESET_LOGOS.konten },
   tws: { id: "tws", name: "TWS", primary: "#2f5ff0", accent: "#3a6bff", bg: "#000000", text: "#ffffff", font: "interTight", logo: PRESET_LOGOS.tws },
 };
+/** logo bawaan milik brand ini (brand "Lainnya" / custom tidak punya) */
+export const presetLogoOf = (id: BrandId): string | null => (id === "custom" ? null : PRESET_LOGOS[id]);
+/**
+ * logo sah untuk brand ini: logo upload user, atau logo bawaan MILIK brand itu sendiri.
+ * Logo bawaan brand lain (mis. logo Konten.com di brand TWS / custom) tidak sah — dibuang normalizeTimeline.
+ */
+export const logoFitsBrand = (logo: unknown, id: BrandId): boolean => !isPresetLogo(logo) || logo === presetLogoOf(id);
+/** true kalau logo brand = logo bawaan milik brand itu sendiri (tidak bisa dilepas: kosong = otomatis logo bawaan lagi) */
+export const isOwnPresetLogo = (brand: Pick<Brand, "id" | "logo">): boolean => !!brand.logo && brand.logo === presetLogoOf(brand.id);
 
 export type TransitionKind = "cut" | "fade" | "slide" | "zoom" | "mask" | "whip" | "glitch";
 export const TRANSITIONS: TransitionKind[] = ["cut", "fade", "slide", "zoom", "mask", "whip", "glitch"];
@@ -383,6 +392,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const b = (o.brand && typeof o.brand === "object" ? o.brand : {}) as Record<string, unknown>;
   const brandId = oneOf(b.id, ["konten", "tws", "custom"] as const, "konten");
   const base = brandId === "custom" ? BRANDS.konten : BRANDS[brandId];
+  // logo bawaan hanya sah untuk brand pemiliknya (AI sering menyalin objek brand lama saat ganti brand, logo ikut terbawa)
+  const upLogo = safeMediaSrc(b.logo);
   const brand: Brand = {
     id: brandId,
     name: str(b.name, 40) || (brandId === "custom" ? "Brand" : base.name),
@@ -391,8 +402,9 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     bg: color(b.bg, base.bg),
     text: color(b.text, base.text),
     font: oneOf(b.font, ["jakarta", "inter", "interTight"] as const, base.font),
-    // tanpa logo upload: brand preset pakai logo bawaannya (brand "Lainnya" tetap tanpa logo → huruf pertama nama)
-    logo: safeMediaSrc(b.logo) ?? (brandId === "custom" ? null : (base.logo ?? null)),
+    // tanpa logo upload: brand preset pakai logo bawaannya (brand "Lainnya" tetap tanpa logo → huruf pertama nama).
+    // Logo bawaan brand lain diganti logo bawaan brand ini sendiri (custom: tanpa logo).
+    logo: (upLogo && logoFitsBrand(upLogo, brandId) ? upLogo : null) ?? presetLogoOf(brandId),
   };
   const catalog = new Map([...SFX_BUILTIN, ...(opts.extraSfx ?? [])].map((s) => [s.id, s]));
   const seen = new Set<string>();

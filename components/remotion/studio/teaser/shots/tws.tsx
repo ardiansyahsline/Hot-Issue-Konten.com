@@ -225,7 +225,7 @@ export function TwsShot() {
     at(CAP_OUT, 1.05, PC, PC, 0, EASE.soft),
     at(DL_IN, Zdl * 1.06, DLP, dlScreenA, 0, EASE.inOut), // turun & dorong ke baris unduh (rack focus)
     at(POP + 0.03, Zdl * 1.085, DLP, dlScreenA, 0, EASE.soft), // ketukan tajam (kamera hampir diam)
-    at(POP + 0.6, Zdl, DLP, dlScreen, 0, EASE.inOut), // tarik mundur & naik: toast + panel Layers masuk
+    at(POP + 0.75, Zdl, DLP, dlScreen, 0, EASE.inOut), // tarik mundur & naik pelan: toast + panel Layers masuk
     at(7.2, Zdl * 1.04, DLP, dlScreen, 0, EASE.soft),
   ];
   const sh1 = shake(s, DROP, 14);
@@ -238,10 +238,14 @@ export function TwsShot() {
     return Math.hypot(cb.x - ca.x, cb.y - ca.y) + Math.abs(cb.z - ca.z) * W * 0.5 + Math.abs(cb.r - ca.r) * 8;
   };
   const camV = Math.min(camSpeed(s - 1 / fps, s), camSpeed(s, s + 1 / fps));
-  const camBlur = Math.min(5, Math.max(0, camV - 7) * 0.12);
-  // posisi layar (y) titik konten pada kamera akhir → panel Layers di bawah kartu
+  // setelah ketukan unduh blur dibatasi (tombol, cincin ketuk & panel tetap terbaca saat kamera naik)
+  const camBlur = Math.min(s > POP ? 0.8 : 5, Math.max(0, camV - 7) * 0.12);
+  // posisi layar (y) tepi bawah kartu: pada kamera akhir (ukuran panel Layers) & kamera sekarang (panel menempel di bawah kartu)
   const zEnd = Zdl * 1.04;
-  const cardBottomEnd = dlScreenY + (toCanvas(0, FULL_H + TAIL + MSG_H)[1] - DLP[1]) * zEnd;
+  const cardBottomY = toCanvas(0, FULL_H + TAIL + MSG_H)[1];
+  const cardBottomEnd = dlScreenY + (cardBottomY - DLP[1]) * zEnd;
+  const camNow = camAtTime(keys, s);
+  const cardBottomNow = H / 2 + (cardBottomY - H / 2) * camNow.z + camNow.y;
 
   // ---- fase kolom ketik ----
   const typed = PROMPT.slice(0, Math.max(0, Math.floor(clamp01((s - 0.1) / 0.66) * PROMPT.length)));
@@ -460,7 +464,7 @@ export function TwsShot() {
         f={f}
         fps={fps}
         x={PCX + box.w * 0.05}
-        y={cardBottomEnd + 34}
+        y={Math.max(cardBottomEnd, cardBottomNow) + 34}
         scale={Math.min((box.w * 0.64) / LP_W, (box.y + box.h - (cardBottomEnd + 34) - 8) / LP_H)}
         layers={layers}
         file={FILE_NAME}

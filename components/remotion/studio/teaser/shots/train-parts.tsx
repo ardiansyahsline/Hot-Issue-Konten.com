@@ -360,6 +360,34 @@ function Rays({ s, at, c }: { s: number; at: number; c: string }) {
   );
 }
 
+/** antisipasi: energi berkumpul di titik chibi (titik cahaya + partikel menuju pusat) lalu pecah tepat di `at` */
+function Charge({ s, from, at, c }: { s: number; from: number; at: number; c: string }) {
+  if (s < from || s > at + 0.3) return null;
+  const p = clamp01((s - from) / Math.max(0.05, at - from));
+  const burst = clamp01((s - at) / 0.3);
+  const r = burst > 0 ? 40 + 120 * EASE.out(burst) : 4 + 30 * p * p;
+  const op = burst > 0 ? 1 - burst : 0.25 + 0.75 * p;
+  return (
+    <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 80, width: 200, height: 200, marginLeft: -100, marginTop: -100, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+      <defs>
+        <radialGradient id="trainCharge" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
+          <stop offset="35%" stopColor={c} stopOpacity="0.85" />
+          <stop offset="100%" stopColor={c} stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle r={r} fill="url(#trainCharge)" opacity={op.toFixed(3)} />
+      {burst <= 0 &&
+        Array.from({ length: 12 }, (_, i) => {
+          const a = (i / 12) * Math.PI * 2 + 0.3;
+          const pi = clamp01((s - from - (i % 4) * 0.04) / Math.max(0.05, at - from - 0.12));
+          const d = 96 * (1 - EASE.inOut(pi)) + 6;
+          return <circle key={i} cx={Math.cos(a) * d} cy={Math.sin(a) * d} r={2.2 + (i % 3) * 0.8} fill={i % 3 ? "#ffffff" : "#fde68a"} opacity={(clamp01(pi * 3) * (1 - pi * 0.4)).toFixed(3)} />;
+        })}
+    </svg>
+  );
+}
+
 export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: number; enter: number; at: number; hopAt: number }) {
   const s = f / fps;
   const G = T_GROUP;
@@ -387,6 +415,7 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
         <rect width="100" height="100" fill="url(#trainTsBg)" />
       </svg>
       <Rays s={s} at={at} c={G.color} />
+      <Charge s={s} from={enter + 0.04} at={at} c={G.color} />
       <svg viewBox="0 0 232 110" preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: decoP }} aria-hidden>
         <DecoNF s={Math.max(0, s - enter)} c={G.color} />
       </svg>
@@ -505,8 +534,8 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                 padding: 10,
                 textAlign: "left",
                 transform: `translateY(${((1 - ap) * 26).toFixed(2)}px) scale(${sc.toFixed(4)})`,
-                opacity: clamp01(ap * 1.4) * (1 - dim * 0.4),
-                filter: dim > 0.05 ? `blur(${(dim * 1.3).toFixed(2)}px)` : undefined,
+                opacity: clamp01(ap * 1.4) * (1 - dim * 0.45),
+                filter: dim > 0.05 ? `blur(${(dim * 2.2).toFixed(2)}px)` : undefined,
                 boxShadow: on ? `0 0 0 1px ${rgba(OR, 0.4)}, 0 14px 30px -12px ${rgba(OR, 0.8)}` : undefined,
                 zIndex: isPick ? 2 : 1,
               }}
@@ -527,7 +556,7 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
             </div>
           );
         })}
-        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.4, filter: focus > 0.05 ? `blur(${(focus * 1.3).toFixed(2)}px)` : undefined }}>
+        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.45, filter: focus > 0.05 ? `blur(${(focus * 2.2).toFixed(2)}px)` : undefined }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 18 }}>✍️</span>
             <span style={{ flex: 1, minWidth: 0, borderRadius: 12, border: `1px solid ${Z[800]}`, background: Z[950], padding: "6px 12px", fontSize: 13, color: Z[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -573,7 +602,7 @@ export function Confetti({ f, fps, at, ox, oy, n = 78, scale = 1 }: { f: number;
     [n, scale],
   );
   const t = f / fps - at;
-  if (t < 0 || t > 3.2) return null;
+  if (t < 0 || t > 1.7) return null;
   const g = 1100 * scale;
   // gelombang kejut (whoosh) dari pusat
   const ring = clamp01(t / 0.5);
@@ -593,7 +622,7 @@ export function Confetti({ f, fps, at, ox, oy, n = 78, scale = 1 }: { f: number;
         const v = Math.hypot(vx, vy);
         const ang = (Math.atan2(vy, vx) * 180) / Math.PI;
         const st = 1 + Math.min(2.4, v / 1100);
-        const op = tt < 1.5 ? 1 : Math.max(0, 1 - (tt - 1.5) / 1.1);
+        const op = tt < 0.95 ? 1 : Math.max(0, 1 - (tt - 0.95) / 0.55);
         if (op <= 0) return null;
         const fl = Math.cos(tt * b.flip + b.ph);
         const tf = `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${ang.toFixed(1)}) scale(${st.toFixed(3)} 1) rotate(${(-ang).toFixed(1)}) rotate(${(b.rot0 + b.spin * tt).toFixed(1)}) scale(1 ${fl.toFixed(3)})`;

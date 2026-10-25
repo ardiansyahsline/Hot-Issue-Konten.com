@@ -79,24 +79,33 @@ export function TrainAiShot() {
   const tiles = wp(MW / 2, BODY + 16 + 16 + 128 + 4 + 18);
   const optsC = wp(MW / 2, BODY + 16 + 200);
   const cardW = (MW - 32 - 8) / 2;
-  const veCard = wp(16 + cardW + 8 + cardW / 2, BODY + 16 + 34 + 128 + 8 + 64);
+  const veCard = wp(16 + cardW + 8 + cardW / 2, BODY + 223);
 
   // ---------------- kamera (keyframe di ketukan) ----------------
   const id = { z: 1, x: 0, y: 0 };
+  const aO = (z: number) => aim(W, H, optsC.x, optsC.y, z, optsC.x, optsC.y);
+  const aT = (z: number, k: number) => aim(W, H, tiles.x, tiles.y, z, cx, box.y + box.h * k);
+  const aV = (z: number) => aim(W, H, veCard.x, veCard.y, z, veCard.x - 24, veCard.y - 10);
   const keys: CamKey[] = [
     { t: 0, z: 1.07, x: 70, y: 30, r: 1.4 },
-    { t: 0.5, ...id, r: 0, ease: EASE.out },
-    { t: 0.6, ...id },
-    { t: 1.75, ...aim(W, H, optsC.x, optsC.y, 1.045, optsC.x, optsC.y), ease: EASE.soft },
+    { t: 0.5, ...aO(1.0), r: 0, ease: EASE.out },
+    // dorong bertahap di tiap ketukan jawaban (kamera ikut "masuk" ke kuis)
+    { t: 0.6, ...aO(1.0) },
+    { t: 0.86, ...aO(1.035), ease: EASE.out },
+    { t: 1.2, ...aO(1.042), ease: EASE.soft },
+    { t: 1.46, ...aO(1.075), ease: EASE.out },
+    { t: 1.8, ...aO(1.082), ease: EASE.soft },
+    { t: 2.04, ...aO(1.1), ease: EASE.out },
     // antisipasi: mundur sedikit sebelum hasil terungkap
-    { t: 2.3, z: 0.975, x: 0, y: 14, ease: EASE.inOut },
+    { t: 2.33, z: 0.975, x: 0, y: 16, ease: EASE.inOut },
     // pukulan ke huruf tipe tepat di 2,4
-    { t: 2.58, ...aim(W, H, tiles.x, tiles.y, 1.13, cx, box.y + box.h * 0.5), ease: EASE.out },
-    { t: 3.55, ...aim(W, H, tiles.x, tiles.y, 1.1, cx, box.y + box.h * 0.49), ease: EASE.soft },
+    { t: 2.58, ...aT(1.13, 0.5), ease: EASE.out },
+    { t: 3.55, ...aT(1.1, 0.49), ease: EASE.soft },
     { t: 4.12, ...id, ease: EASE.inOut },
-    { t: 4.6, z: 1.02, x: -6, y: -4, ease: EASE.soft },
-    { t: 4.98, ...aim(W, H, veCard.x, veCard.y, 1.16, cx + 40, box.y + box.h * 0.5), ease: EASE.out },
-    { t: 6.3, ...aim(W, H, veCard.x, veCard.y, 1.2, cx + 40, box.y + box.h * 0.5), ease: EASE.soft },
+    { t: 4.62, ...aV(1.025), ease: EASE.soft },
+    // dorong ke kartu peran terpilih di 4,8
+    { t: 4.98, ...aV(1.085), ease: EASE.out },
+    { t: 6.3, ...aV(1.11), ease: EASE.soft },
   ];
   // denyut kamera kecil di tiap ketukan jawaban + guncangan whoosh konfeti
   const kick = HIT.concat([ROLE]).reduce((a, h) => a + (s >= h ? 0.016 * Math.exp(-(s - h) * 11) : 0), 0) + (s >= RES ? 0.03 * Math.exp(-(s - RES) * 7) : 0);
@@ -189,7 +198,7 @@ export function TrainAiShot() {
               </Page>
             </TrainModal>
           </div>
-          <Confetti f={f} fps={fps} at={CONF} ox={tiles.x} oy={tiles.y} />
+          <Confetti f={f} fps={fps} at={CONF - 1 / fps} ox={tiles.x} oy={tiles.y} />
         </AbsoluteFill>
       </Cam>
 

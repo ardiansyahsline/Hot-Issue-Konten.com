@@ -20,6 +20,8 @@ import {
   SCREENS,
   TRANSITIONS,
   isLoudSfx,
+  isOwnPresetLogo,
+  logoFitsBrand,
   normalizeTimeline,
   sceneStartSecs,
   type LayoutKind,
@@ -174,7 +176,7 @@ export const DIRECTOR_RULES = [
   "  }]",
   "}",
   "Aturan isi:",
-  "- brand: Konten.com = {\"id\":\"konten\"} (oranye #f97316, latar #09090b), TWS = {\"id\":\"tws\"} (biru #2f5ff0, latar hitam) — cukup id-nya, warna terisi otomatis. Brand lain = \"custom\" + nama & warna dari user. Logo HANYA milik Konten.com, TWS, atau logo yang diupload user (pakai src lampirannya).",
+  "- brand: Konten.com = {\"id\":\"konten\"} (oranye #f97316, latar #09090b), TWS = {\"id\":\"tws\"} (biru #2f5ff0, latar hitam) — cukup id-nya, warna terisi otomatis. Brand lain = \"custom\" + nama & warna dari user. Logo HANYA milik Konten.com, TWS, atau logo yang diupload user (pakai src lampirannya). Logo bawaan Konten.com/TWS terisi otomatis dari id — jangan ditulis, dan saat ganti brand jangan salin logo brand lama.",
   `- id adegan: rencana baru pakai s1, s2, …; revisi pertahankan id lama, adegan baru pakai id yang belum dipakai. dur ${MIN_DUR}–${MAX_DUR} dtk per adegan, maks ${MAX_SCENES} adegan, total maks ${MAX_TOTAL} dtk. Jumlahkan dur supaya total sesuai durasi yang diminta (±1 dtk).`,
   "- transition = cara MASUK ke adegan itu; adegan pertama \"cut\". Variasikan tapi tetap satu bahasa visual (energik: slide + whip + zoom; premium: fade + mask; berita: cut + slide; teknologi: glitch secukupnya).",
   "- sfx.at = detik dari awal adegan saat \"pukulan\" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks 6 SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.",
@@ -384,6 +386,8 @@ function prune(v: unknown): unknown {
 /** timeline dalam JSON ringkas untuk AI (tanpa data VO hasil generate & daftar ketukan yang panjang — diganti jarak ketukan + ketukan pertama) */
 export function compactTimeline(tl: Timeline): string {
   const rest: Record<string, unknown> = { ...tl };
+  // logo bawaan brand terisi otomatis dari id → tidak ditampilkan (supaya AI tidak menyalinnya ke brand lain saat ganti brand)
+  if (isOwnPresetLogo(tl.brand)) rest.brand = { ...tl.brand, logo: undefined };
   delete rest.vo;
   delete rest.v;
   delete rest.fps;
@@ -549,7 +553,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   for (const k of ["concept", "hook", "platform", "goal", "mood"] as const) if (!has(o, k)) out[k] = prev[k];
   // brand
   if (!has(o, "brand")) out.brand = prev.brand;
-  else if (!has(o.brand, "logo") && prev.brand.logo && out.brand.id === prev.brand.id) out.brand = { ...out.brand, logo: prev.brand.logo };
+  else if (!has(o.brand, "logo") && prev.brand.logo && out.brand.id === prev.brand.id && logoFitsBrand(prev.brand.logo, out.brand.id))
+    out.brand = { ...out.brand, logo: prev.brand.logo };
   // suara
   if (!has(o, "voice")) out.voice = prev.voice;
   else if (out.voice.mode === prev.voice.mode) {
@@ -621,7 +626,7 @@ function keepVo(prev: Timeline, next: Timeline): VoTrack | null {
 // ---------------------------------------------------------------------------------------------
 /** permintaan yang butuh kreativitas besar (rencana / konsep baru) */
 const BIG_EDIT =
-  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video|dari awal|rombak|remake|versi (baru|lain|kedua)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
+  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video)(nya)?\b|\b(sudut pandang|dari awal|(di)?rombak|remake|versi (baru|lain|kedua)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
 /** revisi kecil: durasi, teks, hapus/tukar adegan, warna, transisi, SFX, musik */
 const SMALL_EDIT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;
@@ -635,8 +640,15 @@ export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   return SMALL_EDIT.test(t);
 }
 
-/** obrolan ringan di awal pesan: sapaan, terima kasih, "oke" */
-const CHITCHAT = /^\s*(halo+|hallo|hai+|hi+|hey|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks|thank you|thx|oke+|ok|okay|sip+|siap|mantap|keren|bagus|nice|noted|wkwk\w*|haha\w*)\b/i;
+/** satu kata/frasa basa-basi: sapaan, terima kasih, "oke", pujian singkat (+ sapaan orang: kak, bang, Harley, ya, dong…) */
+const PLEASANTRY =
+  "(halo+|hallo+|hai+|hi+|hey+|selamat (pagi|siang|sore|malam)|makasih+|makasi+|terima ?kasih( banyak)?|thanks?|thank you|thx|oke+y?|ok+|okay|sip+|siap|mantap+|mantul|keren+|bagus+|nice|noted|good|great|cakep|wkwk\\w*|haha\\w*|hehe\\w*)(\\s+(kak|ka|bang|mas|mbak|bro|sis|min|harley|ya+|yah|deh|dong|banget|bgt|sekali|nih))*";
+/** pemisah antar basa-basi: spasi, tanda baca, emoji */
+const CHAT_SEP = "[\\s\\p{P}\\p{S}\\p{Extended_Pictographic}\\uFE0F\\u200D]";
+/** obrolan ringan: SELURUH pesan hanya basa-basi ("Oke makasih kak! 🙏"). "Halo, aku mau bikin video…" bukan obrolan (lanjut dinilai sebagai brief). */
+const CHITCHAT = new RegExp(`^${CHAT_SEP}*${PLEASANTRY}(${CHAT_SEP}+${PLEASANTRY})*${CHAT_SEP}*$`, "iu");
+/** sudah ada timeline tapi minta video LAIN (rencana baru) */
+const NEW_VIDEO = /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(bikin|buat)(in|kan)? (juga|lagi)\b|\b(satu|1) (video )?lagi\b/i;
 /** pertanyaan cara pakai / kenapa — dijawab singkat tanpa rencana */
 const HOWTO = /^\s*((gimana|bagaimana|gmn) ?(cara|caranya)\b|caranya\b|cara (pakai|bikin|buat|download|unduh|export|ekspor|upload|ganti|hapus|simpan|share|bagi)\b|kenapa\b|mengapa\b|kok\b)/i;
 /** kata yang menandakan brief video (bukan sekadar obrolan) */
@@ -658,7 +670,7 @@ export function needsHeavy(text: string, o: { hasTimeline: boolean; afterAsk?: b
   if (o.afterAsk && !(question && !brief)) return true;
   if (t.length <= 160 && !brief && (question || CHITCHAT.test(t))) return false;
   // sudah ada timeline: pesan pendek = revisi ringan / obrolan (kecuali minta video baru); belum ada: brief video
-  return o.hasTimeline ? t.length > 60 || /\b(video|rencana|proyek) baru\b/i.test(t) : brief || t.length >= 25;
+  return o.hasTimeline ? t.length > 60 || NEW_VIDEO.test(t) : brief || t.length >= 25;
 }
 
 /** pesan lama untuk riwayat: blok rencana diringkas (timeline terbaru sudah ada di sesi), kartu jadi daftar pertanyaannya */
