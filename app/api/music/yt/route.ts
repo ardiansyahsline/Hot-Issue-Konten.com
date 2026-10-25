@@ -37,6 +37,29 @@ async function fresh(region: string, q: string, key: string): Promise<Item[]> {
   return (j.items ?? []).map(toItem).filter((x): x is Item => !!x);
 }
 
+/**
+ * Urutkan hasil cari supaya yang diputar duluan versi suara paling jernih:
+ * audio resmi (channel "… - Topic" dari YouTube Music, VEVO, channel resmi) di atas;
+ * versi yang suaranya diubah / direkam ulang (slowed, reverb, 8D, nightcore, cover, live, karaoke, lirik buatan fans) di bawah —
+ * kecuali user memang meminta versi itu.
+ */
+const ALTERED = ["slowed", "reverb", "8d", "nightcore", "sped up", "speed up", "bass boost", "cover", "live", "karaoke", "lirik", "lyric", "lyrics", "remix", "acoustic", "instrumental", "tiktok", "1 hour", "1 jam", "loop", "piano version", "reaction"];
+function rankSongs(items: Item[], q: string): Item[] {
+  const want = q.toLowerCase();
+  const score = (x: Item, i: number) => {
+    const t = x.title.toLowerCase();
+    const ch = x.channel.toLowerCase();
+    let s = -i * 0.5; // urutan relevansi YouTube tetap dihargai
+    if (/ - topic$/.test(ch)) s += 6;
+    if (/vevo$/.test(ch)) s += 4;
+    if (/official (audio|music video|video|lyric video)|\(official\)|\[official\]|official mv|\bmv\b/.test(t)) s += 3;
+    if (/official|records|music$/.test(ch)) s += 1;
+    for (const w of ALTERED) if (new RegExp(`(^|[^a-z])${w.replace(/ /g, "\\s*")}([^a-z]|$)`).test(t)) s += want.includes(w) ? 7 : -5;
+    return s;
+  };
+  return items.map((x, i) => ({ x, s: score(x, i) })).sort((a, b) => b.s - a.s).map((y) => y.x);
+}
+
 export async function GET(req: Request) {
   await getCurrentUser();
   const sp = new URL(req.url).searchParams;
@@ -69,6 +92,6 @@ export async function GET(req: Request) {
   const r = await fetch(u, { cache: "no-store" });
   if (!r.ok) return NextResponse.json({ error: r.status === 403 ? "Kuota pencarian YouTube hari ini habis, coba tempel link saja." : "Pencarian YouTube gagal." }, { status: 502 });
   const j = (await r.json()) as { items?: Raw[] };
-  const items = (j.items ?? []).map(toItem).filter((x): x is Item => !!x);
+  const items = rankSongs((j.items ?? []).map(toItem).filter((x): x is Item => !!x), q);
   return NextResponse.json({ items }, { headers: { "Cache-Control": "private, max-age=600" } });
 }

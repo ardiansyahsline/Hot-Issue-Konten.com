@@ -35,7 +35,7 @@ export default async function AdminPage() {
       </div>
 
       <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="m-stack m-kv w-full text-sm">
           <thead className="text-left text-xs text-zinc-500">
             <tr className="border-b border-zinc-800">
               <th className="p-3 font-medium">Nama</th>
@@ -50,18 +50,18 @@ export default async function AdminPage() {
               const self = p.id === user.id;
               return (
                 <tr key={p.id}>
-                  <td className="p-3">{p.full_name}{self && <span className="ml-1 text-xs text-zinc-500">(kamu)</span>}</td>
-                  <td className="p-3 text-zinc-400">{p.email}</td>
-                  <td className="p-3">
+                  <td className="p-3 font-semibold sm:font-normal">{p.full_name}{self && <span className="ml-1 text-xs font-normal text-zinc-500">(kamu)</span>}</td>
+                  <td data-label="Email" className="p-3 text-zinc-400"><span className="break-all">{p.email}</span></td>
+                  <td data-label="Role" className="p-3">
                     {self ? (
                       <span className="text-orange-400">{isRole(p.role) ? ROLES[p.role].label : p.role}</span>
                     ) : (
                       <RoleSelect userId={p.id} role={p.role} />
                     )}
                   </td>
-                  <td className="p-3 text-zinc-400">{fmtDate(p.created_at)}</td>
-                  <td className="p-3">
-                    <div className="flex flex-wrap items-center gap-2">
+                  <td data-label="Dibuat" className="p-3 text-zinc-400"><span>{fmtDate(p.created_at)}</span></td>
+                  <td data-label="Aksi" className="p-3">
+                    <div className="flex flex-wrap items-center justify-end gap-2 sm:justify-start">
                       <ResetPasswordForm userId={p.id} />
                       {!self && <DeleteUserButton userId={p.id} email={p.email ?? ""} />}
                     </div>

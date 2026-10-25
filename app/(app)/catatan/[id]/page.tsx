@@ -62,7 +62,7 @@ export default async function CatatanDetail({ params }: { params: Promise<{ id: 
             <SgStatusBadge status={r.status} />
           </div>
         </div>
-        <h1 className="page-title mt-5">{r.title}</h1>
+        <h1 className="page-title mt-5 text-[21px] sm:text-[26px]">{r.title}</h1>
         {r.body && <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-7 text-zinc-300">{r.body}</p>}
 
         <div className="mt-5">

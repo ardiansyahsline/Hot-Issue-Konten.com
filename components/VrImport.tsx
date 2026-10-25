@@ -96,7 +96,7 @@ export default function VrImport() {
           </div>
           <Result r={result} />
           <div className="max-h-[60vh] overflow-auto rounded-lg border border-zinc-800">
-            <table className="w-full text-left text-xs">
+            <table className="m-stack w-full text-left text-xs">
               <thead className="sticky top-0 bg-zinc-900 text-zinc-500">
                 <tr>
                   <th className="p-2 font-medium">Baris</th>
@@ -111,13 +111,13 @@ export default function VrImport() {
               <tbody className="divide-y divide-zinc-800 align-top">
                 {rows.map((r) => (
                   <tr key={r.source_row}>
-                    <td className="p-2 text-zinc-500">{r.source_row}</td>
-                    <td className="whitespace-nowrap p-2">{r.report_date ?? "-"}</td>
-                    <td className="p-2">{r.explanation}</td>
-                    <td className="p-2 text-zinc-400">{r.category}</td>
-                    <td className="max-w-xs p-2"><VrLinks links={r.links} max={3} /></td>
-                    <td className="p-2 text-zinc-400">{r.resolution ?? "-"}</td>
-                    <td className="p-2"><VrStatusBadge status={r.status} /></td>
+                    <td className="p-2 text-zinc-500">Baris {r.source_row}</td>
+                    <td data-label="Tanggal" className="whitespace-nowrap p-2">{r.report_date ?? "-"}</td>
+                    <td data-label="Penjelasan" className="p-2">{r.explanation}</td>
+                    <td data-label="Kategori (otomatis)" className="p-2 text-zinc-400">{r.category}</td>
+                    <td data-label="Email/link" className="max-w-xs p-2"><VrLinks links={r.links} max={3} /></td>
+                    <td data-label="Penyelesaian" className="p-2 text-zinc-400">{r.resolution ?? "-"}</td>
+                    <td data-label="Status" className="p-2"><VrStatusBadge status={r.status} /></td>
                   </tr>
                 ))}
               </tbody>

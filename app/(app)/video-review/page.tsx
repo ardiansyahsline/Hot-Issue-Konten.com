@@ -144,7 +144,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
       )}
 
       {/* ---------------- SUB MENU ---------------- */}
-      <nav className="inline-flex flex-wrap gap-1 rounded-2xl border border-zinc-800/80 bg-zinc-900 p-1.5" style={{ boxShadow: "var(--shadow-sm)" }}>
+      <nav className="flex w-full gap-1 rounded-2xl border border-zinc-800/80 bg-zinc-900 p-1.5 sm:inline-flex sm:w-auto" style={{ boxShadow: "var(--shadow-sm)" }}>
         {(
           [
             ...(canWrite ? [["input", "＋ Input kasus", null]] : []),
@@ -155,7 +155,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
           <Link
             key={key}
             href={`/video-review?tab=${key}`}
-            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-[14px] font-semibold transition ${
+            className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-2 py-2 text-[13px] font-semibold transition sm:flex-none sm:gap-2 sm:px-4 sm:text-[14px] ${
               tab === key || (key === "report" && tab === "rekap") ? "text-white" : "text-zinc-400 hover:text-zinc-100"
             }`}
             style={tab === key || (key === "report" && tab === "rekap") ? { backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)", boxShadow: "var(--shadow-primary)" } : undefined}
@@ -245,7 +245,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
           </div>
   
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[880px] text-left">
+            <table className="m-stack w-full min-w-[880px] text-left">
               <thead>
                 <tr className="border-y border-zinc-800/80 bg-zinc-950/40 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   <th className="w-[27%] px-6 py-3 font-semibold">Kategori</th>
@@ -274,10 +274,10 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
                           <span className="text-[12px] tabular-nums text-zinc-500">{share}%</span>
                         </div>
                       </td>
-                      <td className="px-3 py-4 text-right">
+                      <td data-label="Jumlah kasus" className="px-3 py-4 text-right">
                         <span className="font-display text-[22px] font-bold leading-none tabular-nums">{r.total}</span>
                       </td>
-                      <td className="px-5 py-4">
+                      <td data-label="Status" className="px-5 py-4">
                         {r.total > 0 ? (
                           <>
                             <div className="flex h-2 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -312,7 +312,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
                           <span className="text-[12px] text-zinc-500">—</span>
                         )}
                       </td>
-                      <td className="px-5 py-4">
+                      <td data-label="Rangkuman" className="px-5 py-4">
                         {r.rangkuman ? (
                           <p className="max-w-[68ch] text-[13.5px] leading-6 text-zinc-300">{r.rangkuman}</p>
                         ) : (
@@ -342,7 +342,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
                 )}
                 <tr className="border-t border-zinc-800 bg-zinc-950/40">
                   <td className="px-6 py-4 text-[12px] font-bold uppercase tracking-wider text-zinc-300">Total</td>
-                  <td className="px-3 py-4 text-right">
+                  <td data-label="Jumlah kasus" className="px-3 py-4 text-right">
                     <span className="font-display text-[22px] font-bold leading-none tabular-nums">{grand}</span>
                   </td>
                   <td className="px-5 py-4">

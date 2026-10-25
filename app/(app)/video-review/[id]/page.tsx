@@ -44,7 +44,7 @@ export default async function ReviewDetail({ params }: { params: Promise<{ id: s
             <span className="badge bg-zinc-800 text-zinc-300 ring-zinc-700">{r.category ?? "Belum dikategorikan"}</span>
           )}
         </div>
-        <h1 className="page-title">{r.explanation}</h1>
+        <h1 className="page-title text-[20px] sm:text-[26px]">{r.explanation}</h1>
 
         <div>
           <div className="label">Email / link</div>
