@@ -17,6 +17,8 @@ export type Comp = {
   durationInFrames: number;
   defaultProps: Record<string, unknown>;
   fields: Field[];
+  /** file MP4 yang sudah jadi (versi teks awal) di folder public — bisa langsung didownload tanpa render */
+  file?: string;
 };
 
 /** Daftar video di menu Remotion. Mau tambah video baru: bikin komponennya lalu daftarkan di sini. */
@@ -31,6 +33,7 @@ export const COMPOSITIONS: Comp[] = [
     fps: FPS,
     durationInFrames: UGC_DURATION,
     defaultProps: UGC_DEFAULTS,
+    file: "/videos/ugc-fitur-cs-tracker.mp4",
     fields: [
       { key: "hook", label: "Hook (teks pembuka)", type: "text", hint: "3 detik pertama — bikin orang berhenti scroll" },
       { key: "prompt", label: "Prompt yang diketik ke AI", type: "text" },
