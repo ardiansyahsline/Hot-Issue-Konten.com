@@ -338,8 +338,9 @@ export default function YtMusic({ panel, vol, onStart, stopTick, onPlaying, cmd 
   return (
     <>
       {panel && createPortal(ui, panel)}
-      {/* pemutar YouTube tidak ditampilkan (hanya suara); kontrol ada di panel 🎵 */}
-      <div aria-hidden className="pointer-events-none fixed bottom-0 right-0 overflow-hidden" style={{ width: 320, height: 180, opacity: 0, zIndex: -5 }}>
+      {/* pemutar YouTube tidak ditampilkan (hanya suara); kontrol ada di panel 🎵.
+          Ukurannya sengaja 640×360: pemutar yang terlalu kecil dikasih YouTube kualitas rendah (suara ikut kurang jernih) */}
+      <div aria-hidden className="pointer-events-none fixed bottom-0 right-0 overflow-hidden" style={{ width: 640, height: 360, opacity: 0, zIndex: -5 }}>
         <div ref={host} className="h-full w-full" />
       </div>
     </>
