@@ -212,9 +212,9 @@ export default function HeroGallery({
               disabled={!ready}
               className="flex min-h-[200px] flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-orange-500/40 bg-orange-500/5 p-3 text-center text-orange-400 transition hover:-translate-y-0.5 hover:border-orange-500/70 disabled:opacity-50"
             >
-              <span className="text-[30px] font-light leading-none">＋</span>
-              <span className="text-[14px] font-bold">Buat karakter sendiri</span>
-              <span className="text-[11.5px] font-medium text-zinc-500">Nama & gambar sendiri · 12 pertanyaan · ±2 menit</span>
+              <span className="text-[30px] leading-none">🧠</span>
+              <span className="text-[14px] font-bold">Train your AI</span>
+              <span className="text-[11.5px] font-medium text-zinc-500">Kuis kepribadian · pilih peran · latih cara berpikirnya · ±5 menit</span>
               <span className="text-[11px] text-zinc-500">🔒 pribadi, hanya kamu yang lihat</span>
             </button>
           )}
@@ -231,7 +231,7 @@ export default function HeroGallery({
                 </div>
                 <div>
                   <div className="text-[15px] font-bold">{c.name}</div>
-                  <div className="line-clamp-1 text-[11px] font-semibold text-zinc-500">{c.profile.role || "Karakter buatanmu"}</div>
+                  <div className="line-clamp-1 text-[11px] font-semibold text-zinc-500">{c.profile.role || "AI latihanmu"}</div>
                 </div>
                 <div>
                   <div className="font-display text-[17px] font-extrabold leading-tight" style={{ color: g.color }}>

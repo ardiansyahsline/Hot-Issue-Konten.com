@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
@@ -23,7 +24,8 @@ import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
 import { GROUPS, personaOf, registerCustom, splitVia, type Group as PGroup } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
-import CharacterWizard from "./CharacterWizard";
+// Train your AI: wizard + data training (besar) baru dimuat saat dibuka
+const CharacterWizard = dynamic(() => import("./CharacterWizard"), { ssr: false });
 import CharacterBrain from "./CharacterBrain";
 import FilePlanCard from "./FilePlanCard";
 import DeckCard from "./DeckCard";
@@ -82,7 +84,7 @@ const SUGGEST: { icon: string; label: string; prompt: string; pick?: boolean; se
 ];
 
 const MODEL_KEY = "cs-ai-model-v2";
-// chibi mini di tombol "Buat Karakter AI"
+// chibi mini di tombol "Train your AI"
 const BTN_CHIBI = "__tombol_buat_karakter__";
 registerCustom(BTN_CHIBI, { type: "ENFP", hair: 3, skin: "#f5c9a8", hc: "#3b2a1e", prop: "orb" });
 const DATA_KEY = "cs-ai-data";
@@ -279,7 +281,7 @@ function ModelPicker({
             </button>
             {mine.length > 0 && (
               <div>
-                <div className="px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">Karakter buatanmu</div>
+                <div className="px-2 pb-1 pt-2 text-[10.5px] font-bold uppercase tracking-wider text-zinc-500">AI latihanmu</div>
                 {mine.map((c) => {
                   const v = `${CHAR_PREFIX}${c.id}`;
                   const p = personaOf(c.name);
@@ -298,7 +300,7 @@ function ModelPicker({
                             {p.type} · {p.label}
                           </span>
                         </span>
-                        <span className="block truncate text-[11.5px] leading-snug text-zinc-400">{c.profile.role || "Karakter buatanmu"}</span>
+                        <span className="block truncate text-[11.5px] leading-snug text-zinc-400">{c.profile.role || "AI latihanmu"}</span>
                       </span>
                       <span className="shrink-0 rounded-md bg-orange-500/15 px-1.5 py-0.5 text-[9.5px] font-extrabold text-orange-400">MILIKMU</span>
                     </button>
@@ -1148,18 +1150,18 @@ export default function AiChat({
                 🎭<span className="hidden sm:inline"> Karakter</span>
               </button>
             </span>
-            <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
+            <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Latih AI versimu sendiri: kuis kepribadian, pilih peran, latih cara berpikirnya" aria-label="Train your AI">
               <span className="mkchar-shine" aria-hidden />
               <span className="mkchar-av" aria-hidden>
                 <HeroArt hero={BTN_CHIBI} size={30} still />
               </span>
               <span>
-                <span className="hidden sm:inline">✨ Buat Karakter AI</span>
+                <span className="hidden sm:inline">🧠 Train your AI</span>
                 <span className="sm:hidden">＋</span>
               </span>
               <span className="mkchar-new hidden sm:inline">BARU</span>
             </button>
-            <span className="mkchar-tip hidden lg:inline">Bikin AI versimu! 👀</span>
+            <span className="mkchar-tip hidden lg:inline">Latih AI versimu! 🧠</span>
             <span className="hidden min-w-0 truncate font-semibold md:inline">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
             <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
               {active && view === "chat" && (
@@ -1662,7 +1664,7 @@ export default function AiChat({
               </button>
               {chars.length > 0 && (
                 <div>
-                  <div className="mx-1 mb-1 mt-2.5 text-[10.5px] font-extrabold uppercase tracking-wider text-zinc-500">Karakter buatanmu</div>
+                  <div className="mx-1 mb-1 mt-2.5 text-[10.5px] font-extrabold uppercase tracking-wider text-zinc-500">AI latihanmu</div>
                   {chars.map((c) => {
                     const p = personaOf(c.name);
                     const g = GROUPS[p.group];

@@ -3,6 +3,7 @@
  * dan prompt kepribadian yang dikirim ke AI (mesin utama: Claude Haiku).
  */
 import { groupVoices, registerCustom, typeInfo, type Prop } from "./aiPersona";
+import type { Training } from "./trainAi";
 
 export type CharAvatar = { kind: "chibi"; hair: number; skin: string; hc: string; prop: Prop } | { kind: "image"; data: string };
 export type CharProfile = {
@@ -12,6 +13,20 @@ export type CharProfile = {
   style?: string;
   catchphrase?: string;
   rules?: string[];
+  /** 2 = hasil "Train your AI" (kuis kepribadian + peran + training); kosong = karakter versi lama (12 pertanyaan) */
+  version?: 2;
+  quiz?: Record<string, number>;
+  roleId?: string;
+  roleName?: string;
+  training?: Training;
+  call?: string;
+  emoji?: string;
+  /** SOP / cara berpikir hasil training (bisa diedit user) */
+  sop?: string;
+  /** nama peran yang dilatihkan (untuk tampilan, tanpa perlu memuat data training) */
+  roleLabel?: string;
+  /** ringkasan otomatis terakhir saat disimpan — dipakai untuk mengenali kolom yang diedit manual (tidak ditimpa saat latih ulang) */
+  gen?: { label: string; role: string; style: string; catchphrase: string; rules: string[]; sop: string };
 };
 export type CustomChar = { id: string; name: string; mbti: string; avatar: CharAvatar; profile: CharProfile; created_at?: string };
 export type MemoryKind = "knowledge" | "example" | "correction";
@@ -194,13 +209,15 @@ export function registerChar(c: CustomChar) {
     label: c.profile.label || t.label,
     say: c.profile.catchphrase || t.say,
     style: c.profile.style || t.style,
-    role: "Buatanmu",
+    role: c.profile.version === 2 && c.profile.roleLabel ? `Dilatih: ${c.profile.roleLabel}` : "Buatanmu",
     sifat: charSifat(c),
   });
 }
 
 /** sifat karakter buatan user dari jawaban wizard-nya (energi, gaya kerja, cara memutuskan) */
 function charSifat(c: CustomChar): string[] | undefined {
+  // hasil Train your AI: sifat tipe kepribadian + peran yang dilatihkan
+  if (c.profile.version === 2) return [...typeInfo(c.mbti).sifat.slice(0, 2), ...(c.profile.roleLabel ? [`peran ${c.profile.roleLabel}`] : [])];
   const a = c.profile.answers ?? {};
   const parts = (id: string) => val(a, id).split(/,|&|;/).map((x) => x.trim().toLowerCase()).filter((x) => x && x.length <= 24);
   const tf = val(a, "tf") ? (/data|logika/i.test(val(a, "tf")) ? "berbasis data" : "peka perasaan") : "";
@@ -208,7 +225,7 @@ function charSifat(c: CustomChar): string[] | undefined {
   return out.length >= 2 ? out : undefined;
 }
 
-/** prompt kepribadian karakter buatan user */
+/** prompt kepribadian karakter buatan user versi lama (12 pertanyaan); hasil Train your AI -> charPrompt() di trainAiPrompt.ts */
 export function customPrompt(c: CustomChar): string {
   const a = c.profile.answers ?? {};
   const t = typeInfo(c.mbti);
