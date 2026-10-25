@@ -47,6 +47,9 @@ type Page = { k: "intro" } | { k: "quiz"; i: number } | { k: "result" } | { k: "
 type Summary = { label: string; role: string; style: string; catchphrase: string; rules: string[]; sop: string };
 /** patokan ringkasan otomatis + peran (dan nama peran custom) yang dipakai saat membuatnya */
 type Gen = { sum: Summary; roleId: string; roleName: string };
+type RoleFields = Pick<Summary, "role" | "rules" | "sop">;
+const roleFields = (x: Summary): RoleFields => ({ role: x.role, rules: x.rules, sop: x.sop });
+const isRoleField = (k: keyof Summary): k is keyof RoleFields => k === "role" || k === "rules" || k === "sop";
 const nameKey = (id: string | undefined, custom: string | undefined) => (id === CUSTOM_ROLE ? (custom ?? "").trim().toLowerCase() : "");
 /** pembanding kolom ringkasan (baris kosong / spasi diabaikan) */
 const norm = (v: string | string[]) => JSON.stringify(Array.isArray(v) ? v.map((x) => x.trim()).filter(Boolean) : v.trim());
@@ -121,6 +124,8 @@ export default function CharacterWizard({
   const lastPreset = useRef(roleId && roleId !== CUSTOM_ROLE ? roleId : "");
   /** ringkasan otomatis terakhir — kolom yang sudah diedit user (beda dari versi otomatis) tidak ditimpa saat ringkasan dibuat ulang */
   const genRef = useRef<Gen | null | undefined>(undefined);
+  /** suntingan Peran/Larangan/SOP per peran — ganti peran lalu kembali -> suntingan untuk peran itu muncul lagi */
+  const sumCache = useRef<Record<string, { s: RoleFields; base: RoleFields; roleName: string }>>({});
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -236,15 +241,21 @@ export default function CharacterWizard({
       const fresh = buildSummary();
       const rn = nameKey(roleId, customRole);
       const base = genRef.current;
+      // peran diganti -> peran, larangan & SOP ikut peran baru (suntingan peran lama disimpan, tidak terbawa);
+      // kembali ke peran yang pernah disunting -> suntingannya dipakai lagi.
+      // nama peran custom diganti -> hanya teks Peran yang ikut (pertanyaan & SOP-nya sama)
+      const idChanged = !!base && base.roleId !== roleId;
+      const nameChanged = !!base && !idChanged && base.roleName !== rn;
+      const cached = idChanged ? sumCache.current[roleId] : undefined;
+      if (sum && base && idChanged) sumCache.current[base.roleId] = { s: roleFields(sum), base: roleFields(base.sum), roleName: base.roleName };
       setSum((s) => {
         if (!s || !base) return fresh;
-        // peran diganti -> peran, larangan & SOP ikut peran baru (suntingan untuk peran lama tidak terbawa);
-        // nama peran custom diganti -> hanya teks Peran yang ikut (pertanyaan & SOP-nya sama)
-        const idChanged = base.roleId !== roleId;
-        const nameChanged = !idChanged && base.roleName !== rn;
         const out: Summary = { ...fresh };
         for (const k of Object.keys(fresh) as (keyof Summary)[]) {
-          if (idChanged && (k === "role" || k === "rules" || k === "sop")) continue;
+          if (idChanged && isRoleField(k)) {
+            if (cached && !(k === "role" && cached.roleName !== rn) && norm(cached.s[k]) !== norm(cached.base[k])) Object.assign(out, { [k]: cached.s[k] });
+            continue;
+          }
           if (nameChanged && k === "role") continue;
           if (norm(s[k]) !== norm(base.sum[k])) Object.assign(out, { [k]: s[k] });
         }
@@ -763,13 +774,13 @@ export default function CharacterWizard({
                 <span className={rowLabel}>Julukan</span>
                 <input value={sum.label} maxLength={60} onChange={(e) => setSum({ ...sum, label: e.target.value })} className="input py-1.5 text-[13px]" />
                 <span className={rowLabel}>Peran</span>
-                <textarea value={sum.role} rows={3} maxLength={240} onChange={(e) => setSum({ ...sum, role: e.target.value.replace(/\n/g, " ") })} className="input resize-y py-1.5 text-[13px] leading-snug" />
+                <textarea value={sum.role} rows={3} maxLength={600} onChange={(e) => setSum({ ...sum, role: e.target.value.replace(/\n/g, " ") })} className="input resize-y py-1.5 text-[13px] leading-snug" />
                 <span className={rowLabel}>Gaya</span>
                 <input value={sum.style} maxLength={400} onChange={(e) => setSum({ ...sum, style: e.target.value })} className="input py-1.5 text-[13px]" />
                 {(role || sum.sop) && (
                   <>
                     <span className={rowLabelTop}>SOP</span>
-                    <textarea value={sum.sop} rows={9} maxLength={9000} onChange={(e) => setSum({ ...sum, sop: e.target.value })} className="input resize-y py-1.5 font-mono text-[12px] leading-relaxed" placeholder="Cara berpikir & SOP dari pelatihanmu" />
+                    <textarea value={sum.sop} rows={9} maxLength={12000} onChange={(e) => setSum({ ...sum, sop: e.target.value })} className="input resize-y py-1.5 font-mono text-[12px] leading-relaxed" placeholder="Cara berpikir & SOP dari pelatihanmu" />
                   </>
                 )}
                 <span className={rowLabel}>Ciri khas</span>
