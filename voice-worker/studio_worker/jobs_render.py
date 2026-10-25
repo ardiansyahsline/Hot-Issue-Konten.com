@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import ff, mix
 from . import log as vlog
 from .jobctx import Cancelled, JobCtx, JobError
+from .supa import norm_path
 
 log = vlog.get("render")
 
@@ -38,6 +39,7 @@ ASSET = re.compile(r"^/api/studio/asset/(sfx|music)/([^/?#]+)$")
 DATA_URL = re.compile(r"^data:(audio|image)/([\w.+-]+);base64,([A-Za-z0-9+/=]+)$")
 MAX_UPLOAD = 200 * 1024 * 1024
 EXT_OF = {"mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav", "png": ".png", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif", "svg+xml": ".svg"}
+SHARED_DIRS = {"voices", "sfx", "tts", "vo"}  # folder storage yang boleh dibaca semua user Studio
 
 
 # ---------------------------------------------------------------- cek kesiapan
@@ -71,9 +73,36 @@ def _storage_path(src: str) -> str | None:
     return p if p and ".." not in p.split("/") else None
 
 
-def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], None]) -> tuple[object, list[str]]:
-    """ganti semua alamat /api/studio/... di timeline dengan /public/... dan siapkan filenya. Balikan (timeline baru, daftar file gagal)."""
+def owner_can_read(supa, owner: str | None) -> Callable[[str], bool]:
+    """aturan baca storage untuk pemilik job (created_by) — sama dengan studioCanRead (lib/studio/storage.server.ts) & RLS studio_read:
+    admin semua; voices/ sfx/ tts/ vo/ dipakai bersama; uploads/<id pemilik>/ saja; renders/ hanya kalau baris studio_render_jobs-nya milik pemilik"""
+    admin: list[bool] = []
+
+    def can(p: str) -> bool:
+        dirs = p.split("/")[:-1]  # folder saja, seperti storage.foldername()
+        if dirs and dirs[0] in SHARED_DIRS:
+            return True
+        if not owner:  # pemilik sudah dihapus (created_by null): hanya folder bersama
+            return False
+        if not admin:  # cek admin sekali saja per job
+            admin.append(bool(supa.select("profiles", select="id", id=f"eq.{owner}", role="eq.admin")))
+        if admin[0]:
+            return True
+        if dirs[:1] == ["uploads"]:
+            return len(dirs) > 1 and dirs[1] == owner
+        if dirs[:1] != ["renders"]:
+            return False
+        return bool(supa.select("studio_render_jobs", select="id", result_path=f"eq.{p}", created_by=f"eq.{owner}", limit="1"))
+
+    return can
+
+
+def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], None], can_read: Callable[[str], bool] | None = None) -> tuple[object, list[str]]:
+    """ganti semua alamat /api/studio/... di timeline dengan /public/... dan siapkan filenya. Balikan (timeline baru, daftar file gagal).
+    File storage yang tidak boleh dibaca pemilik job (can_read) dianggap gagal. Media yang gagal disiapkan dibuang dari timeline
+    (logo/klip/latar/VO → null, musik → "bed") supaya render tidak batal karena file 404."""
     missing: list[str] = []
+    bad: set[str] = set()  # alamat asli yang gagal disiapkan
     done: dict[str, str] = {}
 
     def fix(s: str) -> str:
@@ -94,6 +123,7 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
                     out = f"/public/{d}/{f}"
                 else:
                     missing.append(s)
+                    bad.add(s)
         elif s.startswith("/api/studio/file"):
             p = _storage_path(s)
             if p:
@@ -102,12 +132,15 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
                 name = hashlib.sha1(p.encode("utf-8")).hexdigest()[:16] + ext
                 dst = public / "st" / name
                 try:
+                    if can_read and not can_read(norm_path(p)):
+                        raise PermissionError("pemilik job tidak boleh membaca file ini")
                     if not dst.exists():
                         fetch(p, dst)
                     out = f"/public/st/{name}"
                 except Exception as e:
                     log.warning("File %s tidak bisa diunduh: %s", p, e)
                     missing.append(p)
+                    bad.add(s)
         elif s.startswith("data:"):
             m = DATA_URL.match(s)
             if m:
@@ -120,6 +153,7 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
                     out = f"/public/st/{name}"
                 except (binascii.Error, ValueError):
                     missing.append("data-url")
+                    bad.add(s)
         done[s] = out
         return out
 
@@ -132,7 +166,29 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
             return {k: walk(x) for k, x in v.items()}
         return v
 
-    return walk(tl), missing
+    def gone(v) -> bool:
+        return isinstance(v, str) and v in bad
+
+    out = walk(tl)
+    if bad and isinstance(out, dict):  # media yang tidak ada di folder public → buang (komposisi menganggap null = tanpa media)
+        brand = out.get("brand")
+        if isinstance(brand, dict) and gone(brand.get("logo")):
+            brand["logo"] = None
+        for sc in out.get("scenes") or []:
+            for key, field in (("layout", "src"), ("bg", "media")):
+                o = sc.get(key) if isinstance(sc, dict) else None
+                if isinstance(o, dict) and gone(o.get(field)):
+                    o[field] = None
+        music = out.get("music")
+        if isinstance(music, dict) and gone(music.get("src")):
+            music["src"] = "bed"
+        vo = out.get("vo")
+        if isinstance(vo, dict):
+            if gone(vo.get("full")):
+                vo["full"] = None
+            if isinstance(vo.get("lines"), list):
+                vo["lines"] = [x for x in vo["lines"] if not (isinstance(x, dict) and gone(x.get("src")))]
+    return out, missing
 
 
 def copy_assets(repo: Path, public: Path) -> int:
@@ -259,25 +315,31 @@ def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_s
     tail: list[str] = []
     t0 = time.time()
     last_check = 0.0
-    while True:
+    try:
+        while True:
+            try:
+                line = q.get(timeout=1.0)
+            except queue.Empty:
+                line = ""
+            if line is None:
+                break
+            if line.strip():
+                tail = (tail + [line.strip()])[-25:]
+                on_line(line)
+            now = time.time()
+            if now - last_check > 3:
+                last_check = now
+                if should_stop():
+                    raise Cancelled("batal")
+                if now - t0 > timeout:
+                    raise JobError("Render terlalu lama dan dihentikan. Coba video yang lebih pendek.")
+    except BaseException:  # batal (juga dari progres), jaringan putus, Ctrl+C kedua → node & Chrome jangan ditinggal jalan
+        _kill(p)
         try:
-            line = q.get(timeout=1.0)
-        except queue.Empty:
-            line = ""
-        if line is None:
-            break
-        if line.strip():
-            tail = (tail + [line.strip()])[-25:]
-            on_line(line)
-        now = time.time()
-        if now - last_check > 3:
-            last_check = now
-            if should_stop():
-                _kill(p)
-                raise Cancelled("batal")
-            if now - t0 > timeout:
-                _kill(p)
-                raise JobError("Render terlalu lama dan dihentikan. Coba video yang lebih pendek.")
+            p.wait(timeout=30)
+        except Exception:
+            pass
+        raise
     return p.wait(), tail
 
 
@@ -307,6 +369,8 @@ def run(ctx: JobCtx) -> None:
             return False
         except Cancelled:
             return True
+        except Exception:  # internet putus sebentar: render jalan terus, dicek lagi 3 dtk kemudian
+            return False
 
     def on_line(line: str) -> None:
         log.debug("remotion: %s", line)
@@ -319,7 +383,8 @@ def run(ctx: JobCtx) -> None:
 
     try:
         ctx.progress(0.02, "Menyiapkan file audio & gambar…", force=True)
-        tl2, missing = rewrite_timeline(tl, public, cfg.repo, lambda p, dst: rt.supa.download(p, dst))
+        can_read = owner_can_read(rt.supa, job.get("created_by"))  # service role bisa baca semua: batasi ke file yang boleh dibuka pemilik job
+        tl2, missing = rewrite_timeline(tl, public, cfg.repo, lambda p, dst: rt.supa.download(p, dst), can_read)
         if missing:
             log.warning("Render %s: %d file tidak ketemu: %s", ctx.id, len(missing), missing[:5])
         assert isinstance(tl2, dict)

@@ -5,6 +5,7 @@ Jalankan: jalankan.bat (atau `.venv\\Scripts\\python worker.py`). Ctrl+C = berhe
 """
 from __future__ import annotations
 
+import json
 import os
 import platform
 import signal
@@ -28,6 +29,7 @@ from studio_worker.supa import Supa, SupaError  # noqa: E402
 
 log = vlog.setup(CFG.logs)
 VOICE, RENDER = "studio_voice_jobs", "studio_render_jobs"
+RETRIED = "retried.json"  # di folder data: id job yang sudah diulang otomatis sekali
 FAIL = {
     "tts": jobs_tts.FAIL_MSG,
     "clean": "Pembersihan rekaman gagal di laptop. Coba lagi sebentar lagi.",
@@ -129,22 +131,53 @@ class Heartbeat(threading.Thread):
             pass
 
 
-def recover_stale(rt: Runtime) -> None:
-    """job 'proses' milik worker ini dari sesi sebelumnya (laptop mati / crash) → diulang sekali, kedua kalinya ditandai gagal"""
+def load_retried() -> list[str]:
+    """id job yang sudah pernah diulang otomatis (kolom message tidak bisa dipakai: ditimpa claim & progres)"""
+    try:
+        ids = json.loads((CFG.data / RETRIED).read_text(encoding="utf-8"))
+        return [str(x) for x in ids] if isinstance(ids, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_retried(ids: list[str]) -> None:
+    f = CFG.data / RETRIED
+    try:
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(ids[-200:]), encoding="utf-8")  # cukup 200 terakhir
+        os.replace(tmp, f)
+    except OSError as e:
+        log.warning("Catatan job yang sudah diulang tidak bisa disimpan: %s", e)
+
+
+def recover_stale(rt: Runtime, idle: bool = False) -> None:
+    """job 'proses' milik worker ini yang tidak sedang dikerjakan → diulang sekali, kedua kalinya ditandai gagal.
+    Saat mulai: sisa sesi sebelumnya (laptop mati / crash). Saat menganggur (idle=True): tanda gagal yang tidak terkirim
+    karena internet putus, atau klaim yang balasannya hilang (worker hanya mengerjakan satu job, jadi saat menganggur pasti yatim)."""
+    retried = load_retried()
     for table in (VOICE, RENDER):
         try:
-            rows = rt.supa.select(table, select="id,message", status="eq.proses", worker=f"eq.{CFG.worker_id}")
+            rows = rt.supa.select(table, select="id", status="eq.proses", worker=f"eq.{CFG.worker_id}")
         except SupaError as e:
             log.warning("Cek job tertunda gagal: %s", e)
             continue
         for r in rows:
-            again = (r.get("message") or "").startswith("Diulang")
-            patch = (
-                {"status": "gagal", "message": "Gagal: laptop berhenti saat memproses (sudah diulang sekali)."}
-                if again
-                else {"status": "antri", "progress": 0, "worker": None, "message": "Diulang otomatis setelah laptop menyala lagi"}
-            )
-            rt.supa.update(table, {"id": f"eq.{r['id']}", "status": "eq.proses"}, patch)
+            rid = str(r["id"])
+            again = rid in retried
+            if again:
+                why = "koneksi laptop terputus" if idle else "laptop berhenti"
+                patch = {"status": "gagal", "message": f"Gagal: {why} saat memproses (sudah diulang sekali)."}
+            else:
+                why = "koneksi laptop pulih" if idle else "laptop menyala lagi"
+                patch = {"status": "antri", "progress": 0, "worker": None, "message": f"Diulang otomatis setelah {why}"}
+            try:
+                got = rt.supa.update(table, {"id": f"eq.{rid}", "status": "eq.proses"}, patch)
+            except SupaError as e:
+                log.warning("Job tertunda %s belum bisa diubah: %s", rid, e)
+                continue
+            if got:  # catat sudah diulang (yang sudah gagal dihapus dari catatan)
+                retried = [x for x in retried if x != rid] + ([] if again else [rid])
+                save_retried(retried)
             log.info("Job tertunda %s → %s", r["id"], patch["status"])
 
 
@@ -222,7 +255,7 @@ def main() -> int:
             _ = rt.asr.available
         log.info("Menunggu antrian dari website… (Ctrl+C untuk berhenti)")
         last_err = 0.0
-        last_check = time.time()
+        last_check = last_sweep = time.time()
         while not stop.is_set():
             try:
                 job = rt.supa.claim(VOICE)
@@ -238,6 +271,9 @@ def main() -> int:
             if job:
                 handle(rt, hb, table, job)
                 continue
+            if time.time() - last_sweep > 120:  # job 'proses' milik laptop ini padahal sedang menganggur = yatim → diulang / gagal
+                recover_stale(rt, idle=True)
+                last_sweep = time.time()
             if time.time() - last_check > 600:  # cek ulang kesiapan render & lepas model kalau lama menganggur
                 rt.render_ok, _ = jobs_render.check(CFG)
                 rt.engines.maybe_idle_unload()

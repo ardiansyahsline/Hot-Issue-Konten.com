@@ -27,7 +27,6 @@ log = vlog.get("tts")
 
 FAIL_MSG = "Mesin suara laptop gagal — website otomatis pakai cadangan Edge-TTS"
 CACHE_V = "tts-v1"
-SEED_VOICE = "alif-energik"
 
 
 # ---------------------------------------------------------------- input
@@ -73,10 +72,9 @@ def voice_ref(rt: Runtime, voice_id: str | None, ctx: JobCtx | None = None) -> t
     from . import jobs_clean
 
     supa = rt.supa
-    if voice_id:
-        rows = supa.select("studio_voices", id=f"eq.{voice_id}", select="*")
-    else:  # tanpa pilihan: pakai suara bawaan bank (Alif - Energik)
-        rows = supa.select("studio_voices", seed_key=f"eq.{SEED_VOICE}", select="*")
+    if not voice_id:  # suara dihapus saat job masih antri (voice_id jadi null) → jangan diam-diam pakai suara orang lain
+        raise JobError("Suara yang dipilih sudah dihapus dari bank suara. Pilih suara lain.")
+    rows = supa.select("studio_voices", id=f"eq.{voice_id}", select="*")
     if not rows:
         raise JobError("Suara tidak ditemukan di bank suara. Pilih suara lain atau tambahkan rekaman dulu.")
     v = rows[0]
