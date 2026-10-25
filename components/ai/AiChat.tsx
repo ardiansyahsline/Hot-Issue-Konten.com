@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -16,6 +16,7 @@ import AnalysisCard from "./AnalysisCard";
 import AskCard from "./AskCard";
 import ChoiceCard from "./ChoiceCard";
 import HelperLine from "./HelperLine";
+import FitRow from "@/components/FitRow";
 import AnsweredCard, { parseCardAnswer } from "./AnsweredCard";
 import { splitChoice } from "@/lib/choiceCard";
 import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
@@ -230,16 +231,16 @@ function ModelPicker({
     .filter((x) => x.list.length);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex max-w-[210px] items-center gap-1.5 rounded-full border border-zinc-800 py-0.5 pl-0.5 pr-2.5 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
+        className="flex items-center gap-1.5 whitespace-nowrap rounded-full border border-zinc-800 py-0.5 pl-0.5 pr-2.5 text-[12px] font-semibold text-zinc-300 hover:border-zinc-600"
         title={isCharModel(value) ? `${current}: karakter buatanmu` : `${current}: ${heroDesc(value)}`}
         aria-label="Pilih hero"
       >
         <HeroAvatar hero={current} size={22} />
-        <span className="truncate">
+        <span>
           {current}
           {value === SMART ? " · otomatis" : ""}
         </span>
@@ -355,6 +356,8 @@ export default function AiChat({
   const [convs, setConvs] = useState(initialConvs);
   const [activeId, setActiveId] = useState<string | null>(initialId);
   const [msgs, setMsgs] = useState<AiMsg[]>(() => initialMsgs.map(normMsg));
+  // HP: tinggi kotak AI = sisa layar di bawah header (header HP lebih tinggi) supaya kolom ketik tidak terpotong
+  const cardRef = useRef<HTMLDivElement>(null);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -382,6 +385,18 @@ export default function AiChat({
   const [sideOpen, setSideOpen] = useState(false);
   // mode fokus (layar penuh): navbar & daftar riwayat disembunyikan, chat memenuhi jendela. Diingat per browser.
   const [focus, setFocus] = useState(false);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const fit = () => {
+      if (focus || window.innerWidth >= 768) return void (el.style.height = "");
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      el.style.height = `${Math.max(420, window.innerHeight - top - 8)}px`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [focus]);
   useEffect(() => {
     try {
       if (localStorage.getItem("cs-ai-focus") === "1") setFocus(true);
@@ -986,12 +1001,13 @@ export default function AiChat({
         className="block max-h-[220px] w-full resize-none bg-transparent px-2 py-1.5 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-500"
         aria-label="Tulis pesan ke AI"
       />
-      <div className="mt-1 flex flex-wrap items-center gap-2">
+      {/* tombol-tombol selalu 1 baris; di HP otomatis diperkecil kalau tidak muat */}
+      <FitRow className="mt-1 gap-1.5 sm:gap-2">
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={!!setupError}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-800 text-[15px] hover:border-zinc-600 disabled:opacity-40"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-800 text-[15px] hover:border-zinc-600 disabled:opacity-40"
           title="Lampirkan gambar (maks 4)"
           aria-label="Lampirkan gambar"
         >
@@ -1000,7 +1016,7 @@ export default function AiChat({
         <button
           type="button"
           onClick={toggleData}
-          className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
+          className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
             dataMode === "auto" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" : "border-zinc-800 text-zinc-500"
           }`}
           title={dataMode === "auto" ? "AI otomatis membaca data CS Tracker kalau pertanyaannya soal issue / laporan / video review / catatan. Klik untuk mematikan." : "AI tidak membaca data CS Tracker. Klik untuk menyalakan."}
@@ -1013,7 +1029,7 @@ export default function AiChat({
           <button
             type="button"
             onClick={toggleWeb}
-            className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
+            className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-[12px] font-semibold transition ${
               webMode === "auto" ? "border-sky-500/40 bg-sky-500/10 text-sky-400" : "border-zinc-800 text-zinc-500"
             }`}
             title={
@@ -1029,14 +1045,14 @@ export default function AiChat({
         )}
         <ModelPicker owner={owner} chars={chars} value={model} onChange={pickModel} models={models} ready={ready} vision={best} status={status} visionList={visionList} loadError={loadError} onReload={() => loadModels(false)} />
         {busy ? (
-          <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
+          <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-zinc-700 px-3 text-[13px] font-semibold" aria-label="Berhenti">
             ■ Stop
           </button>
         ) : (
           <button
             type="submit"
             disabled={(!input.trim() && !pending.some((p) => p.status === "done")) || uploading || !!setupError}
-            className="ml-auto flex h-9 w-9 items-center justify-center rounded-xl text-white disabled:opacity-40"
+            className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white disabled:opacity-40"
             style={{ backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)" }}
             aria-label="Kirim"
           >
@@ -1045,12 +1061,13 @@ export default function AiChat({
             </svg>
           </button>
         )}
-      </div>
+      </FitRow>
     </form>
   );
 
   return (
     <div
+      ref={cardRef}
       className={
         focus
           ? "fixed inset-0 z-[60] flex overflow-hidden bg-zinc-900"
@@ -1067,92 +1084,95 @@ export default function AiChat({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b border-zinc-800/80 px-4 py-3">
-          <button type="button" onClick={() => setSideOpen(true)} className={`rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 ${focus ? "" : "md:hidden"}`} aria-label="Daftar percakapan">
-            ☰
-          </button>
-          <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
-            <button type="button" onClick={() => { setView("chat"); setCowork(false); }} className={`rounded-full px-2.5 py-1 ${view === "chat" && !cowork ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat" && !cowork}>
-              💬 Chat
+        {/* baris atas selalu sejajar; di HP diperkecil otomatis kalau tidak muat */}
+        <header className="border-b border-zinc-800/80 px-3 py-3 sm:px-4">
+          <FitRow className="gap-2">
+            <button type="button" onClick={() => setSideOpen(true)} className={`rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 ${focus ? "" : "md:hidden"}`} aria-label="Daftar percakapan">
+              ☰
             </button>
-            {(
-              <span className="group relative flex items-center">
-                <input ref={pickFilesRef} type="file" multiple className="hidden" accept=".csv,.tsv,.xlsx,.txt,.md,.json,.srt,.html,text/*,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => { onPickedFiles(e.target.files); e.target.value = ""; }} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setView("chat");
-                    if (!cowork) {
-                      newChat();
-                      setCowork(true);
-                    } else if (folder) rescanFolder();
-                    else connectFolder();
-                  }}
-                  disabled={folderBusy || !!setupError}
-                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 ${cowork && view === "chat" ? "bg-violet-500/15 text-violet-400" : folder ? "text-violet-400" : "text-zinc-500 hover:text-zinc-300"}`}
-                  aria-label="Cowork: AI kerja langsung di folder laptop kamu"
-                >
-                  {folderBusy ? "⏳" : "💼"}
-                  <span className="hidden max-w-[110px] truncate sm:inline">{folder ? folder.root.name : "Cowork"}</span>
-                  <span className="sm:hidden">{folder ? "" : "Cowork"}</span>
-                </button>
-                {folder && (
-                  <button type="button" onClick={() => setFolder(null)} className="-ml-1 rounded-full px-1.5 py-1 text-violet-400 hover:text-red-400" aria-label="Putuskan folder" title="Putuskan folder">
-                    ✕
+            <span className="flex shrink-0 rounded-full border border-zinc-800 p-0.5 text-[12px] font-semibold">
+              <button type="button" onClick={() => { setView("chat"); setCowork(false); }} className={`rounded-full px-2.5 py-1 ${view === "chat" && !cowork ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chat" && !cowork}>
+                💬 Chat
+              </button>
+              {(
+                <span className="group relative flex items-center">
+                  <input ref={pickFilesRef} type="file" multiple className="hidden" accept=".csv,.tsv,.xlsx,.txt,.md,.json,.srt,.html,text/*,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => { onPickedFiles(e.target.files); e.target.value = ""; }} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView("chat");
+                      if (!cowork) {
+                        newChat();
+                        setCowork(true);
+                      } else if (folder) rescanFolder();
+                      else connectFolder();
+                    }}
+                    disabled={folderBusy || !!setupError}
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 ${cowork && view === "chat" ? "bg-violet-500/15 text-violet-400" : folder ? "text-violet-400" : "text-zinc-500 hover:text-zinc-300"}`}
+                    aria-label="Cowork: AI kerja langsung di folder laptop kamu"
+                  >
+                    {folderBusy ? "⏳" : "💼"}
+                    <span className="hidden max-w-[110px] truncate sm:inline">{folder ? folder.root.name : "Cowork"}</span>
+                    <span className="sm:hidden">{folder ? "" : "Cowork"}</span>
                   </button>
-                )}
-                <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-[230px] -translate-x-1/2 rounded-xl bg-zinc-100 px-3 py-2 text-[11.5px] font-medium leading-snug text-zinc-900 shadow-lg sm:group-hover:block">
-                  <b>💼 Cowork</b> — AI bantu kerja langsung di folder laptop kamu: rapihin file, ganti nama, cari duplikat, baca Excel/CSV & bikin laporan PPT.
-                  <span className="mt-1 block text-zinc-500">
-                    {folder ? `Terhubung: ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")} file. Klik untuk baca ulang.` : canFolder ? "Klik untuk pilih folder." : "Di HP: pilih file Excel / CSV / teks untuk dibaca & dibikin laporan."}
+                  {folder && (
+                    <button type="button" onClick={() => setFolder(null)} className="-ml-1 rounded-full px-1.5 py-1 text-violet-400 hover:text-red-400" aria-label="Putuskan folder" title="Putuskan folder">
+                      ✕
+                    </button>
+                  )}
+                  <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-[230px] -translate-x-1/2 rounded-xl bg-zinc-100 px-3 py-2 text-[11.5px] font-medium leading-snug text-zinc-900 shadow-lg sm:group-hover:block">
+                    <b>💼 Cowork</b> — AI bantu kerja langsung di folder laptop kamu: rapihin file, ganti nama, cari duplikat, baca Excel/CSV & bikin laporan PPT.
+                    <span className="mt-1 block text-zinc-500">
+                      {folder ? `Terhubung: ${folder.root.name} · ${folder.files.length.toLocaleString("id-ID")} file. Klik untuk baca ulang.` : canFolder ? "Klik untuk pilih folder." : "Di HP: pilih file Excel / CSV / teks untuk dibaca & dibikin laporan."}
+                    </span>
                   </span>
                 </span>
+              )}
+              <button type="button" onClick={() => setView("chars")} className={`rounded-full px-2.5 py-1 ${view === "chars" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chars"}>
+                🎭<span className="hidden sm:inline"> Karakter</span>
+              </button>
+            </span>
+            <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
+              <span className="mkchar-shine" aria-hidden />
+              <span className="mkchar-av" aria-hidden>
+                <HeroArt hero={BTN_CHIBI} size={30} still />
               </span>
-            )}
-            <button type="button" onClick={() => setView("chars")} className={`rounded-full px-2.5 py-1 ${view === "chars" ? "bg-orange-500/15 text-orange-400" : "text-zinc-500 hover:text-zinc-300"}`} aria-pressed={view === "chars"}>
-              🎭<span className="hidden sm:inline"> Karakter</span>
+              <span>
+                <span className="hidden sm:inline">✨ Buat Karakter AI</span>
+                <span className="sm:hidden">＋</span>
+              </span>
+              <span className="mkchar-new hidden sm:inline">BARU</span>
             </button>
-          </span>
-          <button type="button" onClick={() => setWizard("new")} disabled={!!setupError} className="mkchar disabled:opacity-50" title="Bikin karakter AI versimu sendiri" aria-label="Buat karakter AI">
-            <span className="mkchar-shine" aria-hidden />
-            <span className="mkchar-av" aria-hidden>
-              <HeroArt hero={BTN_CHIBI} size={30} still />
+            <span className="mkchar-tip hidden lg:inline">Bikin AI versimu! 👀</span>
+            <span className="hidden min-w-0 truncate font-semibold md:inline">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
+            <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
+              {active && view === "chat" && (
+                <>
+                  <button type="button" onClick={() => { setSideOpen(true); setEditing(active.id); }} className="hover:text-zinc-200">
+                    ✎<span className="hidden sm:inline"> Ganti nama</span>
+                  </button>
+                  <button type="button" onClick={() => { setSideOpen(true); setConfirmDel(active.id); }} className="hover:text-red-400">
+                    🗑<span className="hidden sm:inline"> Hapus</span>
+                  </button>
+                </>
+              )}
+              {owner && (
+                <a href="/ai/usage" className="rounded-lg border border-zinc-800 px-2 py-1 font-semibold hover:border-zinc-600 hover:text-zinc-200" title="Pemakaian AI (khusus pemilik)">
+                  📊<span className="hidden sm:inline"> Usage</span>
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setFocus((v) => !v)}
+                title={focus ? "Keluar dari layar penuh (Esc)" : "Layar penuh"}
+                aria-pressed={focus}
+                className={`rounded-lg border px-2 py-1 font-semibold ${focus ? "border-orange-500/40 bg-orange-500/10 text-orange-400" : "border-zinc-800 hover:border-zinc-600 hover:text-zinc-200"}`}
+              >
+                {focus ? "✕" : "⛶"}
+                <span className="hidden sm:inline">{focus ? " Keluar" : " Layar penuh"}</span>
+              </button>
             </span>
-            <span>
-              <span className="hidden sm:inline">✨ Buat Karakter AI</span>
-              <span className="sm:hidden">＋</span>
-            </span>
-            <span className="mkchar-new hidden sm:inline">BARU</span>
-          </button>
-          <span className="mkchar-tip hidden lg:inline">Bikin AI versimu! 👀</span>
-          <span className="hidden truncate font-semibold md:inline">{view === "chars" ? "Karakter AI" : (active?.title ?? "Chat baru")}</span>
-          <span className="ml-auto flex shrink-0 items-center gap-3 text-[12px] text-zinc-500">
-            {active && view === "chat" && (
-              <>
-                <button type="button" onClick={() => { setSideOpen(true); setEditing(active.id); }} className="hover:text-zinc-200">
-                  ✎<span className="hidden sm:inline"> Ganti nama</span>
-                </button>
-                <button type="button" onClick={() => { setSideOpen(true); setConfirmDel(active.id); }} className="hover:text-red-400">
-                  🗑<span className="hidden sm:inline"> Hapus</span>
-                </button>
-              </>
-            )}
-            {owner && (
-              <a href="/ai/usage" className="rounded-lg border border-zinc-800 px-2 py-1 font-semibold hover:border-zinc-600 hover:text-zinc-200" title="Pemakaian AI (khusus pemilik)">
-                📊<span className="hidden sm:inline"> Usage</span>
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={() => setFocus((v) => !v)}
-              title={focus ? "Keluar dari layar penuh (Esc)" : "Layar penuh"}
-              aria-pressed={focus}
-              className={`rounded-lg border px-2 py-1 font-semibold ${focus ? "border-orange-500/40 bg-orange-500/10 text-orange-400" : "border-zinc-800 hover:border-zinc-600 hover:text-zinc-200"}`}
-            >
-              {focus ? "✕" : "⛶"}
-              <span className="hidden sm:inline">{focus ? " Keluar" : " Layar penuh"}</span>
-            </button>
-          </span>
+          </FitRow>
         </header>
 
         {setupError && <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12.5px] text-amber-400">{setupError}</div>}
@@ -1184,7 +1204,7 @@ export default function AiChat({
             }}
           />
         ) : msgs.length === 0 && !loadingMsgs && cowork ? (
-          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-4 text-center sm:p-6" style={{ justifyContent: "safe center" }}>
             <div className="relative">
               <HeroArt hero={hero(model)} size={104} title={hero(model)} />
               <span className="absolute -right-3 top-2 animate-bounce text-[26px]">💼</span>
@@ -1299,7 +1319,7 @@ export default function AiChat({
             <div className="mx-auto mt-4 w-full max-w-[760px]">{composer}</div>
           </div>
         ) : msgs.length === 0 && !loadingMsgs ? (
-          <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-4 text-center sm:p-6" style={{ justifyContent: "safe center" }}>
             <HeroArt hero={hero(model)} size={92} title={hero(model)} />
             <h2 className="mt-2 font-display text-[22px] font-bold">Halo {firstName}, mau ngobrol apa?</h2>
             <button type="button" onClick={() => setView("chars")} className="mt-1 text-[12px] font-semibold text-orange-400 hover:underline">

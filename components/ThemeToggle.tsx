@@ -17,7 +17,8 @@ export default function ThemeToggle({ initial }: { initial: "light" | "dark" }) 
       title={next === "light" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
       aria-label={next === "light" ? "Ganti ke mode terang" : "Ganti ke mode gelap"}
     >
-      {theme === "dark" ? "☀️ Terang" : "🌙 Gelap"}
+      {theme === "dark" ? "☀️" : "🌙"}
+      <span className="hidden sm:inline"> {theme === "dark" ? "Terang" : "Gelap"}</span>
     </button>
   );
 }
