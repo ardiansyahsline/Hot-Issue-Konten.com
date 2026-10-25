@@ -169,10 +169,13 @@ export async function POST(req: NextRequest) {
     const cfg = aiConfig();
     if (!cfg.ok) return void (await saveError("AI belum disetel. Minta admin melengkapi pengaturan AI dulu ya."));
 
+    // timeline terbaru: editan user di body (belum tentu sudah tersimpan) atau dari database
+    const tlRaw = body.timeline && typeof body.timeline === "object" ? body.timeline : project.timeline && typeof project.timeline === "object" ? project.timeline : null;
+
     // 3) konteks: riwayat, SFX tambahan, bank suara, musik, katalog model — diambil bersamaan
-    const [histRes, extraSfx, voices, music, catalog, health] = await Promise.all([
+    const [histRes, sfx, voices, music, catalog, health] = await Promise.all([
       supabase.from("studio_messages").select("role, content, attachments, error").eq("project_id", project.id).order("id", { ascending: false }).limit(HISTORY + 1),
-      loadExtraSfx(supabase),
+      loadExtraSfx(supabase, usedSfxIds(tlRaw)),
       loadVoices(supabase),
       loadMusic(supabase, user.id),
       listCatalog(),
@@ -180,9 +183,7 @@ export async function POST(req: NextRequest) {
     ]);
     setVisionCatalog(catalog.vision);
 
-    // timeline terbaru: editan user di body (belum tentu sudah tersimpan) atau dari database
-    const tlRaw = body.timeline && typeof body.timeline === "object" ? body.timeline : project.timeline && typeof project.timeline === "object" ? project.timeline : null;
-    const current: Timeline | null = tlRaw ? normalizeTimeline(tlRaw, { extraSfx }) : null;
+    const current: Timeline | null = tlRaw ? normalizeTimeline(tlRaw, { extraSfx: sfx.allow }) : null;
 
     // riwayat (tanpa pesan error); pesan user terakhir = pesan ini (dibangun ulang di bawah supaya bisa membawa gambar)
     const rows = ((histRes.data ?? []) as Row[]).reverse().filter((m) => !m.error && (m.content || m.attachments?.length));
@@ -242,7 +243,7 @@ export async function POST(req: NextRequest) {
     // 5) susun pesan
     const userName = profile?.full_name || user.email.split("@")[0] || "anggota tim";
     const dAttach: DirectorAttachment[] = attachments.map((a) => ({ kind: a.kind, name: a.name, src: storageSrc(a.path) }));
-    const session = directorSession({ name: userName, timeline: current, attachments: dAttach, extraSfx, voices, music, notes });
+    const session = directorSession({ name: userName, timeline: current, attachments: dAttach, extraSfx: sfx.list, voices, music, notes });
     const fixed = [DIRECTOR_RULES, directorCatalog(), personaPrompt(DIRECTOR_HERO)].join("\n\n");
     const attachNote = (list: Attach[] | null | undefined) => (list?.length ? `\n[lampiran: ${list.map((a) => `${a.name} (${a.kind})`).join(", ")}]` : "");
     const hist: Msg[] = prevRows.map((m) => ({ role: m.role, content: (m.role === "assistant" ? historyText(m.content ?? "") : (m.content ?? "").slice(0, 3000)) + attachNote(m.attachments) }));
@@ -331,7 +332,7 @@ export async function POST(req: NextRequest) {
         sent = vis.length;
       }
     };
-    let cut = false;
+    let cut = !!opened.cut;
     try {
       full = opened.first.replace(/\u001e/g, "");
       push(false);
@@ -340,6 +341,7 @@ export async function POST(req: NextRequest) {
           full += ev.piece.replace(/\u001e/g, "");
           push(false);
         }
+        if (ev.cut) cut = true;
         if (ev.error) {
           cut = true;
           break;
@@ -356,9 +358,12 @@ export async function POST(req: NextRequest) {
     if (!full.trim()) return void (await saveError(`${DIRECTOR_HERO} belum sempat menjawab. Coba kirim lagi ya.`, usedModel));
 
     step("check", "run");
-    let parsed = parseDirector(full, { extraSfx });
-    // JSON rencana rusak / terpotong -> minta mesin memperbaikinya sekali
-    if (parsed.broken && !upstreamAbort.signal.aborted) {
+    let parsed = parseDirector(full, { extraSfx: sfx.allow });
+    // jawaban terpotong (koneksi putus / batas panjang jawaban / blok rencana belum ditutup) -> rencana rusak TIDAK diperbaiki
+    // & tidak disimpan: hasil "perbaikan" cuma berisi adegan sebelum potongan, saat revisi adegan lama sesudahnya ikut terhapus
+    const truncated = cut || parsed.partial;
+    // JSON rencana rusak (bloknya lengkap) -> minta mesin memperbaikinya sekali
+    if (parsed.broken && !truncated && !upstreamAbort.signal.aborted) {
       const fixedJson = await repairJson(parsed.broken, [usedModel, ...candidates.filter((m) => m !== usedModel && m !== "auto")][0], genDeadline);
       if (fixedJson) {
         const idx = full.lastIndexOf(parsed.broken);
@@ -368,7 +373,7 @@ export async function POST(req: NextRequest) {
           if (!after.startsWith("```")) after = `\`\`\`${after}`;
           const opener = before.match(/```[ \t]*[a-z]*[^\n]*\n?$/i);
           full = `${opener && opener.index !== undefined ? before.slice(0, opener.index) : before}\`\`\`studio\n${fixedJson}\n${after}`;
-          parsed = parseDirector(full, { extraSfx });
+          parsed = parseDirector(full, { extraSfx: sfx.allow });
         }
       }
     }
@@ -384,7 +389,13 @@ export async function POST(req: NextRequest) {
       planSent = true;
     }
     if (parsed.choice) emit({ t: "ask", choice: parsed.choice });
-    if (parsed.broken && !planSent) emit({ t: "error", message: "Rencananya rusak waktu ditulis. Coba minta lagi ya, mis. \"ulang rencananya\"." });
+    if (parsed.broken && !planSent)
+      emit({
+        t: "error",
+        message: truncated
+          ? "Rencananya terpotong waktu ditulis, jadi belum dipakai (timeline tidak diubah). Coba minta lagi ya, mis. \"ulang rencananya\"."
+          : "Rencananya rusak waktu ditulis. Coba minta lagi ya, mis. \"ulang rencananya\".",
+      });
     else if (cut && !planSent && !parsed.choice) emit({ t: "error", message: "Jawabannya terpotong. Coba kirim lagi ya." });
     else if (!planSent && !parsed.choice && !parsed.prose) emit({ t: "error", message: `${DIRECTOR_HERO} belum sempat menjawab. Coba kirim lagi ya.` });
     await saveAssistant(full, usedModel);
@@ -445,6 +456,7 @@ export async function POST(req: NextRequest) {
     const events = sse(res.body);
     let first = "";
     let why = "";
+    let cut = false;
     try {
       for (;;) {
         const { value, done } = await events.next();
@@ -454,6 +466,7 @@ export async function POST(req: NextRequest) {
           break;
         }
         if (value.piece) first += value.piece;
+        if (value.cut) cut = true;
         if (first.trim().length >= 40) break;
       }
     } catch {
@@ -467,7 +480,8 @@ export async function POST(req: NextRequest) {
       // sudah mulai menjawab: batas waktu berikutnya = batas akhir jawaban
       clearTimeout(timer);
       timer = setTimeout(() => ac.abort(), Math.max(1000, t0 + GEN_DEADLINE_MS - Date.now()));
-      return { ok: true, model, events, first, release };
+      // error / batas panjang yang sudah terbaca di potongan pertama tetap dihitung terpotong
+      return { ok: true, model, events, first, release, cut: cut || !!why };
     }
     try {
       await events.return(undefined);
@@ -492,7 +506,7 @@ export async function POST(req: NextRequest) {
           model,
           stream: false,
           messages: [
-            { role: "system", content: "Kamu merapikan JSON yang rusak. Kembalikan JSON valid saja — tanpa penjelasan, tanpa blok kode. Jangan ubah isinya, hanya perbaiki penulisan (koma, kurung, tanda kutip). Kalau terpotong, buang bagian terakhir yang tidak lengkap lalu tutup semua kurung dengan benar." },
+            { role: "system", content: "Kamu merapikan JSON yang rusak. Kembalikan JSON valid saja — tanpa penjelasan, tanpa blok kode. Jangan ubah isinya, hanya perbaiki penulisan (koma, kurung, tanda kutip). Jangan membuang adegan atau bagian mana pun." },
             { role: "user", content: `Kembalikan JSON valid saja:\n${broken.slice(0, 60_000)}` },
           ],
         }),
@@ -516,8 +530,9 @@ export async function POST(req: NextRequest) {
   }
 }
 
-type SseEvent = { piece?: string; error?: string };
-type Opened = { model: string; events: AsyncGenerator<SseEvent>; first: string; release: () => void };
+/** cut = jawaban berhenti karena batas panjang (finish_reason "length") — sisanya tidak ikut terkirim */
+type SseEvent = { piece?: string; error?: string; cut?: boolean };
+type Opened = { model: string; events: AsyncGenerator<SseEvent>; first: string; release: () => void; cut?: boolean };
 type Failed = { model: string; why: string; status?: number; tooBig?: boolean; noCache?: boolean; fatal?: string };
 
 /** baca aliran SSE format OpenAI -> potongan teks / error */
@@ -541,6 +556,7 @@ async function* sse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> 
           const j = JSON.parse(data);
           const piece: string = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content ?? "";
           if (piece) yield { piece };
+          if (/^(length|max_tokens)$/.test(String(j.choices?.[0]?.finish_reason ?? ""))) yield { cut: true };
           if (j.error) yield { error: String(j.error.message ?? j.error) };
         } catch {
           // baris bukan JSON — abaikan
@@ -574,11 +590,16 @@ function tidy(list: Msg[]): Msg[] {
   return out;
 }
 
-/** gambar lampiran untuk mesin yang bisa melihat: ≤ 4 MB dikirim langsung (data URL), lebih besar pakai signed URL 1 jam */
+/**
+ * gambar lampiran untuk mesin yang bisa melihat: ≤ 4 MB dikirim langsung (data URL), lebih besar pakai signed URL 1 jam.
+ * Ukuran dicek dulu lewat info file — file besar (bucket boleh sampai 200 MB) tidak diunduh ke memori.
+ */
 async function imageUrl(db: Db, p: string): Promise<string | null> {
   const bucket = db.storage.from(STUDIO_BUCKET);
   try {
-    const { data } = await bucket.download(p);
+    const { data: info } = await bucket.info(p);
+    const size = Number(info?.size ?? info?.metadata?.size);
+    const { data } = Number.isFinite(size) && size <= MAX_IMAGE_BYTES ? await bucket.download(p) : { data: null };
     if (data && data.size <= MAX_IMAGE_BYTES) {
       const type = data.type && data.type.startsWith("image/") && data.type !== "image/svg+xml" ? data.type : /\.png$/i.test(p) ? "image/png" : /\.webp$/i.test(p) ? "image/webp" : /\.gif$/i.test(p) ? "image/gif" : "image/jpeg";
       return `data:${type};base64,${Buffer.from(await data.arrayBuffer()).toString("base64")}`;
@@ -592,27 +613,60 @@ async function imageUrl(db: Db, p: string): Promise<string | null> {
   }
 }
 
-/** SFX tambahan (Freesound CC0 / Sonniss lokal) dari tabel studio_sfx. Tabel belum ada -> kosong */
-async function loadExtraSfx(db: Db): Promise<SfxMeta[]> {
-  try {
-    const { data, error } = await db.from("studio_sfx").select("id, path, cat, tags, dur, lufs, tp, hit, peak, use_for").limit(300);
-    if (error || !data) return [];
-    return (data as Record<string, unknown>[]).map((r) => ({
-      id: String(r.id),
-      file: String(r.path ?? ""),
-      cat: String(r.cat ?? "ui"),
-      tags: Array.isArray(r.tags) ? r.tags.map(String) : [],
-      dur: Number(r.dur) || 1,
-      lufs: Number(r.lufs) || -20,
-      tp: Number(r.tp) || -3,
-      hit: Number(r.hit) || 0,
-      peak: Number(r.peak) || 0,
-      use: String(r.use_for ?? ""),
-      src: storageSrc(String(r.path ?? "")),
-    }));
-  } catch {
-    return [];
+const SFX_LIMIT = 500; // sama dengan /api/studio/catalog: 500 SFX tambahan tertua (urut created_at)
+const SFX_ID = /^[a-z0-9][a-z0-9-]{1,60}$/; // sama dengan cek kolom studio_sfx.id
+
+/** id SFX yang dipakai timeline mentah (editan user / database) — dicari di studio_sfx supaya tidak ikut terbuang saat dinormalisasi */
+function usedSfxIds(raw: unknown): string[] {
+  const ids = new Set<string>();
+  const scenes = raw && typeof raw === "object" ? (raw as { scenes?: unknown }).scenes : null;
+  for (const s of Array.isArray(scenes) ? scenes : []) {
+    const cues = s && typeof s === "object" ? (s as { sfx?: unknown }).sfx : null;
+    for (const c of Array.isArray(cues) ? cues : []) {
+      const id = c && typeof c === "object" ? (c as { id?: unknown }).id : c;
+      if (typeof id === "string" && SFX_ID.test(id.trim())) ids.add(id.trim());
+    }
   }
+  return [...ids].slice(0, 100);
+}
+
+/**
+ * SFX tambahan (Freesound CC0 / Sonniss lokal) dari tabel studio_sfx. Tabel belum ada -> kosong.
+ * list = 500 tertua (urutan & batas sama dengan katalog editor) — sumber daftar SFX TAMBAHAN di prompt.
+ * allow = list + SFX tambahan yang sudah dipakai timeline sekarang — id yang boleh lolos normalisasi (timeline user & jawaban AI).
+ */
+async function loadExtraSfx(db: Db, used: string[]): Promise<{ list: SfxMeta[]; allow: SfxMeta[] }> {
+  const cols = "id, path, cat, tags, dur, lufs, tp, hit, peak, use_for";
+  try {
+    const [all, usedRes] = await Promise.all([
+      db.from("studio_sfx").select(cols).order("created_at", { ascending: true }).limit(SFX_LIMIT),
+      used.length ? db.from("studio_sfx").select(cols).in("id", used) : null,
+    ]);
+    if (all.error || !all.data) return { list: [], allow: [] };
+    const list = sfxRows(all.data);
+    const have = new Set(list.map((s) => s.id));
+    const more = usedRes && !usedRes.error && usedRes.data ? sfxRows(usedRes.data).filter((s) => !have.has(s.id)) : [];
+    return { list, allow: more.length ? [...list, ...more] : list };
+  } catch {
+    return { list: [], allow: [] };
+  }
+}
+
+/** baris studio_sfx -> SfxMeta */
+function sfxRows(data: unknown): SfxMeta[] {
+  return (data as Record<string, unknown>[]).map((r) => ({
+    id: String(r.id),
+    file: String(r.path ?? ""),
+    cat: String(r.cat ?? "ui"),
+    tags: Array.isArray(r.tags) ? r.tags.map(String) : [],
+    dur: Number(r.dur) || 1,
+    lufs: Number(r.lufs) || -20,
+    tp: Number(r.tp) || -3,
+    hit: Number(r.hit) || 0,
+    peak: Number(r.peak) || 0,
+    use: String(r.use_for ?? ""),
+    src: storageSrc(String(r.path ?? "")),
+  }));
 }
 
 /** bank suara yang sudah siap dipakai */
