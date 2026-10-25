@@ -47,7 +47,7 @@ function usePendingVr(initial: number, path: string) {
   return n;
 }
 
-export default function Nav({ role, pendingVr = 0 }: { role: string | null; pendingVr?: number }) {
+export default function Nav({ role, pendingVr = 0, studio = false }: { role: string | null; pendingVr?: number; studio?: boolean }) {
   const path = usePathname();
   const vrPending = usePendingVr(pendingVr, path);
   // icon + short = tampilan HP (semua menu kelihatan sebagai ikon + label kecil, tanpa geser)
@@ -58,7 +58,8 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
     { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: true },
     { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: true },
     { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: true },
-    { href: "/remotion", label: "🎞️ Remotion", icon: "🎞️", short: "Studio", show: role === "admin" },
+    // Studio: admin, atau user yang diberi akses admin (dihitung di server oleh layout)
+    { href: "/remotion", label: "🎬 Studio", icon: "🎬", short: "Studio", show: role === "admin" || studio },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
   // pemutar musik cukup SATU di halaman (kalau dua, perintah "putar" diterima dua pemutar -> suara dobel):

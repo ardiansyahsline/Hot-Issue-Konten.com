@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { grantStudioAccess, revokeStudioAccess, type StudioState } from "./studioActions";
 
-export type StudioMember = { id: string; name: string; email: string | null; since: string; by: string; admin: boolean };
+export type StudioMember = { id: string; name: string; email: string | null; since: string; by: string | null; admin: boolean };
 export type StudioCandidate = { id: string; name: string; email: string | null };
 export type StudioLogItem = { id: number; action: "grant" | "revoke"; user: string; by: string; at: string };
 
@@ -46,7 +46,9 @@ export default function StudioAccess({
     });
   };
 
-  const grant = () => picked && run("grant", () => grantStudioAccess(picked), () => setPick(""));
+  const grant = () => {
+    if (picked) run("grant", () => grantStudioAccess(picked), () => setPick(""));
+  };
   const revoke = (m: StudioMember) => {
     if (!confirm(`Cabut akses Studio untuk ${m.name}?`)) return;
     run(m.id, () => revokeStudioAccess(m.id));
@@ -79,11 +81,16 @@ export default function StudioAccess({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
                       <span className="min-w-0 break-words">{m.name}</span>
-                      {m.admin && <span className="badge bg-orange-500/10 text-orange-400 ring-orange-500/30">sudah admin</span>}
+                      {m.admin && (
+                        <span className="badge bg-orange-500/10 text-orange-400 ring-orange-500/30" title="Sudah jadi admin. Cabut supaya kuota kembali.">
+                          sudah admin
+                        </span>
+                      )}
                     </div>
                     {m.email && m.email !== m.name && <div className="break-all text-xs text-zinc-400">{m.email}</div>}
                     <div className="mt-0.5 text-[11px] text-zinc-500">
-                      Sejak {m.since} · oleh {m.by}
+                      Sejak {m.since}
+                      {m.by && ` · oleh ${m.by}`}
                     </div>
                   </div>
                   <button

@@ -54,19 +54,20 @@ async function hasRow({ supabase, user }: StudioCtx) {
   }
 }
 
+/** admin selalu boleh; selain itu harus ada barisnya. Kunci cache = objek ctx (sama selama satu request) */
+const allowed = cache(async (ctx: StudioCtx) => ctx.profile?.role === "admin" || hasRow(ctx));
+
 /** Boleh pakai Studio? (admin, atau diberi akses). Di-cache per request. */
 export const canUseStudio = cache(async (): Promise<boolean> => {
   const ctx = await studioCtx();
-  if (!ctx) return false;
-  if (ctx.profile?.role === "admin") return true;
-  return hasRow(ctx);
+  return ctx ? allowed(ctx) : false;
 });
 
 /** Untuk halaman: belum login -> /login, tidak punya akses -> beranda */
 export async function requireStudio(): Promise<StudioCtx> {
   const ctx = await studioCtx();
   if (!ctx) redirect("/login");
-  if (!(await canUseStudio())) redirect("/");
+  if (!(await allowed(ctx))) redirect("/");
   return ctx;
 }
 
@@ -86,12 +87,12 @@ export async function studioGuard(): Promise<({ ok: true } & StudioCtx) | { ok: 
     return { ok: false, res: deny(503, "Layanan login sedang bermasalah. Coba lagi sebentar.") };
   }
   if (!ctx) return { ok: false, res: deny(401, "Belum login") };
-  if (!(await canUseStudio())) return { ok: false, res: deny(403, "Studio hanya untuk admin & user yang diberi akses.") };
+  if (!(await allowed(ctx))) return { ok: false, res: deny(403, "Studio hanya untuk admin & user yang diberi akses.") };
   return { ok: true, ...ctx };
 }
 
 /** Error Supabase seputar akses Studio -> kalimat awam */
-export function studioErrorText(e: { code?: string; message?: string } | null | undefined): string {
+export function studioErrorText(e: { code?: string; message?: string } | null | undefined, fallback = "Gagal menyimpan. Coba lagi sebentar."): string {
   const code = e?.code ?? "";
   const msg = e?.message ?? "";
   // pesan dari trigger studio_access_limit
@@ -102,5 +103,5 @@ export function studioErrorText(e: { code?: string; message?: string } | null | 
     return "Jalankan supabase/migration-20-studio.sql dulu di Supabase.";
   if (code === "23505") return "User ini sudah punya akses Studio.";
   if (code === "23503") return "User tidak ditemukan. Muat ulang halaman.";
-  return "Gagal menyimpan. Coba lagi sebentar.";
+  return fallback;
 }

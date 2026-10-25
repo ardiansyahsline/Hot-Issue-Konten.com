@@ -2,13 +2,49 @@ import { requireAdmin } from "@/lib/auth";
 import type { Profile } from "@/lib/types";
 import { fmtDate } from "@/lib/utils";
 import { ROLES, isRole } from "@/lib/roles";
+import { STUDIO_MAX, studioErrorText } from "@/lib/studio/access.server";
 import { CreateUserForm, DeleteUserButton, ResetPasswordForm, RoleSelect } from "./AdminForms";
+import StudioAccess, { type StudioCandidate, type StudioLogItem, type StudioMember } from "./StudioAccess";
+
+type AccessRow = { user_id: string; granted_by: string | null; granted_at: string };
+type LogRow = { id: number; user_id: string | null; user_name: string | null; action: "grant" | "revoke"; by_id: string | null; by_name: string | null; at: string };
 
 export default async function AdminPage() {
   const { supabase, user } = await requireAdmin();
-  const { data } = await supabase.from("profiles").select("*").order("created_at");
+  const [{ data }, acc, logs] = await Promise.all([
+    supabase.from("profiles").select("*").order("created_at"),
+    supabase.from("studio_access").select("user_id, granted_by, granted_at").order("granted_at"),
+    supabase.from("studio_access_log").select("id, user_id, user_name, action, by_id, by_name, at").order("at", { ascending: false }).limit(20),
+  ]);
   const profiles = (data ?? []) as Profile[];
   const hasServiceKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+  // Akses Studio: siapa saja yang boleh, kandidat (non-admin yang belum punya), dan log terakhir
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+  const nameOf = (id: string | null) => {
+    const p = id ? byId.get(id) : undefined;
+    return p?.full_name?.trim() || p?.email || "User dihapus";
+  };
+  const members: StudioMember[] = ((acc.data ?? []) as AccessRow[]).map((r) => ({
+    id: r.user_id,
+    name: nameOf(r.user_id),
+    email: byId.get(r.user_id)?.email ?? null,
+    since: fmtDate(r.granted_at),
+    by: r.granted_by ? nameOf(r.granted_by) : null,
+    admin: byId.get(r.user_id)?.role === "admin",
+  }));
+  const granted = new Set(members.map((m) => m.id));
+  const candidates: StudioCandidate[] = profiles
+    .filter((p) => p.role !== "admin" && !granted.has(p.id))
+    .map((p) => ({ id: p.id, name: p.full_name?.trim() || p.email || "Tanpa nama", email: p.email }));
+  const studioLog: StudioLogItem[] = ((logs.data ?? []) as LogRow[]).map((l) => ({
+    id: l.id,
+    action: l.action,
+    user: l.user_name || nameOf(l.user_id),
+    by: l.by_name || nameOf(l.by_id),
+    at: fmtDate(l.at),
+  }));
+  const studioSetup = acc.error ? studioErrorText(acc.error, "Data akses Studio gagal dimuat. Coba muat ulang halaman.") : null;
 
   return (
     <div className="space-y-5">
@@ -72,6 +108,8 @@ export default async function AdminPage() {
           </tbody>
         </table>
       </div>
+
+      <StudioAccess members={members} candidates={candidates} log={studioLog} max={STUDIO_MAX} setup={studioSetup} />
     </div>
   );
 }
