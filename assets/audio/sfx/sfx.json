@@ -1,0 +1,691 @@
+[
+  {
+    "id": "ai-magic",
+    "file": "ai-magic.mp3",
+    "kategori": "magic",
+    "tags": [
+      "ai",
+      "magis",
+      "sparkle"
+    ],
+    "durasi_detik": 3.22,
+    "lufs": -20.2,
+    "true_peak_db": -3.1,
+    "dipakai_untuk": "AI mulai bekerja / Train your AI hasil tipe",
+    "sumber_pack": "CB_Sounddesign - Applicable Sounds - Organic UI and Building Games SFX",
+    "file_asli": "GAMEMisc_Magic Creation 23_CB Sounddesign_APPlicable Sounds.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ambience-gelap",
+    "file": "ambience-gelap.mp3",
+    "kategori": "ambience",
+    "tags": [
+      "ambience",
+      "drone",
+      "gelap",
+      "tegang"
+    ],
+    "durasi_detik": 20.04,
+    "lufs": -20.2,
+    "true_peak_db": -7.3,
+    "dipakai_untuk": "Latar hook (pelan, di bawah musik)",
+    "sumber_pack": "Cinematic Sound Design - Sci-Fi Drones",
+    "file_asli": "Dark Industrial Ambience.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "bass-drop-cepat",
+    "file": "bass-drop-cepat.mp3",
+    "kategori": "bass-drop",
+    "tags": [
+      "bass",
+      "drop",
+      "cepat"
+    ],
+    "durasi_detik": 2.16,
+    "lufs": -13.7,
+    "true_peak_db": -5.2,
+    "dipakai_untuk": "Angka/judul jatuh, beat drop singkat",
+    "sumber_pack": "344 Audio - Bass Drops & Downers Vol. 1",
+    "file_asli": "DSGNBass_Bass Drop & Downer Fast 16_344 Audio_Bass Drops & Downers.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "bass-drop-jumpstart",
+    "file": "bass-drop-jumpstart.mp3",
+    "kategori": "bass-drop",
+    "tags": [
+      "bass",
+      "drop",
+      "jump"
+    ],
+    "durasi_detik": 3.74,
+    "lufs": -10.8,
+    "true_peak_db": -3.1,
+    "dipakai_untuk": "Awal montage / kick-off",
+    "sumber_pack": "344 Audio - Bass Drops & Downers Vol. 3",
+    "file_asli": "DSGNBass_Jump Start Drop 3_344 Audio_Bass Drops and Downers Vol 3.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "bass-drop-sedang",
+    "file": "bass-drop-sedang.mp3",
+    "kategori": "bass-drop",
+    "tags": [
+      "bass",
+      "drop",
+      "sedang"
+    ],
+    "durasi_detik": 4.51,
+    "lufs": -14.5,
+    "true_peak_db": -4.4,
+    "dipakai_untuk": "Drop sebelum babak baru",
+    "sumber_pack": "344 Audio - Bass Drops & Downers Vol. 1",
+    "file_asli": "DSGNBass_Bass Drop & Downer Medium 04_344 Audio_Bass Drops & Downers.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "boom-trailer-1",
+    "file": "boom-trailer-1.mp3",
+    "kategori": "boom",
+    "tags": [
+      "boom",
+      "trailer",
+      "sinematik",
+      "berat"
+    ],
+    "durasi_detik": 8.04,
+    "lufs": -7.8,
+    "true_peak_db": -1.2,
+    "dipakai_untuk": "Ketukan berat di reveal & outro",
+    "sumber_pack": "Federico Soler - Effective Trailer Booms Vol. 2",
+    "file_asli": "EffectiveTrailer_Booms_Vol2_011.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "boom-trailer-2",
+    "file": "boom-trailer-2.mp3",
+    "kategori": "boom",
+    "tags": [
+      "boom",
+      "trailer",
+      "sinematik"
+    ],
+    "durasi_detik": 8.04,
+    "lufs": -17.6,
+    "true_peak_db": -1.3,
+    "dipakai_untuk": "Aksen besar di pergantian babak",
+    "sumber_pack": "Federico Soler - Effective Trailer Booms Vol. 2",
+    "file_asli": "EffectiveTrailer_Booms_Vol2_075.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "boom-trailer-3",
+    "file": "boom-trailer-3.mp3",
+    "kategori": "boom",
+    "tags": [
+      "boom",
+      "trailer",
+      "sinematik"
+    ],
+    "durasi_detik": 8.04,
+    "lufs": -12.2,
+    "true_peak_db": -1.2,
+    "dipakai_untuk": "Aksen besar / penutup",
+    "sumber_pack": "Federico Soler - Effective Trailer Booms Vol. 2",
+    "file_asli": "EffectiveTrailer_Booms_Vol2_214.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "braam-epik-1",
+    "file": "braam-epik-1.mp3",
+    "kategori": "braam",
+    "tags": [
+      "braam",
+      "horn",
+      "epik",
+      "gelap"
+    ],
+    "durasi_detik": 8.04,
+    "lufs": -22.0,
+    "true_peak_db": -9.8,
+    "dipakai_untuk": "Reveal logo, pembuka trailer",
+    "sumber_pack": "Jake Fielding - Cinematic Horn Braams",
+    "file_asli": "DSGNBram____Cinematic Horn Braam, Epic, Cinematic, Dark, Instrument, Huge-32.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "braam-epik-2",
+    "file": "braam-epik-2.mp3",
+    "kategori": "braam",
+    "tags": [
+      "braam",
+      "horn",
+      "epik",
+      "gelap"
+    ],
+    "durasi_detik": 8.04,
+    "lufs": -15.3,
+    "true_peak_db": -2.6,
+    "dipakai_untuk": "Outro / klimaks",
+    "sumber_pack": "Jake Fielding - Cinematic Horn Braams",
+    "file_asli": "DSGNBram____Cinematic Horn Braam, Epic, Cinematic, Dark, Instrument, Huge-67.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "braam-transisi-gelap",
+    "file": "braam-transisi-gelap.mp3",
+    "kategori": "braam",
+    "tags": [
+      "braam",
+      "transisi",
+      "tegang"
+    ],
+    "durasi_detik": 4.54,
+    "lufs": -17.1,
+    "true_peak_db": -3.2,
+    "dipakai_untuk": "Hook masalah (suasana tegang)",
+    "sumber_pack": "Cinematic Sound Design - Ultra Transitions & Impacts",
+    "file_asli": "Transition Braam Slow Dark Creepy.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "glitch-error",
+    "file": "glitch-error.mp3",
+    "kategori": "glitch",
+    "tags": [
+      "glitch",
+      "error",
+      "masalah"
+    ],
+    "durasi_detik": 5.47,
+    "lufs": -23.2,
+    "true_peak_db": -1.3,
+    "dipakai_untuk": "Hook masalah (data berantakan)",
+    "sumber_pack": "The Noisery - Rich Glitch",
+    "file_asli": "UIGlitch_Designed_Glitch_Corrupted_Data Error_The Noisery_Rich Glitch_06.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "glitch-tinggi",
+    "file": "glitch-tinggi.mp3",
+    "kategori": "glitch",
+    "tags": [
+      "glitch",
+      "digital"
+    ],
+    "durasi_detik": 3.02,
+    "lufs": -22.5,
+    "true_peak_db": -7.0,
+    "dipakai_untuk": "Transisi digital / data",
+    "sumber_pack": "The Noisery - Rich Glitch",
+    "file_asli": "UIGlitch_User interface_Glitch_High_Electronic_The Noisery_Rich Glitch_05.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "impact-chord",
+    "file": "impact-chord.mp3",
+    "kategori": "impact",
+    "tags": [
+      "impact",
+      "chord",
+      "reverb",
+      "epik"
+    ],
+    "durasi_detik": 3.24,
+    "lufs": -19.9,
+    "true_peak_db": -0.0,
+    "dipakai_untuk": "Reveal logo / momen penting",
+    "sumber_pack": "Cinematic Sound Design - Ultra Transitions & Impacts",
+    "file_asli": "Impact Hit Rapid Chord Reverb.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "impact-cut-sweep",
+    "file": "impact-cut-sweep.mp3",
+    "kategori": "impact",
+    "tags": [
+      "impact",
+      "sweep",
+      "tegas"
+    ],
+    "durasi_detik": 2.83,
+    "lufs": -18.3,
+    "true_peak_db": -1.4,
+    "dipakai_untuk": "Judul besar muncul, angka 3D slam",
+    "sumber_pack": "Cinematic Sound Design - Colossal Impacts",
+    "file_asli": "Impact Cut Sweep.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "kertas-balik-halaman",
+    "file": "kertas-balik-halaman.mp3",
+    "kategori": "foley",
+    "tags": [
+      "kertas",
+      "halaman",
+      "laporan"
+    ],
+    "durasi_detik": 0.58,
+    "lufs": -38.3,
+    "true_peak_db": -19.8,
+    "dipakai_untuk": "Laporan/PPT/carousel geser",
+    "sumber_pack": "Cinematic Sound Design - Paper Foley",
+    "file_asli": "Encyclopedia Glossy Page Turn Muted.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "koin-flip",
+    "file": "koin-flip.mp3",
+    "kategori": "koin",
+    "tags": [
+      "koin",
+      "flip"
+    ],
+    "durasi_detik": 0.98,
+    "lufs": -23.7,
+    "true_peak_db": -3.6,
+    "dipakai_untuk": "Detail kecil soal uang/crypto",
+    "sumber_pack": "Cinematic Sound Design - Hybrid Game & UI Elements",
+    "file_asli": "Foley Coin Flip Single Fast.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "koin-ting",
+    "file": "koin-ting.mp3",
+    "kategori": "koin",
+    "tags": [
+      "koin",
+      "uang",
+      "ting"
+    ],
+    "durasi_detik": 1.15,
+    "lufs": -24.1,
+    "true_peak_db": -6.4,
+    "dipakai_untuk": "Payout/saldo/angka uang muncul",
+    "sumber_pack": "Cinematic Sound Design - UI Interaction Elements",
+    "file_asli": "Ting Coins.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "notif-chat",
+    "file": "notif-chat.mp3",
+    "kategori": "ui",
+    "tags": [
+      "notifikasi",
+      "chat",
+      "pesan"
+    ],
+    "durasi_detik": 0.6,
+    "lufs": -21.1,
+    "true_peak_db": -3.9,
+    "dipakai_untuk": "Pesan chat tim masuk",
+    "sumber_pack": "CB_Sounddesign - Applicable Sounds - Organic UI and Building Games SFX",
+    "file_asli": "UIMisc_Kalimba 3 Up_CB Sounddesign_APPlicable Sounds.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "riser-blastoff",
+    "file": "riser-blastoff.mp3",
+    "kategori": "riser",
+    "tags": [
+      "riser",
+      "naik",
+      "tegang",
+      "launch"
+    ],
+    "durasi_detik": 8.78,
+    "lufs": -19.8,
+    "true_peak_db": -6.6,
+    "dipakai_untuk": "Membangun ketegangan sebelum reveal/drop (taruh berakhir tepat di reveal)",
+    "sumber_pack": "344 Audio - Air Designed",
+    "file_asli": "AEROJet_Blast Off Clean_344 Audio_Air Designed.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "sukses-happy",
+    "file": "sukses-happy.mp3",
+    "kategori": "ui",
+    "tags": [
+      "sukses",
+      "ceria",
+      "game"
+    ],
+    "durasi_detik": 0.91,
+    "lufs": -17.0,
+    "true_peak_db": -4.5,
+    "dipakai_untuk": "Selesai/berhasil, Train AI selesai",
+    "sumber_pack": "Cinematic Sound Design - Hybrid Game & UI Elements",
+    "file_asli": "Game Entry Happy Short.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "swoosh-readout",
+    "file": "swoosh-readout.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "ui",
+      "readout",
+      "data"
+    ],
+    "durasi_detik": 2.33,
+    "lufs": -21.8,
+    "true_peak_db": -2.2,
+    "dipakai_untuk": "Panel/angka/dashboard muncul",
+    "sumber_pack": "Cinematic Sound Design - Cartoon & Animation Vol 2",
+    "file_asli": "Cartoon Pull Swoosh Readout.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "trailer-pulse-lambat",
+    "file": "trailer-pulse-lambat.mp3",
+    "kategori": "trailer-pulse",
+    "tags": [
+      "pulse",
+      "trailer",
+      "ritmis",
+      "musik"
+    ],
+    "durasi_detik": 30.02,
+    "lufs": -9.2,
+    "true_peak_db": -0.4,
+    "dipakai_untuk": "Lapisan ritme trailer (bisa jadi musik cadangan)",
+    "sumber_pack": "Federico Soler - Effective Trailer Alarms Vol. 2",
+    "file_asli": "EffectiveTrailer_Alarms_Vol2_HalfNotes_003.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "trailer-pulse-panjang",
+    "file": "trailer-pulse-panjang.mp3",
+    "kategori": "trailer-pulse",
+    "tags": [
+      "pulse",
+      "trailer",
+      "sustain",
+      "musik"
+    ],
+    "durasi_detik": 30.02,
+    "lufs": -12.0,
+    "true_peak_db": -0.9,
+    "dipakai_untuk": "Lapisan sustain trailer (musik cadangan)",
+    "sumber_pack": "Federico Soler - Effective Trailer Alarms Vol. 2",
+    "file_asli": "EffectiveTrailer_Alarms_Vol2_WholeNotes_011.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "trailer-pulse-sedang",
+    "file": "trailer-pulse-sedang.mp3",
+    "kategori": "trailer-pulse",
+    "tags": [
+      "pulse",
+      "trailer",
+      "ritmis",
+      "musik"
+    ],
+    "durasi_detik": 30.02,
+    "lufs": -11.0,
+    "true_peak_db": -1.1,
+    "dipakai_untuk": "Lapisan ritme trailer energik (musik cadangan)",
+    "sumber_pack": "Federico Soler - Effective Trailer Alarms Vol. 2",
+    "file_asli": "EffectiveTrailer_Alarms_Vol2_QuarterNotes_013.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "transisi-shaker-snap",
+    "file": "transisi-shaker-snap.mp3",
+    "kategori": "transisi",
+    "tags": [
+      "snap",
+      "cepat",
+      "perkusi"
+    ],
+    "durasi_detik": 1.49,
+    "lufs": -18.8,
+    "true_peak_db": -2.5,
+    "dipakai_untuk": "Potongan cepat di montage, ikut ketukan",
+    "sumber_pack": "Cinematic Sound Design - Colossal Impacts",
+    "file_asli": "Transition Frantic Shaker Snap.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "transisi-snap-spin",
+    "file": "transisi-snap-spin.mp3",
+    "kategori": "transisi",
+    "tags": [
+      "snap",
+      "spin",
+      "energik"
+    ],
+    "durasi_detik": 3.24,
+    "lufs": -17.2,
+    "true_peak_db": -0.4,
+    "dipakai_untuk": "Pergantian adegan energik, montage",
+    "sumber_pack": "Cinematic Sound Design - Cartoon Impacts",
+    "file_asli": "Vibrato Impact Snap Spin Transition.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-accept-boing",
+    "file": "ui-accept-boing.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "accept",
+      "lucu"
+    ],
+    "durasi_detik": 1.01,
+    "lufs": -16.6,
+    "true_peak_db": -3.8,
+    "dipakai_untuk": "Momen fun / reaksi emoji",
+    "sumber_pack": "Cinematic Sound Design - UI Interaction Elements",
+    "file_asli": "Accept Boing Crunch.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-accept-glassy",
+    "file": "ui-accept-glassy.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "accept",
+      "kaca"
+    ],
+    "durasi_detik": 0.48,
+    "lufs": -22.9,
+    "true_peak_db": -9.7,
+    "dipakai_untuk": "AskCard dipilih / konfirmasi",
+    "sumber_pack": "Cinematic Sound Design - Interface & Infographics",
+    "file_asli": "Interface Accept Glassy Snap.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-arp-twinkle",
+    "file": "ui-arp-twinkle.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "twinkle",
+      "magis"
+    ],
+    "durasi_detik": 1.85,
+    "lufs": -13.8,
+    "true_peak_db": -2.5,
+    "dipakai_untuk": "Hero MBTI muncul, label \"dibantu oleh\"",
+    "sumber_pack": "Cinematic Sound Design - User Interface",
+    "file_asli": "Button Arp Twinkle.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-plucks-happy",
+    "file": "ui-plucks-happy.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "ceria",
+      "pluck"
+    ],
+    "durasi_detik": 0.89,
+    "lufs": -13.8,
+    "true_peak_db": -3.7,
+    "dipakai_untuk": "Hasil AI keluar / sukses kecil",
+    "sumber_pack": "Cinematic Sound Design - User Interface",
+    "file_asli": "Interface Plucks Happy.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-pop",
+    "file": "ui-pop.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "pop",
+      "klik"
+    ],
+    "durasi_detik": 0.67,
+    "lufs": -15.9,
+    "true_peak_db": -1.2,
+    "dipakai_untuk": "Tombol diklik, chip/badge muncul",
+    "sumber_pack": "Cinematic Sound Design - Interface & Infographics",
+    "file_asli": "Interface Pop High Short.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-readout-panjang",
+    "file": "ui-readout-panjang.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "readout",
+      "proses",
+      "berpikir"
+    ],
+    "durasi_detik": 4.42,
+    "lufs": -16.1,
+    "true_peak_db": -3.2,
+    "dipakai_untuk": "Langkah berpikir AI / loading",
+    "sumber_pack": "Cinematic Sound Design - User Interface",
+    "file_asli": "Readout Thin Long.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-scifi-ping",
+    "file": "ui-scifi-ping.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "ping",
+      "scifi"
+    ],
+    "durasi_detik": 0.79,
+    "lufs": -13.6,
+    "true_peak_db": -3.6,
+    "dipakai_untuk": "Notifikasi sistem, hot issue naik",
+    "sumber_pack": "Cinematic Sound Design - System & UI Feedback Elements",
+    "file_asli": "Interface Sci-Fi Ping Down.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "ui-snap",
+    "file": "ui-snap.mp3",
+    "kategori": "ui",
+    "tags": [
+      "ui",
+      "snap",
+      "perkusi"
+    ],
+    "durasi_detik": 0.7,
+    "lufs": -28.4,
+    "true_peak_db": -5.3,
+    "dipakai_untuk": "Elemen kecil masuk, centang",
+    "sumber_pack": "Cinematic Sound Design - Interface & Infographics",
+    "file_asli": "Interface Percussion Snap.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "whoosh-angin",
+    "file": "whoosh-angin.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "transisi",
+      "angin",
+      "udara"
+    ],
+    "durasi_detik": 1.08,
+    "lufs": -28.0,
+    "true_peak_db": -15.3,
+    "dipakai_untuk": "Transisi halus, teks masuk/keluar",
+    "sumber_pack": "344 Audio - Elemental Palette Designed Vol. 1",
+    "file_asli": "WINDDsgn_Wind, Rush, Whoosh, Long x5 01_344 Audio_Elemental Palette Designed Vol 1.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "whoosh-cepat",
+    "file": "whoosh-cepat.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "transisi",
+      "cepat",
+      "ringan",
+      "infografis"
+    ],
+    "durasi_detik": 0.53,
+    "lufs": -17.6,
+    "true_peak_db": -0.3,
+    "dipakai_untuk": "Transisi antar adegan cepat, geser kartu/slide",
+    "sumber_pack": "Cinematic Sound Design - Ultra Transitions & Impacts",
+    "file_asli": "Woosh Sweep Slide Infographics Basic.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "whoosh-confetti",
+    "file": "whoosh-confetti.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "sukses",
+      "perayaan",
+      "ceria"
+    ],
+    "durasi_detik": 2.57,
+    "lufs": -21.9,
+    "true_peak_db": -1.8,
+    "dipakai_untuk": "Momen berhasil / perayaan / hasil keluar",
+    "sumber_pack": "Cinematic Sound Design - Hybrid Game & UI Elements",
+    "file_asli": "Cofetti Whoosh Pluck Spill.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "whoosh-debris",
+    "file": "whoosh-debris.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "transisi",
+      "debris",
+      "sinematik"
+    ],
+    "durasi_detik": 2.4,
+    "lufs": -21.2,
+    "true_peak_db": -1.6,
+    "dipakai_untuk": "Transisi besar sebelum reveal",
+    "sumber_pack": "Cinematic Sound Design - Colossal Impacts",
+    "file_asli": "Woosh Debris.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
+    "id": "whoosh-metal",
+    "file": "whoosh-metal.mp3",
+    "kategori": "whoosh",
+    "tags": [
+      "transisi",
+      "metal",
+      "berat"
+    ],
+    "durasi_detik": 1.25,
+    "lufs": -20.9,
+    "true_peak_db": -1.0,
+    "dipakai_untuk": "Transisi ke adegan serius / mockup HP masuk",
+    "sumber_pack": "344 Audio - Elemental Palette Designed Vol. 1",
+    "file_asli": "METLMisc_Metal, Slow Whoosh, Rattle, Pass By x4 01_344 Audio_Elemental Palette Designed Vol 1.wav",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  }
+]
