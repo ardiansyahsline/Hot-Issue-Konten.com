@@ -25,6 +25,8 @@ export type CharProfile = {
   sop?: string;
   /** nama peran yang dilatihkan (untuk tampilan, tanpa perlu memuat data training) */
   roleLabel?: string;
+  /** ringkasan otomatis terakhir saat disimpan — dipakai untuk mengenali kolom yang diedit manual (tidak ditimpa saat latih ulang) */
+  gen?: { label: string; role: string; style: string; catchphrase: string; rules: string[]; sop: string };
 };
 export type CustomChar = { id: string; name: string; mbti: string; avatar: CharAvatar; profile: CharProfile; created_at?: string };
 export type MemoryKind = "knowledge" | "example" | "correction";

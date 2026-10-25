@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { SMART_HERO } from "@/lib/aiModels";
 import { CHIBI_HAIRS, CHIBI_PROPS, CHIBI_SKINS, GROUPS, MBTI_TYPES, isBuiltinHero, registerCustom, typeGroup, typeInfo, type Prop } from "@/lib/aiPersona";
-import { registerChar, type CharAvatar, type CharProfile, type CustomChar } from "@/lib/customChar";
+import { registerChar, summarize, type CharAvatar, type CharProfile, type CustomChar } from "@/lib/customChar";
 import { CUSTOM_ROLE, QUIZ, QUIZ_QS, ROLES, compileSop, roleOf, scoreQuiz, typeProfile, type RoleQ, type Training } from "@/lib/trainAi";
 import HeroArt from "./HeroArt";
 import TypeScene from "./TypeScene";
@@ -45,6 +45,11 @@ async function toAvatar(file: File): Promise<string> {
 
 type Page = { k: "intro" } | { k: "quiz"; i: number } | { k: "result" } | { k: "role" } | { k: "train"; i: number } | { k: "identity" } | { k: "summary" };
 type Summary = { label: string; role: string; style: string; catchphrase: string; rules: string[]; sop: string };
+/** patokan ringkasan otomatis + peran yang dipakai saat membuatnya */
+type Gen = { sum: Summary; roleKey: string };
+const roleKeyOf = (id: string | undefined, custom: string | undefined) => (id === CUSTOM_ROLE ? `${id}:${(custom ?? "").trim().toLowerCase()}` : (id ?? ""));
+/** pembanding kolom ringkasan (baris kosong / spasi diabaikan) */
+const norm = (v: string | string[]) => JSON.stringify(Array.isArray(v) ? v.map((x) => x.trim()).filter(Boolean) : v.trim());
 
 const btnGhost = "rounded-xl border border-zinc-800 px-3.5 py-2 text-[12.5px] font-bold text-zinc-300 hover:border-zinc-600";
 const label = "text-[11px] font-bold uppercase tracking-wider text-zinc-500";
@@ -94,8 +99,10 @@ export default function CharacterWizard({
     const a = ip?.answers?.[k];
     return typeof a === "string" ? a : "";
   };
-  const [call, setCall] = useState(ip?.call ?? (CALLS.includes(v1Ans("call")) ? v1Ans("call") : CALLS[0]));
-  const [emoji, setEmoji] = useState(ip?.emoji ?? (EMOJIS.includes(v1Ans("emoji")) ? v1Ans("emoji") : EMOJIS[0]));
+  const seedCall = ip?.call ?? (CALLS.includes(v1Ans("call")) ? v1Ans("call") : CALLS[0]);
+  const seedEmoji = ip?.emoji ?? (EMOJIS.includes(v1Ans("emoji")) ? v1Ans("emoji") : EMOJIS[0]);
+  const [call, setCall] = useState(seedCall);
+  const [emoji, setEmoji] = useState(seedEmoji);
   const [sum, setSum] = useState<Summary | null>(
     initial
       ? { label: ip?.label ?? "", role: ip?.role ?? "", style: ip?.style ?? "", catchphrase: ip?.catchphrase ?? "", rules: ip?.rules ?? [], sop: ip?.sop ?? "" }
@@ -108,7 +115,7 @@ export default function CharacterWizard({
   /** jawaban training per peran: ganti peran lalu kembali -> jawaban lama muncul lagi */
   const trainCache = useRef<Record<string, Training>>({});
   /** ringkasan otomatis terakhir — kolom yang sudah diedit user (beda dari versi otomatis) tidak ditimpa saat ringkasan dibuat ulang */
-  const genRef = useRef<Summary | null | undefined>(undefined);
+  const genRef = useRef<Gen | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -186,6 +193,8 @@ export default function CharacterWizard({
     setDirty(true);
   };
 
+  /** jawaban karakter lama + chip yang benar-benar diganti (isian bebas lama tidak tertimpa nilai bawaan chip) */
+  const v1Answers = (): CharProfile["answers"] => ({ ...(ip?.answers ?? {}), ...(call !== seedCall ? { call } : {}), ...(emoji !== seedEmoji ? { emoji } : {}) });
   const buildSummary = (): Summary => {
     const r = role;
     const larangan = r?.questions.filter((q) => q.topic === "larangan").flatMap((q) => training.picks[q.id] ?? []) ?? [];
@@ -193,29 +202,39 @@ export default function CharacterWizard({
       label: typeInfo(type).label,
       // belum pilih peran (edit cepat karakter lama) -> peran, larangan & SOP lama dipertahankan
       role: r ? `${r.name} — ${r.mission}` : sum?.role || "Asisten serba bisa",
-      style: `Panggil user: ${call}; ${emoji}`,
+      // karakter lama tanpa latih ulang: gaya dibuat dengan rumus lamanya (energi, saat user panik, panjang jawaban tetap ada)
+      style: r || v2 || !initial ? `Panggil user: ${call}; ${emoji}` : summarize(nm || initial.name, v1Answers(), type).style,
       catchphrase: sum?.catchphrase ?? "",
       rules: r ? larangan : (sum?.rules ?? []),
       sop: r ? compileSop(r, training) : (sum?.sop ?? ""),
     };
   };
-  // patokan "versi otomatis": karakter Train your AI = hasil hitung dari jawabannya (suntingan manual terdeteksi & dijaga);
-  // karakter lama = isi tersimpan (boleh diperbarui otomatis)
-  if (genRef.current === undefined) genRef.current = !initial ? null : v2 ? buildSummary() : sum;
+  // patokan "versi otomatis" (kolom yang beda dari patokan = diedit manual): karakter Train your AI = ringkasan otomatis yang
+  // ikut tersimpan (gen); karakter lama = hasil rumus lamanya dari jawaban tersimpan
+  if (genRef.current === undefined)
+    genRef.current = !initial
+      ? null
+      : v2
+        ? { sum: ip?.gen ? { ...ip.gen, rules: ip.gen.rules ?? [] } : (sum as Summary), roleKey: roleKeyOf(ip?.roleId, ip?.roleName) }
+        : { sum: { ...summarize(initial.name, ip?.answers ?? {}, initial.mbti), sop: "" }, roleKey: "" };
   const toSummary = () => {
     if (!typeKnown && !storedType) return go("quiz");
     if (dirty || !sum) {
       const fresh = buildSummary();
-      const prev = genRef.current;
+      const key = roleKeyOf(roleId, customRole);
+      const base = genRef.current;
       setSum((s) => {
-        if (!s || !prev) return fresh;
+        if (!s || !base) return fresh;
+        // peran diganti -> peran, larangan & SOP ikut peran baru (suntingan untuk peran lama tidak terbawa)
+        const roleChanged = base.roleKey !== key;
         const out: Summary = { ...fresh };
         for (const k of Object.keys(fresh) as (keyof Summary)[]) {
-          if (JSON.stringify(s[k]) !== JSON.stringify(prev[k])) Object.assign(out, { [k]: s[k] });
+          if (roleChanged && (k === "role" || k === "rules" || k === "sop")) continue;
+          if (norm(s[k]) !== norm(base.sum[k])) Object.assign(out, { [k]: s[k] });
         }
         return out;
       });
-      genRef.current = fresh;
+      genRef.current = { sum: fresh, roleKey: key };
       setDirty(false);
     }
     go("summary");
@@ -266,7 +285,7 @@ export default function CharacterWizard({
       rules: sum.rules.map((r) => r.trim()).filter(Boolean),
     };
     // karakter lama yang hanya diubah nama/tampilan (belum dilatih ulang) tetap versi lama — jawaban lamanya tidak hilang
-    const profile: CharProfile = initial && !v2 && !role ? { ...initial.profile, ...edited } : {
+    const profile: CharProfile = initial && !v2 && !role ? { ...initial.profile, ...edited, answers: v1Answers() } : {
       version: 2,
       answers: {},
       quiz,
@@ -278,6 +297,7 @@ export default function CharacterWizard({
       emoji,
       ...edited,
       sop: sum.sop.trim(),
+      gen: genRef.current?.sum,
     };
     const row = { name: nm, mbti: type, avatar: curAvatar, profile };
     const sel = "id, name, mbti, avatar, profile, created_at";
@@ -435,7 +455,8 @@ export default function CharacterWizard({
                 </div>
               </div>
               {prof && <p className="text-[13px] leading-relaxed text-zinc-300">{prof.desc}</p>}
-              <div className="space-y-2 rounded-xl border border-zinc-800 p-3">
+              {!scored.complete && <p className="rounded-xl border border-dashed border-zinc-800 px-3 py-2 text-[12px] text-zinc-500">Kuis belum lengkap — tipe di atas diambil dari karakter tersimpan / pilihanmu.</p>}
+              <div className={`space-y-2 rounded-xl border border-zinc-800 p-3 ${scored.complete ? "" : "hidden"}`}>
                 {scored.dims.map((d) => {
                   const dim = QUIZ.find((x) => x.dim === d.dim)!;
                   const [la, lb] = dim.letters;
@@ -529,6 +550,9 @@ export default function CharacterWizard({
                         // baru dianggap pilih "peran lain" setelah benar-benar mengetik (sekadar diketuk tidak menghapus jawaban)
                         if (v.trim()) chooseRole(CUSTOM_ROLE);
                       }}
+                      // nama peran sudah ada -> ketuk / Enter memilihnya lagi (jawaban latihannya kembali)
+                      onClick={() => customRole.trim() && roleId !== CUSTOM_ROLE && chooseRole(CUSTOM_ROLE)}
+                      onKeyDown={(e) => e.key === "Enter" && customRole.trim() && roleId !== CUSTOM_ROLE && chooseRole(CUSTOM_ROLE)}
                       maxLength={60}
                       placeholder="Peran lain… mis. Admin keuangan, Social media specialist"
                       className="input py-1.5 text-[13px]"
@@ -594,7 +618,7 @@ export default function CharacterWizard({
                   <div className={label}>Cara memanggil user</div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {CALLS.map((c) => (
-                      <button key={c} type="button" onClick={() => (setCall(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${call === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
+                      <button key={c} type="button" onClick={() => c !== call && (setCall(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${call === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
                         {c.split(" (")[0]}
                       </button>
                     ))}
@@ -604,7 +628,7 @@ export default function CharacterWizard({
                   <div className={label}>Emoji & gaya bahasa</div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {EMOJIS.map((c) => (
-                      <button key={c} type="button" onClick={() => (setEmoji(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${emoji === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
+                      <button key={c} type="button" onClick={() => c !== emoji && (setEmoji(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${emoji === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
                         {c.split(",")[0]}
                       </button>
                     ))}
@@ -703,8 +727,13 @@ export default function CharacterWizard({
                 <select
                   value={type}
                   onChange={(e) => {
-                    setTypeOverride(e.target.value);
-                    setSum((s) => (s ? { ...s, label: typeInfo(e.target.value).label } : s));
+                    const v = e.target.value;
+                    const lab = typeInfo(v).label;
+                    const auto = [genRef.current?.sum.label, typeInfo(type).label];
+                    setTypeOverride(v);
+                    // julukan bawaan ikut tipe baru; julukan ketikan sendiri dipertahankan
+                    setSum((s) => (s ? { ...s, label: auto.includes(s.label) ? lab : s.label } : s));
+                    if (genRef.current) genRef.current = { ...genRef.current, sum: { ...genRef.current.sum, label: lab } };
                   }}
                   className="input py-1.5 text-[13px]"
                 >
@@ -741,7 +770,7 @@ export default function CharacterWizard({
 
         <div className="flex items-center gap-2 border-t border-zinc-800/80 px-4 py-3">
           {step > 0 ? (
-            <button type="button" onClick={() => (setErr(null), setStep((s) => s - 1))} className={btnGhost}>
+            <button type="button" onClick={() => (setErr(null), page.k === "identity" && initial && !v2 && !role ? go("intro") : setStep((s) => s - 1))} className={btnGhost}>
               ← Kembali
             </button>
           ) : (
