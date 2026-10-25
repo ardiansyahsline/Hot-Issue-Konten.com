@@ -72,8 +72,8 @@ export async function removeBackground(src: string): Promise<string | null> {
         }
       }
     res.close?.();
-    // orang tidak terdeteksi (terlalu sedikit) -> anggap gagal
-    if (kept < w * h * 0.03) return null;
+    // orang tidak terdeteksi (terlalu sedikit) atau seluruh foto dianggap orang (kerumunan / latar ramai) -> gagal
+    if (kept < w * h * 0.03 || kept > w * h * 0.8) return null;
     g.putImageData(px, 0, 0);
     const pad = 8;
     minX = Math.max(0, minX - pad);

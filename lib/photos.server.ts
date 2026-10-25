@@ -192,6 +192,90 @@ export async function searchPhotos(qIn: string, nIn = 6, webOnly = false): Promi
   return r;
 }
 
+/* ---------------------------------------------------------------------------------------------------------
+ * Foto TOKOH & foto BERITA untuk desain konten berita (dicari otomatis, tanpa upload):
+ *  - potret Wikipedia/Wikimedia Commons (gratis, tanpa kunci; latarnya polos -> mudah dihapus jadi potongan orang)
+ *  - foto web dari pencarian gambar (Tavily / SerpApi)
+ *  - og:image artikel sumber berita (foto utama berita yang memang dipakai media itu)
+ * --------------------------------------------------------------------------------------------------------- */
+const UA = "CS-Tracker/1.0 (konten.com; foto desain berita)";
+
+async function wikiPortrait(name: string, lang: "id" | "en"): Promise<Photo | null> {
+  const url = `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&generator=search&gsrsearch=${encodeURIComponent(name)}&gsrlimit=1&prop=pageimages|info&piprop=thumbnail|name&pithumbsize=1400&inprop=url`;
+  const j = await getJson(url, { headers: { "User-Agent": UA } });
+  const page = Object.values(obj(obj(j.query).pages))[0] as Record<string, unknown> | undefined;
+  const th = obj(page?.thumbnail);
+  const src = httpsOnly(str(th.source, 600));
+  if (!page || !src) return null;
+  return {
+    id: `w-${lang}-${str(String(page.pageid ?? ""), 20)}`,
+    thumb: src,
+    full: src,
+    page: httpsOnly(str(page.fullurl, 300)) || `https://${lang}.wikipedia.org`,
+    author: "Wikipedia / Wikimedia Commons",
+    alt: str(page.title, 120),
+    provider: "web",
+    license: "Wikimedia Commons · cek lisensi foto",
+    w: Number(th.width) || undefined,
+    h: Number(th.height) || undefined,
+  };
+}
+
+/** foto tokoh publik: potret Wikipedia dulu (paling rapi untuk dipotong), lalu foto web */
+export async function personPhotos(nameIn: string, n = 6): Promise<PhotoResult> {
+  const query = nameIn.replace(/\s+/g, " ").trim().slice(0, 60);
+  if (!query) return { query, source: "none", items: [] };
+  const ck = `person|${query.toLowerCase()}`;
+  const hit = cache.get(ck);
+  if (hit && Date.now() - hit.at < TTL) return hit.r;
+  const [wid, wen, web] = await Promise.all([
+    wikiPortrait(query, "id").catch(() => null),
+    wikiPortrait(query, "en").catch(() => null),
+    searchPhotos(query, n, true).catch(() => null),
+  ]);
+  const seen = new Set<string>();
+  const items = [wid, wen, ...(web?.items ?? [])].filter((p): p is Photo => !!p && !!p.full && !seen.has(p.full) && !!seen.add(p.full)).slice(0, n);
+  const r: PhotoResult = { query, source: items.length ? "web" : "none", items };
+  if (items.length) cache.set(ck, { at: Date.now(), r });
+  return r;
+}
+
+/** og:image / twitter:image dari halaman artikel (foto utama berita) */
+async function ogImage(pageUrl: string): Promise<Photo | null> {
+  const { safeUrl } = await import("./safeUrl.server");
+  const u = await safeUrl(pageUrl);
+  if (!u) return null;
+  const r = await fetch(u, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT), headers: { "User-Agent": "Mozilla/5.0 (compatible; CS-Tracker)", Accept: "text/html" } });
+  if (!r.ok || !(r.headers.get("content-type") ?? "").includes("html")) return null;
+  // cukup bagian <head>
+  const reader = r.body?.getReader();
+  let html = "";
+  const dec = new TextDecoder();
+  while (reader && html.length < 400_000 && !/<\/head>/i.test(html)) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    html += dec.decode(value, { stream: true });
+  }
+  reader?.cancel().catch(() => {});
+  const meta = (key: string) =>
+    html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]*content=["']([^"']+)["']`, "i"))?.[1] ??
+    html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${key}["']`, "i"))?.[1];
+  const raw = meta("og:image") ?? meta("og:image:url") ?? meta("twitter:image");
+  if (!raw) return null;
+  const src = httpsOnly(new URL(raw.replace(/&amp;/g, "&"), u).href);
+  if (!src || /logo|favicon|default|placeholder/i.test(src)) return null;
+  return { id: `og-${host(u.href)}`, thumb: src, full: src, page: u.href, author: host(u.href), alt: str(meta("og:title"), 160), provider: "web", license: WEB_LICENSE };
+}
+
+/** foto utama dari beberapa artikel sumber (maks 5, dicari bareng) */
+export async function newsImages(urls: string[]): Promise<PhotoResult> {
+  const list = [...new Set(urls.filter((x) => /^https:\/\//.test(x)))].slice(0, 5);
+  const got = await Promise.all(list.map((x) => ogImage(x).catch(() => null)));
+  const seen = new Set<string>();
+  const items = got.filter((p): p is Photo => !!p && !seen.has(p.full) && !!seen.add(p.full));
+  return { query: "berita", source: items.length ? "web" : "none", items };
+}
+
 /** Aturan Unsplash: panggil endpoint download saat user mengunduh foto (hanya URL resmi api.unsplash.com) */
 export async function trackUnsplash(downloadLocation: string) {
   const key = env("UNSPLASH_ACCESS_KEY");

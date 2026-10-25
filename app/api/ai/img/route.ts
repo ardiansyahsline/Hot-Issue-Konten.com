@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { getCurrentUser } from "@/lib/auth";
+import { safeUrl } from "@/lib/safeUrl.server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,32 +12,6 @@ export const runtime = "nodejs";
  * Aman: hanya https, hanya alamat internet publik (bukan jaringan internal), hanya file gambar, maks 8 MB.
  */
 const MAX = 8 * 1024 * 1024;
-
-function privateIp(ip: string): boolean {
-  if (isIP(ip) === 6) {
-    const v = ip.toLowerCase();
-    if (v === "::1" || v === "::" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80")) return true;
-    const m = v.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    return m ? privateIp(m[1]) : false;
-  }
-  const [a, b] = ip.split(".").map(Number);
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-}
-
-async function safeUrl(raw: string): Promise<URL | null> {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443")) return null;
-  const host = u.hostname.replace(/^\[|\]$/g, "");
-  if (/^(localhost|.*\.local|.*\.internal)$/i.test(host)) return null;
-  const ips = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((x) => x.address);
-  if (!ips.length || ips.some(privateIp)) return null;
-  return u;
-}
 
 export async function GET(req: NextRequest) {
   await getCurrentUser();

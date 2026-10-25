@@ -130,7 +130,7 @@ function fitText(doc: Document): Check {
 
 /* ---------- isian gambar (latar & foto tokoh) — disimpan per slide selama halaman terbuka, ikut ke revisi berikutnya ---------- */
 type Pic = { src: string; label?: string; page?: string; credit?: string; download?: string; web?: boolean };
-type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; tried?: { bg?: boolean; person?: boolean } };
+type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; personList?: Pic[]; personAt?: number; tried?: { bg?: boolean; person?: boolean } };
 const fills = new Map<string, Fill>();
 const listeners = new Set<() => void>();
 const setFill = (k: string, f: Partial<Fill>) => {
@@ -146,7 +146,8 @@ function useFills() {
   }, []);
   return fills;
 }
-const keyOf = (d: Design) => (d.tws ? `tws|${d.tws.deck.title ?? ""}|${d.tws.index}` : `d|${d.name}|${d.slide ?? ""}`);
+// nama tokoh ikut kunci: revisi "ganti tokohnya" -> foto dicari ulang
+const keyOf = (d: Design) => (d.tws ? `tws|${d.tws.deck.title ?? ""}|${d.tws.index}|${d.tws.deck.slides[d.tws.index].person ?? ""}` : `d|${d.name}|${d.slide ?? ""}`);
 const hasSlot = (d: Design, slot: "bg" | "person") => (d.tws ? (slot === "person" ? d.tws.deck.slides[d.tws.index].type === "cover" : ["cover", "text", "cta"].includes(d.tws.deck.slides[d.tws.index].type)) : d.html.includes(`data-slot="${slot}"`));
 
 type PhotoItem = { thumb: string; full: string; page: string; author: string; provider: "unsplash" | "pexels" | "web"; download?: string };
@@ -168,7 +169,7 @@ async function findPhotos(q: string, web = false): Promise<PhotoItem[]> {
 function htmlOf(d: Design, f: Fill | undefined): string {
   if (d.tws) {
     const sl = d.tws.deck.slides[d.tws.index];
-    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit });
+    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit, brand: d.tws.deck.brand === "tws" });
   }
   let h = d.html;
   if (f?.bg && !f.graphic) h = h.replace(/<img([^>]*?)data-slot="bg"([^>]*?)>/g, (_m, a: string, b: string) => `<img${(a + b).replace(/\ssrc="[^"]*"/, "")} data-slot="bg" src="${f.bg!.src}">`);
@@ -176,34 +177,68 @@ function htmlOf(d: Design, f: Fill | undefined): string {
   return h;
 }
 
-/** cari otomatis foto latar & foto tokoh untuk slide TWS (sekali per slide) */
+/** foto utama artikel sumber berita (og:image) — sekali per deck */
+const newsCache = new Map<string, Promise<Pic[]>>();
+function deckNews(deck: TwsDeck): Promise<Pic[]> {
+  const urls = (deck.sources ?? []).map((x) => x.url).filter(Boolean);
+  const k = urls.join("|");
+  if (!k) return Promise.resolve([]);
+  let p = newsCache.get(k);
+  if (!p) {
+    p = fetch(`/api/ai/photos?${urls.map((u) => `news=${encodeURIComponent(u)}`).join("&")}`)
+      .then((r) => r.json() as Promise<{ items?: PhotoItem[] }>)
+      .then((j) => (j.items ?? []).map((x) => ({ ...toPic(x), label: `Foto berita ${x.author} · cek hak cipta sebelum dipakai` })))
+      .catch(() => []);
+    newsCache.set(k, p);
+  }
+  return p;
+}
+
+const PERSON_LABEL = "Foto tokoh dicari otomatis dari web · cek hak cipta & pastikan orangnya benar";
+
+/** coba kandidat foto tokoh mulai dari `from`: yang latarnya berhasil dihapus dipakai di depan; semua gagal -> foto pertama jadi latar penuh */
+async function pickPerson(k: string, list: Pic[], from: number) {
+  const { removeBackground } = await import("@/lib/removeBg");
+  for (let i = from; i < Math.min(list.length, from + 3); i++) {
+    const cut = await removeBackground(list[i].src);
+    if (cut) return setFill(k, { person: { ...list[i], src: cut, cut: true, label: PERSON_LABEL }, personAt: i });
+  }
+  if (list[from]) setFill(k, { person: { ...list[from], label: PERSON_LABEL }, personAt: from });
+}
+
+/** cari otomatis foto latar & foto tokoh untuk slide berita (sekali per slide) — tanpa upload */
 function useAutoFill(designs: Design[], on: boolean) {
   useEffect(() => {
     if (!on) return;
     designs.forEach((d) => {
       if (!d.tws) return;
-      const sl = d.tws.deck.slides[d.tws.index];
+      const deck = d.tws.deck;
+      const sl = deck.slides[d.tws.index];
       const k = keyOf(d);
       const f = fills.get(k) ?? {};
-      if (sl.bg && hasSlot(d, "bg") && !f.bg && !f.tried?.bg) {
+      if (hasSlot(d, "bg") && !f.bg && !f.tried?.bg) {
         setFill(k, { tried: { ...f.tried, bg: true } });
-        void findPhotos(sl.bg).then((items) => {
-          const list = items.map(toPic);
-          if (list.length) setFill(k, { bg: list[0], bgList: list, bgAt: 0 });
+        // kata kunci adegan dari AI dulu; kosong -> foto utama artikel berita sumbernya (beda slide, beda foto)
+        void (sl.bg ? findPhotos(sl.bg) : Promise.resolve([] as PhotoItem[])).then(async (items) => {
+          let list = items.map(toPic);
+          if (!list.length) {
+            const news = await deckNews(deck);
+            list = news.length ? [...news.slice(d.tws!.index % news.length), ...news.slice(0, d.tws!.index % news.length)] : [];
+          }
+          if (list.length && !fills.get(k)?.bg) setFill(k, { bg: list[0], bgList: list, bgAt: 0 });
         });
       }
       if (sl.person && hasSlot(d, "person") && !f.person && !f.tried?.person) {
         setFill(k, { tried: { ...(fills.get(k)?.tried ?? {}), person: true } });
-        void findPhotos(`${sl.person} foto`, true).then(async (items) => {
-          const p = items[0];
-          if (!p || fills.get(k)?.person) return;
-          const pic = toPic(p);
-          setFill(k, { person: { ...pic, label: "Foto tokoh dari web · cek hak cipta & pastikan orangnya benar" } });
-          const { removeBackground } = await import("@/lib/removeBg");
-          const cut = await removeBackground(pic.src);
-          const cur = fills.get(k)?.person;
-          if (cut && cur?.src === pic.src) setFill(k, { person: { ...cur, src: cut, cut: true } });
-        });
+        void fetch(`/api/ai/photos?person=${encodeURIComponent(sl.person)}`)
+          .then((r) => r.json() as Promise<{ items?: PhotoItem[] }>)
+          .then(async (j) => {
+            const list = (j.items ?? []).map(toPic);
+            if (!list.length || fills.get(k)?.person) return;
+            setFill(k, { personList: list });
+            await pickPerson(k, list, 0);
+          })
+          .catch(() => {});
       }
     });
   }, [designs, on]);
@@ -254,7 +289,7 @@ function Frame({ d, html, maxH, onReady }: { d: Design; html: string; maxH: numb
 
 /* ---------- unduh ---------- */
 const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "konten";
-const fileName = (d: Design) => `${d.tws ? `tws-${slug(d.tws.deck.title ?? "konten").slice(0, 24)}` : "desain"}-${d.slide ? `${String(d.slide).padStart(2, "0")}-` : ""}${slug(d.name).slice(0, 28)}-${d.size.replace(":", "x")}`;
+const fileName = (d: Design) => `${d.tws ? `${d.tws.deck.brand === "tws" ? "tws" : "berita"}-${slug(d.tws.deck.title ?? "konten").slice(0, 24)}` : "desain"}-${d.slide ? `${String(d.slide).padStart(2, "0")}-` : ""}${slug(d.name).slice(0, 28)}-${d.size.replace(":", "x")}`;
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -422,7 +457,6 @@ function ImageControls({ d, disabled }: { d: Design; disabled?: boolean }) {
   const k = keyOf(d);
   const f = useFills().get(k) ?? {};
   const bgIn = useRef<HTMLInputElement>(null);
-  const pIn = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState("");
   const canBg = hasSlot(d, "bg"), canP = hasSlot(d, "person");
   if (!canBg && !canP) return null;
@@ -439,16 +473,18 @@ function ImageControls({ d, disabled }: { d: Design; disabled?: boolean }) {
     if (list.length && at < list.length) setFill(k, { bgList: list, bgAt: at, bg: list[at], graphic: false });
     else setFill(k, { graphic: true, bgAt: -1 });
   };
-  const upload = async (file: File, slot: "bg" | "person") => {
-    const { fileToDataUrl, removeBackground } = await import("@/lib/removeBg");
-    setBusy(slot);
-    const src = await fileToDataUrl(file);
-    if (slot === "bg") setFill(k, { bg: { src, label: "Foto upload kamu" }, graphic: false });
-    else {
-      setFill(k, { person: { src, label: "Foto tokoh upload kamu · menghapus latar…" } });
-      const cut = await removeBackground(src);
-      setFill(k, { person: cut ? { src: cut, cut: true, label: "Foto tokoh upload kamu · latar dihapus" } : { src, label: "Foto tokoh upload kamu · latar gagal dihapus, dipakai utuh + pinggir gelap" } });
-    }
+  const upload = async (file: File) => {
+    const { fileToDataUrl } = await import("@/lib/removeBg");
+    setBusy("bg");
+    setFill(k, { bg: { src: await fileToDataUrl(file), label: "Foto upload kamu" }, graphic: false });
+    setBusy("");
+  };
+  // foto tokoh tidak di-upload: website mencari sendiri; tombol ini mencoba kandidat foto berikutnya
+  const nextPerson = async () => {
+    const list = f.personList ?? [];
+    if (!list.length) return;
+    setBusy("person");
+    await pickPerson(k, list, ((f.personAt ?? -1) + 1) % list.length);
     setBusy("");
   };
   return (
@@ -464,9 +500,9 @@ function ImageControls({ d, disabled }: { d: Design; disabled?: boolean }) {
             ⬆ Upload latar
           </button>
         )}
-        {canP && (
-          <button type="button" disabled={disabled || !!busy} onClick={() => pIn.current?.click()} className={chip}>
-            {busy === "person" ? "⏳ menghapus latar…" : "👤 Upload foto tokoh"}
+        {canP && (f.personList?.length ?? 0) > 1 && (
+          <button type="button" disabled={disabled || !!busy} onClick={nextPerson} className={chip}>
+            {busy === "person" ? "⏳ mencari foto…" : "👤 Ganti foto tokoh"}
           </button>
         )}
         {f.person && (
@@ -475,8 +511,7 @@ function ImageControls({ d, disabled }: { d: Design; disabled?: boolean }) {
           </button>
         )}
       </div>
-      <input ref={bgIn} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "bg")} />
-      <input ref={pIn} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "person")} />
+      <input ref={bgIn} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       {[f.graphic ? null : f.bg, f.person].filter(Boolean).map((p, i) => (
         <p key={i} className={`text-[11px] ${p!.web ? "text-amber-500" : "text-zinc-500"}`}>
           {p!.web ? "⚠ " : ""}
@@ -650,7 +685,7 @@ export default function DesignCard({ designs, deck, disabled, onSend }: { design
     );
   return (
     <div className="my-2">
-      {slides && designs.length > 1 && <div className="mb-1.5 text-[12px] text-zinc-500">🖼 Carousel {designs.length} slide{deck ? " · template TWS" : ""} — klik slide untuk lihat & revisi</div>}
+      {slides && designs.length > 1 && <div className="mb-1.5 text-[12px] text-zinc-500">🖼 Carousel {designs.length} slide — klik slide untuk lihat & revisi</div>}
       <Viewer designs={designs} deck={deck} disabled={disabled} onSend={onSend} />
     </div>
   );

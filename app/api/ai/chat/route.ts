@@ -9,7 +9,7 @@ import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
 import { MUSIC_INTENT, MUSIC_RULES } from "@/lib/musicCmd";
 import { PHOTO_INTENT, PHOTO_OF_ATTACHMENT, VISUAL_COMPLEX, VISUAL_INTENT, visualRules } from "@/lib/visual";
 import { photoQuery, searchPhotos, type PhotoResult } from "@/lib/photos.server";
-import { TWS_INTENT, twsRules } from "@/lib/tws";
+import { TWS_INTENT, isTwsBrand, twsRules } from "@/lib/tws";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { SMART, SMART_HERO, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -422,9 +422,11 @@ export async function POST(req: NextRequest) {
   // konten TWS: isi dari hasil riset web, desain dari template
   if (twsMode) {
     const asOf = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" }).format(new Date());
-    turnRules.push(twsRules(asOf));
+    // logo & tulisan TWS hanya kalau user menyebut TWS (atau sedang merevisi konten TWS)
+    const brand = isTwsBrand(taskText) || (twsFollow && /"brand"\s*:\s*"tws"/.test(lastAssistantText));
+    turnRules.push(twsRules(asOf, brand));
     if (twsResearch && !web.sources.length && !web.live)
-      turnRules.push("⚠️ HASIL BROWSING TIDAK ADA untuk konten TWS ini (internet mati / kunci pencarian belum diisi / gagal). Bilang jujur di awal. JANGAN tulis angka, tanggal, atau kejadian dari ingatan; buat versi tanpa angka (judul umum + slide edukasi) atau sarankan nyalakan 🌐 Internet lalu coba lagi.");
+      turnRules.push("⚠️ HASIL BROWSING TIDAK ADA untuk konten berita ini (internet mati / kunci pencarian belum diisi / gagal). Bilang jujur di awal. JANGAN tulis angka, tanggal, atau kejadian dari ingatan; buat versi tanpa angka (judul umum + slide edukasi) atau sarankan nyalakan 🌐 Internet lalu coba lagi.");
   }
   const photos = await photosP;
   if (photoMode) turnRules.push(photoRules(photoQ, photos, visualMode));
