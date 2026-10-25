@@ -45,9 +45,9 @@ async function toAvatar(file: File): Promise<string> {
 
 type Page = { k: "intro" } | { k: "quiz"; i: number } | { k: "result" } | { k: "role" } | { k: "train"; i: number } | { k: "identity" } | { k: "summary" };
 type Summary = { label: string; role: string; style: string; catchphrase: string; rules: string[]; sop: string };
-/** patokan ringkasan otomatis + peran yang dipakai saat membuatnya */
-type Gen = { sum: Summary; roleKey: string };
-const roleKeyOf = (id: string | undefined, custom: string | undefined) => (id === CUSTOM_ROLE ? `${id}:${(custom ?? "").trim().toLowerCase()}` : (id ?? ""));
+/** patokan ringkasan otomatis + peran (dan nama peran custom) yang dipakai saat membuatnya */
+type Gen = { sum: Summary; roleId: string; roleName: string };
+const nameKey = (id: string | undefined, custom: string | undefined) => (id === CUSTOM_ROLE ? (custom ?? "").trim().toLowerCase() : "");
 /** pembanding kolom ringkasan (baris kosong / spasi diabaikan) */
 const norm = (v: string | string[]) => JSON.stringify(Array.isArray(v) ? v.map((x) => x.trim()).filter(Boolean) : v.trim());
 
@@ -99,8 +99,11 @@ export default function CharacterWizard({
     const a = ip?.answers?.[k];
     return typeof a === "string" ? a : "";
   };
-  const seedCall = ip?.call ?? (CALLS.includes(v1Ans("call")) ? v1Ans("call") : CALLS[0]);
-  const seedEmoji = ip?.emoji ?? (EMOJIS.includes(v1Ans("emoji")) ? v1Ans("emoji") : EMOJIS[0]);
+  // isian bebas lama (mis. "Bos") dipakai apa adanya & muncul sebagai chip tambahan
+  const seedCall = ip?.call ?? (v1Ans("call") || CALLS[0]);
+  const seedEmoji = ip?.emoji ?? (v1Ans("emoji") || EMOJIS[0]);
+  const callChips = CALLS.includes(seedCall) ? CALLS : [...CALLS, seedCall];
+  const emojiChips = EMOJIS.includes(seedEmoji) ? EMOJIS : [...EMOJIS, seedEmoji];
   const [call, setCall] = useState(seedCall);
   const [emoji, setEmoji] = useState(seedEmoji);
   const [sum, setSum] = useState<Summary | null>(
@@ -215,26 +218,29 @@ export default function CharacterWizard({
     genRef.current = !initial
       ? null
       : v2
-        ? { sum: ip?.gen ? { ...ip.gen, rules: ip.gen.rules ?? [] } : (sum as Summary), roleKey: roleKeyOf(ip?.roleId, ip?.roleName) }
-        : { sum: { ...summarize(initial.name, ip?.answers ?? {}, initial.mbti), sop: "" }, roleKey: "" };
+        ? { sum: ip?.gen ? { ...ip.gen, rules: ip.gen.rules ?? [] } : (sum as Summary), roleId: ip?.roleId ?? "", roleName: nameKey(ip?.roleId, ip?.roleName) }
+        : { sum: { ...summarize(initial.name, ip?.answers ?? {}, initial.mbti), sop: "" }, roleId: "", roleName: "" };
   const toSummary = () => {
     if (!typeKnown && !storedType) return go("quiz");
     if (dirty || !sum) {
       const fresh = buildSummary();
-      const key = roleKeyOf(roleId, customRole);
+      const rn = nameKey(roleId, customRole);
       const base = genRef.current;
       setSum((s) => {
         if (!s || !base) return fresh;
-        // peran diganti -> peran, larangan & SOP ikut peran baru (suntingan untuk peran lama tidak terbawa)
-        const roleChanged = base.roleKey !== key;
+        // peran diganti -> peran, larangan & SOP ikut peran baru (suntingan untuk peran lama tidak terbawa);
+        // nama peran custom diganti -> hanya teks Peran yang ikut (pertanyaan & SOP-nya sama)
+        const idChanged = base.roleId !== roleId;
+        const nameChanged = !idChanged && base.roleName !== rn;
         const out: Summary = { ...fresh };
         for (const k of Object.keys(fresh) as (keyof Summary)[]) {
-          if (roleChanged && (k === "role" || k === "rules" || k === "sop")) continue;
+          if (idChanged && (k === "role" || k === "rules" || k === "sop")) continue;
+          if (nameChanged && k === "role") continue;
           if (norm(s[k]) !== norm(base.sum[k])) Object.assign(out, { [k]: s[k] });
         }
         return out;
       });
-      genRef.current = { sum: fresh, roleKey: key };
+      genRef.current = { sum: fresh, roleId, roleName: rn };
       setDirty(false);
     }
     go("summary");
@@ -617,7 +623,7 @@ export default function CharacterWizard({
                 <div>
                   <div className={label}>Cara memanggil user</div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    {CALLS.map((c) => (
+                    {callChips.map((c) => (
                       <button key={c} type="button" onClick={() => c !== call && (setCall(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${call === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
                         {c.split(" (")[0]}
                       </button>
@@ -627,7 +633,7 @@ export default function CharacterWizard({
                 <div>
                   <div className={label}>Emoji & gaya bahasa</div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    {EMOJIS.map((c) => (
+                    {emojiChips.map((c) => (
                       <button key={c} type="button" onClick={() => c !== emoji && (setEmoji(c), setDirty(true))} className={`rounded-full border px-2.5 py-1 text-[12px] ${emoji === c ? "border-orange-500 bg-orange-500/10 text-orange-400" : "border-zinc-800 text-zinc-400"}`}>
                         {c.split(",")[0]}
                       </button>
