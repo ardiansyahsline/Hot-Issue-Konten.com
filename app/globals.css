@@ -181,6 +181,40 @@ html.light .ai-table { border-color: #fed7aa; }
 html.light .ai-table td { border-bottom-color: #fde8d7; }
 html.light .ai-table tr:nth-child(even) td { background: #fffaf5; }
 html.light .ai-table td:first-child { color: #7c2d12; }
+/* tabel biasa di HP -> kartu per baris (tanpa geser kanan-kiri). Sel diberi data-label = judul kolom.
+   m-kv: label di kiri, isi di kanan (untuk isi pendek: angka, role, tanggal) */
+@media (max-width: 639px) {
+  table.m-stack { min-width: 0 !important; }
+  .m-stack thead { display: none; }
+  .m-stack, .m-stack tbody, .m-stack tfoot, .m-stack tr, .m-stack td { display: block; width: 100%; }
+  .m-stack tr { padding: 12px 16px; }
+  .m-stack td { padding: 3px 0 !important; text-align: left !important; }
+  .m-stack td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; @apply text-zinc-500; }
+  .m-kv td[data-label] { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .m-kv td[data-label]::before { margin: 0; flex-shrink: 0; }
+  .m-kv td[data-label] > * { min-width: 0; text-align: right; }
+  /* m-grid: kolom angka berjejer dalam satu baris kecil (label di atas angka) */
+  .m-grid tr { display: grid; grid-template-columns: repeat(auto-fit, minmax(52px, 1fr)); gap: 6px; }
+  .m-grid td:first-child { grid-column: 1 / -1; }
+  .m-grid td[data-label] { text-align: center !important; }
+  .m-grid td[data-label]::before { font-size: 9.5px; letter-spacing: .03em; margin-bottom: 3px; }
+}
+/* tabel AI yang tidak muat -> kartu per baris (tanpa geser kanan-kiri) */
+.ai-table.stacked { border: 0; border-radius: 0; overflow: visible; }
+.ai-table.stacked thead { display: none; }
+.ai-table.stacked table, .ai-table.stacked tbody, .ai-table.stacked tr, .ai-table.stacked td { display: block; width: 100%; }
+.ai-table.stacked tr { border: 1px solid rgb(234 88 12 / .35); border-radius: 12px; overflow: hidden; padding-bottom: 4px; }
+.ai-table.stacked tr + tr { margin-top: 8px; }
+.ai-table.stacked tr:nth-child(even) td { background: none; }
+.ai-table.stacked td { display: grid; grid-template-columns: minmax(76px, 30%) minmax(0, 1fr); column-gap: 10px; padding: 4px 12px; border-bottom: 0; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.ai-table.stacked td::before { content: attr(data-label); font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #a1a1aa; padding-top: 2px; }
+.ai-table.stacked td:first-child { display: flex; gap: 8px; align-items: baseline; background: rgb(234 88 12 / .12); border-bottom: 1px solid rgb(234 88 12 / .2); padding: 7px 12px; margin-bottom: 3px; font-size: 13.5px; }
+.ai-table.stacked td:first-child::before { padding-top: 0; color: rgb(234 88 12 / .8); }
+.ai-table.stacked td.ai-num { text-align: left; }
+html.light .ai-table.stacked tr { border-color: #fed7aa; }
+html.light .ai-table.stacked td:first-child { background: #fff4ea; border-bottom-color: #fde8d7; }
+html.light .ai-table.stacked td::before { color: #71717a; }
+html.light .ai-table.stacked td:first-child::before { color: #c2410c; }
 
 /* tombol "Buat Karakter AI": gradien mengalir + kilau + chibi + gelembung ajakan */
 .mkchar { position: relative; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; border-radius: 999px; padding: 2px 11px 2px 3px; font-size: 12px; font-weight: 800; color: #fff; white-space: nowrap;

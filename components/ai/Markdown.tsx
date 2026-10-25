@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -49,6 +49,56 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
+/**
+ * Tabel jawaban AI. Tidak pernah bikin geser kanan-kiri: kalau tidak muat di lebar layar (atau kolomnya banyak di layar HP),
+ * otomatis tampil sebagai KARTU per baris — kolom pertama jadi judul kartu, kolom lain "LABEL  isi".
+ */
+export function AiTable({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [stacked, setStacked] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const fit = () => {
+      const table = el.querySelector("table");
+      if (!table) return;
+      // label tiap sel = judul kolomnya (dipakai tampilan kartu)
+      const heads = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "");
+      const rows = Array.from(table.querySelectorAll("tbody tr"));
+      rows.forEach((tr) => Array.from(tr.children).forEach((td, i) => td.setAttribute("data-label", heads[i] ?? "")));
+      // judul kolom angka ikut rata kanan, sejajar dengan angkanya
+      table.querySelectorAll("thead th").forEach((th, i) => {
+        const cells = rows.map((tr) => tr.children[i]).filter(Boolean);
+        if (cells.length && cells.every((c) => c.classList.contains("ai-num"))) (th as HTMLElement).style.textAlign = "right";
+      });
+      // ukur dalam bentuk tabel biasa
+      el.classList.remove("stacked");
+      const w = el.clientWidth;
+      const cols = heads.length;
+      const over = table.scrollWidth > w + 1;
+      const tooNarrow = (cols >= 4 && w < 560) || (cols >= 3 && w < 360);
+      const next = over || tooNarrow;
+      el.classList.toggle("stacked", next);
+      setStacked(next);
+    };
+    fit();
+    // hanya hitung ulang kalau LEBAR berubah (tinggi berubah karena ganti tampilan tidak dihitung)
+    let lastW = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (Math.abs(el.clientWidth - lastW) < 1) return;
+      lastW = el.clientWidth;
+      fit();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  return (
+    <div ref={box} className={`ai-table${stacked ? " stacked" : ""}`}>
+      <table>{children}</table>
+    </div>
+  );
+}
+
 const C: Components = {
   p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
@@ -64,11 +114,7 @@ const C: Components = {
   ),
   blockquote: ({ children }) => <blockquote className="my-2 border-l-4 border-orange-500/60 pl-3 text-zinc-400">{children}</blockquote>,
   hr: () => <hr className="my-4 border-zinc-800" />,
-  table: ({ children }) => (
-    <div className="ai-table">
-      <table>{children}</table>
-    </div>
-  ),
+  table: ({ children }) => <AiTable>{children}</AiTable>,
   th: ({ children }) => <th>{children}</th>,
   // sel berisi angka (harga, persen, rasio) -> rata kanan & tebal
   td: ({ children }) => <td className={isNumCell(children) ? "ai-num" : undefined}>{children}</td>,

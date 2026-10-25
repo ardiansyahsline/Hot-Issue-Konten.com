@@ -212,7 +212,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         agentMore="/?status=all"
       />
 
-      <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5 [&>*:last-child:nth-child(odd)]:col-span-2 sm:[&>*:last-child:nth-child(odd)]:col-span-1">
         {stats.map((s) => (
           <StatCard key={s.label} label={s.label} value={s.value} unit="issue" tone={s.tone} icon={s.icon} href={s.href} footer={s.footer} />
         ))}

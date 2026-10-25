@@ -121,7 +121,7 @@ export default async function IssueDetail({
           <PriorityBadge priority={issue.priority} />
           <span className="badge bg-zinc-800 text-zinc-300 ring-zinc-700">{issue.category}</span>
         </div>
-        <h1 className="mt-3 page-title">{issue.title}</h1>
+        <h1 className="mt-3 page-title text-[21px] sm:text-[26px]">{issue.title}</h1>
         {issue.description && <p className="mt-3 whitespace-pre-wrap text-sm text-zinc-300">{issue.description}</p>}
 
         <div className="mt-4">

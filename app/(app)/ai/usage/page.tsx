@@ -8,6 +8,7 @@ import { PIN_COOKIE, pinToken } from "./pin";
 import { lockUsage, unlockUsage } from "./actions";
 import { heroName, providerOf, SMART_HERO } from "@/lib/aiModels";
 import { isBuiltinHero } from "@/lib/aiPersona";
+import { AiTable } from "@/components/ai/Markdown";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Usage AI · CS Tracker" };
@@ -224,8 +225,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
         </div>
       </div>
 
-      <div className="ai-table">
-        <table>
+      <AiTable>
           <thead>
             <tr>
               <th>Hero · mesin</th>
@@ -256,11 +256,9 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
               </tr>
             )}
           </tbody>
-        </table>
-      </div>
+      </AiTable>
 
-      <div className="ai-table">
-        <table>
+      <AiTable>
           <thead>
             <tr>
               <th>User</th>
@@ -281,8 +279,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+      </AiTable>
       <p className="text-[11.5px] text-zinc-500">
         Token dicatat mulai update ini (jawaban lama tanpa angka token). Biaya = perkiraan dari tarif Claude per 1 jt token — tagihan resmi tetap di console.anthropic.com. Langkah &quot;mikir dulu&quot; (perencana browsing) tidak ikut dihitung.
       </p>

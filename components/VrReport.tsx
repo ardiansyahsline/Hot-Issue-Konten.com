@@ -116,7 +116,7 @@ export function VrVisual({ rows, range, today }: { rows: VrSummaryRow[]; range: 
         </span>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <section className="card p-5 lg:col-span-2">
           <h3 className="font-semibold">Tren kasus {weekly ? "mingguan" : "harian"}</h3>
           <p className="text-[12.5px] text-zinc-500">warna = status · puncak {max} kasus{weekly ? "/minggu" : "/hari"}</p>
@@ -154,7 +154,7 @@ export function VrVisual({ rows, range, today }: { rows: VrSummaryRow[]; range: 
           <h3 className="font-semibold">Status</h3>
           <p className="text-[12.5px] text-zinc-500">{total} kasus</p>
           <div className="mt-3 flex items-center gap-5">
-            <svg viewBox="0 0 42 42" className="h-36 w-36 shrink-0 -rotate-90" role="img" aria-label="Proporsi status">
+            <svg viewBox="0 0 42 42" className="h-28 w-28 shrink-0 -rotate-90 sm:h-36 sm:w-36" role="img" aria-label="Proporsi status">
               <circle cx="21" cy="21" r="15.9" fill="none" stroke="currentColor" className="text-zinc-800" strokeWidth="6" />
               {total > 0 &&
                 byStatus.map(([k, v]) => {
@@ -284,7 +284,7 @@ export function VrCompare({ rows, mode, today }: { rows: VrSummaryRow[]; mode: "
           />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-[13.5px]">
+          <table className="m-stack m-grid w-full min-w-[720px] text-[13.5px]">
             <thead>
               <tr className="border-y border-zinc-800/80 bg-zinc-950/40 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                 <th className="px-5 py-2.5 text-left">Kategori</th>
@@ -307,10 +307,10 @@ export function VrCompare({ rows, mode, today }: { rows: VrSummaryRow[]; mode: "
                 <tr key={c}>
                   <td className="px-5 py-2 font-semibold">{c}</td>
                   {counts.map((n, i) => (
-                    <td key={i} className="px-2 py-1.5 text-center">
+                    <td key={i} data-label={PERIODS[i][0]} className="px-2 py-1.5 text-center">
                       <Link
                         href={`/video-review?tab=daftar&category=${encodeURIComponent(c === "Belum dikategorikan" ? "__none" : c)}&from=${fromOf(PERIODS[i][1])}&to=${today}`}
-                        className="block rounded-lg py-1.5 font-semibold tabular-nums transition hover:ring-1 hover:ring-red-500/50"
+                        className="block rounded-lg py-1.5 text-center font-semibold tabular-nums transition hover:ring-1 hover:ring-red-500/50"
                         style={{ background: n ? `rgba(239,68,68,${0.07 + (n / colMax[i]) * 0.33})` : undefined }}
                       >
                         {cell(n, i)}
@@ -323,8 +323,8 @@ export function VrCompare({ rows, mode, today }: { rows: VrSummaryRow[]; mode: "
                 <tr className="bg-zinc-950/40">
                   <td className="px-5 py-2.5 font-bold">Total</td>
                   {totals.map((n, i) => (
-                    <td key={i} className="px-2 py-2.5 text-center font-bold tabular-nums">
-                      {mode === "persen" ? "100%" : n}
+                    <td key={i} data-label={PERIODS[i][0]} className="px-2 py-2.5 text-center font-bold tabular-nums">
+                      <span>{mode === "persen" ? "100%" : n}</span>
                     </td>
                   ))}
                 </tr>
