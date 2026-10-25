@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { SMART_HERO } from "@/lib/aiModels";
 import { CHIBI_HAIRS, CHIBI_PROPS, CHIBI_SKINS, GROUPS, MBTI_TYPES, isBuiltinHero, registerCustom, typeGroup, typeInfo, type Prop } from "@/lib/aiPersona";
 import { registerChar, type CharAvatar, type CharProfile, type CustomChar } from "@/lib/customChar";
-import { CUSTOM_ROLE, QUIZ, QUIZ_QS, ROLES, compileSop, roleOf, scoreQuiz, typeProfile, type Training } from "@/lib/trainAi";
+import { CUSTOM_ROLE, QUIZ, QUIZ_QS, ROLES, compileSop, roleOf, scoreQuiz, typeProfile, type RoleQ, type Training } from "@/lib/trainAi";
 import HeroArt from "./HeroArt";
 import TypeScene from "./TypeScene";
 
@@ -48,6 +48,18 @@ type Summary = { label: string; role: string; style: string; catchphrase: string
 
 const btnGhost = "rounded-xl border border-zinc-800 px-3.5 py-2 text-[12.5px] font-bold text-zinc-300 hover:border-zinc-600";
 const label = "text-[11px] font-bold uppercase tracking-wider text-zinc-500";
+/** label baris ringkasan: di HP di atas kolom (kolom selebar layar), di layar lebar di kiri */
+const rowLabel = `${label} pt-1.5 sm:pt-0`;
+const rowLabelTop = `${label} pt-1.5 sm:self-start sm:pt-2`;
+
+/** teks bantu pertanyaan training (tanpa kalimat "boleh pilih…" yang dobel) */
+function hintText(q: RoleQ): string {
+  const base = q.multi ? "Boleh pilih lebih dari satu." : "Pilih satu.";
+  const h = (q.hint ?? "").replace(/^boleh pilih lebih dari satu[.;]?\s*/i, "").trim();
+  if (!h) return base;
+  if (/lebih dari satu/i.test(h) || (!q.multi && /^pilih/i.test(h))) return h;
+  return `${base} ${h[0].toUpperCase()}${h.slice(1)}`;
+}
 
 /**
  * "Train your AI": kuis kepribadian → hasil tipe (animasi) → pilih peran → pertanyaan training per peran →
@@ -220,6 +232,7 @@ export default function CharacterWizard({
       quiz,
       roleId: roleId || undefined,
       roleName: roleId === CUSTOM_ROLE ? customRole.trim() : undefined,
+      roleLabel: role?.name,
       training,
       call,
       emoji,
@@ -467,7 +480,7 @@ export default function CharacterWizard({
                 {role.icon} Latih jadi {role.name}
               </div>
               <div className="mb-1 text-[15.5px] font-bold leading-snug">{tq.q}</div>
-              <div className="mb-3 text-[11.5px] text-zinc-500">{tq.multi ? "Boleh pilih lebih dari satu." : "Pilih satu."}{tq.hint ? ` ${tq.hint}` : ""}</div>
+              <div className="mb-3 text-[11.5px] text-zinc-500">{hintText(tq)}</div>
               <div className="space-y-2">
                 {tq.options.map((o, i) => {
                   const on = (training.picks[tq.id] ?? []).includes(o.label);
@@ -620,8 +633,8 @@ export default function CharacterWizard({
                 </div>
               </div>
               <p className="text-[11.5px] text-zinc-500">✎ Semua bisa diedit sebelum disimpan. SOP di bawah dikirim ke AI setiap kali ia menjawab.</p>
-              <div className="grid grid-cols-[84px_1fr] items-center gap-x-3 gap-y-2 text-[12.5px]">
-                <span className={label}>Tipe</span>
+              <div className="grid grid-cols-1 gap-y-1 text-[12.5px] sm:grid-cols-[84px_1fr] sm:items-center sm:gap-x-3 sm:gap-y-2">
+                <span className={rowLabel}>Tipe</span>
                 <select
                   value={type}
                   onChange={(e) => {
@@ -636,17 +649,17 @@ export default function CharacterWizard({
                     </option>
                   ))}
                 </select>
-                <span className={label}>Julukan</span>
+                <span className={rowLabel}>Julukan</span>
                 <input value={sum.label} maxLength={60} onChange={(e) => setSum({ ...sum, label: e.target.value })} className="input py-1.5 text-[13px]" />
-                <span className={label}>Peran</span>
-                <input value={sum.role} maxLength={240} onChange={(e) => setSum({ ...sum, role: e.target.value })} className="input py-1.5 text-[13px]" />
-                <span className={label}>Gaya</span>
+                <span className={rowLabel}>Peran</span>
+                <textarea value={sum.role} rows={3} maxLength={240} onChange={(e) => setSum({ ...sum, role: e.target.value.replace(/\n/g, " ") })} className="input resize-y py-1.5 text-[13px] leading-snug" />
+                <span className={rowLabel}>Gaya</span>
                 <input value={sum.style} maxLength={400} onChange={(e) => setSum({ ...sum, style: e.target.value })} className="input py-1.5 text-[13px]" />
-                <span className="self-start pt-2 text-[11px] font-bold uppercase tracking-wider text-zinc-500">SOP</span>
+                <span className={rowLabelTop}>SOP</span>
                 <textarea value={sum.sop} rows={9} maxLength={9000} onChange={(e) => setSum({ ...sum, sop: e.target.value })} className="input resize-y py-1.5 font-mono text-[12px] leading-relaxed" placeholder="Cara berpikir & SOP dari pelatihanmu" />
-                <span className={label}>Ciri khas</span>
+                <span className={rowLabel}>Ciri khas</span>
                 <input value={sum.catchphrase} maxLength={120} onChange={(e) => setSum({ ...sum, catchphrase: e.target.value })} placeholder="kata andalan (opsional)" className="input py-1.5 text-[13px]" />
-                <span className="self-start pt-2 text-[11px] font-bold uppercase tracking-wider text-zinc-500">Larangan</span>
+                <span className={rowLabelTop}>Larangan</span>
                 <textarea value={sum.rules.join("\n")} rows={3} maxLength={1200} onChange={(e) => setSum({ ...sum, rules: e.target.value.split("\n") })} placeholder="satu larangan per baris" className="input resize-y py-1.5 text-[13px]" />
               </div>
               <p className="rounded-xl border border-dashed border-zinc-800 px-3 py-2 text-[11.5px] leading-snug text-zinc-400">
@@ -667,7 +680,7 @@ export default function CharacterWizard({
               Batal
             </button>
           )}
-          {initial && page.k !== "summary" && (
+          {initial && v2 && page.k !== "summary" && (
             <button type="button" onClick={toSummary} className="text-[12px] font-semibold text-zinc-500 hover:text-zinc-300">
               Ke ringkasan »
             </button>

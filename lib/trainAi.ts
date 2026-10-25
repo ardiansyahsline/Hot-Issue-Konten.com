@@ -1,6 +1,6 @@
 /**
  * "Train your AI": kuis kepribadian (4 dimensi MBTI) → hasil tipe → pilih peran → pertanyaan training per peran.
- * Jawaban training diubah jadi SOP / cara berpikir yang dikirim ke AI (lihat customPrompt di customChar.ts).
+ * Jawaban training diubah jadi SOP / cara berpikir yang dikirim ke AI (lihat trainAiPrompt.ts).
  * Isi kuis, profil 16 tipe & paket training per peran ada di trainAiData.ts (hasil riset, bisa diedit tanpa ubah logika).
  */
 import { GENERIC_ROLE, QUIZ, ROLES, TYPE_PROFILES } from "./trainAiData";
@@ -84,15 +84,19 @@ export function compileSop(role: TrainRole, t: Training): string {
   return [...groups.entries()].map(([k, lines]) => `${k}:\n${lines.map((l) => `- ${l}`).join("\n")}`).join("\n\n");
 }
 
-/** potongan prompt peran & SOP untuk karakter hasil Train your AI */
-export function trainPromptLines(roleId: string | undefined, customName: string | undefined, sop: string | undefined): string[] {
+const sopLine = (sop: string | undefined) =>
+  sop?.trim() ? `CARA BERPIKIR & SOP DARI PELATIHMU (WAJIB diikuti — lebih penting dari kebiasaan umum; kalau bertentangan dengan gaya kepribadian, ikuti SOP ini):\n${sop.trim()}` : "";
+
+/** potongan prompt peran & SOP untuk karakter hasil Train your AI. roleText = isi kolom "Peran" di ringkasan (bisa diedit user) */
+export function trainPromptLines(roleId: string | undefined, customName: string | undefined, sop: string | undefined, roleText?: string): string[] {
   const role = roleOf(roleId, customName ?? "");
-  if (!role) return [];
+  const rt = clean(roleText ?? "");
+  if (!role) return [rt ? `PERAN: ${rt}` : "", sopLine(sop)].filter(Boolean);
   return [
-    `PERAN YANG DILATIHKAN: ${role.name} — ${role.mission}`,
+    `PERAN YANG DILATIHKAN: ${rt || `${role.name} — ${role.mission}`}`,
     role.principles.length ? `PRINSIP KERJA PERAN INI (dari riset praktik terbaik):\n${role.principles.map((p) => `- ${clean(p)}`).join("\n")}` : "",
     role.frameworks.length ? `FRAMEWORK YANG KAMU KUASAI (pakai kalau relevan): ${role.frameworks.map(clean).join("; ")}.` : "",
     role.kpis.length ? `UKURAN SUKSES: ${role.kpis.map(clean).join("; ")}.` : "",
-    sop?.trim() ? `CARA BERPIKIR & SOP DARI PELATIHMU (WAJIB diikuti — lebih penting dari kebiasaan umum; kalau bertentangan dengan gaya kepribadian, ikuti SOP ini):\n${sop.trim()}` : "",
+    sopLine(sop),
   ].filter(Boolean);
 }

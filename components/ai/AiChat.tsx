@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { deleteConversation, renameConversation } from "@/app/(app)/ai/actions";
@@ -23,7 +24,8 @@ import { analysisText, splitAnalysis, splitAsk } from "@/lib/analysisCard";
 import { splitPlan } from "@/lib/tradePlan";
 import { GROUPS, personaOf, registerCustom, splitVia, type Group as PGroup } from "@/lib/aiPersona";
 import { CHAR_PREFIX, isCharModel, registerChar, type CustomChar, type MemoryKind } from "@/lib/customChar";
-import CharacterWizard from "./CharacterWizard";
+// Train your AI: wizard + data training (besar) baru dimuat saat dibuka
+const CharacterWizard = dynamic(() => import("./CharacterWizard"), { ssr: false });
 import CharacterBrain from "./CharacterBrain";
 import FilePlanCard from "./FilePlanCard";
 import DeckCard from "./DeckCard";
