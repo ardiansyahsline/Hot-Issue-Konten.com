@@ -9,6 +9,16 @@ const nextConfig = {
     staleTimes: { dynamic: 30, static: 180 },
   },
   poweredByHeader: false,
+  // Edge-TTS (suara cadangan Studio) pakai WebSocket "ws": jangan dibundel webpack — versi bundel menukar "bufferutil" jadi modul kosong
+  // sehingga ws.send() pesan ≥ 48 byte error "mask is not a function". Dimuat langsung dari node_modules, ws pakai mask versi JS.
+  serverExternalPackages: ["ws"],
+  // SFX & musik Studio disajikan lewat route API (bukan public/) -> pastikan filenya ikut ter-deploy
+  outputFileTracingIncludes: {
+    "/api/studio/asset/**": ["./assets/audio/**/*"],
+    "/api/studio/catalog": ["./assets/audio/**/*"],
+    // daftar musik di assets/audio/music ikut dibaca AI Sutradara
+    "/api/studio/chat": ["./assets/audio/music/**/*"],
+  },
   // pptxgenjs (bikin PowerPoint di browser) menyebut modul Node "node:fs"/"node:https" yang tidak dipakai di browser
   webpack(config, { isServer, webpack }) {
     if (!isServer) {

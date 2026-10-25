@@ -1,6 +1,6 @@
 "use client";
 
-import { Player } from "@remotion/player";
+import { Player, type PlayerRef } from "@remotion/player";
 import { useEffect, useRef, useState } from "react";
 import { COMPOSITIONS, type Comp } from "./compositions";
 
@@ -27,11 +27,17 @@ const canShare = (f: File) => typeof navigator !== "undefined" && !!navigator.ca
 const LICENSE = process.env.NEXT_PUBLIC_REMOTION_LICENSE_KEY || "free-license";
 
 /** Menu Remotion (admin): pilih video, ubah teks, preview, lalu render jadi file MP4 langsung di browser */
-export default function RemotionStudio() {
+export default function RemotionStudio({ active = true }: { active?: boolean }) {
   const [comp, setComp] = useState<Comp>(COMPOSITIONS[0]);
   const [props, setProps] = useState<Record<string, unknown>>(comp.defaultProps);
   const [render, setRender] = useState<RenderState>({ s: "idle" });
   const abort = useRef<AbortController | null>(null);
+  const player = useRef<PlayerRef>(null);
+
+  // tab ditinggal -> pemutar berhenti (editan & render yang sedang jalan tetap aman)
+  useEffect(() => {
+    if (!active) player.current?.pause();
+  }, [active]);
 
   // bersihkan file video lama dari memori browser
   useEffect(() => () => void (render.s === "done" && URL.revokeObjectURL(render.url)), [render]);
@@ -94,6 +100,7 @@ export default function RemotionStudio() {
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className="card flex justify-center p-3 sm:p-5">
         <Player
+          ref={player}
           component={comp.component}
           inputProps={props}
           durationInFrames={comp.durationInFrames}

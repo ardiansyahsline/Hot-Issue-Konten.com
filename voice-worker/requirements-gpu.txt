@@ -1,0 +1,33 @@
+# Dependensi mesin suara. Dipasang install.ps1 SETELAH torch==2.8.0 + torchaudio==2.8.0 (cu128).
+#
+# chatterbox-tts 0.1.7, s3tokenizer 0.3.0 & deepfilternet 0.5.6 dipasang dengan --no-deps:
+#  - chatterbox-tts mengunci torch==2.6.0 (belum kenal RTX 50xx / sm_120) + numpy<2
+#  - deepfilternet mengunci numpy<2 & packaging<24 (bentrok dengan pocket-tts yang butuh numpy>=2)
+#  - s3tokenizer ikut menarik pre-commit dll. yang tidak perlu
+# Jadi dependensinya dipasang satu per satu di bawah (versi yang cocok dengan torch 2.8 cu128).
+
+# --- chatterbox-tts ---
+transformers==5.2.0
+diffusers==0.29.0
+safetensors==0.5.3
+conformer==0.3.2
+resemble-perth==1.0.1
+omegaconf>=2.3
+einops>=0.7
+onnx>=1.16
+tokenizers>=0.21
+huggingface-hub>=1.0,<2
+tqdm
+# resemble-perth (watermark suara AI) masih butuh pkg_resources → setuptools < 81
+setuptools>=70,<81
+
+# --- pocket-tts (cadangan CPU) ---
+pocket-tts==4.0.1
+
+# --- deepfilternet (pembersih suara) ---
+deepfilterlib==0.5.6
+appdirs>=1.4,<2
+loguru>=0.7
+sympy>=1.12
+packaging
+requests>=2.27

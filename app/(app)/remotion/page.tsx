@@ -1,18 +1,18 @@
-import { requireAdmin } from "@/lib/auth";
-import RemotionStudio from "@/components/remotion/StudioLazy";
+import { requireStudio } from "@/lib/studio/access.server";
+import StudioTabs from "@/components/remotion/pro/StudioTabs";
 
-export const metadata = { title: "Remotion · CS Tracker" };
+export const metadata = { title: "Studio · CS Tracker" };
 
-/** Menu Remotion — bikin video promosi/UGC dari kode (sementara khusus admin) */
-export default async function RemotionPage() {
-  await requireAdmin();
+/** Menu Studio — admin & user yang diberi akses (dicek di server) */
+export default async function StudioPage() {
+  await requireStudio();
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="page-title">🎞️ Remotion</h1>
-        <p className="page-sub">Bikin video UGC fitur CS Tracker — preview, ubah teks, lalu download. Khusus admin.</p>
+        <h1 className="page-title">🎬 Studio</h1>
+        <p className="page-sub">Bikin video pro bareng Harley si Sutradara — ketik ide, cek rencana, preview, lalu download.</p>
       </div>
-      <RemotionStudio />
+      <StudioTabs />
     </div>
   );
 }

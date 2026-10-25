@@ -2,6 +2,7 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import Logo from "@/components/Logo";
 import { getCurrentUser, getProfile } from "@/lib/auth";
+import { canUseStudio } from "@/lib/studio/access.server";
 import { signOut } from "@/app/login/actions";
 import { ROLES, isRole } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -16,7 +17,7 @@ import SoundNotifier from "@/components/SoundNotifier";
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [{ user }, profile, theme, pendingVr] = await Promise.all([
+  const [{ user }, profile, theme, pendingVr, studio] = await Promise.all([
     getCurrentUser(),
     getProfile(),
     getTheme(),
@@ -24,6 +25,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     getCurrentUser()
       .then(({ supabase }) => supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu"))
       .then((r) => r.count ?? 0, () => 0),
+    // menu Studio: admin atau user yang diberi akses (gagal cek -> disembunyikan)
+    canUseStudio().catch(() => false),
   ]);
   const name = profile?.full_name || user.email;
   const role = profile && isRole(profile.role) ? ROLES[profile.role] : null;
@@ -42,7 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               </span>
             </Link>
             <div className="order-3 w-full sm:order-none sm:w-auto">
-              <Nav role={profile?.role ?? null} pendingVr={pendingVr} />
+              <Nav role={profile?.role ?? null} pendingVr={pendingVr} studio={studio} />
             </div>
           </div>
           <div className="order-2 flex items-center gap-1.5 sm:order-none sm:gap-2">
