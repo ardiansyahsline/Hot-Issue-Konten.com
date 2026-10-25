@@ -50,7 +50,27 @@ export function splitMusic(text: string): { text: string; cmd: MusicCmd | null; 
   return { text: (text.slice(0, m.index) + text.slice(m.index! + m[0].length)).trim(), cmd, partial: false };
 }
 
-export const playMusic = (cmd: MusicCmd) => window.dispatchEvent(new CustomEvent<MusicCmd>("cs-music", { detail: cmd }));
+/** kunci untuk mengenali "lagu/perintah yang sama" (kartu musik di chat tahu dirinya sedang diputar atau tidak) */
+export const musicKey = (c: MusicCmd) => JSON.stringify([c.source ?? "", c.query ?? "", c.top ?? "", c.url ?? "", c.preset ?? "", c.prompt ?? ""]);
+const isPlayCmd = (c: MusicCmd) => !!(c.query || c.top || c.url || c.preset || c.prompt || c.source === "ai");
+let lastKey = "";
+export const lastMusicKey = () => lastKey;
+
+export const playMusic = (cmd: MusicCmd) => {
+  if (isPlayCmd(cmd) && !cmd.action) lastKey = musicKey(cmd);
+  if (cmd.action === "stop") lastKey = "";
+  window.dispatchEvent(new CustomEvent<MusicCmd>("cs-music", { detail: cmd }));
+};
+
+/** status pemutar (dikirim pemutar 🎵, dibaca kartu musik di chat) */
+export type MusicState = { playing: boolean; source: "ai" | "yt" | null; bpm?: number | null };
+let current: MusicState = { playing: false, source: null };
+export const getMusicState = () => current;
+export function setMusicState(s: MusicState) {
+  if (s.playing === current.playing && s.source === current.source && s.bpm === current.bpm) return;
+  current = s;
+  window.dispatchEvent(new CustomEvent<MusicState>("cs-music-state", { detail: s }));
+}
 
 export function musicLabel(c: MusicCmd): string {
   if (c.action === "pause") return "⏸ Musik dijeda";

@@ -60,6 +60,16 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
     { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: true },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
+  // pemutar musik cukup SATU di halaman (kalau dua, perintah "putar" diterima dua pemutar -> suara dobel):
+  // dipasang di menu HP atau menu layar lebar sesuai ukuran layar
+  const [narrow, setNarrow] = useState<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   const badge = (cls: string) =>
     vrPending > 0 && (
@@ -91,7 +101,7 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
         </Link>
       ))}
       <span className="flex min-w-0 items-center justify-center [&>button]:px-1 [&>button]:text-[16px]">
-        <MusicButton />
+        {narrow === true && <MusicButton />}
       </span>
     </nav>
     <nav className="hidden max-w-full gap-1 overflow-x-auto rounded-full sm:flex border border-zinc-800/80 bg-zinc-900 p-1 [scrollbar-width:none]" style={{ boxShadow: "var(--shadow-sm)" }}>
@@ -111,7 +121,7 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
           </Link>
         );
       })}
-      <MusicButton />
+      {narrow === false && <MusicButton />}
     </nav>
     </>
   );
