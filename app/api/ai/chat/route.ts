@@ -7,6 +7,8 @@ import { personaIntro, personaOf, splitVia, viaMarker, type Group as PGroup } fr
 import { isAiOwner } from "@/lib/aiOwner";
 import { DESIGN_INTENT, DESIGN_RULES } from "@/lib/kontenDesign";
 import { MUSIC_INTENT, MUSIC_RULES } from "@/lib/musicCmd";
+import { PHOTO_INTENT, PHOTO_OF_ATTACHMENT, VISUAL_COMPLEX, VISUAL_INTENT, visualRules } from "@/lib/visual";
+import { photoQuery, searchPhotos, type PhotoResult } from "@/lib/photos.server";
 import { CHAR_PREFIX, brainText, customPrompt, isCharModel, registerChar, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { SMART, SMART_HERO, heavyModelFrom, heroName, isChatModel, isVisionModel, providerOf, rankTextModels, rankVisionModels, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
 import { ATTACH_BUCKET } from "@/lib/attachments";
@@ -264,6 +266,16 @@ export async function POST(req: NextRequest) {
   const prevRequest = [...hist].reverse().find((m) => m.role === "user" && m !== lastUser && !/^📌/.test(m.content))?.content ?? "";
   const taskText = cardAnswer ? `${prevRequest}\n${lastText}` : lastText;
 
+  // 5a) VISUAL: desain (HTML/CSS/SVG → PNG) & foto asli dari internet — tanpa model pembuat gambar
+  const lastAssistantText = [...hist].reverse().find((m) => m.role === "assistant")?.content ?? "";
+  // lanjutan desain: pilih opsi / revisi / pakai foto, atau pesan pendek setelah jawaban berisi desain ("ganti warna jadi biru")
+  const designFollow = /```design/.test(lastAssistantText) && (/^(📌 (Pilih desain|Pakai foto)|✏️ Revisi desain)/.test(lastText) || (lastText.length < 240 && !TRADE_INTENT.test(lastText) && !SMALL_TALK.test(lastText.trim()) && DESIGN_EDIT.test(lastText)));
+  const visualMode = !hasImages && (designFollow || (VISUAL_INTENT.test(taskText) && !/\b(ppt|pptx|powerpoint|presentasi|slide|deck|report campaign|campaign performance|one.?pager|portfolio|portofolio|laporan)\w*/i.test(taskText)));
+  const photoMode = !hasImages && !/^(📌 (Pakai foto|Foto asli)|✏️)/.test(lastText) && PHOTO_INTENT.test(taskText) && !PHOTO_OF_ATTACHMENT.test(lastText);
+  const photoQ = photoMode ? photoQuery(cardAnswer ? prevRequest : lastText) : "";
+  // dicari bareng langkah lain; tidak pernah error (kunci kosong / gagal -> daftar kosong)
+  const photosP: Promise<PhotoResult | null> = photoQ ? searchPhotos(photoQ, 6).catch(() => null) : Promise.resolve(null);
+
   // 5) data CS Tracker (otomatis kalau pertanyaannya soal isi website / lanjutan dari jawaban yang memakai data)
   const prevAssistant = [...hist].reverse().find((m) => m.role === "assistant");
   // pertanyaan lanjutan ("yang itu siapa PIC-nya?") setelah jawaban yang memakai data -> tetap pakai data
@@ -396,7 +408,11 @@ export async function POST(req: NextRequest) {
   const brain = custom ? brainText(custom, customMem, 20000, lastText) : "";
   const turnRules: string[] = [];
   // standar desain Konten.com (skill konten-report-designer) untuk semua permintaan desain / laporan / PPT / report
-  if (DESIGN_INTENT.test(taskText)) turnRules.push(DESIGN_RULES);
+  if (DESIGN_INTENT.test(taskText) && !visualMode) turnRules.push(DESIGN_RULES);
+  // desain visual (poster, banner, thumbnail, infografis, diagram, mockup …) -> blok ```design dirender jadi PNG
+  if (visualMode) turnRules.push(visualRules());
+  const photos = await photosP;
+  if (photoMode) turnRules.push(photoRules(photoQ, photos, visualMode));
   // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
   if (MUSIC_INTENT.test(lastText)) turnRules.push(MUSIC_RULES);
   const folderMsg = folder ? folderPrompt(folder) : "";
@@ -407,7 +423,7 @@ export async function POST(req: NextRequest) {
   // ===== aturan per mode (hanya dimuat saat dipakai, supaya hemat token) =====
   const marketMode = !!web.chart || !!marketOnly || assetAsk || answered;
   if (marketMode) turnRules.push(marketRules(!!web.live, goalNews));
-  const coworkMode = !!folder || DESIGN_INTENT.test(taskText) || COWORK_INTENT.test(taskText);
+  const coworkMode = !visualMode && (!!folder || DESIGN_INTENT.test(taskText) || COWORK_INTENT.test(taskText));
   if (coworkMode) turnRules.push(coworkRules(!folder && /\b(ppt|pptx|powerpoint|presentasi|slide|deck)\w*/i.test(taskText)));
   // obrolan ringan / pertanyaan konsep singkat -> jangan pernah pakai kartu
   if (smallTalk || (lastText.length < 160 && CONCEPT_Q.test(lastText.trim()))) turnRules.push("Pesan ini obrolan ringan / pertanyaan konsep: jawab langsung, JANGAN pakai kartu ```ask.");
@@ -424,7 +440,7 @@ export async function POST(req: NextRequest) {
   // 🧠 tugas berat & penting (PPT/laporan, report campaign, analisa lengkap, baca data folder, teks panjang, atau diminta):
   //    + analisa trading / trade plan. Jawaban ditulis mesin Sonnet; Haiku tetap jadi "perencana" (mikir dulu, browsing) + cadangan.
   //    Dibatasi per user per hari. Di halaman Usage pemakaiannya digabung ke baris Haiku.
-  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: DESIGN_INTENT.test(taskText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
+  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: visualMode && VISUAL_COMPLEX.test(designFollow ? `${prevRequest}\n${lastText}` : taskText), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
   let heavyOn = false;
   if (heavyWhy) {
     const hm = heavyModelFrom(models);
@@ -450,10 +466,12 @@ export async function POST(req: NextRequest) {
   type Msg = { role: string; content: string | Part[] };
   const histMsgs: Msg[] = [];
   const start = Math.max(0, hist.length - SEND_HISTORY);
+  // desain terakhir tetap dikirim utuh (revisi bertahap butuh kodenya), desain lama dipangkas
+  const lastDesignAt = hist.map((m) => m.role === "assistant" && /```design/.test(m.content)).lastIndexOf(true);
   for (let i = start; i < hist.length; i++) {
     const m = hist[i];
     const imgs = m.images ?? [];
-    const text = compactMsg(m.content, m.role, i >= hist.length - 3);
+    const text = compactMsg(m.content, m.role, i >= hist.length - 3, i === lastDesignAt);
     if (m.role === "user" && imgs.length && imageTurns.has(i)) {
       const urls = (await Promise.all(imgs.map(toDataUrl))).filter((u): u is string => !!u);
       histMsgs.push({ role: "user", content: [{ type: "text", text: text || "Tolong jelaskan gambar ini." }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))] });
@@ -873,6 +891,8 @@ function heavyReason(text: string, o: { approach: string; folderData: boolean; d
   if (/\b(ppt|pptx|powerpoint|presentasi|slide|deck|report campaign|one.?pager|portfolio|portofolio)\w*/i.test(text)) return "ppt/report";
   if (/\b(buat|bikin|buatin|bikinin|susun|susunin)\w*\s+(\w+\s+){0,3}laporan/i.test(text)) return "laporan";
   if (o.approach === "full") return "analisa lengkap";
+  // desain visual kompleks (infografis, alur, diagram, mockup, A4) -> mesin berat; poster/thumbnail biasa tetap mesin hemat
+  if (o.design) return "desain kompleks";
   if (o.trade) return "analisa trading";
   if (o.folderData) return "data folder";
   if (text.length > 4000) return "teks panjang";
@@ -896,6 +916,9 @@ const THINK_WORDS = /\b(kenapa|mengapa|gimana bisa|apa penyebab|penyebab|dampak|
 /** rangkuman / tren dari data (CS Tracker atau hasil browsing) */
 const AGGREGATE = /\b(rangkum|ringkas|rekap|report|tren|trend|terbanyak|paling banyak|pola|minggu ini|bulan ini|per (pic|kategori|minggu)|dibanding|naik|turun|statistik|persen)\w*/i;
 
+/** pesan revisi desain singkat ("ganti warna jadi biru", "judulnya lebih besar", "pakai opsi B") */
+const DESIGN_EDIT = /\b(ganti|ubah|jadi(in)?|lebih|warna|teks|tulisan|judul|font|huruf|besar(in)?|kecil(in)?|geser|tambah(in)?|hapus|buang|versi|ukuran|background|latar|logo|foto|gambar|rapi\w*|revisi|opsi|pilih|yang (a|b|c|pertama|kedua|ketiga)|terang|gelap|bold|minimalis|ramai|kontras|9:16|16:9|1:1|4:5|a4)\b/i;
+
 /** sapaan / terima kasih (bukan "iya"/"oke" — itu bisa jawaban atas pertanyaan AI) — tidak perlu perencana internet atau mesin berat */
 const SMALL_TALK =
   /^(hai+|halo+|hallo|helo|hi+|hey|hei|pagi|siang|sore|malam|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks?|thx|tq|mantap\w*|keren|nice|wkwk\w*|haha\w*|hehe\w*)([\s,!.]+(ya|kak|bro|sis|min|banget|deh|nih|semua|banyak|hehe|wkwk))*[\s!.]*$/i;
@@ -910,12 +933,13 @@ const isClaudeModel = (m: string) => /claude|anthropic|haiku|sonnet|opus|^anth\/
  * Rapikan satu pesan riwayat sebelum dikirim ulang ke AI.
  * 3 pesan terakhir dikirim utuh; yang lebih lama: buang daftar sumber, blok data besar (deck/tradeplan/fileplan…), lalu dipotong.
  */
-function compactMsg(text: string, role: string, recent: boolean): string {
+function compactMsg(text: string, role: string, recent: boolean, keepDesign = false): string {
   let t = text.replace(/\[\[ask:[\s\S]*?\]\]/g, "(menanyakan pendekatan analisa)").replace(/\n*\[\[chart:[^\]]*\]\]/g, "");
-  if (recent) return t;
+  if (!keepDesign) t = t.replace(/```design[ \t]*([^\n]*)\n[\s\S]*?(```|$)/g, (_, h: string) => `(desain "${h.trim()}" sudah dikirim sebelumnya)`);
+  if (recent || keepDesign) return t;
   t = t
     .replace(/\n+---\n🌐 \*\*Sumber:\*\*[\s\S]*$/, "")
-    .replace(/```(deck|report|tradeplan|fileplan|music|srt|ask)\b[\s\S]*?(```|$)/g, (_, k: string) => `(blok ${k} sudah dikirim sebelumnya)`);
+    .replace(/```(deck|report|tradeplan|fileplan|music|srt|ask|photos)\b[\s\S]*?(```|$)/g, (_, k: string) => `(blok ${k} sudah dikirim sebelumnya)`);
   const max = role === "user" ? 3000 : 1500;
   return t.length > max ? `${t.slice(0, max)} …(dipotong)` : t;
 }
@@ -952,11 +976,40 @@ function coworkRules(deckSpec: boolean) {
   return [
     "MODE COWORK (tugas / bikin file). Alur: pahami tujuan → kartu ```ask kalau perlu → rencana singkat → kerjakan → cek ulang → serahkan.",
     "- Info penting belum ada (periode, sumber data, untuk siapa, format/jumlah slide) dan salah tebak bikin kerja ulang → kirim kartu ```ask DULU, jangan langsung bikin file panjang. Sudah jelas / user sudah jawab kartu → langsung kerjakan.",
-    "- Hasil SIAP PAKAI pakai fitur website: blok ```deck untuk PPT, ```report untuk report campaign, ```fileplan untuk rapikan file, tabel/teks rapi untuk dokumen. Jangan menceritakan proses panjang.",
+    "- Hasil SIAP PAKAI pakai fitur website: blok ```deck untuk PPT, ```report untuk report campaign, ```fileplan untuk rapikan file, ```design untuk poster/gambar/infografis, tabel/teks rapi untuk dokumen. Jangan menceritakan proses panjang.",
     "- Sebelum menyerahkan, cek ulang: angka cocok dengan data, tidak ada placeholder (…, XX, [isi]), jumlah slide/poin sesuai permintaan, JSON valid.",
     "- Buka dengan 1–2 kalimat ringkasan hasil (gaya karaktermu); tutup dengan TEPAT 1 saran langkah berikutnya.",
     "- Laporan/PPT dari data CS Tracker: semua angka dari blok DATA CS TRACKER (sebut periodenya). Data tidak ada → bilang, jangan mengarang.",
     ...(deckSpec ? ["", "FORMAT PPT — tutup jawaban dengan SATU blok ```deck berisi JSON (website mengubahnya jadi PowerPoint bergaya Konten.com):", ...DECK_SPEC] : []),
+  ].join("\n");
+}
+
+/** hasil cari foto asli untuk giliran ini (foto Unsplash/Pexels boleh masuk desain, foto web umum tidak) */
+function photoRules(q: string, r: PhotoResult | null, design: boolean) {
+  const items = r?.items ?? [];
+  const block = `\`\`\`photos\n{"query":${JSON.stringify(q)},"count":${Math.max(4, items.length || 6)}}\n\`\`\``;
+  if (!items.length)
+    return [
+      `FOTO ASLI untuk "${q}" TIDAK TERSEDIA saat ini (${r?.note ?? "sumber foto gagal"}). JANGAN menolak dan jangan bilang tidak bisa.`,
+      design
+        ? "- Buat desainnya dengan ILUSTRASI SVG buatan sendiri sebagai pengganti foto, dan bilang jujur 1 kalimat: gambarnya ilustrasi, bukan foto asli."
+        : "- Gambar ILUSTRASI SVG yang rapi lewat SATU blok ```design 1:1 (bukan 2–3 opsi), dan bilang jujur di awal: ini ilustrasi buatanku, bukan foto asli — foto asli belum ketemu.",
+    ].join("\n");
+  const src = r!.source === "web" ? "pencarian gambar web" : r!.source === "unsplash" ? "Unsplash" : "Pexels";
+  const stock = items.filter((p) => p.provider !== "web");
+  return [
+    `HASIL CARI FOTO ASLI (query "${q}", sumber ${src}, ${items.length} foto). Website menampilkannya sebagai grid lengkap dengan kredit & lisensi kalau kamu menulis blok ini PERSIS:`,
+    block,
+    "- Bilang jujur 1 kalimat: ini foto asli dari internet (sebut sumbernya), bukan dibuat AI." + (r!.source === "web" ? " Ingatkan: foto web umum, cek hak cipta sebelum dipakai untuk konten/promosi." : " Boleh dipakai gratis, tetap cantumkan kredit fotografer."),
+    "- Jangan menulis ulang daftar link fotonya (sudah ada di grid). Boleh tawarkan: pakai salah satu di desain" + (stock.length ? "" : " (hanya untuk foto Unsplash/Pexels)") + ".",
+    ...(design
+      ? stock.length
+        ? [
+            "- User juga minta DESAIN pakai foto: masukkan foto ini sebagai <img> (object-fit:cover) + lapisan gradasi supaya teks terbaca, dan kredit kecil di pojok. Foto yang boleh dipakai:",
+            ...stock.slice(0, 3).map((p, i) => `  ${i + 1}. ${p.full} — kredit: "Foto: ${p.author} / ${p.provider === "unsplash" ? "Unsplash" : "Pexels"}"`),
+          ]
+        : ["- User juga minta DESAIN pakai foto, tapi foto yang ada hanya dari web umum (hak cipta belum jelas) → JANGAN masukkan ke desain. Pakai ilustrasi SVG di desain, tampilkan grid fotonya terpisah, dan bilang 1 kalimat alasannya."]
+      : []),
   ].join("\n");
 }
 
