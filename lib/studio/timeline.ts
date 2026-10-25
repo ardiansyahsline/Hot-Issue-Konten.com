@@ -454,13 +454,18 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   };
 }
 
+/** VO cadangan tanpa penyimpanan server (service role kosong) dikirim sebagai data URL mp3/wav — dibatasi ±1,5 MB per baris */
+const MAX_DATA_VO = 2_000_000;
+const safeVoSrc = (v: unknown): string | null =>
+  typeof v === "string" && /^data:audio\/(mpeg|mp3|wav|x-wav);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length <= MAX_DATA_VO ? v : safeMediaSrc(v);
+
 function normVo(v: unknown, sceneIds: Set<string>): VoTrack | null {
   const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
   if (!o) return null;
   const lines = arr(o.lines)
     .map((l) => {
       const x = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
-      const src = safeMediaSrc(x.src);
+      const src = safeVoSrc(x.src);
       const words = arr(x.words)
         .map((w) => {
           const y = (w && typeof w === "object" ? w : {}) as Record<string, unknown>;

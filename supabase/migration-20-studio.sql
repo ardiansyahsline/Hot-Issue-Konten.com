@@ -310,7 +310,14 @@ drop policy if exists "studio_delete" on storage.objects;
 create policy "studio_delete" on storage.objects for delete to authenticated
   using (
     bucket_id = 'studio' and public.can_use_studio()
-    and ((storage.foldername(name))[1] = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text or public.is_admin())
+    and (
+      (storage.foldername(name))[1] = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text
+      -- rekaman bank suara: boleh dihapus kalau bukan milik orang lain (pemilik menghapus suaranya)
+      or (storage.foldername(name))[1] = 'voices' and not exists (
+        select 1 from public.studio_voices v where v.id::text = (storage.foldername(name))[2] and v.owner is distinct from auth.uid()
+      )
+      or public.is_admin()
+    )
   );
 
 -- ---------- 10. Realtime: progres antrian tampil langsung di website ----------
