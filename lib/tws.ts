@@ -137,7 +137,7 @@ const BASE_CSS = `
 .tokoh img{height:100%;width:auto;max-width:none;display:block;filter:drop-shadow(0 0 34px rgba(61,110,247,.38)) drop-shadow(0 30px 40px rgba(0,0,0,.6))}
 .kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.5)}
 .udara{position:absolute;left:0;right:0;top:0;height:760px;z-index:2}
-.big3d{position:absolute;left:0;right:0;top:56px;z-index:3}
+.big3d{position:absolute;left:0;right:0;top:0;z-index:3}
 .judul{position:absolute;left:68px;right:52px;bottom:110px;z-index:10;margin:0;font-weight:800;line-height:1.12;letter-spacing:-.02em;text-transform:uppercase;text-shadow:0 2px 18px rgba(0,0,0,.45)}
 .judul span{display:block;white-space:nowrap}
 .judul em{font-style:normal;display:inline-block;background:linear-gradient(180deg,#4a7dff 0%,#2a56ea 100%);padding:3px 16px 1px;margin:3px 0 3px -16px;border-radius:5px;text-shadow:none;box-shadow:0 10px 28px rgba(42,86,234,.35)}
@@ -172,41 +172,65 @@ function mix(a: string, b: string, t: number): string {
   return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("")}`;
 }
 
-function big3d(text: string, tone: TwsTone, ambient?: string): string {
+/*
+ * Proporsi angka 3D pakai rasio emas (φ = 1,618), dicek ke referensi IG (lebar angka 51–76%, rata-rata ±60% lebar kanvas;
+ * tinggi huruf 150–270 px; dasar huruf di ±y 280–380):
+ *  - lebar angka   = lebar kanvas / φ      ≈ 667 px (61,8%)
+ *  - tinggi maks   = tinggi kanvas / φ⁴    ≈ 197 px (huruf kapital), jadi angka pendek ("40x") tidak raksasa
+ *  - garis dasar   = tinggi kanvas / φ³    ≈ y 319
+ *  - posisi samping: garis emas x = 1080/φ² ≈ 412 (kiri) atau 1080/φ ≈ 667 (kanan) — angka di satu sisi, tokoh di sisi lain
+ */
+const PHI = 1.618;
+const NUM_W = Math.round(1080 / PHI);
+const NUM_CAP = Math.round(1350 / PHI ** 4);
+const NUM_BASE = Math.round(1350 / PHI ** 3);
+const GOLD_L = Math.round(1080 / PHI ** 2), GOLD_R = 1080 - GOLD_L;
+/** perkiraan lebar teks (em) huruf Inter Tight 900 dengan spasi rapat */
+const numEm = (t: string) =>
+  [...t].reduce((n, c) => n + (/[0-9]/.test(c) ? 0.58 : /[,.]/.test(c) ? 0.24 : c === " " ? 0.22 : c === "%" ? 0.82 : /[-+−]/.test(c) ? 0.46 : /[a-z]/.test(c) ? 0.54 : 0.62), 0) || 1;
+type NumSide = "left" | "right" | "center";
+function numLayout(text: string, side: NumSide) {
+  const size = Math.round(Math.max(110, Math.min(NUM_CAP / 0.72, NUM_W / numEm(text))));
+  const w = numEm(text) * size;
+  const want = side === "left" ? GOLD_L : side === "right" ? GOLD_R : 540;
+  const cx = Math.round(Math.min(1080 - 60 - w / 2, Math.max(60 + w / 2, want)));
+  return { size, cx, w };
+}
+
+function big3d(text: string, tone: TwsTone, ambient?: string, side: NumSide = "center"): string {
   const t = TONE3D[tone];
   const amb = ambient && /^#[0-9a-f]{6}$/i.test(ambient) ? ambient : null;
-  // angka besar (±820 px lebar, tinggi muat di atas kepala tokoh), makin panjang teksnya makin kecil
-  const size = Math.round(Math.max(130, Math.min(300, 820 / (Math.max(3, text.length) * 0.6))));
-  const y = 46 + size * 0.86;
+  const { size, cx } = numLayout(text, side);
+  const y = NUM_BASE;
   const id = `n${tone}`;
   const txt = esc(text);
   const attrs = `text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${(-size * 0.04).toFixed(1)}"`;
   // sisi tebal: dari warna sisi (sedikit kena warna lingkungan) di depan ke hampir hitam di belakang
-  const layers = 20;
-  const dx = size * 0.003, dy = size * 0.0068;
+  const layers = 14;
+  const dx = size * 0.0028, dy = size * 0.006;
   const sideFront = amb ? mix(t.side, amb, 0.22) : t.side;
   const depth = Array.from({ length: layers }, (_, i) => layers - i)
-    .map((k) => `<text ${attrs} x="${(540 + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, "#050505", (k / layers) * 0.85)}">${txt}</text>`)
+    .map((k) => `<text ${attrs} x="${(cx + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, "#050505", (k / layers) * 0.85)}">${txt}</text>`)
     .join("");
   const rim = amb ? mix(amb, "#ffffff", 0.35) : t.edge;
-  const h = Math.round(size * 1.25) + 80;
+  const h = NUM_BASE + Math.round(size * 0.3) + 40;
   const stops = t.face.map(([o, c]) => `<stop offset="${o}" stop-color="${amb && o > 0.5 ? mix(c, amb, 0.12) : c}"/>`).join("");
   return `<svg width="1080" height="${h}" viewBox="0 0 1080 ${h}" style="display:block;overflow:visible"><defs>
 <linearGradient id="${id}f" x1="0" y1="0" x2="0.18" y2="1">${stops}</linearGradient>
 <linearGradient id="${id}e" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.edge}" stop-opacity=".95"/><stop offset=".35" stop-color="${t.edge}" stop-opacity=".25"/><stop offset="1" stop-color="${t.edge}" stop-opacity="0"/></linearGradient>
 <linearGradient id="${id}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".7" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity=".55"/></linearGradient>
 <mask id="${id}k" maskUnits="userSpaceOnUse" x="0" y="0" width="1080" height="${h}"><rect width="1080" height="${h}" fill="url(#${id}m)"/></mask>
-<filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="${Math.round(size * 0.16)}"/></filter>
+<filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="${Math.round(size * 0.13)}"/></filter>
 <filter id="${id}s" x="-20%" y="-40%" width="140%" height="200%"><feGaussianBlur stdDeviation="${Math.round(size * 0.07)}"/></filter>
 <filter id="${id}t" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
-</defs><g transform="rotate(-3 540 ${Math.round(y - size * 0.35)})" mask="url(#${id}k)">
-<text ${attrs} x="560" y="${(y + size * 0.16).toFixed(1)}" fill="#000" opacity=".7" filter="url(#${id}s)">${txt}</text>
-<text ${attrs} x="540" y="${(y + size * 0.04).toFixed(1)}" fill="${t.glow}" filter="url(#${id}g)">${txt}</text>
+</defs><g transform="rotate(-3 ${cx} ${Math.round(y - size * 0.35)})" mask="url(#${id}k)">
+<text ${attrs} x="${cx + 16}" y="${(y + size * 0.14).toFixed(1)}" fill="#000" opacity=".65" filter="url(#${id}s)">${txt}</text>
+<text ${attrs} x="${cx}" y="${(y + size * 0.04).toFixed(1)}" fill="${t.glow}" opacity=".8" filter="url(#${id}g)">${txt}</text>
 ${depth}
-<text ${attrs} x="540" y="${y}" fill="url(#${id}f)">${txt}</text>
-<text ${attrs} x="540" y="${y}" fill="#fff" opacity=".07" filter="url(#${id}t)">${txt}</text>
-<text ${attrs} x="540" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.011).toFixed(1)}">${txt}</text>
-<text ${attrs} x="${(540 - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".55" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
+<text ${attrs} x="${cx}" y="${y}" fill="url(#${id}f)">${txt}</text>
+<text ${attrs} x="${cx}" y="${y}" fill="#fff" opacity=".07" filter="url(#${id}t)">${txt}</text>
+<text ${attrs} x="${cx}" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.011).toFixed(1)}">${txt}</text>
+<text ${attrs} x="${(cx - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".55" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
 </g></svg>`;
 }
 
@@ -326,17 +350,18 @@ const HEAD_CUT = 330;
 const HEAD_PHOTO = 405;
 const CUT_H: Record<NonNullable<TwsSlide["frame"]>, number> = { close: 1150, half: 860, full: 720 };
 
-/** posisi foto utuh supaya kepala (hasil deteksi wajah) berada tepat di bawah angka & di tengah */
-function photoBox(face: NonNullable<Img["face"]>, frame: TwsSlide["frame"]): string {
+/** posisi foto utuh supaya kepala (hasil deteksi wajah) berada tepat di bawah angka, digeser ke garis emas terdekat */
+function photoBox(face: NonNullable<Img["face"]>, frame: TwsSlide["frame"]): { style: string; faceX: number } {
   let w = 1080, h = w / face.aspect;
   if (h < 1350 - HEAD_PHOTO + 120) (h = 1350 - HEAD_PHOTO + 120), (w = h * face.aspect);
   // wajah terlalu kecil -> diperbesar secukupnya (maks 1,8×), "full" tidak diperbesar
   const want = frame === "close" ? 300 : frame === "full" ? 0 : 210;
   const zoom = Math.min(1.8, Math.max(1, want / Math.max(1, (face.bottom - face.top) * h)));
   (w *= zoom), (h *= zoom);
-  const left = Math.min(0, Math.max(1080 - w, 540 - face.cx * w));
+  const target = face.cx * w < 540 ? GOLD_L : GOLD_R;
+  const left = Math.min(0, Math.max(1080 - w, target - face.cx * w));
   const top = Math.min(440, Math.max(1350 - 160 - h, HEAD_PHOTO - face.top * h));
-  return `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px`;
+  return { style: `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px`, faceX: left + face.cx * w };
 }
 
 function cover(sl: TwsSlide, img: Img): string {
@@ -346,23 +371,28 @@ function cover(sl: TwsSlide, img: Img): string {
   const cut = !!(img.person && img.cut);
   const useBg = !!img.bg && (cut || !img.person);
   const base: Img = { ...img, bg: useBg ? img.bg : img.person ?? img.bg, credit: useBg ? img.credit : undefined };
-  // kabut gelap + rona warna angka di bagian atas foto: angka tampak "berada" di adegan, bukan ditempel
-  const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 70% 42% at 50% 17%,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 60% 34% at 50% 20%,${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".22)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
-  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient)}</div>` : "";
-  // tokoh terpotong: ujung kepala di HEAD_CUT, tinggi sesuai pembingkaian; memudar ke hitam tepat di atas judul
-  const ph = CUT_H[sl.frame ?? "half"];
-  const fadeFrom = Math.round(((1000 - HEAD_CUT) / ph) * 100), fadeTo = Math.min(100, Math.round(((1160 - HEAD_CUT) / ph) * 100));
-  const person = cut
-    ? `<div data-layer="Foto Tokoh" class="tokoh" style="top:${sl.big ? HEAD_CUT : HEAD_CUT - 110}px;bottom:auto;height:${ph}px;-webkit-mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%);mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%)"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>`
-    : "";
   // foto utuh (tokoh belum terpotong / foto berita berisi orang) + ada angka: foto digeser supaya kepala di bawah angka,
   // celah di atasnya diisi versi buram foto yang sama -> warnanya nyambung, angka "melayang" di atas kepala
   const drop = !!(sl.big && base.bg && !cut && ((img.person && base.bg === img.person) || img.face));
+  const pb = drop && img.face ? photoBox(img.face, sl.frame) : null;
+  // komposisi seperti referensi: tokoh di satu garis emas, angka condong ke sisi lainnya; tanpa tokoh -> angka di tengah
+  const side: NumSide = cut ? "left" : pb ? (pb.faceX >= 540 ? "left" : "right") : "center";
+  const nl = sl.big ? numLayout(sl.big, side) : null;
+  // kabut gelap + rona warna angka di belakang angka: angka tampak "berada" di adegan, bukan ditempel
+  const at = nl ? `${Math.round((nl.cx / 1080) * 100)}% 17%` : "50% 17%";
+  const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 62% 38% at ${at},rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 52% 30% at ${at},${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".2)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
+  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient, side)}</div>` : "";
+  // tokoh terpotong: ujung kepala di HEAD_CUT, tinggi sesuai pembingkaian, sedikit ke kanan (garis emas); memudar tepat di atas judul
+  const ph = CUT_H[sl.frame ?? "half"];
+  const fadeFrom = Math.round(((1000 - HEAD_CUT) / ph) * 100), fadeTo = Math.min(100, Math.round(((1160 - HEAD_CUT) / ph) * 100));
+  const person = cut
+    ? `<div data-layer="Foto Tokoh" class="tokoh" style="left:${sl.big ? 620 : 540}px;top:${sl.big ? HEAD_CUT : HEAD_CUT - 110}px;bottom:auto;height:${ph}px;-webkit-mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%);mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%)"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>`
+    : "";
   const fadeTop = "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 200px);mask-image:linear-gradient(180deg,transparent 0,#000 200px)";
   const bgLayer = drop
     ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div><div data-layer="Latar" class="latar">${
-        img.face
-          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${photoBox(img.face, sl.frame)};${fadeTop}">`
+        pb
+          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${pb.style};${fadeTop}">`
           : `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;left:0;top:300px;height:auto;min-height:1050px;${fadeTop}">`
       }</div>`
     : latar(base, sl, "", cut ? "redup" : "");
