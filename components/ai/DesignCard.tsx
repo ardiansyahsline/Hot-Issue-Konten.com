@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { SIZES, sanitizeDesign, type Design } from "@/lib/visual";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SIZES, sanitizeDesign, withUtm, type Design } from "@/lib/visual";
+import { twsSlideHtml, type TwsDeck } from "@/lib/tws";
+import { FONT_LINKS } from "@/lib/domToSvg";
 
 /**
- * Desain dari AI (blok ```design): HTML/CSS/SVG dirender di iframe sandbox (tanpa script, CSP ketat,
- * tidak bisa membaca data user), dicek otomatis (teks kepotong → dikecilkan, kontras rendah → ditandai),
- * lalu bisa diunduh PNG resolusi tinggi & HTML. Beberapa opsi → pilih satu → revisi bertahap.
+ * Desain dari AI (blok ```design / ```tws): HTML/CSS/SVG dirender di iframe sandbox (tanpa script, CSP ketat,
+ * tidak bisa membaca data user), dicek otomatis (teks kepotong → dikecilkan, kontras rendah → ditandai).
+ * - beberapa opsi → pilih satu → revisi bertahap; carousel (slide 1..6) → preview semua, revisi per slide
+ * - gambar latar & foto tokoh: upload / Unsplash-Pexels / foto web (berlabel cek hak cipta) / latar grafis
+ * - unduh: PNG resolusi tinggi, SVG siap Figma (teks tetap teks, layer bernama), HTML (html.to.design), ZIP semua slide
  */
 
 /** @font-face website (Neue Montreal, Inter, Plus Jakarta Sans) supaya desain memakai font yang sama */
@@ -24,7 +28,7 @@ function siteFontCss() {
     for (const r of Array.from(rules)) {
       if (r.constructor.name === "CSSFontFaceRule" || r.cssText.startsWith("@font-face")) {
         const fam = (r as CSSFontFaceRule).style?.getPropertyValue("font-family") ?? "";
-        if (/Neue Montreal|Inter Variable|Plus Jakarta Sans Variable/i.test(fam) && !/italic/i.test((r as CSSFontFaceRule).style?.getPropertyValue("font-style") ?? "")) {
+        if (/Neue Montreal|Inter Variable|Inter Tight Variable|Plus Jakarta Sans Variable/i.test(fam) && !/italic/i.test((r as CSSFontFaceRule).style?.getPropertyValue("font-style") ?? "")) {
           // url relatif terhadap file CSS -> absolut (iframe & file HTML unduhan)
           const base = sheet.href || location.href;
           out.push(r.cssText.replace(/url\((['"]?)([^'")]+)\1\)/g, (_m, _q, u: string) => (/^(data:|https?:)/.test(u) ? `url("${u}")` : `url("${new URL(u, base).href}")`)));
@@ -39,7 +43,7 @@ function siteFontCss() {
 const CSP =
   "default-src 'none'; img-src 'self' data: blob: https://images.unsplash.com https://plus.unsplash.com https://images.pexels.com; style-src 'unsafe-inline'; font-src 'self' data:";
 
-function buildDoc(d: Design, standalone = false) {
+function buildDoc(d: Design, html: string, standalone = false) {
   const { w, h } = SIZES[d.size];
   const origin = typeof location !== "undefined" ? location.origin : "";
   return [
@@ -50,7 +54,7 @@ function buildDoc(d: Design, standalone = false) {
     `#cs-art{width:${w}px;height:${h}px;position:relative;overflow:hidden;font-family:'Inter Variable','Plus Jakarta Sans Variable',system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased}`,
     `#cs-art>.art{width:100%;height:100%}img{max-width:100%}`,
     "</style></head><body>",
-    `<div id="cs-art">${sanitizeDesign(d.html)}</div>`,
+    `<div id="cs-art">${sanitizeDesign(html)}</div>`,
     "</body></html>",
   ].join("");
 }
@@ -124,7 +128,88 @@ function fitText(doc: Document): Check {
   return res;
 }
 
-function Frame({ d, maxH, onReady }: { d: Design; maxH: number; onReady?: (doc: Document, c: Check) => void }) {
+/* ---------- isian gambar (latar & foto tokoh) — disimpan per slide selama halaman terbuka, ikut ke revisi berikutnya ---------- */
+type Pic = { src: string; label?: string; page?: string; credit?: string; download?: string; web?: boolean };
+type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; tried?: { bg?: boolean; person?: boolean } };
+const fills = new Map<string, Fill>();
+const listeners = new Set<() => void>();
+const setFill = (k: string, f: Partial<Fill>) => {
+  fills.set(k, { ...(fills.get(k) ?? {}), ...f });
+  listeners.forEach((l) => l());
+};
+function useFills() {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const l = () => bump((n) => n + 1);
+    listeners.add(l);
+    return () => void listeners.delete(l);
+  }, []);
+  return fills;
+}
+const keyOf = (d: Design) => (d.tws ? `tws|${d.tws.deck.title ?? ""}|${d.tws.index}` : `d|${d.name}|${d.slide ?? ""}`);
+const hasSlot = (d: Design, slot: "bg" | "person") => (d.tws ? (slot === "person" ? d.tws.deck.slides[d.tws.index].type === "cover" : ["cover", "text", "cta"].includes(d.tws.deck.slides[d.tws.index].type)) : d.html.includes(`data-slot="${slot}"`));
+
+type PhotoItem = { thumb: string; full: string; page: string; author: string; provider: "unsplash" | "pexels" | "web"; download?: string };
+const toPic = (p: PhotoItem): Pic =>
+  p.provider === "web"
+    ? { src: `/api/ai/img?u=${encodeURIComponent(p.full)}`, label: "Foto web · cek hak cipta sebelum dipakai", page: p.page, web: true }
+    : { src: p.full, credit: `Foto: ${p.author} / ${p.provider === "unsplash" ? "Unsplash" : "Pexels"}`, page: withUtm(p.page), download: p.download };
+async function findPhotos(q: string, web = false): Promise<PhotoItem[]> {
+  try {
+    const r = await fetch(`/api/ai/photos?q=${encodeURIComponent(q)}&n=6${web ? "&src=web" : ""}`);
+    const j = (await r.json()) as { items?: PhotoItem[] };
+    return j.items ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** HTML akhir satu desain, dengan gambar latar / foto tokoh yang sudah dipilih */
+function htmlOf(d: Design, f: Fill | undefined): string {
+  if (d.tws) {
+    const sl = d.tws.deck.slides[d.tws.index];
+    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit });
+  }
+  let h = d.html;
+  if (f?.bg && !f.graphic) h = h.replace(/<img([^>]*?)data-slot="bg"([^>]*?)>/g, (_m, a: string, b: string) => `<img${(a + b).replace(/\ssrc="[^"]*"/, "")} data-slot="bg" src="${f.bg!.src}">`);
+  if (f?.person) h = h.replace(/<img([^>]*?)data-slot="person"([^>]*?)>/g, (_m, a: string, b: string) => `<img${(a + b).replace(/\ssrc="[^"]*"/, "")} data-slot="person" src="${f.person!.src}">`);
+  return h;
+}
+
+/** cari otomatis foto latar & foto tokoh untuk slide TWS (sekali per slide) */
+function useAutoFill(designs: Design[], on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    designs.forEach((d) => {
+      if (!d.tws) return;
+      const sl = d.tws.deck.slides[d.tws.index];
+      const k = keyOf(d);
+      const f = fills.get(k) ?? {};
+      if (sl.bg && hasSlot(d, "bg") && !f.bg && !f.tried?.bg) {
+        setFill(k, { tried: { ...f.tried, bg: true } });
+        void findPhotos(sl.bg).then((items) => {
+          const list = items.map(toPic);
+          if (list.length) setFill(k, { bg: list[0], bgList: list, bgAt: 0 });
+        });
+      }
+      if (sl.person && hasSlot(d, "person") && !f.person && !f.tried?.person) {
+        setFill(k, { tried: { ...(fills.get(k)?.tried ?? {}), person: true } });
+        void findPhotos(`${sl.person} foto`, true).then(async (items) => {
+          const p = items[0];
+          if (!p || fills.get(k)?.person) return;
+          const pic = toPic(p);
+          setFill(k, { person: { ...pic, label: "Foto tokoh dari web · cek hak cipta & pastikan orangnya benar" } });
+          const { removeBackground } = await import("@/lib/removeBg");
+          const cut = await removeBackground(pic.src);
+          const cur = fills.get(k)?.person;
+          if (cut && cur?.src === pic.src) setFill(k, { person: { ...cur, src: cut, cut: true } });
+        });
+      }
+    });
+  }, [designs, on]);
+}
+
+function Frame({ d, html, maxH, onReady }: { d: Design; html: string; maxH: number; onReady?: (doc: Document, c: Check) => void }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [cw, setCw] = useState(0);
   const { w, h } = SIZES[d.size];
@@ -136,7 +221,7 @@ function Frame({ d, maxH, onReady }: { d: Design; maxH: number; onReady?: (doc: 
     setCw(el.clientWidth);
     return () => ro.disconnect();
   }, []);
-  const [doc] = useState(() => (typeof document === "undefined" ? "" : buildDoc(d)));
+  const doc = useMemo(() => (typeof document === "undefined" ? "" : buildDoc(d, html)), [d, html]);
   const s = cw ? Math.min(cw / w, maxH / h) : 0;
   return (
     <div ref={wrap} className="w-full">
@@ -167,20 +252,9 @@ function Frame({ d, maxH, onReady }: { d: Design; maxH: number; onReady?: (doc: 
   );
 }
 
-const fileName = (d: Design) => `desain-${d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "konten"}-${d.size.replace(":", "x")}`;
-
-async function savePng(doc: Document | null, d: Design) {
-  const node = doc?.getElementById("cs-art");
-  if (!node) throw new Error("desain belum siap");
-  const { toBlob } = await import("html-to-image");
-  const { w, h } = SIZES[d.size];
-  const blob = await toBlob(node, { pixelRatio: 2, width: w, height: h, cacheBust: true, backgroundColor: "#0a0a0a" });
-  if (!blob) throw new Error("gagal membuat PNG");
-  download(blob, `${fileName(d)}.png`);
-}
-function saveHtml(d: Design) {
-  download(new Blob([buildDoc(d, true)], { type: "text/html" }), `${fileName(d)}.html`);
-}
+/* ---------- unduh ---------- */
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "konten";
+const fileName = (d: Design) => `${d.tws ? `tws-${slug(d.tws.deck.title ?? "konten").slice(0, 24)}` : "desain"}-${d.slide ? `${String(d.slide).padStart(2, "0")}-` : ""}${slug(d.name).slice(0, 28)}-${d.size.replace(":", "x")}`;
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -189,8 +263,98 @@ function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
+/**
+ * @font-face + file font (data URL) untuk PNG. html-to-image hanya mendeteksi font di elemen paling luar kalau desain
+ * ada di iframe, jadi font judul (mis. Inter Tight) tidak ikut & teks melebar/turun baris -> ditanam sendiri di sini.
+ * Hanya subset latin (cukup untuk Bahasa Indonesia), disimpan selama halaman terbuka.
+ */
+let fontEmbed: Promise<string> | null = null;
+function fontEmbedCss(): Promise<string> {
+  fontEmbed ??= (async () => {
+    const rules = siteFontCss()
+      .split(/(?=@font-face)/)
+      // buang subset cyrillic / greek / vietnam (tidak dipakai, bikin berat)
+      .filter((r) => r.startsWith("@font-face") && !/unicode-range:\s*U\+(0?460|0?400|0?301|1F00|0?370|0?102)\b/i.test(r));
+    const out = await Promise.all(
+      rules.map(async (r) => {
+        const urls = [...r.matchAll(/url\("([^"]+)"\)/g)].map((m) => m[1]);
+        let css = r;
+        for (const u of urls) {
+          try {
+            const blob = await (await fetch(u)).blob();
+            const data = await new Promise<string>((res) => {
+              const fr = new FileReader();
+              fr.onload = () => res(String(fr.result));
+              fr.readAsDataURL(blob);
+            });
+            css = css.split(u).join(data);
+          } catch {}
+        }
+        return css;
+      })
+    );
+    return out.join("\n");
+  })().catch(() => "");
+  return fontEmbed;
+}
+async function pngBlob(doc: Document | null | undefined, d: Design) {
+  const node = doc?.getElementById("cs-art");
+  if (!node) throw new Error("desain belum siap");
+  const { toBlob } = await import("html-to-image");
+  const { w, h } = SIZES[d.size];
+  const blob = await toBlob(node, { pixelRatio: 2, width: w, height: h, cacheBust: true, backgroundColor: "#0a0a0a", fontEmbedCSS: await fontEmbedCss() });
+  if (!blob) throw new Error("gagal membuat PNG");
+  return blob;
+}
+async function svgText(doc: Document | null | undefined, d: Design) {
+  const node = doc?.getElementById("cs-art");
+  if (!node) throw new Error("desain belum siap");
+  const { domToSvg } = await import("@/lib/domToSvg");
+  const { w, h } = SIZES[d.size];
+  return domToSvg(node, w, h, d.slide ? `Slide ${d.slide} · ${d.name}` : d.name);
+}
+/** aturan Unsplash: unduhan desain yang memakai foto Unsplash ikut dilaporkan */
+const trackPhotos = (ds: Design[]) =>
+  ds.forEach((d) => {
+    const dl = fills.get(keyOf(d))?.bg?.download;
+    if (dl && !fills.get(keyOf(d))?.graphic) void fetch(`/api/ai/photos?track=${encodeURIComponent(dl)}`).catch(() => {});
+  });
+
+type Fmt = "png" | "svg" | "html" | "zip-png" | "zip-svg";
+async function exportAs(fmt: Fmt, list: { d: Design; doc?: Document | null; html: string }[], title: string): Promise<string[]> {
+  trackPhotos(list.map((x) => x.d));
+  const one = list[0];
+  if (fmt === "png") download(await pngBlob(one.doc, one.d), `${fileName(one.d)}.png`);
+  if (fmt === "html") download(new Blob([buildDoc(one.d, one.html, true)], { type: "text/html" }), `${fileName(one.d)}.html`);
+  if (fmt === "svg") {
+    const r = await svgText(one.doc, one.d);
+    download(new Blob([r.svg], { type: "image/svg+xml" }), `${fileName(one.d)}.svg`);
+    return r.fonts;
+  }
+  if (fmt === "zip-png" || fmt === "zip-svg") {
+    const { zipSync, strToU8 } = await import("fflate");
+    const files: Record<string, Uint8Array> = {};
+    const fonts = new Set<string>();
+    for (const x of list) {
+      if (fmt === "zip-png") files[`${fileName(x.d)}.png`] = new Uint8Array(await (await pngBlob(x.doc, x.d)).arrayBuffer());
+      else {
+        const r = await svgText(x.doc, x.d);
+        r.fonts.forEach((f) => fonts.add(f));
+        files[`${fileName(x.d)}.svg`] = strToU8(r.svg);
+      }
+    }
+    if (fmt === "zip-svg")
+      files["BACA-DULU.txt"] = strToU8(
+        `File SVG siap Figma: tarik (drag) file .svg ke Figma. Teks tetap bisa diedit, layer sudah dinamai (Logo, Judul, Sorotan, Angka 3D, Foto Tokoh, Latar).\nInstall font ini dulu supaya tampilannya sama:\n${[...fonts].map((f) => `- ${f}${FONT_LINKS[f] ? `: ${FONT_LINKS[f]}` : ""}`).join("\n")}\n`
+      );
+    download(new Blob([zipSync(files, { level: 6 }) as BlobPart], { type: "application/zip" }), `${slug(title)}-${fmt === "zip-png" ? "png" : "svg"}.zip`);
+    return [...fonts];
+  }
+  return [];
+}
 
 const btn = "rounded-lg border border-zinc-800 px-2.5 py-1 text-[12px] font-semibold hover:bg-zinc-800/60 disabled:opacity-50";
+const chip = "rounded-full border border-zinc-800 px-2.5 py-0.5 text-[11.5px] text-zinc-400 hover:border-orange-500/50 hover:text-zinc-100";
 
 function CheckLine({ c, onFix }: { c: Check | null; onFix?: (why: string) => void }) {
   if (!c) return <span className="text-zinc-500">⏳ mengecek hasil render…</span>;
@@ -208,20 +372,140 @@ function CheckLine({ c, onFix }: { c: Check | null; onFix?: (why: string) => voi
   );
 }
 
-function Tile({ d, i, many, disabled, onSend }: { d: Design; i: number; many: boolean; disabled?: boolean; onSend: (t: string) => void }) {
+/** tombol unduh dengan pilihan format */
+function Downloads({ get, many, title }: { get: (all: boolean) => { d: Design; doc?: Document | null; html: string }[]; many: boolean; title: string }) {
+  const [busy, setBusy] = useState<Fmt | null>(null);
+  const [msg, setMsg] = useState("");
+  const run = async (f: Fmt) => {
+    setBusy(f);
+    setMsg("");
+    try {
+      const fonts = await exportAs(f, get(f.startsWith("zip")), title);
+      if (fonts.length) setMsg(`Font di SVG: ${fonts.join(", ")} — install dulu supaya di Figma tampilannya sama.`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "gagal");
+    }
+    setBusy(null);
+  };
+  const b = (f: Fmt, label: string, hint: string) => (
+    <button key={f} type="button" title={hint} disabled={!!busy} onClick={() => run(f)} className={btn}>
+      {busy === f ? "⏳" : "⬇"} {label}
+    </button>
+  );
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap gap-1.5">
+        {b("png", "PNG", "Gambar resolusi tinggi (2×)")}
+        {b("svg", "SVG Figma", "Teks tetap teks, layer bernama — tarik ke Figma")}
+        {b("html", "HTML", "Untuk plugin Figma html.to.design")}
+        {many && b("zip-png", "ZIP PNG", "Semua slide (PNG)")}
+        {many && b("zip-svg", "ZIP SVG", "Semua slide (SVG siap Figma)")}
+      </div>
+      {msg && (
+        <p className="mt-1 text-[11.5px] text-zinc-500">
+          {msg}{" "}
+          {Object.entries(FONT_LINKS)
+            .filter(([f]) => msg.includes(f))
+            .map(([f, u]) => (
+              <a key={f} href={u} target="_blank" rel="noopener noreferrer" className="mr-2 text-orange-500 hover:underline">
+                Unduh {f}
+              </a>
+            ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** kontrol gambar latar & foto tokoh untuk satu slide */
+function ImageControls({ d, disabled }: { d: Design; disabled?: boolean }) {
+  const k = keyOf(d);
+  const f = useFills().get(k) ?? {};
+  const bgIn = useRef<HTMLInputElement>(null);
+  const pIn = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState("");
+  const canBg = hasSlot(d, "bg"), canP = hasSlot(d, "person");
+  if (!canBg && !canP) return null;
+  const nextBg = async () => {
+    let list = f.bgList ?? [];
+    const q = d.tws?.deck.slides[d.tws.index].bg;
+    if (!list.length && q) {
+      setBusy("bg");
+      list = (await findPhotos(q)).map(toPic);
+      setBusy("");
+    }
+    // urutan: foto berikutnya … lalu latar grafis
+    const at = f.graphic ? 0 : (f.bgAt ?? -1) + 1;
+    if (list.length && at < list.length) setFill(k, { bgList: list, bgAt: at, bg: list[at], graphic: false });
+    else setFill(k, { graphic: true, bgAt: -1 });
+  };
+  const upload = async (file: File, slot: "bg" | "person") => {
+    const { fileToDataUrl, removeBackground } = await import("@/lib/removeBg");
+    setBusy(slot);
+    const src = await fileToDataUrl(file);
+    if (slot === "bg") setFill(k, { bg: { src, label: "Foto upload kamu" }, graphic: false });
+    else {
+      setFill(k, { person: { src, label: "Foto tokoh upload kamu · menghapus latar…" } });
+      const cut = await removeBackground(src);
+      setFill(k, { person: cut ? { src: cut, cut: true, label: "Foto tokoh upload kamu · latar dihapus" } : { src, label: "Foto tokoh upload kamu · latar gagal dihapus, dipakai utuh + pinggir gelap" } });
+    }
+    setBusy("");
+  };
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex flex-wrap gap-1.5">
+        {canBg && (
+          <button type="button" disabled={disabled || !!busy} onClick={nextBg} className={chip}>
+            {busy === "bg" ? "⏳" : "🖼"} Ganti gambar latar
+          </button>
+        )}
+        {canBg && (
+          <button type="button" disabled={disabled || !!busy} onClick={() => bgIn.current?.click()} className={chip}>
+            ⬆ Upload latar
+          </button>
+        )}
+        {canP && (
+          <button type="button" disabled={disabled || !!busy} onClick={() => pIn.current?.click()} className={chip}>
+            {busy === "person" ? "⏳ menghapus latar…" : "👤 Upload foto tokoh"}
+          </button>
+        )}
+        {f.person && (
+          <button type="button" disabled={disabled} onClick={() => setFill(k, { person: undefined })} className={chip}>
+            ✕ Tanpa tokoh
+          </button>
+        )}
+      </div>
+      <input ref={bgIn} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "bg")} />
+      <input ref={pIn} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "person")} />
+      {[f.graphic ? null : f.bg, f.person].filter(Boolean).map((p, i) => (
+        <p key={i} className={`text-[11px] ${p!.web ? "text-amber-500" : "text-zinc-500"}`}>
+          {p!.web ? "⚠ " : ""}
+          {p!.credit ?? p!.label}
+          {p!.page && (
+            <a href={p!.page} target="_blank" rel="noopener noreferrer" className="ml-1 underline underline-offset-2">
+              sumber
+            </a>
+          )}
+        </p>
+      ))}
+      {canBg && f.graphic && <p className="text-[11px] text-zinc-500">Latar grafis (bukan foto)</p>}
+    </div>
+  );
+}
+
+/** opsi desain (pilih salah satu) */
+function OptionTile({ d, i, disabled, onSend }: { d: Design; i: number; disabled?: boolean; onSend: (t: string) => void }) {
   const docRef = useRef<Document | null>(null);
   const [check, setCheck] = useState<Check | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [rev, setRev] = useState("");
+  const f = useFills().get(keyOf(d));
+  const html = htmlOf(d, f);
   const { w, h } = SIZES[d.size];
-  const revise = (t: string) => t.trim() && onSend(`✏️ Revisi desain "${d.name}": ${t.trim().slice(0, 300)}`);
   return (
     <div className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-950/40 p-2">
-      <Frame d={d} maxH={many ? 300 : 520} onReady={(doc, c) => ((docRef.current = doc), setCheck(c))} />
-      <div className={`mt-2 flex px-0.5 ${many ? "flex-col" : "flex-wrap items-center gap-x-2 gap-y-1"}`}>
-        <b className={`min-w-0 text-[13px] leading-snug ${many ? "" : "flex-1"}`}>
-          {many && <span className="mr-1 text-orange-500">{String.fromCharCode(65 + i)}.</span>}
+      <Frame d={d} html={html} maxH={300} onReady={(doc, c) => ((docRef.current = doc), setCheck(c))} />
+      <div className="mt-2 flex flex-col px-0.5">
+        <b className="min-w-0 text-[13px] leading-snug">
+          <span className="mr-1 text-orange-500">{String.fromCharCode(65 + i)}.</span>
           {d.name}
         </b>
         <span className="text-[11px] text-zinc-500">
@@ -229,41 +513,73 @@ function Tile({ d, i, many, disabled, onSend }: { d: Design; i: number; many: bo
         </span>
       </div>
       <div className="mt-1 px-0.5 text-[11.5px]">
-        <CheckLine c={check} onFix={disabled ? undefined : (why) => revise(`rapikan: ${why}. Jangan ubah konsepnya.`)} />
+        <CheckLine c={check} onFix={disabled ? undefined : (why) => onSend(`✏️ Revisi desain "${d.name}": rapikan: ${why}. Jangan ubah konsepnya.`)} />
       </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <button type="button" disabled={disabled} onClick={() => onSend(`📌 Pilih desain: ${String.fromCharCode(65 + i)}. ${d.name} — lanjut pakai yang ini`)} className="mt-2 rounded-lg bg-orange-600 px-2.5 py-1 text-[12px] font-bold text-white hover:bg-orange-500 disabled:opacity-50">
+        Pilih ini
+      </button>
+      <Downloads get={() => [{ d, doc: docRef.current, html }]} many={false} title={d.name} />
+    </div>
+  );
+}
+
+/** satu desain atau carousel: preview besar + thumbnail semua slide + revisi per slide + unduh */
+function Viewer({ designs, deck, disabled, onSend }: { designs: Design[]; deck?: TwsDeck; disabled?: boolean; onSend: (t: string) => void }) {
+  const store = useFills();
+  const [at, setAt] = useState(0);
+  const [checks, setChecks] = useState<(Check | null)[]>(() => designs.map(() => null));
+  const docs = useRef<(Document | null)[]>([]);
+  const [rev, setRev] = useState("");
+  const [copied, setCopied] = useState(false);
+  const many = designs.length > 1;
+  const cur = designs[Math.min(at, designs.length - 1)];
+  const htmls = designs.map((d) => htmlOf(d, store.get(keyOf(d))));
+  const n = cur.slide ?? at + 1;
+  const revise = (t: string) => t.trim() && onSend(many ? `✏️ Revisi slide ${n} "${cur.name}": ${t.trim().slice(0, 300)}` : `✏️ Revisi desain "${cur.name}": ${t.trim().slice(0, 300)}`);
+  const title = deck?.title || cur.name;
+  const quick = deck ? ["Ganti judul", "Angka jadi merah", "Angka jadi hijau", "Teks lebih besar"] : ["Ganti warna", "Teks lebih besar", "Lebih minimalis", cur.size === "9:16" ? "Versi 1:1" : "Versi 9:16"];
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-2">
+      {/* preview besar slide aktif (iframe thumbnail di bawah juga dipakai untuk unduh semua slide) */}
+      <Frame d={cur} html={htmls[at]} maxH={540} onReady={(doc, c) => ((docs.current[at] = doc), setChecks((x) => x.map((v, i) => (i === at ? c : v))))} />
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5">
         {many && (
-          <button type="button" disabled={disabled} onClick={() => onSend(`📌 Pilih desain: ${String.fromCharCode(65 + i)}. ${d.name} — lanjut pakai yang ini`)} className="rounded-lg bg-orange-600 px-2.5 py-1 text-[12px] font-bold text-white hover:bg-orange-500 disabled:opacity-50">
-            Pilih ini
+          <button type="button" aria-label="Slide sebelumnya" disabled={at === 0} onClick={() => setAt(at - 1)} className={`${btn} px-2`}>
+            ‹
           </button>
         )}
-        <button
-          type="button"
-          disabled={busy || !check}
-          className={btn}
-          onClick={async () => {
-            setBusy(true);
-            setErr("");
-            try {
-              await savePng(docRef.current, d);
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : "gagal");
-            }
-            setBusy(false);
-          }}
-        >
-          {busy ? "⏳" : "⬇"} PNG
-        </button>
-        <button type="button" className={btn} onClick={() => saveHtml(d)}>
-          ⬇ HTML
-        </button>
+        <b className="min-w-0 flex-1 text-[13px] leading-snug">
+          {many && <span className="mr-1 text-orange-500">Slide {n}/{designs.length}</span>}
+          {cur.name}
+        </b>
+        {many && (
+          <button type="button" aria-label="Slide berikutnya" disabled={at === designs.length - 1} onClick={() => setAt(at + 1)} className={`${btn} px-2`}>
+            ›
+          </button>
+        )}
       </div>
-      {err && <p className="mt-1 text-[11.5px] text-red-400">{err}</p>}
-      {!many && !disabled && (
+      <div className="mt-0.5 px-0.5 text-[11px] text-zinc-500">
+        {SIZES[cur.size].label} · {SIZES[cur.size].w * 2}×{SIZES[cur.size].h * 2}
+      </div>
+      {many && (
+        <div className="mt-2 grid grid-cols-6 gap-1.5">
+          {designs.map((d, i) => (
+            <button key={i} type="button" onClick={() => setAt(i)} className={`min-w-0 rounded-md p-0.5 ${i === at ? "ring-2 ring-orange-500" : "opacity-70 hover:opacity-100"}`} aria-label={`Slide ${i + 1}`}>
+              <Frame d={d} html={htmls[i]} maxH={110} onReady={(doc, c) => ((docs.current[i] = doc), setChecks((x) => x.map((v, j) => (j === i ? c : v))))} />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="mt-1.5 px-0.5 text-[11.5px]">
+        <CheckLine c={checks[at]} onFix={disabled ? undefined : (why) => revise(`rapikan: ${why}. Jangan ubah konsepnya.`)} />
+      </div>
+      <ImageControls d={cur} disabled={disabled} />
+      <Downloads get={(all) => (all ? designs.map((d, i) => ({ d, doc: docs.current[i], html: htmls[i] })) : [{ d: cur, doc: docs.current[at], html: htmls[at] }])} many={many} title={title} />
+      {!disabled && (
         <div className="mt-2 space-y-1.5">
           <div className="flex flex-wrap gap-1.5">
-            {["Ganti warna", "Teks lebih besar", "Lebih minimalis", d.size === "9:16" ? "Versi 1:1" : "Versi 9:16"].map((t) => (
-              <button key={t} type="button" onClick={() => revise(t)} className="rounded-full border border-zinc-800 px-2.5 py-0.5 text-[11.5px] text-zinc-400 hover:border-orange-500/50 hover:text-zinc-100">
+            {quick.map((t) => (
+              <button key={t} type="button" onClick={() => revise(t)} className={chip}>
                 {t}
               </button>
             ))}
@@ -277,26 +593,73 @@ function Tile({ d, i, many, disabled, onSend }: { d: Design; i: number; many: bo
                 setRev("");
               }
             }}
-            placeholder="Revisi… mis. judul jadi 'Gajian Clipper Cair!', Enter"
+            placeholder={many ? `Revisi slide ${n}… mis. judul jadi lebih singkat, Enter` : "Revisi… mis. judul jadi 'Gajian Clipper Cair!', Enter"}
             className="input w-full py-1.5 text-[12.5px]"
           />
+        </div>
+      )}
+      {deck?.caption && (
+        <div className="mt-3 rounded-lg border border-zinc-800 p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <b className="text-[12px]">Caption siap copas</b>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(`${deck.caption}\n\n${(deck.hashtags ?? []).join(" ")}`.trim()).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1500)))}
+              className={btn}
+            >
+              {copied ? "✓ Tersalin" : "⧉ Salin"}
+            </button>
+          </div>
+          <p className="mt-1 whitespace-pre-wrap text-[12.5px] text-zinc-300">{deck.caption}</p>
+          {!!deck.hashtags?.length && <p className="mt-1 text-[12px] text-orange-500">{deck.hashtags.join(" ")}</p>}
+        </div>
+      )}
+      {!!deck?.sources?.length && (
+        <div className="mt-2 px-0.5 text-[11.5px] text-zinc-500">
+          <b className="text-zinc-400">Sumber data{deck.asOf ? ` (per ${deck.asOf})` : ""}:</b>
+          <ol className="mt-0.5 list-decimal space-y-0.5 pl-4">
+            {deck.sources.map((s, i) => (
+              <li key={i}>
+                <a href={s.url} target="_blank" rel="noopener noreferrer" className="break-words underline-offset-2 hover:text-zinc-200 hover:underline">
+                  {s.title || s.url}
+                </a>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
     </div>
   );
 }
 
-export default function DesignCard({ designs, disabled, onSend }: { designs: Design[]; disabled?: boolean; onSend: (t: string) => void }) {
-  const many = designs.length > 1;
+export default function DesignCard({ designs, deck, disabled, onSend }: { designs: Design[]; deck?: TwsDeck; disabled?: boolean; onSend: (t: string) => void }) {
+  useAutoFill(designs, true);
+  const slides = !!deck || designs.some((d) => d.slide);
+  const options = !slides && designs.length > 1;
   const wide = designs.every((d) => SIZES[d.size].w > SIZES[d.size].h);
+  if (options)
+    return (
+      <div className="my-2">
+        <div className="mb-1.5 text-[12px] text-zinc-500">🎨 {designs.length} opsi desain — pilih satu, lalu revisi sampai pas</div>
+        <div className={`grid gap-2 ${wide ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2 sm:grid-cols-3"}`}>
+          {designs.map((d, i) => (
+            <OptionTile key={`${i}-${d.name}-${d.html.length}`} d={d} i={i} disabled={disabled} onSend={onSend} />
+          ))}
+        </div>
+      </div>
+    );
   return (
     <div className="my-2">
-      {many && <div className="mb-1.5 text-[12px] text-zinc-500">🎨 {designs.length} opsi desain — pilih satu, lalu revisi sampai pas</div>}
-      <div className={many ? `grid gap-2 ${wide ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2 sm:grid-cols-3"}` : ""}>
-        {designs.map((d, i) => (
-          <Tile key={`${i}-${d.name}-${d.html.length}`} d={d} i={i} many={many} disabled={disabled} onSend={onSend} />
-        ))}
-      </div>
+      {slides && designs.length > 1 && <div className="mb-1.5 text-[12px] text-zinc-500">🖼 Carousel {designs.length} slide{deck ? " · template TWS" : ""} — klik slide untuk lihat & revisi</div>}
+      <Viewer designs={designs} deck={deck} disabled={disabled} onSend={onSend} />
     </div>
   );
+}
+
+/** revisi satu slide carousel: slide yang tidak dikirim ulang diambil dari carousel sebelumnya */
+export function mergeSlides(cur: Design[], prev: Design[] | null): Design[] {
+  if (!prev?.length || !cur.length || !cur.every((d) => d.slide) || !prev.every((d) => d.slide)) return cur;
+  const byNo = new Map(prev.map((d) => [d.slide!, d]));
+  cur.forEach((d) => byNo.set(d.slide!, d));
+  return [...byNo.values()].sort((a, b) => a.slide! - b.slide!);
 }

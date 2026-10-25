@@ -149,18 +149,19 @@ const cache = new Map<string, { at: number; r: PhotoResult }>();
 const TTL = 15 * 60_000;
 
 /** cari foto: kunci kosong / sumber gagal tidak pernah melempar error — hasilnya daftar kosong + catatan */
-export async function searchPhotos(qIn: string, nIn = 6): Promise<PhotoResult> {
+export async function searchPhotos(qIn: string, nIn = 6, webOnly = false): Promise<PhotoResult> {
   const query = qIn.replace(/\s+/g, " ").trim().slice(0, 80);
   const n = Math.min(6, Math.max(4, Math.round(nIn) || 6));
   if (!query) return { query, source: "none", items: [], note: "kata kunci kosong" };
-  const ck = `${query.toLowerCase()}|${n}`;
+  const ck = `${query.toLowerCase()}|${n}|${webOnly ? "w" : ""}`;
   const hit = cache.get(ck);
   if (hit && Date.now() - hit.at < TTL) return hit.r;
 
   const ok = (list: Photo[]) => list.filter((p) => p.thumb && p.full);
   let r: PhotoResult | null = null;
   // 1) foto stok bebas pakai: Unsplash & Pexels dicari bareng, digabung selang-seling
-  const [u, p] = await Promise.all([unsplash(query, n).catch(() => []), pexels(query, n).catch(() => [])]);
+  // webOnly: foto tokoh/berita (tidak ada di Unsplash/Pexels) -> langsung pencarian gambar web
+  const [u, p] = webOnly ? [[], []] : await Promise.all([unsplash(query, n).catch(() => []), pexels(query, n).catch(() => [])]);
   const stock: Photo[] = [];
   for (let i = 0; i < n && stock.length < n; i++) {
     if (u[i]) stock.push(u[i]);

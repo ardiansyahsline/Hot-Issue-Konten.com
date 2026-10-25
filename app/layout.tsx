@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/plus-jakarta-sans";
+import "@fontsource-variable/inter-tight";
 import "./globals.css";
 import { getTheme } from "@/lib/theme";
 
