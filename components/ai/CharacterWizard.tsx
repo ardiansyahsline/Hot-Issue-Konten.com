@@ -202,6 +202,21 @@ export default function CharacterWizard({
     setDirty(true);
     setErr(null);
   };
+  /** karakter lama: ubah nama & tampilan saja -> lepas peran yang mungkin sempat dipilih, tipe kembali ke tipe tersimpan */
+  const quickEdit = () => {
+    if (roleId) {
+      trainCache.current[roleId] = training;
+      if (roleId !== CUSTOM_ROLE) lastPreset.current = roleId;
+      setRoleId("");
+      setTraining({ picks: {}, other: {} });
+      setDirty(true);
+    }
+    if (initial) setTypeOverride(initial.mbti);
+    setErr(null);
+    setStep(1 + QUIZ_QS.length + 2); // halaman nama & tampilan (tanpa halaman latihan)
+  };
+  /** semua pertanyaan latihan wajib (pilih satu) sudah dijawab */
+  const trainingDone = !!role && role.questions.every((q) => q.multi || (training.picks[q.id]?.length ?? 0) > 0 || !!training.other[q.id]?.trim());
   const setOther = (qid: string, v: string) => {
     setTraining((t) => ({ picks: t.picks, other: { ...t.other, [qid]: v } }));
     setDirty(true);
@@ -436,7 +451,7 @@ export default function CharacterWizard({
               {initial && !v2 && (
                 <div className="rounded-xl border border-dashed border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">
                   Karakter ini dibuat dengan versi lama. Jalankan Train your AI sampai selesai untuk menambahkan peran & SOP-nya.{" "}
-                  <button type="button" onClick={() => go("identity")} className="font-semibold text-orange-500 hover:underline">
+                  <button type="button" onClick={quickEdit} className="font-semibold text-orange-500 hover:underline">
                     Atau ubah nama & tampilan saja »
                   </button>
                 </div>
@@ -806,7 +821,7 @@ export default function CharacterWizard({
               Batal
             </button>
           )}
-          {initial && v2 && page.k !== "summary" && !!role && typeKnown && !(roleId === CUSTOM_ROLE && !customRole.trim()) && (
+          {initial && v2 && page.k !== "summary" && trainingDone && typeKnown && !(roleId === CUSTOM_ROLE && !customRole.trim()) && (
             <button type="button" onClick={toSummary} className="text-[12px] font-semibold text-zinc-500 hover:text-zinc-300">
               Ke ringkasan »
             </button>
