@@ -94,7 +94,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .limit(5000),
     supabase
       .from("issue_list")
-      .select("id, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
+      .select("id, title, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
       .gte("created_at", prevFromIso)
       .limit(5000),
   ]);
@@ -108,7 +108,7 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   if (missing.length) {
     const { data: more } = await supabase
       .from("issue_list")
-      .select("id, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
+      .select("id, title, category, status, is_hot, max_contact_reports_30d, report_count, pic_name, created_at")
       .in("id", missing.slice(0, 500));
     for (const r of (more ?? []) as AgentIssueRow[]) topicById.set(r.id, r);
   }
@@ -133,10 +133,11 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
   }));
   const agentRows: TopCardData[] = agentTop.map((t) => ({
     summary: agentRangkuman(t, HOT_THRESHOLD, REPORT_HOT_THRESHOLD),
-    title: t.category,
+    title: t.title,
     count: t.count,
     diff: t.count - t.prev,
-    href: `/?status=all&category=${encodeURIComponent(t.category)}`,
+    // satu topik -> buka issue-nya langsung; gabungan beberapa topik -> daftar issue kategori itu
+    href: t.topics.length === 1 && t.topics[0].id != null ? `/issues/${t.topics[0].id}` : `/?status=all&category=${encodeURIComponent(t.category)}`,
     segments: [
       { key: "open", label: "open", bar: "bg-sky-400", count: t.rows.filter((r) => r.status === "open").length },
       { key: "in_progress", label: "in progress", bar: "bg-amber-400", count: t.rows.filter((r) => r.status === "in_progress").length },

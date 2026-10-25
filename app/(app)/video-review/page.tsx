@@ -85,7 +85,7 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
     tab === "rekap" && view === "detail" ? supabase.from("video_review_category_notes").select("category, note") : Promise.resolve({ data: [] as { category: string; note: string }[] }),
     supabase.from("video_reviews").select("id", { count: "exact", head: true }),
     tab === "input"
-      ? supabase.from("video_review_list").select("*").eq("created_by", user.id).order("created_at", { ascending: false }).limit(5)
+      ? supabase.from("video_review_list").select("*").order("created_at", { ascending: false }).limit(10)
       : Promise.resolve({ data: [] as unknown[] }),
   ]);
   const totalCases = totalRes.count ?? 0;
@@ -174,14 +174,16 @@ export default async function VideoReviewPage({ searchParams }: { searchParams: 
           <VrQuickForm today={todayWib()} />
           <section className="card overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4">
-              <h2 className="text-[14px] font-semibold">5 kasus terakhir yang kamu input</h2>
+              <h2 className="text-[14px] font-semibold">
+                10 kasus terbaru <span className="font-normal text-zinc-500">· dari semua anggota tim</span>
+              </h2>
               <Link href="/video-review?tab=daftar" className="text-[12.5px] font-medium text-orange-400 hover:underline">Lihat semua →</Link>
             </div>
             {recent.length === 0 ? (
-              <p className="border-t border-zinc-800/80 px-5 py-6 text-[13px] text-zinc-500">Belum ada. Kasus yang kamu simpan akan muncul di sini.</p>
+              <p className="border-t border-zinc-800/80 px-5 py-6 text-[13px] text-zinc-500">Belum ada. Kasus yang diinput tim akan muncul di sini.</p>
             ) : (
               <div className="border-t border-zinc-800/80">
-                <VrTable rows={recent} canWrite={canEdit} numberFrom={recent.length} descending />
+                <VrTable rows={recent} canWrite={canEdit} numberFrom={recent.length} descending compact />
               </div>
             )}
           </section>
