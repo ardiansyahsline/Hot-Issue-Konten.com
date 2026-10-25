@@ -372,7 +372,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   for (const sv of arr(o.scenes).slice(0, MAX_SCENES)) {
     const s = (sv && typeof sv === "object" ? sv : {}) as Record<string, unknown>;
     const dur = Math.round(num(s.dur, 3, MIN_DUR, MAX_DUR) * FPS) / FPS;
-    if (total + dur > MAX_TOTAL) break;
+    // toleransi kecil: jumlah durasi per 1/30 detik bisa jadi 180.00000000000003 untuk rencana yang pas 180 detik
+    if (total + dur > MAX_TOTAL + 1e-6) break;
     total += dur;
     let id = str(s.id, 40).replace(/[^\w-]/g, "");
     if (!id || seen.has(id)) id = newId();

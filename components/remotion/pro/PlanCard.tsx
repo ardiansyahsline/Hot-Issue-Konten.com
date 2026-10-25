@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BED_BPM } from "@/components/remotion/studio/audio";
 import type { Catalog } from "@/lib/studio/client";
 import { SFX_BUILTIN } from "@/lib/studio/sfxMeta";
-import { BRANDS, FORMATS, MAX_SCENES, MAX_TOTAL, RATIOS, beatGrid, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 import SceneCard, { type ScenePatch, type SfxItem } from "./SceneCard";
 import { Field, Seg, Toggle, Txt, UploadBtn } from "./fields";
@@ -22,6 +22,18 @@ const HEX = /^#[0-9a-f]{6}$/i;
 const EDGE_NAME: Record<string, string> = { "id-ID-ArdiNeural": "Ardi (pria)", "id-ID-GadisNeural": "Gadis (wanita)" };
 
 /**
+ * Durasi terpanjang (≤ want, per frame) untuk adegan ke-i supaya total tidak lewat MAX_TOTAL — kalau lewat, normalizeTimeline
+ * diam-diam membuang adegan di ujung (lalu ikut tersimpan otomatis). Dicek dengan penjumlahan berurutan yang sama seperti
+ * normalizeTimeline, karena total "pas 180" dari pecahan 1/30 bisa jadi 180,00000000000003.
+ */
+function fitDur(durs: number[], i: number, want: number): number {
+  const sum = (f: number) => durs.reduce((a, d, k) => a + (k === i ? f / FPS : d), 0);
+  let f = Math.min(Math.round(want * FPS), Math.floor((MAX_TOTAL - sum(0)) * FPS + 1e-6));
+  while (f > 0 && sum(f) > MAX_TOTAL) f--;
+  return Math.max(0, f) / FPS;
+}
+
+/**
  * Kartu RENCANA DETAIL (format mengikuti naskah VO + cue sheet): konsep, hook, gaya, brand, suara, musik,
  * lalu kartu per adegan. Semua bisa diedit sebelum render; tiap perubahan dinormalisasi supaya tetap valid.
  */
@@ -35,7 +47,13 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
   /** satu-satunya pintu perubahan: fn(timeline terbaru) -> normalisasi -> onChange */
   const update = useCallback(
     (fn: (t: Timeline) => unknown) => {
-      const next = tidyTimeline(fn(ref.current), cat.current);
+      const prev = ref.current;
+      const raw = fn(prev);
+      const next = tidyTimeline(raw, cat.current);
+      // jaring terakhir: editan yang membuat adegan terbuang (lewat MAX_TOTAL) ditolak. Timeline yang sudah lewat batas
+      // dari editor lain tetap diterima seperti dulu, supaya kartu tidak macet
+      const want = (raw as { scenes?: unknown } | null)?.scenes;
+      if (Array.isArray(want) && next.scenes.length < Math.min(want.length, MAX_SCENES) && totalSec(prev) <= MAX_TOTAL) return prev;
       ref.current = next;
       onChange(next);
       return next;
@@ -65,7 +83,17 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
     }
   };
   const patch = useCallback(
-    (id: string, p: ScenePatch) => update((t) => ({ ...t, scenes: t.scenes.map((s) => (s.id === id ? { ...s, ...(typeof p === "function" ? p(s) : p) } : s)) })),
+    (id: string, p: ScenePatch) =>
+      update((t) => ({
+        ...t,
+        scenes: t.scenes.map((s, i) => {
+          if (s.id !== id) return s;
+          const q = typeof p === "function" ? p(s) : p;
+          // durasi hanya boleh memanjang sampai sisa jatah total (lihat fitDur)
+          if (typeof q.dur !== "number" || q.dur <= s.dur) return { ...s, ...q };
+          return { ...s, ...q, dur: Math.max(s.dur, fitDur(t.scenes.map((x) => x.dur), i, q.dur)) };
+        }),
+      })),
     [update],
   );
   const move = useCallback(
@@ -82,21 +110,30 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
   );
   const dup = useCallback(
     (id: string) => {
-      const i = ref.current.scenes.findIndex((s) => s.id === id);
-      if (i < 0 || ref.current.scenes.length >= MAX_SCENES) return;
+      const cur = ref.current;
+      const i = cur.scenes.findIndex((s) => s.id === id);
+      if (i < 0 || cur.scenes.length >= MAX_SCENES) return;
+      // salinan dipendekkan ke sisa jatah total; tidak muat sama sekali -> batal
+      const durs = cur.scenes.map((s) => s.dur);
+      const dur = fitDur([...durs.slice(0, i + 1), 0, ...durs.slice(i + 1)], i + 1, cur.scenes[i].dur);
+      if (dur < MIN_DUR) return;
       // id kosong -> dibuatkan id baru oleh normalizeTimeline
-      const next = update((t) => ({ ...t, scenes: [...t.scenes.slice(0, i + 1), { ...t.scenes[i], id: "", name: `${t.scenes[i].name} (salinan)`.slice(0, 40) }, ...t.scenes.slice(i + 1)] }));
-      const nid = next.scenes[i + 1]?.id;
+      const next = update((t) => ({ ...t, scenes: [...t.scenes.slice(0, i + 1), { ...t.scenes[i], id: "", dur, name: `${t.scenes[i].name} (salinan)`.slice(0, 40) }, ...t.scenes.slice(i + 1)] }));
+      const nid = next.scenes.length > cur.scenes.length ? next.scenes[i + 1]?.id : undefined;
       if (nid) setOpen((o) => new Set(o).add(nid));
     },
     [update],
   );
   const del = useCallback((id: string) => update((t) => (t.scenes.length > 1 ? { ...t, scenes: t.scenes.filter((s) => s.id !== id) } : t)), [update]);
+  /** durasi adegan baru: 3 dtk, dipendekkan ke sisa jatah total (kalau tidak, normalizeTimeline langsung membuangnya) */
+  const addDur = (t: Timeline) => fitDur([...t.scenes.map((s) => s.dur), 0], t.scenes.length, 3);
   const add = () => {
-    if (tl.scenes.length >= MAX_SCENES) return;
-    const blank: Partial<Scene> = { id: "", name: `Adegan ${tl.scenes.length + 1}`, dur: 3, text: ["Teks baru"], vo: null, visual: "", layout: { kind: "kinetic" }, sfx: [], music: "mid" };
+    const cur = ref.current;
+    const dur = addDur(cur);
+    if (cur.scenes.length >= MAX_SCENES || dur < MIN_DUR) return;
+    const blank: Partial<Scene> = { id: "", name: `Adegan ${cur.scenes.length + 1}`, dur, text: ["Teks baru"], vo: null, visual: "", layout: { kind: "kinetic" }, sfx: [], music: "mid" };
     const next = update((t) => ({ ...t, scenes: [...t.scenes, blank] }));
-    const nid = next.scenes[next.scenes.length - 1]?.id;
+    const nid = next.scenes.length > cur.scenes.length ? next.scenes[next.scenes.length - 1]?.id : undefined;
     if (nid) {
       setOpen((o) => new Set(o).add(nid));
       onSelect(nid);
@@ -286,7 +323,7 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
           />
         ))}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <button type="button" className="btn-ghost px-3 py-2 text-[12.5px]" disabled={tl.scenes.length >= MAX_SCENES || total >= MAX_TOTAL - 0.5} onClick={add}>
+          <button type="button" className="btn-ghost px-3 py-2 text-[12.5px]" disabled={tl.scenes.length >= MAX_SCENES || addDur(tl) < MIN_DUR} onClick={add}>
             ＋ Tambah adegan
           </button>
           <span className="text-[11px] text-zinc-500">

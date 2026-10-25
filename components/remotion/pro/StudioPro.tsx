@@ -105,7 +105,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
   // ---------- simpan otomatis (antri berurutan supaya urutan tulis tidak tertukar) ----------
   const queued = useRef<Job | null>(null);
-  const failed = useRef<Job | null>(null);
+  /** simpanan yang gagal, per proyek (tidak hilang walau sudah pindah proyek) */
+  const failed = useRef(new Map<string | null, Job>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chain = useRef<Promise<void>>(Promise.resolve());
 
@@ -135,10 +136,10 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
           if (error) throw error;
           if (data) bump(job.id, (data as { updated_at: string }).updated_at);
         }
-        setSave(queued.current ? "dirty" : "saved");
+        setSave(queued.current ? "dirty" : failed.current.size ? "error" : "saved");
       } catch (e) {
-        // simpan lagi nanti kalau belum ada perubahan yang lebih baru
-        if (!queued.current) failed.current = job;
+        // simpan lagi nanti kalau belum ada perubahan yang lebih baru untuk proyek yang sama
+        if (queued.current?.id !== job.id) failed.current.set(job.id, job);
         setSave("error");
         setBarErr(dbErrorText(e as { code?: string; message?: string }, "Gagal menyimpan otomatis. Cek internet lalu klik Coba lagi."));
       }
@@ -149,24 +150,31 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const queueSave = useCallback(
     (tl: Timeline) => {
       queued.current = { id: idRef.current, tl };
-      failed.current = null;
+      failed.current.delete(idRef.current); // digantikan editan yang lebih baru (proyek lain tetap disimpan ulang)
       setSave("dirty");
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => void flush(), SAVE_DELAY);
     },
     [flush],
   );
-  const retrySave = useCallback(() => {
-    if (!queued.current && failed.current) queued.current = failed.current;
-    failed.current = null;
-    setBarErr(null);
+  /** kirim editan yang antre + ulangi semua simpanan yang gagal (dipakai tombol Coba lagi & sebelum pindah proyek) */
+  const flushAll = useCallback(() => {
     void flush();
+    for (const job of failed.current.values()) {
+      queued.current = job;
+      void flush();
+    }
+    failed.current.clear();
   }, [flush]);
+  const retrySave = useCallback(() => {
+    setBarErr(null);
+    flushAll();
+  }, [flushAll]);
 
-  // tab ditutup saat masih ada yang belum tersimpan -> simpan + minta konfirmasi
+  // tab ditutup saat masih ada yang belum tersimpan (termasuk yang gagal) -> simpan + minta konfirmasi
   useEffect(() => {
     const h = (e: BeforeUnloadEvent) => {
-      if (!queued.current && !timer.current) return;
+      if (!queued.current && !timer.current && !failed.current.size) return;
       void flush();
       e.preventDefault();
       e.returnValue = "";
@@ -190,7 +198,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   // ---------- proyek ----------
   const open = useCallback(
     async (id: string) => {
-      void flush();
+      flushAll(); // simpanan proyek lama yang gagal ikut diulang dulu (tidak dibuang diam-diam)
       setBarErr(null);
       setPid(id);
       setTitle(listRef.current.find((p) => p.id === id)?.title ?? "");
@@ -212,7 +220,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
       tlRef.current = tl;
       setTimeline(tl);
     },
-    [sb, flush, setPid],
+    [sb, flushAll, setPid],
   );
 
   // daftar proyek milik sendiri, lalu buka proyek terakhir
@@ -250,7 +258,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   }, [sb, open]);
 
   const fresh = useCallback(() => {
-    void flush();
+    flushAll();
     setBarErr(null);
     setPid(null);
     setTitle("");
@@ -259,7 +267,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setSelected(null);
     setSave("idle");
     setOpening(false);
-  }, [flush, setPid]);
+  }, [flushAll, setPid]);
 
   const example = useCallback(async () => {
     setCreating(true);
@@ -268,7 +276,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setCreating(false);
     if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuat proyek. Coba lagi."));
     const row = data as ProjectRow;
-    void flush();
+    flushAll();
     setProjects((ps) => [row, ...ps]);
     setPid(row.id);
     setTitle(row.title);
@@ -276,7 +284,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setTimeline(tl);
     setSelected(null);
     setSave("saved");
-  }, [sb, flush, setPid]);
+  }, [sb, flushAll, setPid]);
 
   const rename = useCallback(
     async (t: string) => {
@@ -294,7 +302,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     const id = idRef.current;
     if (!id) return;
     if (queued.current?.id === id) queued.current = null;
-    if (failed.current?.id === id) failed.current = null;
+    failed.current.delete(id);
     const { error } = await sb.from("studio_projects").delete().eq("id", id);
     if (error) return setBarErr(dbErrorText(error, "Gagal menghapus proyek. Coba lagi."));
     const rest = listRef.current.filter((p) => p.id !== id);

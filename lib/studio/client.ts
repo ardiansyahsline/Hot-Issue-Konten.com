@@ -190,12 +190,18 @@ export function useStudioStatus(): StudioStatus | null {
 export const refreshStudioStatus = () => loadStatus();
 
 // ---------------------------------------------------------------------------------------------
-// Katalog SFX + musik (GET /api/studio/catalog sekali, cache modul). Gagal -> SFX bawaan saja.
+// Katalog SFX + musik (GET /api/studio/catalog sekali, cache modul). Gagal -> SFX bawaan saja (complete: false).
 // ---------------------------------------------------------------------------------------------
-export type Catalog = { sfx: (SfxMeta & { src: string })[]; music: { name: string; src: string; lufs?: number | null }[]; bed: boolean };
+export type Catalog = {
+  sfx: (SfxMeta & { src: string })[];
+  music: { name: string; src: string; lufs?: number | null }[];
+  bed: boolean;
+  /** false = daftar SFX tambahan gagal dimuat (belum pasti lengkap) -> cue SFX yang tidak dikenal jangan dibuang */
+  complete: boolean;
+};
 
 const BUILTIN_IDS = new Set(SFX_BUILTIN.map((s) => s.id));
-const builtinCatalog = (): Catalog => ({ sfx: SFX_BUILTIN.map((s) => ({ ...s, src: sfxSrc(s.file) })), music: [], bed: true });
+const builtinCatalog = (): Catalog => ({ sfx: SFX_BUILTIN.map((s) => ({ ...s, src: sfxSrc(s.file) })), music: [], bed: true, complete: false });
 
 function parseCatalog(raw: unknown): Catalog {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -207,7 +213,8 @@ function parseCatalog(raw: unknown): Catalog {
     .map((m) => ({ name: String(m.name || m.src.split("/").pop() || "Musik"), src: m.src, lufs: typeof m.lufs === "number" ? m.lufs : null }));
   // bawaan selalu ada walau route lupa menyertakan
   const ids = new Set(sfx.map((s) => s.id));
-  return { sfx: [...builtinCatalog().sfx.filter((s) => !ids.has(s.id)), ...sfx], music, bed: o.bed !== false };
+  // partial = route gagal membaca tabel studio_sfx
+  return { sfx: [...builtinCatalog().sfx.filter((s) => !ids.has(s.id)), ...sfx], music, bed: o.bed !== false, complete: o.partial !== true };
 }
 
 let catalogVal: Catalog | null = null;
@@ -219,6 +226,7 @@ function loadCatalog(): Promise<Catalog> {
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
     .then((j) => {
       const c = parseCatalog(j);
+      if (!c.complete) catalogP = null; // SFX tambahan gagal dibaca -> coba lagi di pemakaian berikutnya
       catalogVal = c;
       catalogSubs.forEach((f) => f(c));
       return c;

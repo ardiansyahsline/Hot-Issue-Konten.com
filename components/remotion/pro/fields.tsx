@@ -135,7 +135,11 @@ export function Txt({
   );
 }
 
-/** angka desimal (terima koma). Dikirim tiap ketikan yang valid, dibatasi min–max. */
+/**
+ * angka desimal (terima koma). Dikirim tiap ketikan yang valid, dibatasi min–max.
+ * `commitOnBlur`: dikirim saat keluar kolom / Enter saja — untuk nilai yang membuat daftar diurut ulang / dirapikan
+ * (angka setengah jadi, mis. "1" dari "1,8", tidak ikut diproses).
+ */
 export function Num({
   value,
   onCommit,
@@ -146,6 +150,7 @@ export function Num({
   placeholder,
   className = "",
   disabled,
+  commitOnBlur,
 }: {
   value: number | undefined | null;
   onCommit: (v: number | undefined) => void;
@@ -156,12 +161,22 @@ export function Num({
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  commitOnBlur?: boolean;
 }) {
   const [draft, setDraft] = useState(numText(value));
   const focus = useRef(false);
+  const edited = useRef(false);
+  const cur = useRef(value);
+  cur.current = value;
   useEffect(() => {
     if (!focus.current) setDraft(numText(value));
   }, [value]);
+  const commit = (v: string) => {
+    edited.current = false;
+    if (!v.trim()) return onCommit(undefined);
+    const n = parseNum(v);
+    if (n !== null) onCommit(Math.min(max, Math.max(min, n)));
+  };
   return (
     <input
       id={id}
@@ -172,15 +187,23 @@ export function Num({
       disabled={disabled}
       value={draft}
       onFocus={() => (focus.current = true)}
-      onBlur={() => {
+      onBlur={(e) => {
         focus.current = false;
-        setDraft(numText(value));
+        if (commitOnBlur && edited.current) {
+          commit(e.currentTarget.value);
+          // tampilkan nilai yang sudah dirapikan
+          setTimeout(() => {
+            if (!focus.current) setDraft(numText(cur.current));
+          }, 0);
+        } else setDraft(numText(value));
+      }}
+      onKeyDown={(e) => {
+        if (commitOnBlur && e.key === "Enter" && edited.current) commit(e.currentTarget.value);
       }}
       onChange={(e) => {
         setDraft(e.target.value);
-        if (!e.target.value.trim()) return onCommit(undefined);
-        const n = parseNum(e.target.value);
-        if (n !== null) onCommit(Math.min(max, Math.max(min, n)));
+        if (commitOnBlur) edited.current = true;
+        else commit(e.target.value);
       }}
       className={`input py-2 text-[13px] tabular-nums ${className}`}
     />

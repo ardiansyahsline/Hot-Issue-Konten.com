@@ -29,13 +29,14 @@ function pretty(file: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : file;
 }
 
-async function extraSfx(sb: Parameters<typeof studioClient>[0]): Promise<Sfx[]> {
-  if (!sb) return [];
+/** SFX tambahan. ok = false kalau tabel gagal dibaca -> katalog ditandai `partial` (klien jangan membuang cue SFX tambahan) */
+async function extraSfx(sb: Parameters<typeof studioClient>[0]): Promise<{ list: Sfx[]; ok: boolean }> {
+  if (!sb) return { list: [], ok: false };
   try {
     const { data, error } = await sb.from("studio_sfx").select("id,path,cat,tags,dur,lufs,tp,hit,peak,use_for").order("created_at", { ascending: true }).limit(500);
-    if (error || !data) return []; // tabel belum ada -> bawaan saja
+    if (error || !data) return { list: [], ok: false }; // tabel belum ada / gagal dibaca -> bawaan saja
     const builtin = new Set(SFX_BUILTIN.map((s) => s.id));
-    return (data as Row[])
+    const list = (data as Row[])
       .filter((r) => r.id && r.path && !builtin.has(r.id))
       .map((r) => ({
         id: r.id,
@@ -50,8 +51,9 @@ async function extraSfx(sb: Parameters<typeof studioClient>[0]): Promise<Sfx[]> 
         use: r.use_for ?? "",
         src: storageSrc(r.path),
       }));
+    return { list, ok: true };
   } catch {
-    return [];
+    return { list: [], ok: false };
   }
 }
 
@@ -75,6 +77,6 @@ export async function GET() {
   if (!g.ok) return g.res;
 
   const [extra, repo, mine] = await Promise.all([extraSfx(g.supabase), repoMusic(), userMusic(g.user.id, g.supabase)]);
-  const sfx: Sfx[] = [...SFX_BUILTIN.map((s) => ({ ...s, src: sfxSrc(s.file) })), ...extra];
-  return NextResponse.json({ sfx, music: [...repo, ...mine], bed: true }, { headers: { "Cache-Control": "private, max-age=120" } });
+  const sfx: Sfx[] = [...SFX_BUILTIN.map((s) => ({ ...s, src: sfxSrc(s.file) })), ...extra.list];
+  return NextResponse.json({ sfx, music: [...repo, ...mine], bed: true, ...(extra.ok ? {} : { partial: true }) }, { headers: { "Cache-Control": "private, max-age=120" } });
 }

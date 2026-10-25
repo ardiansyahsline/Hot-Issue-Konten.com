@@ -96,7 +96,7 @@ const BUILTIN = new Set(SFX_BUILTIN.map((s) => s.id));
 /** SFX katalog yang bukan bawaan (Freesound / tambahan) — diteruskan ke StudioVideo & normalizeTimeline */
 export const sfxExtraOf = extraSfxOf;
 
-/** placeholder untuk id SFX tambahan saat katalog belum termuat (supaya cue-nya tidak ikut terbuang) */
+/** placeholder untuk id SFX tambahan saat katalog belum termuat / tidak lengkap (supaya cue-nya tidak ikut terbuang) */
 const keepMeta = (id: string): SfxMeta => ({ id, file: "", cat: "ui", tags: [], dur: 1, lufs: -20, tp: -3, hit: 0, peak: 0, use: "" });
 
 const DATA_AUDIO = /^data:audio\/[\w.+-]+;base64,[A-Za-z0-9+/=]+$/;
@@ -123,13 +123,15 @@ function markDataVo(raw: unknown): { input: unknown; datas: string[] } {
 
 /**
  * Bersihkan timeline (dari AI / DB / editan) — wajib dipakai sebelum disimpan.
- * Katalog sudah ada -> SFX yang tidak dikenal dibuang. Katalog belum ada -> id tambahan dipertahankan dulu.
+ * Katalog lengkap -> SFX yang tidak dikenal dibuang. Katalog belum ada / gagal dimuat (`complete: false`) -> id tambahan
+ * dipertahankan dulu (kalau dibuang, cue Freesound hilang permanen di simpan otomatis berikutnya).
  */
 export function tidyTimeline(rawIn: unknown, catalog: Catalog | null): Timeline {
   const { input: raw, datas } = markDataVo(rawIn);
   const extra = sfxExtraOf(catalog);
-  if (!catalog && raw && typeof raw === "object") {
+  if (!catalog?.complete && raw && typeof raw === "object") {
     const scenes = (raw as { scenes?: unknown }).scenes;
+    const have = new Set(extra.map((s) => s.id));
     const ids = new Set<string>();
     if (Array.isArray(scenes))
       for (const s of scenes) {
@@ -137,7 +139,7 @@ export function tidyTimeline(rawIn: unknown, catalog: Catalog | null): Timeline 
         if (Array.isArray(cues))
           for (const c of cues) {
             const id = typeof c === "string" ? c : (c as { id?: unknown } | null)?.id;
-            if (typeof id === "string" && id && !BUILTIN.has(id)) ids.add(id);
+            if (typeof id === "string" && id && !BUILTIN.has(id) && !have.has(id)) ids.add(id);
           }
       }
     extra.push(...[...ids].map(keepMeta));

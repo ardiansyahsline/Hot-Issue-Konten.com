@@ -360,8 +360,10 @@ function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxIte
       <ul className="space-y-1.5">
         {s.sfx.map((c, i) => {
           const m = byId.get(c.id);
+          // kunci tidak pakai indeks (daftar diurut ulang per waktu): id + urutan ke-n untuk id yang sama
+          const nth = s.sfx.slice(0, i).filter((x) => x.id === c.id).length;
           return (
-            <li key={`${c.id}-${i}`} className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-2 py-1.5 ${c.on ? "border-zinc-800" : "border-zinc-800/60 opacity-60"}`}>
+            <li key={`${c.id}#${nth}`} className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-2 py-1.5 ${c.on ? "border-zinc-800" : "border-zinc-800/60 opacity-60"}`}>
               <Toggle on={c.on} label={`SFX ${c.id} nyala`} onChange={(v) => setCue(i, { on: v })} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[12.5px] font-semibold text-zinc-200">{c.id}</span>
@@ -369,7 +371,7 @@ function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxIte
               </span>
               <span className="flex items-center gap-1 text-[11.5px] text-zinc-500">
                 di
-                <Num value={c.at} min={0} max={s.dur} label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
+                <Num value={c.at} min={0} max={s.dur} commitOnBlur label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
                 dtk
               </span>
               {m && (
