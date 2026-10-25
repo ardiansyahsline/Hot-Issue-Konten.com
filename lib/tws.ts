@@ -11,14 +11,15 @@ import type { Design } from "./visual";
 
 // TODO: ganti dengan logo resmi (public/brand/tws-logo.png) kalau sudah ada — sekarang versi teks + ikon garis miring
 export const TWS_LOGO = "/brand/tws-logo.svg";
-export const TWS_BLUE = "#3d6ef7";
-export const TWS_TEXT_BLUE = "#4a7cff";
+export const TWS_BLUE = "#2f5ff0";
+export const TWS_TEXT_BLUE = "#3a6bff";
 export const TWS_FONTS = ["Inter Tight"];
 
 export type TwsTone = "gold" | "red" | "green" | "blue" | "white";
 export type TwsGraphic = "chart-up" | "chart-down" | "coins" | "exchange" | "arrows" | "bank" | "globe";
 /** isian gambar dari website: latar, foto tokoh (cut = latarnya sudah dihapus), kredit foto kecil di pojok */
-export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string };
+export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string; /** logo TWS hanya kalau user memang minta konten TWS */ brand?: boolean; /** warna rata-rata foto latar (#rrggbb) — angka 3D ikut disinari warna ini */ ambient?: string;
+  /** posisi kepala di foto latar (pecahan 0..1) — foto digeser supaya kepala tidak tertutup angka */ face?: { top: number; bottom: number; cx: number; aspect: number } };
 type Img = TwsImg;
 export type TwsRow = { label: string; value?: string; note?: string; icon?: string };
 export type TwsItem = { label: string; a?: string; b?: string; pct?: string; value?: string; top?: string; icon?: string };
@@ -44,8 +45,10 @@ export type TwsSlide = {
   graphic?: TwsGraphic;
   /** nama tokoh (foto dari upload user / foto berita web) */
   person?: string;
+  /** pembingkaian tokoh: close = wajah besar, half = kepala s.d. pinggang (default, barang yang dipegang tetap kelihatan), full = badan */
+  frame?: "close" | "half" | "full";
 };
-export type TwsDeck = { title?: string; asOf?: string; slides: TwsSlide[]; caption?: string; hashtags?: string[]; sources?: { title: string; url: string }[] };
+export type TwsDeck = { title?: string; asOf?: string; slides: TwsSlide[]; caption?: string; hashtags?: string[]; sources?: { title: string; url: string }[]; /** "tws" = pakai logo & gaya ajakan TWS (hanya kalau user menyebut TWS) */ brand?: "tws" };
 
 /* ------------------------------------------------------------------ parse ------------------------------------------------------------------ */
 const DONE = /```tws\s*\n?([\s\S]*?)```/i;
@@ -86,6 +89,7 @@ export function splitTws(text: string): { text: string; deck: TwsDeck | null; pa
           bg: s(x.bg, 80) || undefined,
           graphic: GRAPHICS.includes(x.graphic as TwsGraphic) ? (x.graphic as TwsGraphic) : undefined,
           person: s(x.person, 60) || undefined,
+          frame: (["close", "half", "full"].includes(String(x.frame)) ? x.frame : undefined) as TwsSlide["frame"],
         };
       })
       .slice(0, 6);
@@ -95,6 +99,7 @@ export function splitTws(text: string): { text: string; deck: TwsDeck | null; pa
       deck: {
         title: s(j.title, 80) || undefined,
         asOf: s(j.asOf, 40) || undefined,
+        brand: String(j.brand ?? "").toLowerCase() === "tws" ? "tws" : undefined,
         slides,
         caption: s(j.caption, 2200) || undefined,
         hashtags: arr(j.hashtags).map((h) => s(h, 40).replace(/^#?/, "#")).filter((h) => h.length > 1).slice(0, 15),
@@ -120,49 +125,135 @@ const toneOf = (sl: TwsSlide): TwsTone => sl.tone ?? (dirOf(sl.big) < 0 ? "red" 
 
 const BASE_CSS = `
 .art{width:100%;height:100%;position:relative;overflow:hidden;background:#000;color:#fff;font-family:'Inter Tight Variable','Inter Tight','Inter Variable',sans-serif}
-.logo{position:absolute;left:56px;top:48px;height:40px;z-index:20}
+.logo{position:absolute;left:64px;top:56px;height:44px;z-index:20}
 .logo.c{left:50%;transform:translateX(-50%)}
-.num{position:absolute;right:58px;top:56px;font-size:26px;color:#d4d4d4;z-index:20}
+.num{position:absolute;right:64px;top:62px;font-size:26px;font-weight:500;color:#e4e4e7;z-index:20}
 .latar{position:absolute;inset:0;z-index:0}
-.latar img,.latar svg{width:100%;height:100%;object-fit:cover;display:block}
-.fade{position:absolute;inset:0;z-index:2;background:linear-gradient(180deg,rgba(0,0,0,.55) 0%,rgba(0,0,0,0) 18%,rgba(0,0,0,0) 46%,rgba(0,0,0,.92) 74%,#000 86%)}
-.tokoh{position:absolute;z-index:4;bottom:300px;height:860px;left:50%;padding:0 80px;transform:translateX(-36%);-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent 100%);mask-image:linear-gradient(180deg,#000 72%,transparent 100%)}
-.tokoh img{height:100%;width:auto;display:block;filter:drop-shadow(-14px 0 26px rgba(61,110,247,.55)) drop-shadow(14px 0 26px rgba(239,68,68,.35))}
-.tokoh.utuh{padding:0;height:820px;width:700px;left:50%;transform:translateX(-42%);-webkit-mask-image:radial-gradient(ellipse 50% 58% at 50% 42%,#000 62%,transparent 100%);mask-image:radial-gradient(ellipse 50% 58% at 50% 42%,#000 62%,transparent 100%)}
-.tokoh.utuh img{width:100%;height:100%;object-fit:cover;filter:none}
-.kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.55)}
-.big3d{position:absolute;left:0;right:0;top:40px;z-index:3}
-.judul{position:absolute;left:56px;right:56px;bottom:84px;z-index:10;margin:0;font-weight:800;font-size:62px;line-height:1.1;letter-spacing:-.012em;text-transform:uppercase}
+.latar img,.latar svg{width:100%;height:100%;object-fit:cover;object-position:50% 28%;display:block}
+.latar.redup img{filter:brightness(.58) saturate(1.15) contrast(1.06)}
+.vign{position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 24%,rgba(0,0,0,0) 76%,rgba(0,0,0,.5) 100%)}
+.fade{position:absolute;inset:0;z-index:5;background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 15%,rgba(0,0,0,0) 46%,rgba(0,0,0,.7) 62%,rgba(0,0,0,.95) 76%,#000 88%)}
+.tokoh{position:absolute;z-index:4;left:50%;transform:translateX(-50%)}
+.tokoh img{height:100%;width:auto;max-width:none;display:block;filter:drop-shadow(0 0 34px rgba(61,110,247,.38)) drop-shadow(0 30px 40px rgba(0,0,0,.6))}
+.kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.5)}
+.udara{position:absolute;left:0;right:0;top:0;height:760px;z-index:2}
+.grade{position:absolute;inset:0;z-index:4;mix-blend-mode:soft-light;pointer-events:none}
+.big3d{position:absolute;left:0;right:0;top:0;z-index:3}
+.judul{position:absolute;left:68px;right:52px;bottom:110px;z-index:10;margin:0;font-weight:800;line-height:1.12;letter-spacing:-.02em;text-transform:uppercase;text-shadow:0 2px 18px rgba(0,0,0,.45)}
 .judul span{display:block;white-space:nowrap}
-.judul em{font-style:normal;background:${TWS_BLUE};padding:0 14px;margin:0 -14px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
-.kicker{font-size:25px;font-weight:400;color:#e4e4e7;letter-spacing:-.005em}
-.isi{font-weight:300;font-size:58px;line-height:1.16;letter-spacing:-.02em}
+.judul em{font-style:normal;display:inline-block;background:linear-gradient(180deg,#4a7dff 0%,#2a56ea 100%);padding:3px 16px 1px;margin:3px 0 3px -16px;border-radius:5px;text-shadow:none;box-shadow:0 10px 28px rgba(42,86,234,.35)}
+.kicker{font-size:28px;font-weight:400;color:#e4e4e7;letter-spacing:-.005em;line-height:1.3}
+.isi{font-weight:400;line-height:1.1;letter-spacing:-.03em}
 .isi .k,.k{color:${TWS_TEXT_BLUE};font-weight:700}
-.cap{font-size:22px;font-weight:400;color:#a1a1aa;line-height:1.4}
-.note{position:absolute;left:56px;right:56px;bottom:40px;z-index:10;font-size:19px;color:#8a8a8a;text-align:center}
+.cap{font-size:30px;font-weight:400;color:#d4d4d8;line-height:1.35;letter-spacing:-.005em}
+.note{position:absolute;left:56px;right:56px;bottom:36px;z-index:10;font-size:19px;color:#9a9a9a;text-align:center}
 .up{color:#3ee66b}.down{color:#ff3b3b}
 `;
 
 const kredit = (img: Img) => (img.credit && img.bg ? `<div class="kredit" data-layer="Kredit Foto">${esc(img.credit)}</div>` : "");
-/** angka besar 3D sebagai vektor SVG (gradasi + tumpukan lapisan = ketebalan) — ikut rapi di PNG & SVG Figma */
-const TONE3D: Record<TwsTone, { top: string; mid: string; low: string; depth: string[]; glow: string }> = {
-  gold: { top: "#fff7d6", mid: "#f3c85e", low: "#a8721c", depth: ["#8a5d16", "#7a5212", "#6a470f", "#5a3c0c", "#4a3109", "#3a2607"], glow: "rgba(255,190,70,.35)" },
-  red: { top: "#ffd6d6", mid: "#ff4646", low: "#b5121a", depth: ["#8d0d12", "#7d0a0e", "#6b080c", "#5a070a", "#4a0508", "#3a0406"], glow: "rgba(255,40,40,.45)" },
-  green: { top: "#d9ffe3", mid: "#45ee75", low: "#0f9a3a", depth: ["#0b7a2d", "#096a27", "#075e22", "#06501d", "#054217", "#043512"], glow: "rgba(40,255,110,.38)" },
-  blue: { top: "#dde8ff", mid: "#6c95ff", low: "#2a57de", depth: ["#24479f", "#1f3e8c", "#1a3478", "#152b64", "#112350", "#0d1a3d"], glow: "rgba(70,120,255,.45)" },
-  white: { top: "#ffffff", mid: "#e4e4e7", low: "#a1a1aa", depth: ["#71717a", "#5c5c64", "#52525b", "#3f3f46", "#2f2f35", "#27272a"], glow: "rgba(255,255,255,.25)" },
+/**
+ * Angka 3D sebagai vektor SVG — dibuat seperti benda logam yang DISINARI adegan fotonya (bukan stiker):
+ * permukaan metalik berlapis (pantulan terang-gelap-terang), sisi tebal yang makin gelap ke belakang,
+ * bayangan jatuh ke latar, cahaya pinggir berwarna lingkungan (ambient dari foto latar), tekstur halus,
+ * dan bagian bawah sedikit tenggelam ke kabut supaya menyatu dengan foto.
+ */
+type Tone3D = { face: [number, string][]; side: string; glow: string; edge: string };
+const TONE3D: Record<TwsTone, Tone3D> = {
+  gold: { face: [[0, "#fff4c8"], [0.2, "#f2cf6c"], [0.42, "#b98425"], [0.56, "#ffe7a0"], [0.78, "#a46d18"], [1, "#5e3c0b"]], side: "#5a3a0a", glow: "rgba(255,186,70,.55)", edge: "#fff1c2" },
+  red: { face: [[0, "#ffd0cc"], [0.2, "#ff5b52"], [0.42, "#b3141b"], [0.56, "#ff7d72"], [0.78, "#8e0c12"], [1, "#4a0508"]], side: "#4a0609", glow: "rgba(255,46,46,.6)", edge: "#ffc2bc" },
+  green: { face: [[0, "#dcffe7"], [0.2, "#5cf08c"], [0.42, "#119a3f"], [0.56, "#8ef9b0"], [0.78, "#0a7029"], [1, "#043a16"]], side: "#053a17", glow: "rgba(46,255,120,.5)", edge: "#d2ffe0" },
+  blue: { face: [[0, "#e4ecff"], [0.2, "#80a6ff"], [0.42, "#2b57e0"], [0.56, "#a9c1ff"], [0.78, "#1c3da4"], [1, "#0b1a4d"]], side: "#0d1d52", glow: "rgba(70,125,255,.6)", edge: "#dce6ff" },
+  white: { face: [[0, "#ffffff"], [0.2, "#eef1f5"], [0.42, "#9aa3ae"], [0.56, "#f7f9fb"], [0.78, "#6e7884"], [1, "#363c45"]], side: "#2b3038", glow: "rgba(170,200,255,.45)", edge: "#ffffff" },
 };
-function big3d(text: string, tone: TwsTone): string {
-  const t = TONE3D[tone];
-  const size = text.length > 7 ? Math.max(118, 212 - (text.length - 7) * 15) : 212;
-  const y = 70 + size * 0.86;
-  const id = `n${tone}`;
-  const attrs = `x="540" text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${-size * 0.04}"`;
-  const depth = t.depth.map((c, i) => `<text ${attrs} y="${y + (i + 1) * 2.2}" fill="${c}">${esc(text)}</text>`).join("");
-  return `<svg width="1080" height="${Math.round(size * 1.25) + 40}" viewBox="0 0 1080 ${Math.round(size * 1.25) + 40}" style="display:block;overflow:visible"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.top}"/><stop offset=".45" stop-color="${t.mid}"/><stop offset="1" stop-color="${t.low}"/></linearGradient><filter id="${id}b" x="-10%" y="-30%" width="120%" height="160%"><feGaussianBlur stdDeviation="22"/></filter></defs><text ${attrs} y="${y + 18}" fill="${t.glow}" filter="url(#${id}b)">${esc(text)}</text>${depth}<text ${attrs} y="${y}" fill="url(#${id})">${esc(text)}</text><text ${attrs} y="${y}" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5">${esc(text)}</text></svg>`;
+
+/** campur dua warna hex (t = porsi b) */
+function mix(a: string, b: string, t: number): string {
+  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const x = p(a), y = p(b);
+  return `#${x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("")}`;
 }
 
-const logo = (center = false) => `<img data-layer="Logo" class="logo${center ? " c" : ""}" src="${TWS_LOGO}" alt="TWS">`;
+/*
+ * Proporsi angka 3D pakai rasio emas (φ = 1,618), dicek ke referensi IG (lebar angka 51–76%, rata-rata ±60% lebar kanvas;
+ * tinggi huruf 150–270 px; dasar huruf di ±y 280–380):
+ *  - lebar angka   = lebar kanvas / φ      ≈ 667 px (61,8%)
+ *  - tinggi maks   = tinggi kanvas / φ⁴    ≈ 197 px (huruf kapital), jadi angka pendek ("40x") tidak raksasa
+ *  - garis dasar   = tinggi kanvas / φ³    ≈ y 319
+ *  - posisi samping: garis emas x = 1080/φ² ≈ 412 (kiri) atau 1080/φ ≈ 667 (kanan) — angka di satu sisi, tokoh di sisi lain
+ */
+const PHI = 1.618;
+const NUM_W = Math.round(1080 / PHI);
+const NUM_CAP = Math.round(1350 / PHI ** 4);
+const NUM_BASE = Math.round(1350 / PHI ** 3);
+const GOLD_L = Math.round(1080 / PHI ** 2), GOLD_R = 1080 - GOLD_L;
+/** perkiraan lebar teks (em) huruf Inter Tight 900 dengan spasi rapat */
+const numEm = (t: string) =>
+  [...t].reduce((n, c) => n + (/[0-9]/.test(c) ? 0.58 : /[,.]/.test(c) ? 0.24 : c === " " ? 0.22 : c === "%" ? 0.82 : /[-+−]/.test(c) ? 0.46 : /[a-z]/.test(c) ? 0.54 : 0.62), 0) || 1;
+type NumSide = "left" | "right" | "center";
+function numLayout(text: string, side: NumSide) {
+  const size = Math.round(Math.max(110, Math.min(NUM_CAP / 0.72, NUM_W / numEm(text))));
+  const w = numEm(text) * size;
+  const want = side === "left" ? GOLD_L : side === "right" ? GOLD_R : 540;
+  const cx = Math.round(Math.min(1080 - 60 - w / 2, Math.max(60 + w / 2, want)));
+  return { size, cx, w };
+}
+
+const rgba = (hex: string, a: number) => `rgba(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(",")},${a})`;
+
+function big3d(text: string, tone: TwsTone, ambient?: string, side: NumSide = "center", env?: string): string {
+  const t = TONE3D[tone];
+  const amb = ambient && /^#[0-9a-f]{6}$/i.test(ambient) ? ambient : null;
+  const { size, cx } = numLayout(text, side);
+  const y = NUM_BASE;
+  // id unik per angka (beberapa SVG di satu halaman tidak boleh saling pinjam gradien / potongan)
+  const id = `n${tone}${[...`${text}|${side}|${ambient ?? ""}`].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36)}`;
+  const txt = esc(text);
+  const attrs = `text-anchor="middle" font-family="Inter Tight Variable, Inter Tight, sans-serif" font-weight="900" font-size="${size}" letter-spacing="${(-size * 0.04).toFixed(1)}"`;
+  // warna angka "dibasuh" cahaya adegan: makin bawah makin kena warna lingkungan -> tidak menabrak latar
+  const tint = (c: string, o: number) => (amb ? mix(c, amb, o < 0.3 ? 0.16 : o < 0.6 ? 0.26 : 0.38) : c);
+  const stops = t.face.map(([o, c]) => `<stop offset="${o}" stop-color="${tint(c, o)}"/>`).join("");
+  // sisi tebal: dari warna sisi (kena warna lingkungan) di depan ke bayangan gelap lingkungan di belakang
+  const layers = 14;
+  const dx = size * 0.0028, dy = size * 0.006;
+  const sideFront = amb ? mix(t.side, amb, 0.32) : t.side;
+  const shade = amb ? mix(amb, "#000000", 0.88) : "#050505";
+  const depth = Array.from({ length: layers }, (_, i) => layers - i)
+    .map((k) => `<text ${attrs} x="${(cx + k * dx).toFixed(1)}" y="${(y + k * dy).toFixed(1)}" fill="${mix(sideFront, shade, (k / layers) * 0.85)}">${txt}</text>`)
+    .join("");
+  const rim = amb ? mix(amb, "#ffffff", 0.35) : t.edge;
+  const glow = amb ? rgba(mix(t.face[1][1], amb, 0.5), 0.5) : t.glow;
+  const fog = amb ? mix(amb, "#000000", 0.55) : "#000000";
+  const h = NUM_BASE + Math.round(size * 0.3) + 40;
+  const clip = `<clipPath id="${id}c"><text ${attrs} x="${cx}" y="${y}">${txt}</text></clipPath>`;
+  return `<svg width="1080" height="${h}" viewBox="0 0 1080 ${h}" style="display:block;overflow:visible"><defs>
+<linearGradient id="${id}f" x1="0" y1="0" x2="0.18" y2="1">${stops}</linearGradient>
+<linearGradient id="${id}e" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.edge}" stop-opacity=".9"/><stop offset=".35" stop-color="${t.edge}" stop-opacity=".2"/><stop offset="1" stop-color="${t.edge}" stop-opacity="0"/></linearGradient>
+<linearGradient id="${id}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".7" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity=".55"/></linearGradient>
+<linearGradient id="${id}h" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${fog}" stop-opacity="0"/><stop offset=".55" stop-color="${fog}" stop-opacity="0"/><stop offset="1" stop-color="${fog}" stop-opacity=".55"/></linearGradient>
+<mask id="${id}k" maskUnits="userSpaceOnUse" x="0" y="0" width="1080" height="${h}"><rect width="1080" height="${h}" fill="url(#${id}m)"/></mask>
+${clip}
+<filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="${Math.round(size * 0.13)}"/></filter>
+<filter id="${id}s" x="-20%" y="-40%" width="140%" height="200%"><feGaussianBlur stdDeviation="${Math.round(size * 0.07)}"/></filter>
+<filter id="${id}r"><feGaussianBlur stdDeviation="3"/></filter>
+<filter id="${id}t" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
+</defs><g transform="rotate(-3 ${cx} ${Math.round(y - size * 0.35)})" mask="url(#${id}k)">
+<text ${attrs} x="${cx + 16}" y="${(y + size * 0.14).toFixed(1)}" fill="${shade}" opacity=".7" filter="url(#${id}s)">${txt}</text>
+<text ${attrs} x="${cx}" y="${(y + size * 0.04).toFixed(1)}" fill="${glow}" filter="url(#${id}g)">${txt}</text>
+${depth}
+<text ${attrs} x="${cx}" y="${y}" fill="url(#${id}f)">${txt}</text>
+${
+  // pantulan lingkungan: foto latar "terpantul" samar di permukaan logam -> angka & latar satu adegan
+  env ? `<image href="${esc(env)}" x="0" y="0" width="1080" height="1350" preserveAspectRatio="xMidYMid slice" clip-path="url(#${id}c)" opacity=".34" filter="url(#${id}r)" style="mix-blend-mode:overlay"/>` : ""
+}
+<text ${attrs} x="${cx}" y="${y}" fill="#fff" opacity=".06" filter="url(#${id}t)">${txt}</text>
+<rect x="0" y="${Math.round(y - size * 0.75)}" width="1080" height="${Math.round(size * 0.8)}" fill="url(#${id}h)" clip-path="url(#${id}c)"/>
+<text ${attrs} x="${cx}" y="${y}" fill="none" stroke="url(#${id}e)" stroke-width="${Math.max(2, size * 0.01).toFixed(1)}">${txt}</text>
+<text ${attrs} x="${(cx - size * 0.006).toFixed(1)}" y="${(y - size * 0.006).toFixed(1)}" fill="none" stroke="${rim}" stroke-opacity=".5" stroke-width="${Math.max(1.5, size * 0.006).toFixed(1)}">${txt}</text>
+</g></svg>`;
+}
+
+/** logo TWS hanya untuk konten TWS (user menyebut TWS); selain itu tanpa logo */
+const logo = (brand?: boolean, center = false) => (brand ? `<img data-layer="Logo" class="logo${center ? " c" : ""}" src="${TWS_LOGO}" alt="TWS">` : "");
 
 /* ------------------------------------------------------- latar grafis SVG (kalau tidak ada foto) ------------------------------------------------------- */
 function rnd(seed: number) {
@@ -262,41 +353,114 @@ function icon(label: string, key?: string, size = 64): string {
 const titleHtml = (lines: string[], hl?: number, cls = "judul", style = "") =>
   `<h1 data-layer="Judul" class="${cls}" style="${style}">${lines.map((l, i) => (hl === i + 1 ? `<span><em data-layer="Sorotan">${esc(l)}</em></span>` : `<span>${esc(l)}</span>`)).join("")}</h1>`;
 
-const latar = (img: Img, sl: TwsSlide, style = "") =>
-  `<div data-layer="Latar" class="latar" style="${style}">${img.bg ? `<img data-slot="bg" src="${esc(img.bg)}" alt="">` : graphicSvg(sl.graphic ?? (dirOf(sl.big) < 0 ? "chart-down" : "chart-up"))}</div>`;
+const latar = (img: Img, sl: TwsSlide, style = "", cls = "") =>
+  `<div data-layer="Latar" class="latar${cls ? ` ${cls}` : ""}" style="${style}">${img.bg ? `<img data-slot="bg" src="${esc(img.bg)}" alt="">` : graphicSvg(sl.graphic ?? (dirOf(sl.big) < 0 ? "chart-down" : "chart-up"))}</div>`;
+
+/** ukuran huruf judul cover: baris terpanjang harus muat ±950 px (huruf kapital tebal ≈ 0,6 em) */
+const coverSize = (lines: string[]) => Math.max(52, Math.min(80, Math.round(950 / (Math.max(8, ...lines.map((l) => l.length)) * 0.6))));
+
+/*
+ * Tata letak cover (kanvas 1080×1350): angka 3D di atas (±y 140–360), kepala tokoh mulai di bawahnya, judul di bawah (±y 980–1240).
+ * Tokoh terpotong ada di DEPAN angka (boleh sedikit menimpa ujung bawah angka); foto utuh ada di BELAKANG angka,
+ * jadi fotonya digeser supaya kepala tidak tertutup. Pembingkaian "half" menjaga tangan / barang yang dipegang tetap di atas judul.
+ */
+const HEAD_CUT = 330;
+const HEAD_PHOTO = 405;
+const CUT_H: Record<NonNullable<TwsSlide["frame"]>, number> = { close: 1150, half: 860, full: 720 };
+
+/** posisi foto utuh supaya kepala (hasil deteksi wajah) berada tepat di bawah angka, digeser ke garis emas terdekat */
+function photoBox(face: NonNullable<Img["face"]>, frame: TwsSlide["frame"]): { style: string; faceX: number } {
+  let w = 1080, h = w / face.aspect;
+  if (h < 1350 - HEAD_PHOTO + 120) (h = 1350 - HEAD_PHOTO + 120), (w = h * face.aspect);
+  // wajah terlalu kecil -> diperbesar secukupnya (maks 1,8×), "full" tidak diperbesar
+  const want = frame === "close" ? 300 : frame === "full" ? 0 : 210;
+  const zoom = Math.min(1.8, Math.max(1, want / Math.max(1, (face.bottom - face.top) * h)));
+  (w *= zoom), (h *= zoom);
+  const target = face.cx * w < 540 ? GOLD_L : GOLD_R;
+  const left = Math.min(0, Math.max(1080 - w, target - face.cx * w));
+  const top = Math.min(440, Math.max(1350 - 160 - h, HEAD_PHOTO - face.top * h));
+  // tepi atas foto dipudarkan, tapi tidak sampai menutupi kepala (kepala yang mepet tepi foto -> pudar pendek)
+  const fade = Math.round(Math.max(90, Math.min(200, face.top * h * 0.8)));
+  const mask = `-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 ${fade}px);mask-image:linear-gradient(180deg,transparent 0,#000 ${fade}px)`;
+  return { style: `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px;${mask}`, faceX: left + face.cx * w };
+}
 
 function cover(sl: TwsSlide, img: Img): string {
   const lines = sl.title?.length ? sl.title : ["JUDUL BERITA", "DI SINI"];
   const tone = toneOf(sl);
-  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone)}</div>` : "";
-  const person = img.person ? `<div data-layer="Foto Tokoh" class="tokoh${img.cut ? "" : " utuh"}"><img data-slot="person" src="${esc(img.person)}" alt=""></div>` : "";
-  return `<div class="art">${latar(img, sl)}${big}${person}<div class="fade" data-layer="Gradasi"></div>${logo()}${titleHtml(lines, sl.hl)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(img)}</div>`;
+  // foto tokoh yang latarnya sudah dihapus = lapisan depan; kalau belum terpotong, fotonya jadi latar penuh
+  const cut = !!(img.person && img.cut);
+  const useBg = !!img.bg && (cut || !img.person);
+  const base: Img = { ...img, bg: useBg ? img.bg : img.person ?? img.bg, credit: useBg ? img.credit : undefined };
+  // foto utuh (tokoh belum terpotong / foto berita berisi orang) + ada angka: foto digeser supaya kepala di bawah angka,
+  // celah di atasnya diisi versi buram foto yang sama -> warnanya nyambung, angka "melayang" di atas kepala
+  const drop = !!(sl.big && base.bg && !cut && ((img.person && base.bg === img.person) || img.face));
+  const pb = drop && img.face ? photoBox(img.face, sl.frame) : null;
+  // komposisi seperti referensi: tokoh di satu garis emas, angka condong ke sisi lainnya; tanpa tokoh -> angka di tengah
+  const side: NumSide = cut ? "left" : pb ? (pb.faceX >= 540 ? "left" : "right") : "center";
+  const nl = sl.big ? numLayout(sl.big, side) : null;
+  // kabut gelap + rona warna angka di belakang angka: angka tampak "berada" di adegan, bukan ditempel
+  const at = nl ? `${Math.round((nl.cx / 1080) * 100)}% 17%` : "50% 17%";
+  const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 62% 38% at ${at},rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 52% 30% at ${at},${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".2)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
+  const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient, side, base.bg)}</div>` : "";
+  // tokoh terpotong: ujung kepala di HEAD_CUT, tinggi sesuai pembingkaian, sedikit ke kanan (garis emas); memudar tepat di atas judul
+  const ph = CUT_H[sl.frame ?? "half"];
+  const fadeFrom = Math.round(((1000 - HEAD_CUT) / ph) * 100), fadeTo = Math.min(100, Math.round(((1160 - HEAD_CUT) / ph) * 100));
+  const person = cut
+    ? `<div data-layer="Foto Tokoh" class="tokoh" style="left:${sl.big ? 620 : 540}px;top:${sl.big ? HEAD_CUT : HEAD_CUT - 110}px;bottom:auto;height:${ph}px;-webkit-mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%);mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%)"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>`
+    : "";
+  const fadeTop = "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 200px);mask-image:linear-gradient(180deg,transparent 0,#000 200px)";
+  const bgLayer = drop
+    ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div><div data-layer="Latar" class="latar">${
+        pb
+          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${pb.style}">`
+          : `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;left:0;top:300px;height:auto;min-height:1050px;${fadeTop}">`
+      }</div>`
+    : latar(base, sl, "", cut ? "redup" : "");
+  // color grading: satu warna cahaya untuk latar, angka, dan tokoh (soft-light) -> semuanya terasa satu foto
+  const gradeCol = img.ambient && /^#[0-9a-f]{6}$/i.test(img.ambient) ? img.ambient : TONE3D[tone].face[1][1];
+  const grade = base.bg || sl.big ? `<div class="grade" data-layer="Color Grading" style="background:linear-gradient(180deg,${rgba(gradeCol, 0.55)} 0%,${rgba(gradeCol, 0.25)} 45%,rgba(0,0,0,0) 75%)"></div>` : "";
+  return `<div class="art">${bgLayer}<div class="vign" data-layer="Vignette"></div>${air}${big}${person}${grade}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
 }
+
+/** ukuran kalimat besar slide isi: pendek = besar sekali (seperti referensi), panjang = mengecil */
+const isiSize = (t: string) => {
+  const n = t.replace(/\*\*/g, "").length;
+  return n <= 40 ? 104 : n <= 60 ? 92 : n <= 90 ? 80 : n <= 130 ? 68 : 58;
+};
 
 function textSlide(sl: TwsSlide, img: Img, n: number): string {
   const align = sl.align ?? "center";
   const hasImg = !!img.bg || !!sl.graphic || !!sl.bg;
-  const rows = sl.rows?.length
-    ? `<div data-layer="Data" style="margin-top:44px;text-align:left">${sl.rows
-        .map((r) => {
+  const nRows = sl.rows?.length ?? 0;
+  const rows = nRows
+    ? `<div data-layer="Data" style="margin-top:40px;text-align:left">${sl
+        .rows!.map((r) => {
           const d = dirOf(r.value);
-          return `<div style="display:flex;align-items:center;gap:20px;padding:22px 0;border-top:1px solid rgba(255,255,255,.14)">${r.icon ? `<div style="flex:none">${icon(r.label, r.icon, 52)}</div>` : ""}<div style="flex:1;font-size:30px;font-weight:600">${esc(r.label)}</div><div style="text-align:right"><div class="${d < 0 ? "down" : d > 0 ? "up" : ""}" style="font-size:34px;font-weight:800">${esc(r.value ?? "")}</div>${r.note ? `<div style="font-size:18px;color:#a1a1aa;margin-top:2px">${esc(r.note)}</div>` : ""}</div></div>`;
+          return `<div style="display:flex;align-items:center;gap:20px;padding:22px 0;border-top:1px solid rgba(255,255,255,.16)">${r.icon ? `<div style="flex:none">${icon(r.label, r.icon, 52)}</div>` : ""}<div style="flex:1;font-size:34px;font-weight:600;letter-spacing:-.01em">${esc(r.label)}</div><div style="text-align:right;max-width:55%"><div class="${d < 0 ? "down" : d > 0 ? "up" : ""}" style="font-size:40px;font-weight:800;letter-spacing:-.02em">${esc(r.value ?? "")}</div>${r.note ? `<div style="font-size:22px;color:#a1a1aa;margin-top:2px;line-height:1.3">${esc(r.note)}</div>` : ""}</div></div>`;
         })
         .join("")}</div>`
     : "";
-  const textTop = 210;
-  // gambar pendukung setengah halaman bawah (foto / latar grafis); baris data banyak -> gambar lebih pendek
-  const imgH = (sl.rows?.length ?? 0) > 2 ? 380 : sl.rows?.length ? 520 : 640;
-  const imgBlock = latar(img, { ...sl, graphic: sl.graphic ?? (hasImg ? undefined : "globe") }, `top:auto;height:${imgH}px;-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 35%);mask-image:linear-gradient(180deg,transparent 0%,#000 35%)`);
-  return `<div class="art">${imgBlock}${logo()}<div class="num" data-layer="Nomor">${n}</div>
-<div data-layer="Teks" style="position:absolute;left:64px;right:64px;top:${textTop}px;z-index:5;text-align:${align}">
+  // foto pendukung mengisi sisa bagian bawah (memudar ke hitam di atasnya) — perkiraan tinggi teks supaya tidak menimpa tulisan
+  const fs = isiSize(sl.text ?? "");
+  const lines = (t: string, size: number, k: number) => Math.max(1, Math.ceil(t.replace(/\*\*/g, "").length / (952 / (size * k))));
+  const textH =
+    (img.brand ? 200 : 170) +
+    (sl.kicker ? 58 : 0) +
+    lines(sl.text ?? "", fs, 0.47) * fs * 1.1 +
+    (sl.caption ? 26 + lines(sl.caption, 30, 0.47) * 40 : 0) +
+    (nRows ? 40 + nRows * 96 : 0);
+  const imgH = Math.max(320, Math.min(800, Math.round(1350 - textH + 60)));
+  const imgBlock = latar(img, { ...sl, graphic: sl.graphic ?? (hasImg ? undefined : "globe") }, `top:auto;height:${imgH}px;-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 38%);mask-image:linear-gradient(180deg,transparent 0%,#000 38%)`);
+  return `<div class="art">${imgBlock}${logo(img.brand)}<div class="num" data-layer="Nomor">${n}</div>
+<div data-layer="Teks" style="position:absolute;left:64px;right:64px;top:${img.brand ? 200 : 170}px;z-index:5;text-align:${align}">
 ${sl.kicker ? `<div class="kicker" data-layer="Pengantar">${esc(sl.kicker)}</div>` : ""}
-<div class="isi" style="margin-top:${sl.kicker ? 18 : 0}px">${rich(sl.text ?? "")}</div>
-${sl.caption ? `<div class="cap" style="margin-top:22px">${esc(sl.caption)}</div>` : ""}
-${rows}</div>${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${imgBlock ? kredit(img) : ""}</div>`;
+<div class="isi" style="font-size:${isiSize(sl.text ?? "")}px;margin-top:${sl.kicker ? 20 : 0}px">${rich(sl.text ?? "")}</div>
+${sl.caption ? `<div class="cap" style="margin-top:26px">${esc(sl.caption)}</div>` : ""}
+${rows}</div>${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(img)}</div>`;
 }
 
-function athSlide(sl: TwsSlide, n: number): string {
+function athSlide(sl: TwsSlide, n: number, brand?: boolean): string {
   const items = sl.items ?? [];
   const head = sl.head?.length === 2 ? sl.head : ["ATH", "SEKARANG"];
   const h = Math.min(104, Math.floor(820 / Math.max(1, items.length)) - 18);
@@ -311,14 +475,14 @@ function athSlide(sl: TwsSlide, n: number): string {
 <div style="margin-left:auto;background:#16a34a;color:#fff;border-radius:14px;padding:8px 18px;font-size:28px;font-weight:800">${esc(it.pct ?? "")}</div></div>`;
     })
     .join("");
-  return `<div class="art" style="background:radial-gradient(120% 80% at 50% 20%,#0c1733 0%,#000 70%)">${logo(true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
+  return `<div class="art" style="background:radial-gradient(120% 80% at 50% 20%,#0c1733 0%,#000 70%)">${logo(brand, true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
 ${titleHtml(sl.title?.length ? sl.title : ["BUTUH NAIK BERAPA", "SAMPAI BALIK ATH?"], sl.hl, "judul", "position:absolute;top:130px;bottom:auto;text-align:center;font-size:70px")}
 <div data-layer="Tabel" style="position:absolute;left:60px;right:60px;top:${330}px">
 <div style="display:flex;font-size:22px;font-weight:700;color:#d4d4d8;letter-spacing:.06em"><div style="width:${h + 2 + 170}px"></div><div style="width:200px;text-align:center">${esc(head[0])}</div><div style="width:200px;text-align:center">${esc(head[1])}</div></div>${body}</div>
 ${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}</div>`;
 }
 
-function timelineSlide(sl: TwsSlide, n: number): string {
+function timelineSlide(sl: TwsSlide, n: number, brand?: boolean): string {
   const items = (sl.items ?? []).slice(0, 8);
   const per = items.length > 4 ? Math.ceil(items.length / 2) : items.length;
   const row = (list: TwsItem[], top: number) =>
@@ -328,14 +492,14 @@ function timelineSlide(sl: TwsSlide, n: number): string {
           `<div style="position:relative;width:${Math.floor(940 / per)}px;text-align:center">${icon(it.label, it.icon, 104)}<div style="margin-top:14px;display:inline-block;background:#000;padding:0 10px;font-size:34px;font-weight:800">${esc(it.top ?? "")}</div><div style="margin-top:6px;font-size:22px;color:#d4d4d8;line-height:1.25">${esc(it.label)}</div></div>`
       )
       .join("")}</div>`;
-  return `<div class="art" style="background:radial-gradient(120% 70% at 50% 0%,#141b30 0%,#000 65%)">${logo(true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
+  return `<div class="art" style="background:radial-gradient(120% 70% at 50% 0%,#141b30 0%,#000 65%)">${logo(brand, true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
 ${titleHtml(sl.title?.length ? sl.title : ["RP100 RIBU BISA", "DIPAKAI BUAT APA?"], sl.hl, "judul", "position:absolute;top:120px;bottom:auto;text-align:center;font-size:66px")}
 ${sl.sub ? `<div style="position:absolute;top:290px;left:0;right:0;text-align:center;font-size:30px;font-weight:600">${esc(sl.sub)}</div>` : ""}
 <div data-layer="Timeline">${row(items.slice(0, per), 380)}${items.length > per ? row(items.slice(per), 760) : ""}</div>
 ${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}</div>`;
 }
 
-function barsSlide(sl: TwsSlide, n: number): string {
+function barsSlide(sl: TwsSlide, n: number, brand?: boolean): string {
   const items = sl.items ?? [];
   const nums = items.map((it) => Math.abs(parseFloat((it.pct ?? "0").replace(/[^\d,.-]/g, "").replace(",", ".")) || 0));
   const max = Math.max(0.01, ...nums);
@@ -353,7 +517,7 @@ function barsSlide(sl: TwsSlide, n: number): string {
 <div class="${d < 0 ? "down" : d > 0 ? "up" : ""}" style="width:170px;text-align:right;padding-right:16px;font-size:36px;font-weight:800">${esc(it.pct ?? "")}</div></div>`;
     })
     .join("");
-  return `<div class="art" style="background:radial-gradient(120% 70% at 50% 0%,#0b1a33 0%,#000 65%)">${logo(true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
+  return `<div class="art" style="background:radial-gradient(120% 70% at 50% 0%,#0b1a33 0%,#000 65%)">${logo(brand, true)}${n > 1 ? `<div class="num" data-layer="Nomor">${n}</div>` : ""}
 ${titleHtml(sl.title?.length ? sl.title : ["IHSG VS", "BURSA ASIA"], sl.hl, "judul", "position:absolute;top:130px;bottom:auto;text-align:center;font-size:66px")}
 ${sl.sub ? `<div style="position:absolute;top:300px;left:0;right:0;text-align:center;font-size:26px;color:#d4d4d8">${esc(sl.sub)}</div>` : ""}
 <div data-layer="Grafik Batang" style="position:absolute;left:60px;right:60px;top:380px">${body}</div>
@@ -361,19 +525,22 @@ ${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}
 }
 
 function ctaSlide(sl: TwsSlide, img: Img): string {
-  const lines = sl.title?.length ? sl.title : ["DAPETIN UPDATE", "MARKET CRYPTO"];
-  return `<div class="art" style="background:radial-gradient(90% 60% at 50% 100%,#13245a 0%,#000 70%)">${logo(true)}
-<div data-layer="Teks" style="position:absolute;left:60px;right:60px;top:150px;text-align:center">
+  // tanpa TWS: ajakan umum (follow), bukan "live Suli"
+  const lines = sl.title?.length ? sl.title : img.brand ? ["DAPETIN UPDATE", "MARKET CRYPTO"] : ["IKUTI TERUS", "UPDATE MARKETNYA"];
+  const button = sl.button ?? (img.brand ? "KLIK LINK DI BIO!" : "FOLLOW BIAR NGGAK KETINGGALAN!");
+  const fs = Math.min(84, Math.round(930 / (Math.max(10, ...lines.map((l) => l.length)) * 0.6)));
+  return `<div class="art" style="background:linear-gradient(180deg,#000 0%,#000 45%,#0b1a4a 100%)">${logo(img.brand, true)}
+<div data-layer="Teks" style="position:absolute;left:60px;right:60px;top:${img.brand ? 150 : 110}px;text-align:center">
 ${sl.kicker ? `<div class="kicker">${esc(sl.kicker)}</div>` : ""}
-<h1 data-layer="Judul" style="margin:10px 0 0;font-size:76px;line-height:1.05;font-weight:700;letter-spacing:-.02em">${lines.map((l, i) => `<span style="display:block${i === lines.length - 1 ? `;color:${TWS_TEXT_BLUE};font-weight:800` : ""}">${esc(l)}</span>`).join("")}</h1></div>
-<div data-layer="Gambar" style="position:absolute;left:150px;right:150px;top:470px;height:500px;border-radius:28px;overflow:hidden;border:2px solid rgba(255,255,255,.18);background:#0b0f1a">${img.bg ? `<img data-slot="bg" src="${esc(img.bg)}" alt="" style="width:100%;height:100%;object-fit:cover">` : graphicSvg(sl.graphic ?? "chart-up", 780, 500)}</div>
-<div data-layer="Tombol" style="position:absolute;left:0;right:0;bottom:150px;text-align:center"><span style="display:inline-block;white-space:nowrap;background:${TWS_BLUE};padding:10px 26px;font-size:54px;font-weight:800;letter-spacing:-.01em">${esc(sl.button ?? "KLIK LINK DI BIO!")}</span></div>${kredit(img)}</div>`;
+<h1 data-layer="Judul" style="margin:12px 0 0;font-size:${fs}px;line-height:1.04;font-weight:600;letter-spacing:-.025em">${lines.map((l, i) => `<span style="display:block;white-space:nowrap${i === lines.length - 1 ? `;color:${TWS_TEXT_BLUE};font-weight:800` : ""}">${esc(l)}</span>`).join("")}</h1></div>
+<div data-layer="Gambar" style="position:absolute;left:130px;right:130px;top:${img.brand ? 470 : 430}px;height:540px;border-radius:30px;overflow:hidden;border:2px solid rgba(255,255,255,.2);background:#0b0f1a;box-shadow:0 30px 80px rgba(0,0,0,.6)">${img.bg ? `<img data-slot="bg" src="${esc(img.bg)}" alt="" style="width:100%;height:100%;object-fit:cover">` : graphicSvg(sl.graphic ?? "chart-up", 820, 540)}</div>
+<div data-layer="Tombol" style="position:absolute;left:0;right:0;bottom:140px;text-align:center"><span style="display:inline-block;white-space:nowrap;background:linear-gradient(180deg,#4a7dff,#2a56ea);border-radius:6px;padding:10px 28px;font-size:${button.length > 22 ? 44 : 54}px;font-weight:800;letter-spacing:-.015em">${esc(button)}</span></div>${kredit(img)}</div>`;
 }
 
 /** HTML satu slide TWS (isi kanvas 1080×1350) */
 export function twsSlideHtml(sl: TwsSlide, n: number, img: Img = {}): string {
   const html =
-    sl.type === "cover" ? cover(sl, img) : sl.type === "ath" ? athSlide(sl, n) : sl.type === "timeline" ? timelineSlide(sl, n) : sl.type === "bars" ? barsSlide(sl, n) : sl.type === "cta" ? ctaSlide(sl, img) : textSlide(sl, img, n);
+    sl.type === "cover" ? cover(sl, img) : sl.type === "ath" ? athSlide(sl, n, img.brand) : sl.type === "timeline" ? timelineSlide(sl, n, img.brand) : sl.type === "bars" ? barsSlide(sl, n, img.brand) : sl.type === "cta" ? ctaSlide(sl, img) : textSlide(sl, img, n);
   return `<style>${BASE_CSS}</style>${html}`;
 }
 
@@ -381,7 +548,7 @@ const NAMES: Record<TwsSlide["type"], string> = { cover: "Cover", text: "Isi", a
 
 /** deck TWS -> daftar slide desain (dipakai pemutar desain) */
 export function twsDesigns(deck: TwsDeck): Design[] {
-  return deck.slides.map((sl, i) => ({ size: "4:5", name: `${NAMES[sl.type]}${sl.type === "text" && sl.text ? ` · ${sl.text.replace(/\*\*/g, "").slice(0, 24).trim()}` : ""}`, html: twsSlideHtml(sl, i + 1), slide: i + 1, tws: { deck, index: i } }));
+  return deck.slides.map((sl, i) => ({ size: "4:5", name: `${NAMES[sl.type]}${sl.type === "text" && sl.text ? ` · ${sl.text.replace(/\*\*/g, "").slice(0, 24).trim()}` : ""}`, html: twsSlideHtml(sl, i + 1, { brand: deck.brand === "tws" }), slide: i + 1, tws: { deck, index: i } }));
 }
 
 /**
@@ -394,21 +561,38 @@ const TWS_TOPIC = /\b(ekonomi|makro|saham|ihsg|bursa|crypto|kripto|bitcoin|btc|e
 const NOT_TWS = /\b(ppt|pptx|powerpoint|presentasi|deck|laporan|report campaign|campaign performance)\b/i;
 export const TWS_INTENT = { test: (t: string) => TWS_NAME.test(t) || (TWS_VISUAL.test(t) && TWS_TOPIC.test(t) && !NOT_TWS.test(t)) };
 
-/** aturan giliran untuk konten TWS */
-export function twsRules(asOf: string): string {
+/** user memang minta konten TWS (menyebut TWS / Trade With Suli / Suli) -> pakai logo & ajakan TWS */
+export const isTwsBrand = (t: string) => TWS_NAME.test(t);
+
+/** aturan giliran untuk konten berita/market (template ```tws); brand=false -> tanpa logo/tulisan TWS sama sekali */
+export function twsRules(asOf: string, brand = false): string {
+  const cta = brand
+    ? '{"type":"cta","kicker":"Cek live Suli terbaru untuk","title":["DAPETIN UPDATE","MARKET CRYPTO"],"button":"KLIK LINK DI BIO!"}'
+    : '{"type":"cta","title":["IKUTI TERUS","UPDATE MARKETNYA"],"button":"FOLLOW BIAR NGGAK KETINGGALAN!"}';
   return [
-    "MODE KONTEN TWS (Trade With Suli) — gaya akun berita ekonomi/market. Kamu menulis ISI, website yang menggambar desainnya.",
+    `MODE KONTEN BERITA / MARKET (gaya akun berita ekonomi IG: foto dramatis, angka 3D besar, judul kapital tebal + sorotan biru). Kamu menulis ISI, website yang menggambar desain & MENCARI FOTONYA SENDIRI di internet.`,
+    brand
+      ? `BRAND: user minta konten TWS (Trade With Suli) → isi "brand":"tws" di JSON (logo TWS tampil), boleh hashtag #TWS & ajakan live Suli.`
+      : `BRAND: user TIDAK menyebut TWS → JANGAN isi "brand", JANGAN tulis "TWS", "Trade With Suli", atau "Suli" di slide, caption, maupun hashtag. Ajakan (cta) dibuat umum.`,
     "1) FAKTA DULU: semua angka, tanggal, nama, dan kejadian HANYA dari blok HASIL BROWSING INTERNET / DATA HARGA di atas. DILARANG mengarang angka atau kutipan. Data tidak ada → bilang terus terang & buat konten yang tidak butuh angka itu (atau tanya lewat kartu ```ask).",
     `2) Judul boleh catchy & bikin penasaran (gaya: "WALL STREET RONTOK, RP18.000T MENGUAP!"), tapi HARUS sesuai fakta beritanya — tidak menyesatkan, tidak merendahkan tokoh, tidak menaruh kata-kata di mulut orang. Tanggal data wajib ditulis di "note" slide yang memuat angka (mis. "*Harga per ${asOf}").`,
     "3) Tulis SATU blok ```tws berisi JSON satu kali (jangan tulis HTML). Format:",
-    '```tws\n{"title":"BI Rate Oktober 2026","asOf":"21 Oktober 2026","slides":[\n {"type":"cover","big":"5,75%","tone":"gold","title":["BREAKING! BI TAHAN","SUKU BUNGA 5,75%,","DI LUAR EKSPEKTASI"],"hl":3,"bg":"bank indonesia building jakarta","graphic":"bank","person":"Nama Tokoh (opsional)"},\n {"type":"text","kicker":"Keputusan RDG 20–21 Oktober 2026","text":"BI Rate ditahan di **5,75%** untuk keempat kalinya","caption":"Mayoritas ekonom memperkirakan naik ke 6,00%","rows":[{"label":"Deposit Facility","value":"5,00%","note":"naik"},{"label":"Lending Facility","value":"6,50%","note":"tetap"}],"note":"*Data per 21 Oktober 2026"},\n {"type":"ath","title":["BUTUH NAIK BERAPA","SAMPAI BALIK ATH?"],"hl":2,"head":["ATH","SEKARANG"],"items":[{"label":"BTC","a":"$126.000","b":"$81.774","pct":"+54%"}],"note":"*Harga per 23 Oktober 2026"},\n {"type":"bars","title":["IHSG IJO,","BURSA ASIA LOYO"],"hl":2,"sub":"Penutupan 14 Oktober 2026","items":[{"label":"IHSG","value":"5.943,02","pct":"+0,29%"},{"label":"Nikkei","value":"67.744,29","pct":"-0,05%"}],"note":"*Sumber: Katadata"},\n {"type":"timeline","title":["RP100 RIBU BISA","DIPAKAI BUAT APA?"],"hl":2,"sub":"DULU VS SEKARANG","items":[{"top":"1960","label":"2 rumah"}]},\n {"type":"cta","kicker":"Cek live Suli terbaru untuk","title":["DAPETIN UPDATE","MARKET CRYPTO"],"button":"KLIK LINK DI BIO!"}\n],"caption":"caption siap copas (2–4 kalimat, fakta + ajakan diskusi)","hashtags":["#TWS","#BIRate"],"sources":[{"title":"Bisnis.com — BI tahan BI Rate 5,75%","url":"https://…"}]}\n```',
-    "   - type: cover (judul + angka 3D), text (kalimat besar tipis + **kata kunci** biru, boleh rows data), ath (tabel butuh naik berapa sampai ATH), bars (perbandingan naik/turun, mis. IHSG vs bursa Asia), timeline (dulu vs sekarang), cta (ajakan, slide terakhir).",
-    "   - cover: title 2–3 baris HURUF BESAR (maks ±22 huruf/baris), hl = nomor baris yang disorot kotak biru. big = angka utama pendek (\"5,75%\", \"-RP 18.000 T\", \"40x\"). tone: gold netral/positif, red turun/bahaya, green naik.",
-    "   - bg = kata kunci foto latar Bahasa Inggris (mis. \"stock market trading screen red\"). graphic = latar grafis kalau foto tidak ada: chart-up | chart-down | coins | exchange | bank | arrows | globe.",
-    "   - person = nama tokoh berita (hanya kalau beritanya memang tentang tokoh itu). Website memakai foto upload user / foto berita web berlabel cek hak cipta. Kamu TIDAK membuat wajah.",
-    "   - Satu gambar → 1 slide cover. Carousel → 3–6 slide: cover → isi → (infografis) → cta. text maks ±18 kata.",
-    "   - sources: daftar sumber berita/data yang benar-benar dipakai (judul + url dari hasil browsing).",
-    "4) REVISI (\"ganti judul slide 2\", \"angka jadi merah\"): kirim ulang blok ```tws LENGKAP dengan perubahan itu saja; slide lain sama persis.",
-    "5) Setelah blok: 1–2 kalimat gaya karaktermu (apa isinya + tanggal data). Jangan menulis ulang caption/sumber di luar blok — website menampilkannya.",
+    '```tws\n{"title":"BI Rate Oktober 2026","asOf":"21 Oktober 2026",' +
+      (brand ? '"brand":"tws",' : "") +
+      '"slides":[\n {"type":"cover","big":"5,75%","tone":"gold","title":["BREAKING! BI TAHAN","SUKU BUNGA 5,75%,","DI LUAR EKSPEKTASI"],"hl":3,"person":"Perry Warjiyo","frame":"half","bg":"bank indonesia headquarters jakarta night"},\n {"type":"text","kicker":"Keputusan RDG 20–21 Oktober 2026","text":"BI Rate ditahan di **5,75%** untuk keempat kalinya","caption":"Mayoritas ekonom memperkirakan naik ke 6,00%","rows":[{"label":"Deposit Facility","value":"5,00%","note":"naik"},{"label":"Lending Facility","value":"6,50%","note":"tetap"}],"note":"*Data per 21 Oktober 2026","bg":"bank indonesia monetary policy press conference"},\n {"type":"ath","title":["BUTUH NAIK BERAPA","SAMPAI BALIK ATH?"],"hl":2,"head":["ATH","SEKARANG"],"items":[{"label":"BTC","a":"$126.000","b":"$81.774","pct":"+54%"}],"note":"*Harga per 23 Oktober 2026"},\n {"type":"bars","title":["IHSG IJO,","BURSA ASIA LOYO"],"hl":2,"sub":"Penutupan 14 Oktober 2026","items":[{"label":"IHSG","value":"5.943,02","pct":"+0,29%"},{"label":"Nikkei","value":"67.744,29","pct":"-0,05%"}],"note":"*Sumber: Katadata"},\n {"type":"timeline","title":["RP100 RIBU BISA","DIPAKAI BUAT APA?"],"hl":2,"sub":"DULU VS SEKARANG","items":[{"top":"1960","label":"2 rumah"}]},\n ' +
+      cta +
+      '\n],"caption":"caption siap copas (2–4 kalimat, fakta + ajakan diskusi)","hashtags":[' +
+      (brand ? '"#TWS",' : "") +
+      '"#BIRate"],"sources":[{"title":"Bisnis.com — BI tahan BI Rate 5,75%","url":"https://…"}]}\n```',
+    "   - type: cover (judul + angka 3D), text (kalimat besar + **kata kunci** biru, boleh rows data), ath (tabel butuh naik berapa sampai ATH), bars (perbandingan naik/turun, mis. IHSG vs bursa Asia), timeline (dulu vs sekarang), cta (ajakan, slide terakhir).",
+    "   - cover: title 2–3 baris HURUF BESAR (maks ±20 huruf/baris, singkat & padat), hl = nomor baris yang disorot kotak biru (biasanya baris terakhir = inti beritanya). big = angka utama SANGAT pendek (\"-11%\", \"5,75%\", \"RP1,2 T\", \"40x\", maks 7 karakter). tone: gold netral/positif, red turun/bahaya, green naik.",
+    "   - person (WAJIB di cover, pikir seperti redaktur berita): tokoh publik yang PALING dikaitkan publik dengan berita itu, tulis NAMA LENGKAP resmi. Contoh: kebijakan pemerintah / IHSG anjlok / MSCI turunkan status Indonesia → \"Prabowo Subianto\" (atau Menkeu kalau beritanya soal APBN/pajak); BI Rate / rupiah → \"Perry Warjiyo\"; OJK → Ketua OJK; perusahaan → CEO-nya (\"Jensen Huang\", \"Elon Musk\"); crypto → tokoh yang disebut berita (\"Michael Saylor\", \"Changpeng Zhao\"); The Fed → Ketua The Fed. Kosongkan HANYA kalau memang tidak ada tokoh yang relevan (mis. harga emas harian). Website mencari foto tokoh itu sendiri di internet lalu memotong latarnya — user TIDAK perlu upload. Kamu tidak menggambar wajah.",
+    "   - frame (pembingkaian tokoh, pahami konteks fotonya): \"half\" (default: kepala s.d. pinggang — pakai kalau tokoh biasanya tampil memegang/menunjuk sesuatu yang penting untuk berita, mis. koin bitcoin, dokumen, emas), \"close\" (wajah besar, untuk berita yang menonjolkan ekspresi/pernyataan tokoh), \"full\" (badan, mis. tokoh sedang berpidato/berjalan).",
+    "   - bg = kata kunci foto adegan dalam Bahasa Inggris yang spesifik & dramatis sesuai isi slide (mis. \"indonesia stock exchange building jakarta\", \"stock market screen red numbers crash\", \"gold bars vault\", \"bitcoin coins dark\"). Isi bg di cover DAN tiap slide text supaya tiap slide punya foto berbeda. Pilih ADEGAN tanpa tulisan (hindari kata poster/thumbnail/headline/infographic) supaya angka & judul tidak dobel dengan tulisan di foto. graphic = cadangan latar grafis: chart-up | chart-down | coins | exchange | bank | arrows | globe.",
+    "   - text: 1 kalimat besar maks ±14 kata (pendek = huruf makin besar & makin mirip referensi), **kata kunci** 2–5 kata. caption = 1 kalimat kecil penjelas. Pakai rows hanya kalau ada 2–3 angka pembanding.",
+    "   - Satu gambar → 1 slide cover. Carousel → 3–6 slide: cover → isi → (infografis) → cta.",
+    "   - sources: daftar sumber berita/data yang benar-benar dipakai (judul + url ASLI dari hasil browsing) — foto utama artikel ini juga dipakai website sebagai cadangan foto.",
+    "4) REVISI (\"ganti judul slide 2\", \"angka jadi merah\", \"ganti tokohnya\"): kirim ulang blok ```tws LENGKAP dengan perubahan itu saja; slide lain sama persis.",
+    "5) Setelah blok: 1–2 kalimat gaya karaktermu (apa isinya + tokoh yang dipilih & alasannya singkat + tanggal data). Jangan menulis ulang caption/sumber di luar blok — website menampilkannya.",
   ].join("\n");
 }
