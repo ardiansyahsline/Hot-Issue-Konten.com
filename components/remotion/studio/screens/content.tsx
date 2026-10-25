@@ -5,6 +5,7 @@ import { Video } from "@remotion/media";
 import type { CSSProperties, ReactNode } from "react";
 import { Easing, Img } from "remotion";
 import { storagePathOf } from "@/lib/studio/urls";
+import { useSrc } from "../theme";
 import {
   Btn,
   Caret,
@@ -773,6 +774,7 @@ const FEATS: [string, string, string][] = [
 export function WebsiteScreen({ e }: { e: Env }) {
   const { t, wide, brand } = e;
   const gid = useSid("ws");
+  const res = useSrc();
   const bg = brand.bg || "#09090b";
   const dark = lumOf(bg) < 0.55;
   const ink = dark ? brand.text || "#fafafa" : "#0a0a0a";
@@ -801,7 +803,7 @@ export function WebsiteScreen({ e }: { e: Env }) {
   const pad = wide ? 72 : 20;
 
   const logo = brand.logo ? (
-    <Img src={brand.logo} style={{ height: wide ? 34 : 30, width: "auto", maxWidth: 140, objectFit: "contain" }} />
+    <Img src={res(brand.logo)} style={{ height: wide ? 34 : 30, width: "auto", maxWidth: 140, objectFit: "contain" }} />
   ) : (
     <span style={{ width: wide ? 34 : 30, height: wide ? 34 : 30, borderRadius: 10, background: grad, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: wide ? 17 : 15 }}>{Array.from(brand.name.trim())[0]?.toUpperCase() ?? "B"}</span>
   );

@@ -61,9 +61,11 @@ const cut = (b: Box, top: number, gap = 0): [Box, Box] => [
   { x: b.x, y: b.y + top + gap, w: b.w, h: Math.max(0, b.h - top - gap) },
 ];
 
-/** label kecil di atas judul: titik warna brand + huruf kapital berjarak */
-function Kicker({ text, p, size = 30 }: { text: string; p: number; size?: number }) {
+/** label kecil di atas judul: titik warna brand + huruf kapital berjarak (satu baris, dikecilkan supaya muat di lebar `w`) */
+function Kicker({ text, p, w, size: base = 30 }: { text: string; p: number; w: number; size?: number }) {
   const { brand, display } = useStudio();
+  // lebar dalam em: teks kapital + letter-spacing 0.14em per huruf + titik, jarak & padding pil (2.27em) + border 4px
+  const size = Math.min(base, Math.floor((w - 4) / (textEm(text.toUpperCase()) + 0.14 * Array.from(text).length + 2.27)));
   return (
     <div
       style={{
@@ -117,7 +119,7 @@ function KineticL() {
   const extra = (L.kicker ? 90 : 0) + (L.subtitle ? 110 : 0);
   return (
     <Area box={box} gap={28}>
-      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} />}
+      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} w={box.w} />}
       <KineticText lines={lines} emphasis={L.emphasis} style={L.style ?? "punch"} w={box.w} h={Math.max(120, box.h * 0.8 - extra)} />
       {L.subtitle && <Sub text={L.subtitle} p={enter(14, 16)} w={box.w} color={brand.text} />}
     </Area>
@@ -150,7 +152,7 @@ function TitleL() {
   const sweep = clamp01((f - T(20)) / T(22));
   return (
     <Area box={box} gap={size * 0.28}>
-      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} size={Math.round(clamp(size * 0.24, 24, 34))} />}
+      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} w={box.w} size={Math.round(clamp(size * 0.24, 24, 34))} />}
       <TextShine p={sweep}>
         <div style={{ fontFamily: display, fontWeight: 800, fontSize: size, lineHeight: 1.04, letterSpacing: "-0.03em", textAlign: "center", color: brand.text, textShadow: splitShadow(split, "0 6px 40px rgba(0,0,0,.35)") }}>
           {lines.map((l, i) => {
@@ -181,8 +183,10 @@ function LowerThirdL() {
   const name = L.name ?? L.title ?? scene.text[0] ?? scene.name;
   const role = L.role ?? L.subtitle ?? "";
   const head = scene.text.filter((t) => t !== name);
-  const nameSize = fitSize([name], box.w * 0.78, 140, { max: portrait ? 70 : 64, min: 32, padEm: 1 });
-  const roleSize = Math.round(nameSize * 0.56);
+  // satu baris (nowrap): batas lebar menang atas `min`, supaya nama / peran panjang tidak keluar zona aman
+  const nameSize = Math.min(fitSize([name], box.w * 0.78, 140, { max: portrait ? 70 : 64, min: 32, padEm: 1 }), Math.round((box.w * 0.78) / (textEm(name) + 1)));
+  // peran: lebar = teks + padding 1.2em, di samping garis brand (10px + jarak 18px)
+  const roleSize = Math.min(Math.round(nameSize * 0.56), Math.floor((box.w - 28) / (textEm(role) + 1.2)));
   const bar = enter(0, 10);
   const pn = clamp01(enter(4, 14));
   const pr = clamp01(enter(9, 14));
@@ -243,7 +247,7 @@ function CounterL() {
   const appear = enter(0, 10);
   return (
     <Area box={box} gap={size * 0.16}>
-      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} size={Math.round(clamp(size * 0.14, 24, 34))} />}
+      {L.kicker && <Kicker text={L.kicker} p={enter(0, 12)} w={box.w} size={Math.round(clamp(size * 0.14, 24, 34))} />}
       <div style={{ position: "relative", display: "flex", alignItems: "baseline", justifyContent: "center", fontFamily: display, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.03em", color: brand.text, fontVariantNumeric: "tabular-nums", opacity: clamp01(appear * 1.5), transform: `translateX(${shake.toFixed(1)}px) scale(${(1 + 0.12 * slam + antic + (1 - appear) * 0.3).toFixed(4)})`, textShadow: splitShadow(split, `0 0 ${size * 0.25}px ${rgba(brand.primary, 0.35)}, 0 8px 40px rgba(0,0,0,.4)`) }}>
         {ringK >= 0 && ringK < 22 && (
           <svg width={size * 4} height={size * 4} style={{ position: "absolute", left: "50%", top: "50%", marginLeft: -size * 2, marginTop: -size * 2, overflow: "visible", pointerEvents: "none" }}>
@@ -448,7 +452,8 @@ function LogoL() {
   const name = L.title ?? brand.name;
   const tagline = L.tagline ?? L.subtitle ?? scene.text.find((t) => t !== name && !t.includes(name));
   const G = Math.round(clamp(Math.min(box.w, box.h) * 0.24, 120, portrait ? 230 : 210));
-  const wordSize = fitSize([name], box.w * 0.9, box.h * 0.2, { max: portrait ? 140 : 150, min: 48, lh: 1 });
+  // wordmark satu baris (nowrap): batas lebar menang atas `min`, supaya judul panjang tidak keluar zona aman
+  const wordSize = Math.min(fitSize([name], box.w * 0.9, box.h * 0.2, { max: portrait ? 140 : 150, min: 48, lh: 1 }), Math.round((box.w * 0.9) / textEm(name)));
   const gp = enter(0, 16);
   const kb = f - T(8);
   const wp = clamp01(enter(9, 16));

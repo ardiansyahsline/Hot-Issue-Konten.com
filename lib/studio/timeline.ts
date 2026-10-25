@@ -250,8 +250,11 @@ export function snapScenesToBeats<T extends Pick<Timeline, "scenes" | "fps">>(tl
   let acc = 0;
   for (const s of tl.scenes) {
     acc += s.dur;
-    const b = nearestBeat(acc, beats);
-    bounds.push(Math.abs(b - acc) <= maxShift && b > bounds[bounds.length - 1] + MIN_DUR ? b : acc);
+    // tiap batas dicek terhadap batas sebelumnya (yang mungkin sudah digeser) supaya durasi tetap MIN_DUR..MAX_DUR
+    const prev = bounds[bounds.length - 1];
+    const ok = (t: number) => t - prev >= MIN_DUR && t - prev <= MAX_DUR;
+    const b = nearestBeat(acc, beats.filter(ok));
+    bounds.push(ok(b) && Math.abs(b - acc) <= maxShift ? b : ok(acc) ? acc : prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur)));
   }
   const scenes = tl.scenes.map((s, i) => ({ ...s, dur: Math.round((bounds[i + 1] - bounds[i]) * tl.fps) / tl.fps }));
   return { ...tl, scenes };
@@ -543,6 +546,28 @@ const srtTime = (t: number) => {
   return `${p(h)}:${p(m)}:${p(s)},${p(r, 3)}`;
 };
 
+/**
+ * Timestamp per kata dari mesin suara (ejaan mesin, mis. "si es treker") → kata naskah asli (`text`).
+ * Jumlah sama = dipetakan satu-satu. Jumlah beda (gara-gara `spell`) = waktu diinterpolasi sepanjang sumbu kata mesin,
+ * jadi tiap kata naskah muncul tepat sekali, berurutan, tanpa kata dobel / hilang.
+ */
+export function alignWords(eng: Word[], text: string[]): Word[] {
+  const M = eng.length;
+  const N = text.length;
+  if (!M || !N) return eng.map((w) => ({ ...w }));
+  if (M === N) return eng.map((w, k) => ({ w: text[k], s: w.s, e: w.e }));
+  // posisi p (0..M) di sumbu kata mesin → detik
+  const at = (p: number) => {
+    const k = Math.min(M - 1, Math.floor(p));
+    const w = eng[k];
+    return w.s + (w.e - w.s) * Math.min(1, p - k);
+  };
+  return text.map((w, j) => {
+    const s = at((j * M) / N);
+    return { w, s, e: j === N - 1 ? Math.max(s, eng[M - 1].e) : Math.max(s, at(((j + 1) * M) / N)) };
+  });
+}
+
 /** potongan subtitle per adegan: dari timestamp per kata kalau ada, kalau tidak dari perkiraan kecepatan bicara */
 export function subtitleCues(tl: Timeline): { s: number; e: number; text: string }[] {
   const starts = sceneStartSecs(tl);
@@ -552,9 +577,9 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
     const t0 = starts[i] + (line?.at ?? 0.15);
     const textWords = sc.vo.text.split(/\s+/).filter(Boolean);
-    // timestamp per kata dari mesin suara memakai ejaan mesin -> teks subtitle tetap kata asli (dipetakan per urutan)
+    // timestamp per kata dari mesin suara memakai ejaan mesin -> teks subtitle tetap kata asli (alignWords)
     const ws = line?.words?.length
-      ? line.words.map((w, k) => ({ w: textWords[Math.round((k * textWords.length) / line.words!.length)] ?? w.w, s: t0 + w.s, e: t0 + w.e }))
+      ? alignWords(line.words, textWords).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e }))
       : (() => {
           const dur = line?.dur ?? Math.min(sc.dur - 0.2, Math.max(0.6, textWords.length * 0.34));
           return textWords.map((w, k) => ({ w, s: t0 + (k * dur) / textWords.length, e: t0 + ((k + 1) * dur) / textWords.length }));

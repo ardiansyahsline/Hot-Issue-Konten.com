@@ -18,8 +18,6 @@ import type { FC } from "react";
 import { Composition, staticFile, type CalculateMetadataFunction } from "remotion";
 import { StudioVideo, studioMeta, type StudioVideoProps } from "@/components/remotion/studio/StudioVideo";
 import { SrcCtx } from "@/components/remotion/studio/theme";
-import { FPS, H, W } from "@/components/remotion/ugc/kit";
-import { UGC_DEFAULTS, UGC_DURATION, UgcFitur } from "@/components/remotion/ugc/UgcFitur";
 import { defaultTimeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 
@@ -69,8 +67,6 @@ export function RemotionRoot() {
         fps={m.fps}
         durationInFrames={m.durationInFrames}
       />
-      {/* komposisi lama "UGC — Fitur CS Tracker" (tetap bisa dirender di laptop) */}
-      <Composition id="ugc-fitur-cs-tracker" component={UgcFitur} defaultProps={UGC_DEFAULTS} width={W} height={H} fps={FPS} durationInFrames={UGC_DURATION} />
     </>
   );
 }
