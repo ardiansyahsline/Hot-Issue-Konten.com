@@ -50,20 +50,53 @@ function usePendingVr(initial: number, path: string) {
 export default function Nav({ role, pendingVr = 0 }: { role: string | null; pendingVr?: number }) {
   const path = usePathname();
   const vrPending = usePendingVr(pendingVr, path);
+  // icon + short = tampilan HP (semua menu kelihatan sebagai ikon + label kecil, tanpa geser)
   const links = [
-    { href: "/", label: "Dashboard", show: true },
-    { href: "/issues/new", label: "+ Issue Baru", show: canWriteIssues(role) },
-    { href: "/video-review", label: "Video Review", show: true },
-    { href: "/catatan", label: "Catatan & Saran", show: true },
-    { href: "/chat", label: "Chat", show: true },
-    { href: "/ai", label: "✨ AI", show: true },
-    { href: "/admin", label: "Admin", show: role === "admin" },
+    { href: "/", label: "Dashboard", icon: "🏠", short: "Home", show: true },
+    { href: "/issues/new", label: "+ Issue Baru", icon: "➕", short: "Issue", show: canWriteIssues(role) },
+    { href: "/video-review", label: "Video Review", icon: "🎬", short: "Video", show: true },
+    { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: true },
+    { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: true },
+    { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: true },
+    { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
+  const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
+  const badge = (cls: string) =>
+    vrPending > 0 && (
+      <span
+        className={`absolute flex h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white ring-2 ring-zinc-900 ${cls}`}
+        style={{ background: "#ef4444" }}
+        title={`${vrPending} video review masih menunggu dicek`}
+        aria-label={`${vrPending} video review menunggu`}
+      >
+        {vrPending > 99 ? "99+" : vrPending}
+      </span>
+    );
 
   return (
-    <nav className="flex max-w-full gap-1 overflow-x-auto rounded-full border border-zinc-800/80 bg-zinc-900 p-1 [scrollbar-width:none]" style={{ boxShadow: "var(--shadow-sm)" }}>
+    <>
+    {/* HP: semua menu tampil sejajar sebagai ikon + label kecil (proporsional, tidak perlu digeser) */}
+    <nav className="grid w-full auto-cols-fr grid-flow-col gap-0.5 rounded-2xl border border-zinc-800/80 bg-zinc-900 p-1 sm:hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+      {links.map((l) => (
+        <Link
+          key={l.href}
+          href={l.href}
+          title={l.label}
+          className={`relative flex min-w-0 flex-col items-center gap-0.5 rounded-xl px-0.5 py-1 transition ${isActive(l.href) ? "bg-zinc-800 text-zinc-50" : "text-zinc-400"}`}
+          style={isActive(l.href) ? { boxShadow: "var(--shadow-pop)" } : undefined}
+        >
+          <span className="text-[16px] leading-none">{l.icon}</span>
+          <span className="w-full truncate text-center text-[10px] font-semibold leading-tight">{l.short}</span>
+          {l.href === "/video-review" && badge("right-0.5 top-0")}
+        </Link>
+      ))}
+      <span className="flex min-w-0 items-center justify-center [&>button]:px-1 [&>button]:text-[16px]">
+        <MusicButton />
+      </span>
+    </nav>
+    <nav className="hidden max-w-full gap-1 overflow-x-auto rounded-full sm:flex border border-zinc-800/80 bg-zinc-900 p-1 [scrollbar-width:none]" style={{ boxShadow: "var(--shadow-sm)" }}>
       {links.map((l) => {
-        const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
+        const active = isActive(l.href);
         return (
           <Link
             key={l.href}
@@ -74,20 +107,12 @@ export default function Nav({ role, pendingVr = 0 }: { role: string | null; pend
             style={active ? { boxShadow: "var(--shadow-pop)" } : undefined}
           >
             {l.label}
-            {l.href === "/video-review" && vrPending > 0 && (
-              <span
-                className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10.5px] font-bold leading-none text-white ring-2 ring-zinc-900"
-                style={{ background: "#ef4444" }}
-                title={`${vrPending} video review masih menunggu dicek`}
-                aria-label={`${vrPending} video review menunggu`}
-              >
-                {vrPending > 99 ? "99+" : vrPending}
-              </span>
-            )}
+            {l.href === "/video-review" && badge("-right-0.5 -top-0.5")}
           </Link>
         );
       })}
       <MusicButton />
     </nav>
+    </>
   );
 }
