@@ -1486,13 +1486,13 @@ export default function AiChat({
                                         const ans = cardAnswerAfter(m.id);
                                         return ans ? <AnsweredCard title={ch.choice.title} answer={ans} /> : <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />;
                                       })()}
-                                    {(dz.partial || ph.partial || tw.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ {tw.partial ? "Menyusun konten TWS…" : dz.partial ? `Menggambar desain${dz.designs.length ? ` (${dz.designs.some((d) => d.slide) ? "slide" : "opsi"} ${dz.designs.length + 1})` : ""}…` : "Mencari foto…"}</p>}
+                                    {(dz.partial || ph.partial || tw.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ {tw.partial ? "Menyusun desain berita…" : dz.partial ? `Menggambar desain${dz.designs.length ? ` (${dz.designs.some((d) => d.slide) ? "slide" : "opsi"} ${dz.designs.length + 1})` : ""}…` : "Mencari foto…"}</p>}
                                     {ph.photos && !streaming && <PhotoGrid ask={ph.photos} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
                                     {slides.length > 0 && !streaming && <DesignCard designs={slides} deck={tw.deck ?? undefined} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
                                     {/* blok ```tws yang JSON-nya rusak / tidak lengkap: jangan diam saja, tawarkan bikin ulang */}
                                     {!tw.deck && !streaming && /```tws/i.test(mu.text) && (
                                       <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12.5px] text-amber-300">
-                                        ⚠️ Desain TWS gagal dibaca.
+                                        ⚠️ Desain gagal dibaca.
                                         <button type="button" disabled={busy} className="font-semibold underline disabled:opacity-50" onClick={() => run("✏️ Revisi desain: kirim ulang blok tws LENGKAP (JSON valid), isi sama")}>
                                           Bikin ulang
                                         </button>
