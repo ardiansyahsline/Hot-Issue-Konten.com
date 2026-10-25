@@ -146,7 +146,7 @@ export default function SceneCard({
                   <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
                     −
                   </button>
-                  <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
+                  <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} commitOnBlur className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
                   <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Tambah 0,1 detik" onClick={() => dur(s.dur + 0.1)}>
                     +
                   </button>

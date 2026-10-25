@@ -204,7 +204,8 @@ grant select, insert, update on public.studio_voice_jobs, public.studio_render_j
 -- user Studio boleh membuat & melihat antriannya sendiri, dan membatalkan (status 'batal'); worker memakai service role
 drop policy if exists "studio_voice_jobs_read" on public.studio_voice_jobs;
 create policy "studio_voice_jobs_read" on public.studio_voice_jobs for select to authenticated
-  using (public.can_use_studio() and (created_by = auth.uid() or public.is_admin() or kind in ('clean', 'beats')));
+  -- job 'clean' (bank suara) dipakai bersama; job 'beats' berisi path upload pribadi -> hanya pemilik & admin
+  using (public.can_use_studio() and (created_by = auth.uid() or public.is_admin() or kind = 'clean'));
 drop policy if exists "studio_voice_jobs_insert" on public.studio_voice_jobs;
 create policy "studio_voice_jobs_insert" on public.studio_voice_jobs for insert to authenticated
   with check (public.can_use_studio() and created_by = auth.uid() and status = 'antri');

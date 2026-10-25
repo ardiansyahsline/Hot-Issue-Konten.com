@@ -16,6 +16,8 @@ type Props = {
   catalog: Catalog | null;
   selected: string | null;
   onSelect: (sceneId: string) => void;
+  /** alasan ketukan musik belum ada (mis. laptop mati / lagi dideteksi) */
+  beatHint?: string | null;
 };
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -37,7 +39,7 @@ function fitDur(durs: number[], i: number, want: number): number {
  * Kartu RENCANA DETAIL (format mengikuti naskah VO + cue sheet): konsep, hook, gaya, brand, suara, musik,
  * lalu kartu per adegan. Semua bisa diedit sebelum render; tiap perubahan dinormalisasi supaya tetap valid.
  */
-function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props) {
+function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHint }: Props) {
   const ref = useRef(tl);
   ref.current = tl;
   const cat = useRef(catalog);
@@ -53,7 +55,7 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
       // jaring terakhir: editan yang membuat adegan terbuang (lewat MAX_TOTAL) ditolak. Timeline yang sudah lewat batas
       // dari editor lain tetap diterima seperti dulu, supaya kartu tidak macet
       const want = (raw as { scenes?: unknown } | null)?.scenes;
-      if (Array.isArray(want) && next.scenes.length < Math.min(want.length, MAX_SCENES) && totalSec(prev) <= MAX_TOTAL) return prev;
+      if (Array.isArray(want) && next.scenes.length < Math.min(want.length, MAX_SCENES) && totalSec(prev) <= MAX_TOTAL + 1e-6) return prev;
       ref.current = next;
       onChange(next);
       return next;
@@ -247,7 +249,7 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
           </Toggle>
         </div>
         <div className="space-y-2 rounded-xl border border-zinc-800/80 p-2.5 sm:p-3">
-          <Field label="🎵 Musik" hint={music.src === "none" ? "Video tanpa musik." : bpm ? `Tempo ±${Math.round(bpm)} BPM` : "Tempo (BPM) belum dideteksi."}>
+          <Field label="🎵 Musik" hint={music.src === "none" ? "Video tanpa musik." : bpm ? `Tempo ±${Math.round(bpm)} BPM` : beats.length >= 2 ? "Ketukan musik terdeteksi." : beatHint || "Tempo (BPM) belum dideteksi."}>
             {(id) => (
               <select id={id} className="input py-2 text-[13px]" value={music.src} onChange={(e) => pickMusic(e.target.value)}>
                 {catalog?.music.map((m) => (
@@ -266,7 +268,7 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect }: Props
             <button
               type="button"
               disabled={beats.length < 2 || music.src === "none"}
-              title={beats.length < 2 ? "Tempo musik belum diketahui" : "Geser batas adegan ke ketukan terdekat"}
+              title={beats.length < 2 ? beatHint || "Tempo musik belum diketahui" : "Geser batas adegan ke ketukan terdekat"}
               className="btn-ghost px-2.5 py-1.5 text-[12px]"
               onClick={() => update((t) => snapScenesToBeats(t, beats))}
             >

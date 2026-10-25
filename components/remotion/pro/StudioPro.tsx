@@ -13,6 +13,7 @@ import PlanCard from "./PlanCard";
 import ProjectBar, { type ProjectRow, type SaveState } from "./ProjectBar";
 import { Toggle } from "./fields";
 import { dbErrorText, fmtSec, keepDataVo, sfxExtraOf, tidyTimeline, withoutDataVo } from "./planUtils";
+import { useBeats } from "./useBeats";
 
 // panel berat (timeline, suara, export) dimuat belakangan supaya chat cepat siap
 const skeleton = (h: string) =>
@@ -194,6 +195,9 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     },
     [queueSave],
   );
+
+  // musik upload / katalog tanpa ketukan -> dideteksi di laptop, hasilnya masuk lewat change
+  const beatHint = useBeats(timeline, projectId, tlRef, change);
 
   // ---------- proyek ----------
   const open = useCallback(
@@ -396,7 +400,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
             {opening ? (
               <div className="card h-64 animate-pulse" />
             ) : timeline ? (
-              <PlanCard timeline={timeline} onChange={change} catalog={catalog} selected={selected} onSelect={selectScene} />
+              <PlanCard timeline={timeline} onChange={change} catalog={catalog} selected={selected} onSelect={selectScene} beatHint={beatHint} />
             ) : (
               <div className="rounded-2xl border border-dashed border-zinc-800 p-5 text-center text-[13px] text-zinc-500">📋 Rencana video (naskah, adegan, musik & SFX) muncul di sini setelah ngobrol sama Harley.</div>
             )}
@@ -405,7 +409,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
         <div className="contents lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100dvh-6rem)] lg:min-w-0 lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pb-1">
           <div className="order-2 min-w-0 space-y-4">
-            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={change} opening={opening} />
+            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={change} opening={opening} beatHint={beatHint} />
           </div>
           {timeline && (
             <div className="order-4 min-w-0 space-y-4">
@@ -428,6 +432,7 @@ const PreviewPane = memo(function PreviewPane({
   onSelect,
   onChange,
   opening,
+  beatHint,
 }: {
   timeline: Timeline | null;
   sfxExtra: SfxMeta[];
@@ -436,6 +441,7 @@ const PreviewPane = memo(function PreviewPane({
   onSelect: (id: string) => void;
   onChange: (tl: Timeline) => void;
   opening: boolean;
+  beatHint: string | null;
 }) {
   const [safe, setSafe] = useState(() => store.get(SAFE_KEY) === "1");
   const [frame, setFrame] = useState(0);
@@ -546,7 +552,7 @@ const PreviewPane = memo(function PreviewPane({
         </div>
         {safe && timeline && <p className="mt-2 text-[11px] text-zinc-500">Kotak garis = area aman. Teks penting jangan keluar kotak (ketutup tombol & caption {timeline.ratio === "9:16" ? "TikTok/Reels" : "platform"}).</p>}
       </section>
-      {timeline && <TimelineEditor timeline={timeline} onChange={onChange} selected={selected} onSelect={onSelect} frame={frame} onSeek={seek} />}
+      {timeline && <TimelineEditor timeline={timeline} onChange={onChange} selected={selected} onSelect={onSelect} frame={frame} onSeek={seek} beatHint={beatHint} />}
     </>
   );
 });

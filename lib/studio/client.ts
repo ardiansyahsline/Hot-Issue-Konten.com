@@ -387,7 +387,8 @@ export const JOB_DONE: JobStatus[] = ["selesai", "gagal", "batal"];
 export type JobTable = "studio_voice_jobs" | "studio_render_jobs";
 
 export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number };
-export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[] };
+/** `start` = detik baris ini ditaruh di VO lengkap (full.mp3) */
+export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[]; start?: number };
 export type VoiceJobResult = {
   lines?: VoiceJobResultLine[];
   full_path?: string | null;
@@ -402,6 +403,8 @@ export type VoiceJob = {
   kind: "tts" | "clean" | "beats";
   project_id: string | null;
   voice_id: string | null;
+  /** naskah yang dikirim (tts) — untuk cek naskah adegan belum berubah saat hasilnya ditempel */
+  lines?: VoiceJobLine[];
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -420,7 +423,7 @@ export type RenderJob = {
   created_at: string;
 };
 
-const VOICE_JOB_COLS = "id,kind,project_id,voice_id,status,progress,message,engine_used,result,created_at";
+const VOICE_JOB_COLS = "id,kind,project_id,voice_id,lines,status,progress,message,engine_used,result,created_at";
 const RENDER_JOB_COLS = "id,project_id,variant,status,progress,message,result_path,created_at";
 const colsOf = (t: JobTable) => (t === "studio_voice_jobs" ? VOICE_JOB_COLS : RENDER_JOB_COLS);
 
@@ -484,7 +487,8 @@ export function useStudioJob<T extends { id: string; status: JobStatus }>(table:
     let lastPoll = 0;
     const take = (row: T) => {
       if (!alive) return;
-      setJob(row);
+      // realtime bisa tidak mengirim kolom besar yang tidak berubah (mis. lines) -> sisanya diambil dari data sebelumnya
+      setJob((prev) => (prev && prev.id === row.id ? { ...prev, ...row } : row));
       if (JOB_DONE.includes(row.status)) done = true;
     };
     const poll = async () => {

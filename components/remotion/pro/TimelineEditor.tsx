@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { extraSfxOf, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, snapScenesToBeats, totalFrames, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, snapScenesToBeats, totalFrames, totalSec, type Scene, type Timeline } from "@/lib/studio/timeline";
 
 /** warna titik SFX per kategori (palet yang otomatis ikut mode terang) */
 const CAT: Record<string, { dot: string; label: string }> = {
@@ -56,9 +56,10 @@ type Drag = { id: string; x0: number; d0: number; dur: number; start: number; ot
 /**
  * Timeline horizontal: blok adegan selebar durasinya (tarik tepi kanan untuk ubah durasi, nempel 0,1 dtk / ketukan musik),
  * titik SFX per cue (klik = nyala/mati), blok VO, playhead + klik/geser penggaris untuk lompat.
+ * `beatHint` = alasan ketukan musik belum ada (mis. laptop mati / lagi dideteksi), untuk tombol "Tempel ke ketukan".
  */
-export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: Timeline) => void; selected: string | null; onSelect: (sceneId: string) => void; frame?: number; onSeek?: (frame: number) => void }) {
-  const { timeline: tl, onChange, selected, onSelect, frame, onSeek } = p;
+export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: Timeline) => void; selected: string | null; onSelect: (sceneId: string) => void; frame?: number; onSeek?: (frame: number) => void; beatHint?: string | null }) {
+  const { timeline: tl, onChange, selected, onSelect, frame, onSeek, beatHint } = p;
   const catalog = useStudioCatalog();
   const extra = useMemo<SfxMeta[]>(() => extraSfxOf(catalog), [catalog]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -199,6 +200,8 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   const snapAll = () => {
     const next = snapScenesToBeats(tl, beats);
     const changed = next.scenes.some((s, i) => Math.abs(s.dur - tl.scenes[i].dur) > 1e-6);
+    // total lewat 3 menit -> adegan terakhir nanti dibuang diam-diam saat dirapikan, jadi ditolak
+    if (changed && totalSec(next) > MAX_TOTAL + 1e-6) return setNote(`Tidak ditempel: total video jadi lewat ${MAX_TOTAL} dtk. Pendekkan adegan dulu.`);
     if (changed) onChange(withScenes(tl, next.scenes));
     setNote(changed ? "🎯 Potongan adegan sudah nempel ke ketukan musik" : "Potongan sudah pas di ketukan");
   };
@@ -219,7 +222,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
           Total <b className="text-zinc-200">{fmt(total)} dtk</b> · {tl.scenes.length} adegan
         </div>
         <div className="ml-auto flex items-center gap-1.5">
-          <button type="button" className="btn-ghost px-2.5 py-1.5 text-xs" disabled={beats.length < 2} title={beats.length < 2 ? "Pilih musik dulu supaya ada ketukan" : "Geser batas adegan ke ketukan musik terdekat"} onClick={snapAll}>
+          <button type="button" className="btn-ghost px-2.5 py-1.5 text-xs" disabled={beats.length < 2} title={beats.length >= 2 ? "Geser batas adegan ke ketukan musik terdekat" : !tl.music || tl.music.src === "none" ? "Pilih musik dulu supaya ada ketukan" : beatHint || "Tempo musik belum diketahui"} onClick={snapAll}>
             🎯 Tempel ke ketukan
           </button>
           <button type="button" className="btn-ghost h-8 w-8 p-0 text-base" aria-label="Perkecil" disabled={zoom === 0} onClick={() => setZoom((z) => Math.max(0, z - 1))}>

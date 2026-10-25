@@ -128,14 +128,15 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
     sb.from("studio_messages")
       .select("id, role, content, attachments, persona, model, error")
       .eq("project_id", projectId)
-      .order("id")
+      .order("id", { ascending: false })
       .limit(400)
       .then(({ data, error }) => {
         if (dead) return;
         setLoading(false);
         if (error) return setLoadErr(dbErrorText(error, "Gagal memuat obrolan. Coba buka ulang proyeknya."));
+        // diambil 400 pesan TERBARU (urut turun), lalu dibalik supaya tampil dari yang lama ke yang baru
         setMsgs(
-          ((data ?? []) as Row[]).map((r) => ({
+          ((data ?? []) as Row[]).reverse().map((r) => ({
             id: r.id,
             role: r.role,
             content: r.content ?? "",

@@ -17,7 +17,7 @@ import {
   type VoiceJob,
   type VoiceJobLine,
 } from "@/lib/studio/client";
-import { MAX_DUR, MAX_TOTAL, sceneStartSecs, type EdgeVoice, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
+import { MAX_DUR, MAX_TOTAL, sceneStartSecs, type EdgeVoice, type Scene, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
@@ -30,6 +30,7 @@ const DEF_EXG = 0.65;
 const DEF_CFG = 0.35;
 const DEFAULT_VOICE = "Alif - Energik";
 const NO_SCRIPT = "Belum ada naskah VO di adegan. Minta Harley tuliskan naskahnya dulu.";
+const STALE = 'Naskah VO berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
 
 type Run =
   | { s: "idle" }
@@ -44,6 +45,9 @@ const cleanWords = (w: unknown): Word[] =>
   (Array.isArray(w) ? w : [])
     .filter((x): x is Word => !!x && typeof x === "object" && typeof (x as Word).w === "string")
     .map((x) => ({ w: x.w, s: Number(x.s) || 0, e: Number(x.e) || 0 }));
+/** naskah VO adegan masih sama dengan yang dikirim ke mesin suara (teks & ejaan) */
+const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined) =>
+  !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
 
 /** perpanjang adegan yang VO-nya lebih panjang (at + dur + 0,25), tetap dalam batas 20 dtk/adegan & 180 dtk total */
 function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[] } {
@@ -132,14 +136,22 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
 
   const applyJob = (j: VoiceJob) => {
     const t = tlRef.current;
-    const ids = new Set(t.scenes.map((s) => s.id));
-    const lines: VoLine[] = (j.result?.lines ?? [])
-      .filter((l) => !!l && typeof l.path === "string" && ids.has(l.scene_id))
-      .map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: VO_AT, words: cleanWords(l.words) }));
+    const starts = sceneStartSecs(t);
+    const at = new Map(t.scenes.map((s, i) => [s.id, i]));
+    // naskah yang dikirim: adegan yang naskahnya berubah / dihapus selama job jalan tidak ditempeli suara lama
+    const sent = Array.isArray(j.lines) && j.lines.length ? new Map(j.lines.map((l) => [l.scene_id, l])) : null;
+    const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
+    const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
+    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: VO_AT, words: cleanWords(l.words) }));
     if (!lines.length) {
-      setRun({ s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
+      setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
       return;
     }
+    // VO lengkap (.mp3) hanya dipakai kalau semua baris yang diminta terpakai & posisi adegannya tidak bergeser
+    const fullOk =
+      !!sent &&
+      ok.length === sent.size &&
+      ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + VO_AT)) < 2e-3);
     const name = voicesRef.current.find((x) => x.id === j.voice_id)?.name ?? t.voice.voiceName ?? "Bank suara";
     finish(t, {
       jobId: j.id,
@@ -147,7 +159,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       temp: false,
       label: `Bank suara · ${name}`,
       lines,
-      full: j.result?.full_path ? storageSrc(j.result.full_path) : null,
+      full: fullOk && j.result?.full_path ? storageSrc(j.result.full_path) : null,
     });
   };
 
@@ -214,13 +226,17 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     if (ctrl.signal.aborted) return setRun({ s: "idle" });
     if (!out.length) return setRun({ s: "error", msg: lastErr || "Gagal bikin suara. Coba lagi." });
     const t = tlRef.current;
+    // naskah adegan diubah selama suara dibuat -> suara lamanya tidak dipakai
+    const sent = new Map(items.map((s) => [s.id, s.vo!]));
+    const fresh = out.filter((l) => sameVo(t.scenes.find((s) => s.id === l.sceneId), sent.get(l.sceneId)));
+    if (!fresh.length) return setRun({ s: "error", msg: STALE });
     const order = new Map(t.scenes.map((s, i) => [s.id, i]));
-    out.sort((a, b) => (order.get(a.sceneId) ?? 0) - (order.get(b.sceneId) ?? 0));
+    fresh.sort((a, b) => (order.get(a.sceneId) ?? 0) - (order.get(b.sceneId) ?? 0));
     const used: "edge" | "elevenlabs" = results.some((r) => r.engine === "edge") ? "edge" : "elevenlabs";
     const label = results.find((r) => r.engine === used)?.label || (used === "edge" ? EDGE_LABEL : "Premium");
     // mode bank tetap bank (nanti tinggal "Generate ulang VO" saat laptop nyala)
     const voice = engine === "elevenlabs" ? { ...t.voice, mode: "elevenlabs" as const } : t.voice.mode === "bank" ? t.voice : { ...t.voice, mode: "edge" as const };
-    finish({ ...t, voice }, { jobId: null, engine: used, temp: results.some((r) => r.temp), label, lines: out, full: null }, [
+    finish({ ...t, voice }, { jobId: null, engine: used, temp: results.some((r) => r.temp), label, lines: fresh, full: null }, [
       why ?? "",
       engine === "elevenlabs" && used === "edge" ? "Premium sedang tidak bisa dipakai — dipakai suara cadangan." : "",
       fail ? `${fail} adegan gagal dibuat suaranya.` : "",

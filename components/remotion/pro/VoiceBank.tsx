@@ -51,7 +51,7 @@ function audioDur(file: File): Promise<number | null> {
  * Tab "Bank suara": daftar suara (status, skor kualitas, putar asli/bersih) + form tambah rekaman
  * (wajib centang izin pemilik suara). Simpan = upload voices/<uuid>/raw.<ext> → baris studio_voices → job 'clean' untuk laptop.
  */
-export default function VoiceBank() {
+export default function VoiceBank({ active = true }: { active?: boolean }) {
   const uid = useId();
   const status = useStudioStatus();
   const { voices, reload, loaded, error } = useVoices();
@@ -72,6 +72,11 @@ export default function VoiceBank() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const online = !!status?.worker.online;
+
+  // pindah tab -> rekaman yang sedang diputar berhenti (tab tetap terpasang, cuma disembunyikan)
+  useEffect(() => {
+    if (!active) setPlaying(null);
+  }, [active]);
 
   // siapa saya (untuk tombol hapus: pemilik / admin)
   useEffect(() => {

@@ -88,7 +88,7 @@ export default function StudioTabs() {
       )}
       {seen.has("suara") && (
         <div id="studio-panel-suara" role="tabpanel" aria-labelledby="studio-tab-suara" hidden={tab !== "suara"}>
-          <VoiceBank />
+          <VoiceBank active={tab === "suara"} />
         </div>
       )}
     </div>
