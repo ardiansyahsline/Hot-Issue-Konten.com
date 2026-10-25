@@ -33,6 +33,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
 - **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
 - **Admin:** buat akun, ganti role lewat dropdown, reset password, dan hapus akun.
+- **🎞️ Remotion (khusus admin):** bikin video dari kode pakai [Remotion](https://www.remotion.dev). Sudah ada video **UGC fitur CS Tracker** (9:16, ±45 detik, buat TikTok/Reels/Shorts) dengan zoom in/out, caption, dan adegan ngetik prompt ke AI. Teks hook, prompt, dan CTA bisa diubah, lalu **Bikin file video** → MP4 langsung jadi di browser (tanpa server). Remotion gratis untuk perorangan / perusahaan ≤ 3 orang; selebihnya isi `NEXT_PUBLIC_REMOTION_LICENSE_KEY` di Vercel.
 - **Akun saya:** ganti nama dan password sendiri.
 
 ## Hak akses per role
