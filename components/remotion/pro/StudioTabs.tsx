@@ -48,7 +48,7 @@ export default function StudioTabs() {
       <div
         role="tablist"
         aria-label="Menu Studio"
-        className="grid w-full grid-cols-3 rounded-full border border-zinc-800/80 bg-zinc-900 p-1 text-[12px] font-semibold sm:inline-grid sm:w-auto sm:text-[13px]"
+        className="grid w-full grid-cols-3 rounded-full border border-zinc-800/80 bg-zinc-900 p-1 text-[11.5px] font-semibold sm:inline-grid sm:w-auto sm:text-[13px]"
         style={{ boxShadow: "var(--shadow-sm)" }}
       >
         {TABS.map(([k, label], i) => (
@@ -65,7 +65,7 @@ export default function StudioTabs() {
             tabIndex={tab === k ? 0 : -1}
             onClick={() => pick(k)}
             onKeyDown={(e) => onKey(e, i)}
-            className={`whitespace-nowrap rounded-full px-2 py-1.5 transition sm:px-3.5 ${tab === k ? "text-white" : "text-zinc-400 hover:text-zinc-100"}`}
+            className={`whitespace-nowrap rounded-full px-1.5 py-1.5 transition sm:px-3.5 ${tab === k ? "text-white" : "text-zinc-400 hover:text-zinc-100"}`}
             style={tab === k ? { backgroundImage: "linear-gradient(180deg,#fb8a3c,#ea580c)", boxShadow: "var(--shadow-primary)" } : undefined}
           >
             {label}

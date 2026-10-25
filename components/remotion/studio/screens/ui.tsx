@@ -123,6 +123,11 @@ export const typeOut = (t: Clock, text: string, at: number, cps = 30) => {
   const chars = Array.from(text);
   return chars.slice(0, Math.max(0, Math.floor(((t.f - at) / t.fps) * cps))).join("");
 };
+/** ujung teks saja (kolom ketik yang menggeser teks lama ke kiri): "…ujung kalimat" */
+export const tail = (text: string, max: number) => {
+  const c = Array.from(text);
+  return c.length > max ? `…${c.slice(c.length - max + 1).join("")}` : text;
+};
 /** frame selesai mengetik */
 export const typeEnd = (t: Clock, text: string, at: number, cps = 30) => at + (Array.from(text).length / cps) * t.fps;
 /** urutan frame yang dijamin naik (syarat interpolate) */
@@ -704,9 +709,10 @@ export function HeroAvatar({ t, hero = "Harley", size = 36, acc = "#f97316", tal
  */
 export function HelperChip({ hero = "Harley", max, p = 1, glow = 0, acc = "#f97316" }: { hero?: string; max: number; p?: number; glow?: number; acc?: string }) {
   const tg = personaTagline(hero);
-  const text = `👋 Kamu dibantu oleh ${tg.name} · ${tg.kind} — ${tg.sifat}`;
-  const est = Array.from(text).length * 0.53 + 2;
-  const fs = Math.max(6.5, Math.min(11.5, (max - 20) / est));
+  const fit = (s: string) => Math.min(11.5, (max - 20) / (Array.from(s).length * 0.53 + 2));
+  // terlalu kecil untuk dibaca di video -> sifat dihilangkan dulu, baru huruf dikecilkan
+  const full = fit(`👋 Kamu dibantu oleh ${tg.name} · ${tg.kind} — ${tg.sifat}`) >= 9.5;
+  const fs = Math.max(7, full ? fit(`👋 Kamu dibantu oleh ${tg.name} · ${tg.kind} — ${tg.sifat}`) : fit(`👋 Kamu dibantu oleh ${tg.name} · ${tg.kind}`));
   return (
     <div style={{ marginBottom: 6, minWidth: 0, overflow: "hidden", maxWidth: max, opacity: clamp01(p * 1.4), transform: `translateY(${(1 - p) * 6}px) scale(${0.94 + 0.06 * p})`, transformOrigin: "0 50%" }}>
       <span
@@ -723,7 +729,8 @@ export function HelperChip({ hero = "Harley", max, p = 1, glow = 0, acc = "#f973
           boxShadow: `0 1px 2px rgba(0,0,0,0.4)${glow > 0 ? `, 0 0 0 ${glow * 4}px ${rgba(acc, 0.18 * glow)}` : ""}`,
         }}
       >
-        👋 Kamu dibantu oleh <b style={{ fontWeight: 650, color: Z[100] }}>{tg.name}</b> · {tg.kind} — {tg.sifat}
+        👋 Kamu dibantu oleh <b style={{ fontWeight: 650, color: Z[100] }}>{tg.name}</b> · {tg.kind}
+        {full && ` — ${tg.sifat}`}
       </span>
     </div>
   );

@@ -50,6 +50,7 @@ export function Txt({
   value,
   onCommit,
   onDraft,
+  onDone,
   multiline,
   rows = 2,
   id,
@@ -63,6 +64,7 @@ export function Txt({
   onCommit: (v: string) => void;
   /** dipanggil tiap ketikan (mis. untuk peringatan jumlah kata) */
   onDraft?: (v: string) => void;
+  onDone?: () => void;
   multiline?: boolean;
   rows?: number;
   id?: string;
@@ -116,6 +118,7 @@ export function Txt({
     onBlur: () => {
       focus.current = false;
       flush();
+      onDone?.();
       // tampilkan versi yang sudah dirapikan
       setTimeout(() => {
         if (!focus.current) {

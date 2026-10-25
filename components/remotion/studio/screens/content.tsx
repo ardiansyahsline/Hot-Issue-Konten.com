@@ -182,8 +182,9 @@ function TwsGraphic({ t, at, accent = "#2ee86a", h = TH }: { t: Clock; at: numbe
 /** baris judul TWS: kapital tebal, satu baris disorot kotak biru yang menyapu dari kiri */
 function TwsTitle({ t, at, lines, hl, size, style, center }: { t: Clock; at: number; lines: string[]; hl: number; size: number; style?: CSSProperties; center?: boolean }) {
   return (
-    <div style={{ position: "absolute", margin: 0, fontWeight: 800, fontSize: size, lineHeight: 1.12, letterSpacing: "-0.02em", textTransform: "uppercase", textShadow: "0 2px 18px rgba(0,0,0,0.45)", textAlign: center ? "center" : "left", ...style }}>
-      {lines.map((l, i) => {
+    <div style={{ position: "absolute", margin: 0, fontWeight: 800, fontSize: size, lineHeight: 1.12, letterSpacing: "-0.02em", textShadow: "0 2px 18px rgba(0,0,0,0.45)", textAlign: center ? "center" : "left", ...style }}>
+      {lines.map((raw, i) => {
+        const l = raw.toUpperCase();
         const p = pop(t, at + i * 5, { damping: 16, stiffness: 150 });
         const em = i === hl - 1;
         const w = ramp(t, at + 10 + i * 5, at + 20 + i * 5, 0, 1, Easing.out(Easing.cubic));
@@ -678,8 +679,8 @@ export function ReportScreen({ e }: { e: Env }) {
   const starts = [cardAt + 6, flips[0] + 4, flips[1] + 4, flips[2] + 4];
   const idx = flips.filter((f) => t.f >= f + 9).length;
   const cp = pop(t, cardAt, { damping: 16 });
-  const vw = wide ? 820 : e.w - 28 - 24;
-  const thumbW = wide ? 180 : (vw - 18) / 4;
+  const vw = wide ? 780 : e.w - 28 - 24;
+  const thumbW = wide ? 150 : (vw - 18) / 4;
   const viewer = <DeckViewer t={t} w={vw} flips={flips} starts={starts} title={title} kpis={kpis} points={points} />;
   const thumbs = (
     <div style={{ display: "flex", gap: 6 }}>
@@ -696,7 +697,7 @@ export function ReportScreen({ e }: { e: Env }) {
         <Btn grad={e.grad} size={12} press={t.f >= bt(t, 0.9) - 3 && t.f < bt(t, 0.9) + 3 ? 0.9 : 1}>
           ⬇️ Unduh PPT
         </Btn>
-        <TapAt t={t} at={bt(t, 0.9)} wide={wide} />
+        <TapAt t={t} at={bt(t, 0.9)} wide={wide} from={[80, -60]} />
       </span>
       <Btn ghost size={12}>
         📄 PDF
@@ -744,7 +745,7 @@ export function ReportScreen({ e }: { e: Env }) {
     );
   return (
     <Shell e={e} nav="ai" fill>
-      <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "844px minmax(0, 1fr)", gap: 24 }}>
+      <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "804px minmax(0, 1fr)", gap: 24 }}>
         <div>{deckCard}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <AiLine e={e} at={en(t, 2)} text="Laporan minggu ini udah jadi 📊 tinggal **unduh PPT**." max={330} />

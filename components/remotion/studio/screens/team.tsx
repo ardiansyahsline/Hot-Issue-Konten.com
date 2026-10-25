@@ -22,6 +22,7 @@ import {
   pop,
   ramp,
   rgba,
+  tail,
   typeEnd,
   typeOut,
   type Clock,
@@ -254,7 +255,7 @@ export function ChatScreen({ e }: { e: Env }) {
         >
           {draft ? (
             <>
-              <span style={{ overflow: "hidden", textOverflow: "clip", direction: "rtl", textAlign: "left", unicodeBidi: "plaintext" }}>{draft}</span>
+              <span style={{ whiteSpace: "nowrap" }}>{tail(draft, wide ? 90 : 30)}</span>
               <Caret t={t} typing={!typingDone} color={e.acc} h={17} />
             </>
           ) : (
@@ -411,7 +412,7 @@ export function MusicScreen({ e }: { e: Env }) {
             </span>
             {sel && playing && <span style={{ fontSize: 11, fontWeight: 750, color: "#34d399", whiteSpace: "nowrap" }}>▶ diputar</span>}
             {sel && connecting && <span style={{ fontSize: 11, fontWeight: 650, color: Z[400], whiteSpace: "nowrap" }}>menyambung{".".repeat(1 + (Math.floor(t.f / 6) % 3))}</span>}
-            {i === target && <TapAt t={t} at={tap} wide={wide} x="40%" />}
+            {i === target && <TapAt t={t} at={tap} wide={wide} x="40%" from={[80, -70]} />}
           </div>
         );
       })}

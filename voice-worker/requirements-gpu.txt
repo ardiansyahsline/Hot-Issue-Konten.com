@@ -18,6 +18,8 @@ onnx>=1.16
 tokenizers>=0.21
 huggingface-hub>=1.0,<2
 tqdm
+# resemble-perth (watermark suara AI) masih butuh pkg_resources → setuptools < 81
+setuptools>=70,<81
 
 # --- pocket-tts (cadangan CPU) ---
 pocket-tts==4.0.1

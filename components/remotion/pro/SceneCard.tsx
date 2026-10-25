@@ -75,13 +75,13 @@ export default function SceneCard({
   onDel: (id: string) => void;
 }) {
   const [askDel, setAskDel] = useState(false);
-  const [lines, setLines] = useState<string[] | null>(null);
+  const [draftLines, setDraftLines] = useState<string[] | null>(null);
   const patch = (p: ScenePatch) => onPatch(s.id, p);
   const setLayout = (p: Partial<Layout>) => patch((x) => ({ layout: { ...x.layout, ...p } }));
   const dur = (d: number) => patch({ dur: Math.min(MAX_DUR, Math.max(MIN_DUR, Math.round(d * 10) / 10)) });
 
   // peringatan teks layar dihitung dari yang sedang diketik (sebelum dirapikan otomatis)
-  const shown = lines ?? s.text;
+  const shown = draftLines ?? s.text;
   const long = shown.map((l, i) => ({ i, n: wordCount(l) })).filter((x) => x.n > MAX_WORDS_PER_LINE);
   const voSec = s.vo ? speakSec(s.vo.text) : 0;
   const peek = s.text[0] || s.vo?.text || s.layout.title || s.visual;
@@ -209,11 +209,9 @@ export default function SceneCard({
                 multiline
                 rows={Math.min(4, Math.max(2, s.text.length))}
                 value={s.text.join("\n")}
-                onDraft={(v) => setLines(v.split("\n").filter((l) => l.trim()))}
-                onCommit={(v) => {
-                  setLines(null);
-                  patch({ text: v.split("\n").map((l) => l.trim()).filter(Boolean) });
-                }}
+                onDraft={(v) => setDraftLines(v.split("\n").filter((l) => l.trim()))}
+                onDone={() => setDraftLines(null)}
+                onCommit={(v) => patch({ text: lines(v) })}
               />
             )}
           </Field>

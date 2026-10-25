@@ -12,7 +12,7 @@ import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
 import ProjectBar, { type ProjectRow, type SaveState } from "./ProjectBar";
 import { Toggle } from "./fields";
-import { dbErrorText, fmtSec, sfxExtraOf, tidyTimeline } from "./planUtils";
+import { dbErrorText, fmtSec, keepDataVo, sfxExtraOf, tidyTimeline, withoutDataVo } from "./planUtils";
 
 // panel berat (timeline, suara, export) dimuat belakangan supaya chat cepat siap
 const skeleton = (h: string) =>
@@ -79,10 +79,15 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setProjectId(id);
     store.set(LAST_KEY, id);
   }, []);
-  const bump = useCallback((id: string, updated_at: string) => setProjects((ps) => {
-    const p = ps.find((x) => x.id === id);
-    return p ? [{ ...p, updated_at }, ...ps.filter((x) => x.id !== id)] : ps;
-  }), []);
+  /** proyek yang baru disimpan naik ke atas daftar */
+  const bump = useCallback(
+    (id: string, updated_at: string) =>
+      setProjects((ps) => {
+        const p = ps.find((x) => x.id === id);
+        return p ? [{ ...p, updated_at }, ...ps.filter((x) => x.id !== id)] : ps;
+      }),
+    [],
+  );
 
   // ---------- simpan otomatis (antri berurutan supaya urutan tulis tidak tertukar) ----------
   const queued = useRef<Job | null>(null);
@@ -105,10 +110,12 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
           if (error || !data) throw error ?? new Error("insert");
           const row = data as ProjectRow;
           setProjects((ps) => [row, ...ps]);
-          if (idRef.current === null && tlRef.current === job.tl) {
+          if (idRef.current === null) {
             setPid(row.id);
             setTitle(row.title);
           }
+          // editan yang menyusul ikut masuk ke proyek yang baru dibuat
+          if (queued.current && !queued.current.id) queued.current.id = row.id;
         } else {
           const { data, error } = await sb.from("studio_projects").update({ timeline: job.tl }).eq("id", job.id).select("updated_at").maybeSingle();
           if (error) throw error;
@@ -296,7 +303,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   );
   const onPlan = useCallback(
     (raw: unknown) => {
-      const tl = tidyTimeline(raw, catRef.current);
+      const tl = keepDataVo(tlRef.current, tidyTimeline(raw, catRef.current));
       change(tl);
       setSelected(null);
       playerRef.current?.seekTo(0);
@@ -310,7 +317,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     },
     [change],
   );
-  const getTimeline = useCallback(() => tlRef.current, []);
+  const getTimeline = useCallback(() => withoutDataVo(tlRef.current), []);
 
   /** pilih adegan dari kartu rencana -> preview lompat ke awal adegan */
   const selectScene = useCallback((sid: string) => {

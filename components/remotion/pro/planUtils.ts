@@ -154,6 +154,31 @@ export function tidyTimeline(rawIn: unknown, catalog: Catalog | null): Timeline 
   return tl;
 }
 
+const isData = (s: string | null | undefined) => !!s && s.startsWith("data:");
+
+/** timeline untuk dikirim ke chat: baris VO data URL dibuang (besar & tidak dibaca AI) */
+export function withoutDataVo(tl: Timeline | null): Timeline | null {
+  if (!tl?.vo?.lines.some((l) => isData(l.src))) return tl;
+  const lines = tl.vo.lines.filter((l) => !isData(l.src));
+  return { ...tl, vo: lines.length ? { ...tl.vo, lines, full: isData(tl.vo.full) ? null : tl.vo.full } : null };
+}
+
+/** setelah revisi dari chat: VO data URL tetap dipakai untuk adegan yang id & teks VO-nya tidak berubah */
+export function keepDataVo(prev: Timeline | null, next: Timeline): Timeline {
+  const old = prev?.vo?.lines.filter((l) => isData(l.src)) ?? [];
+  if (!prev?.vo || !old.length) return next;
+  const same = (id: string) => {
+    const a = prev.scenes.find((s) => s.id === id)?.vo;
+    const b = next.scenes.find((s) => s.id === id)?.vo;
+    return !!a && !!b && a.text === b.text && (a.spell ?? "") === (b.spell ?? "");
+  };
+  const have = new Set(next.vo?.lines.map((l) => l.sceneId));
+  const add = old.filter((l) => same(l.sceneId) && !have.has(l.sceneId));
+  if (!add.length) return next;
+  const base = next.vo ?? { ...prev.vo, lines: [], full: null };
+  return { ...next, vo: { ...base, lines: [...base.lines, ...add], full: null } };
+}
+
 /** 2,5 dtk (koma desimal ala Indonesia) */
 export const fmtSec = (s: number, d = 1) => `${(Math.round(s * 10 ** d) / 10 ** d).toString().replace(".", ",")} dtk`;
 

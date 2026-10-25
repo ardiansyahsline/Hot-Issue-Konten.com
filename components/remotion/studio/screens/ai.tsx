@@ -32,6 +32,7 @@ import {
   pop,
   ramp,
   rgba,
+  tail,
   useSid,
   type Clock,
   type Env,
@@ -68,7 +69,7 @@ function Composer({ e, draft, focus, sendAt, placeholder }: { e: Env; draft: str
       <div style={{ minHeight: 26, display: "flex", alignItems: "center", padding: "0 4px", fontSize: 14, color: Z[100], whiteSpace: "nowrap", overflow: "hidden" }}>
         {ready ? (
           <>
-            <span style={{ overflow: "hidden", textOverflow: "clip", direction: "rtl", unicodeBidi: "plaintext", textAlign: "left" }}>{draft}</span>
+            <span style={{ whiteSpace: "nowrap" }}>{tail(draft, wide ? 80 : 34)}</span>
             {focus && <Caret t={t} typing color={e.acc} h={17} />}
           </>
         ) : (
@@ -101,7 +102,7 @@ function Composer({ e, draft, focus, sendAt, placeholder }: { e: Env; draft: str
           }}
         >
           ↑
-          <TapAt t={t} at={sendAt} wide={wide} />
+          <TapAt t={t} at={sendAt} wide={wide} from={[-70, -40]} />
         </span>
       </div>
     </div>
@@ -115,7 +116,7 @@ function AskBox({ e, title, q, opts, pick, tapAt, at }: { e: Env; title: string;
   const { t, wide } = e;
   const chosen = t.f >= tapAt - 1;
   return (
-    <div style={{ borderRadius: 16, border: `1px solid ${Z[800]}`, background: Z[900], overflow: "hidden", boxShadow: "0 1px 2px rgba(0,0,0,0.4), 0 18px 40px -24px rgba(0,0,0,0.8)" }}>
+    <div style={{ borderRadius: 16, border: `1px solid ${Z[800]}`, background: Z[900], boxShadow: "0 1px 2px rgba(0,0,0,0.4), 0 18px 40px -24px rgba(0,0,0,0.8)" }}>
       <div style={{ padding: "11px 14px 3px" }}>
         <div style={{ fontSize: 12, color: Z[500], marginBottom: 2 }}>{title}</div>
         <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.35, color: Z[100] }}>{q}</div>
@@ -166,7 +167,7 @@ function AskBox({ e, title, q, opts, pick, tapAt, at }: { e: Env; title: string;
                 </b>
                 {o.desc && <span style={{ display: "block", fontSize: 12, color: Z[500], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{o.desc}</span>}
               </span>
-              {i === pick && <TapAt t={t} at={tapAt} wide={wide} x="34%" />}
+              {i === pick && <TapAt t={t} at={tapAt} wide={wide} x="34%" from={[110, 30]} />}
             </div>
           );
         })}
@@ -385,8 +386,30 @@ export function AiScreen({ e }: { e: Env }) {
     </div>
   );
 
+  // layar sambutan (belum ada pesan) — hilang saat pertanyaan dikirim
+  const wOut = ramp(t, sendAt - 2, sendAt + 8);
+  const wIn = pop(t, 0, { damping: 18 });
+  const welcome = wOut < 1 && (
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: 6, opacity: (1 - wOut) * clamp01(wIn * 1.4), transform: `translateY(${-wOut * 30}px) scale(${1 - wOut * 0.05})` }}>
+      <Hero name={HERO} size={wide ? 96 : 84} t={t} />
+      <div style={{ fontFamily: DISPLAY, fontSize: wide ? 22 : 19, fontWeight: 750, color: Z[50] }}>Halo Alif, mau ngobrol apa?</div>
+      <div style={{ fontSize: wide ? 13 : 12, color: Z[500], maxWidth: 300 }}>Tanya bebas, kirim screenshot, atau tanya isi CS Tracker.</div>
+      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 6, maxWidth: wide ? 520 : 330 }}>
+        {["📊 Rangkum hot issue", "🎬 Video ditolak kenapa?", "✍️ Draft balasan clipper"].map((x, i) => {
+          const a = pop(t, en(t, 6 + i * 3), { damping: 16 });
+          return (
+            <span key={x} style={{ borderRadius: 999, border: `1px solid ${Z[800]}`, background: Z[900], padding: "5px 11px", fontSize: 11.5, fontWeight: 600, color: Z[300], opacity: clamp01(a * 1.4), transform: `translateY(${(1 - a) * 8}px)` }}>
+              {x}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const thread = (
     <div style={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}>
+      {welcome}
       <div style={{ position: "absolute", left: 0, right: 0, bottom: 10, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
         {userMsg}
         {assistant}
@@ -616,7 +639,7 @@ export function TrainAiScreen({ e }: { e: Env }) {
     const tap = cuts[page] - 8;
     body = (
       <div>
-        <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: 1, textTransform: "uppercase", color: G.color, marginBottom: 4 }}>{qp.title}</div>
+        <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: 1, color: G.color, marginBottom: 4 }}>{qp.title.toUpperCase()}</div>
         <div style={{ fontSize: wide ? 16.5 : 15.5, fontWeight: 700, lineHeight: 1.35, color: Z[50], marginBottom: 12 }}>{qp.q}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {qp.options.map((o, i) => {
@@ -645,7 +668,7 @@ export function TrainAiScreen({ e }: { e: Env }) {
                   {String.fromCharCode(65 + i)}
                 </span>
                 <span style={{ minWidth: 0 }}>{o.label}</span>
-                {i === qp.pick && <TapAt t={t} at={tap} wide={wide} x="60%" />}
+                {i === qp.pick && <TapAt t={t} at={tap} wide={wide} x="60%" from={[90, 60]} />}
               </div>
             );
           })}
@@ -964,6 +987,11 @@ function PlanList({ e, scenes, sec, planAt, total, title, rowH }: { e: Env; scen
         <b style={{ fontSize: 12.5, color: Z[100], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>📋 {title}</b>
         <span style={{ fontSize: 10.5, color: Z[500], whiteSpace: "nowrap" }}>{total} dtk</span>
       </div>
+      {t.f < planAt && (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: Z[500] }}>
+          <StepIcon t={t} done={false} size={11.5} /> Harley lagi nyusun adegan…
+        </div>
+      )}
       {scenes.map((s, i) => {
         const st = s0;
         s0 += s.d;
