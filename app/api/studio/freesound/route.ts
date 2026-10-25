@@ -199,8 +199,8 @@ export async function POST(req: Request) {
     license: "CC0",
     credit: clip(`${name} oleh ${user} (Freesound, CC0)`, 240),
   };
-  // insert lewat client user (RLS studio_sfx_insert, created_by = user)
-  const { error } = await g.supabase.from("studio_sfx").insert(row);
+  // insert lewat service role (user tidak boleh insert langsung, supaya cek CC0 di atas tidak bisa dilewati); created_by = user
+  const { error } = await admin.from("studio_sfx").insert({ ...row, created_by: g.user.id });
   if (error && error.code !== "23505") {
     console.error("[studio/freesound] simpan", error.message);
     return json({ error: "Gagal menyimpan SFX. Coba lagi sebentar." }, 500);

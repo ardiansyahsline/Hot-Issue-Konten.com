@@ -254,11 +254,12 @@ create table if not exists public.studio_sfx (
   created_at  timestamptz not null default now()
 );
 alter table public.studio_sfx enable row level security;
-grant select, insert, delete on public.studio_sfx to authenticated;
+-- tambah SFX hanya lewat server (route freesound / script worker, service role) supaya cek lisensi CC0 tidak bisa dilewati
+grant select, delete on public.studio_sfx to authenticated;
+revoke insert on public.studio_sfx from authenticated;
 drop policy if exists "studio_sfx_read" on public.studio_sfx;
 create policy "studio_sfx_read" on public.studio_sfx for select to authenticated using (public.can_use_studio());
 drop policy if exists "studio_sfx_insert" on public.studio_sfx;
-create policy "studio_sfx_insert" on public.studio_sfx for insert to authenticated with check (public.can_use_studio());
 drop policy if exists "studio_sfx_delete" on public.studio_sfx;
 create policy "studio_sfx_delete" on public.studio_sfx for delete to authenticated using (public.is_admin());
 
@@ -296,9 +297,23 @@ set public = false,
     allowed_mime_types = excluded.allowed_mime_types;
 
 -- hanya admin & user yang diberi akses Studio. Upload user ke folder uploads/<id-nya>/ atau voices/; sisanya ditulis worker (service role)
+-- baca: admin semua; voices/ sfx/ tts/ vo/ dipakai bersama (cache TTS worker membagi hasil vo/ antar user);
+-- uploads/ hanya folder milik sendiri; renders/ hanya kalau baris studio_render_jobs-nya milik sendiri.
+-- Route /api/studio/file menerapkan aturan yang sama sebelum menandatangani URL dengan service role.
 drop policy if exists "studio_read" on storage.objects;
 create policy "studio_read" on storage.objects for select to authenticated
-  using (bucket_id = 'studio' and public.can_use_studio());
+  using (
+    bucket_id = 'studio' and public.can_use_studio()
+    and (
+      public.is_admin()
+      or (storage.foldername(name))[1] in ('voices', 'sfx', 'tts', 'vo')
+      or (storage.foldername(name))[1] = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text
+      -- objects.name ditulis lengkap supaya tidak tertukar dengan kolom tabel di dalam subquery
+      or (storage.foldername(name))[1] = 'renders' and exists (
+        select 1 from public.studio_render_jobs j where j.result_path = objects.name and j.created_by = auth.uid()
+      )
+    )
+  );
 drop policy if exists "studio_upload" on storage.objects;
 create policy "studio_upload" on storage.objects for insert to authenticated
   with check (
@@ -312,9 +327,10 @@ create policy "studio_delete" on storage.objects for delete to authenticated
     bucket_id = 'studio' and public.can_use_studio()
     and (
       (storage.foldername(name))[1] = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text
-      -- rekaman bank suara: boleh dihapus kalau bukan milik orang lain (pemilik menghapus suaranya)
-      or (storage.foldername(name))[1] = 'voices' and not exists (
-        select 1 from public.studio_voices v where v.id::text = (storage.foldername(name))[2] and v.owner is distinct from auth.uid()
+      -- rekaman bank suara: boleh dihapus kalau bukan milik orang lain (pemilik menghapus suaranya).
+      -- objects.name ditulis lengkap: studio_voices juga punya kolom "name"
+      or (storage.foldername(objects.name))[1] = 'voices' and not exists (
+        select 1 from public.studio_voices v where v.id::text = (storage.foldername(objects.name))[2] and v.owner is distinct from auth.uid()
       )
       or public.is_admin()
     )

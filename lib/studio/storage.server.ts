@@ -40,6 +40,29 @@ export function cleanStoragePath(p: unknown): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9._\-/]*$/.test(s) ? s : null;
 }
 
+/** folder yang boleh dibaca semua user Studio: bank suara, SFX, cache TTS server, hasil VO worker (cache TTS worker dipakai lintas user) */
+const SHARED_DIRS = new Set(["voices", "sfx", "tts", "vo"]);
+
+/**
+ * Boleh baca path ini? Aturan sama dengan RLS studio_read (migration-20), wajib dicek SEBELUM tanda tangan pakai service role:
+ * admin semua; voices/ sfx/ tts/ vo/ semua user Studio; uploads/<id sendiri>/...; renders/ hanya kalau baris
+ * studio_render_jobs-nya terlihat lewat client user (RLS: milik sendiri / admin). Selain itu false.
+ */
+export async function studioCanRead(path: string, user: Sb, uid: string, admin: boolean): Promise<boolean> {
+  if (admin) return true;
+  const dirs = path.split("/").slice(0, -1); // folder saja, seperti storage.foldername()
+  if (!dirs.length) return false;
+  if (SHARED_DIRS.has(dirs[0])) return true;
+  if (dirs[0] === "uploads") return dirs[1] === uid;
+  if (dirs[0] !== "renders") return false;
+  try {
+    const { data, error } = await user.from("studio_render_jobs").select("id").eq("result_path", path).limit(1).maybeSingle();
+    return !error && !!data;
+  } catch {
+    return false;
+  }
+}
+
 /** signed URL (default 1 jam). Coba service role dulu, lalu client user. null = file tidak ada / tidak boleh */
 export async function signedStudioUrl(path: string, user?: Sb | null, expires = 3600): Promise<string | null> {
   const tried = new Set<Sb>();
