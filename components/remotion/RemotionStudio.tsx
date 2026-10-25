@@ -7,8 +7,21 @@ import { COMPOSITIONS, type Comp } from "./compositions";
 type RenderState =
   | { s: "idle" }
   | { s: "rendering"; progress: number }
-  | { s: "done"; url: string; ext: string; size: number; secs: number }
+  | { s: "done"; url: string; file: File; secs: number }
   | { s: "error"; msg: string };
+
+/** simpan file ke perangkat (klik link download secara otomatis) */
+function saveUrl(url: string, name: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** HP (terutama iPhone) sering tidak bisa download langsung -> pakai menu Bagikan / Simpan Video */
+const canShare = (f: File) => typeof navigator !== "undefined" && !!navigator.canShare?.({ files: [f] });
 
 // Remotion gratis untuk perorangan / perusahaan ≤ 3 orang. Kalau perlu lisensi perusahaan, isi key-nya di env Vercel.
 const LICENSE = process.env.NEXT_PUBLIC_REMOTION_LICENSE_KEY || "free-license";
@@ -61,7 +74,10 @@ export default function RemotionStudio() {
         onProgress: (p) => setRender({ s: "rendering", progress: p.progress }),
       });
       const blob = await res.getBlob();
-      setRender({ s: "done", url: URL.createObjectURL(blob), ext: container, size: blob.size, secs: Math.round((performance.now() - t0) / 1000) });
+      const file = new File([blob], `${comp.id}.${container}`, { type: blob.type || `video/${container}` });
+      const url = URL.createObjectURL(file);
+      setRender({ s: "done", url, file, secs: Math.round((performance.now() - t0) / 1000) });
+      saveUrl(url, file.name); // langsung terdownload begitu jadi
     } catch (e) {
       if (ctrl.signal.aborted) setRender({ s: "idle" });
       else setRender({ s: "error", msg: e instanceof Error ? e.message : String(e) });
@@ -71,6 +87,7 @@ export default function RemotionStudio() {
   };
 
   const busy = render.s === "rendering";
+  const edited = JSON.stringify(props) !== JSON.stringify(comp.defaultProps);
   const secs = Math.round(comp.durationInFrames / comp.fps);
 
   return (
@@ -151,6 +168,23 @@ export default function RemotionStudio() {
 
         <div className="card space-y-3 p-4">
           <div className="label mb-0">Download video</div>
+          {comp.file && !edited && (
+            <>
+              <a href={comp.file} download={`${comp.id}.mp4`} className="btn-primary w-full">
+                ⬇️ Download MP4 sekarang
+              </a>
+              <p className="text-[11px] text-zinc-500">
+                Video versi teks awal, langsung download tanpa nunggu.{" "}
+                <a href={comp.file} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
+                  Buka di tab baru
+                </a>{" "}
+                kalau di HP nggak mau kedownload (tekan lama videonya → Simpan).
+              </p>
+            </>
+          )}
+          {comp.file && edited && render.s === "idle" && (
+            <p className="text-[11px] text-amber-400">Teks sudah diubah — klik tombol di bawah buat bikin video versi baru.</p>
+          )}
           {render.s === "rendering" ? (
             <>
               <div className="h-2.5 overflow-hidden rounded-full bg-zinc-800">
@@ -164,14 +198,28 @@ export default function RemotionStudio() {
               </div>
             </>
           ) : (
-            <button type="button" className="btn-primary w-full" onClick={start}>
-              🎬 Bikin file video ({secs} detik)
+            <button type="button" className={comp.file && !edited ? "btn-ghost w-full" : "btn-primary w-full"} onClick={start}>
+              🎬 {comp.file && !edited ? "Bikin ulang di browser" : `Bikin file video (${secs} detik)`}
             </button>
           )}
           {render.s === "done" && (
-            <a href={render.url} download={`${comp.id}.${render.ext}`} className="btn-ghost w-full">
-              ⬇️ Download .{render.ext} ({(render.size / 1e6).toFixed(1)} MB · jadi dalam {render.secs} dtk)
-            </a>
+            <>
+              <button type="button" className="btn-primary w-full" onClick={() => saveUrl(render.url, render.file.name)}>
+                ⬇️ Download {render.file.name.split(".").pop()?.toUpperCase()} ({(render.file.size / 1e6).toFixed(1)} MB)
+              </button>
+              {canShare(render.file) && (
+                <button type="button" className="btn-ghost w-full" onClick={() => navigator.share({ files: [render.file] }).catch(() => {})}>
+                  📤 Simpan ke HP / Bagikan
+                </button>
+              )}
+              <p className="text-[11px] text-zinc-500">
+                Jadi dalam {render.secs} detik.{" "}
+                <a href={render.url} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
+                  Buka di tab baru
+                </a>{" "}
+                kalau download nggak jalan.
+              </p>
+            </>
           )}
           {render.s === "error" && <p className="text-xs text-red-400">Gagal bikin video: {render.msg}</p>}
           <p className="text-[11px] leading-relaxed text-zinc-500">
