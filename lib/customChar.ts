@@ -3,6 +3,7 @@
  * dan prompt kepribadian yang dikirim ke AI (mesin utama: Claude Haiku).
  */
 import { groupVoices, registerCustom, typeInfo, type Prop } from "./aiPersona";
+import { roleOf, trainPromptLines, type Training } from "./trainAi";
 
 export type CharAvatar = { kind: "chibi"; hair: number; skin: string; hc: string; prop: Prop } | { kind: "image"; data: string };
 export type CharProfile = {
@@ -12,6 +13,16 @@ export type CharProfile = {
   style?: string;
   catchphrase?: string;
   rules?: string[];
+  /** 2 = hasil "Train your AI" (kuis kepribadian + peran + training); kosong = karakter versi lama (12 pertanyaan) */
+  version?: 2;
+  quiz?: Record<string, number>;
+  roleId?: string;
+  roleName?: string;
+  training?: Training;
+  call?: string;
+  emoji?: string;
+  /** SOP / cara berpikir hasil training (bisa diedit user) */
+  sop?: string;
 };
 export type CustomChar = { id: string; name: string; mbti: string; avatar: CharAvatar; profile: CharProfile; created_at?: string };
 export type MemoryKind = "knowledge" | "example" | "correction";
@@ -194,13 +205,18 @@ export function registerChar(c: CustomChar) {
     label: c.profile.label || t.label,
     say: c.profile.catchphrase || t.say,
     style: c.profile.style || t.style,
-    role: "Buatanmu",
+    role: c.profile.version === 2 && roleOf(c.profile.roleId, c.profile.roleName) ? `Dilatih: ${roleOf(c.profile.roleId, c.profile.roleName)!.name}` : "Buatanmu",
     sifat: charSifat(c),
   });
 }
 
 /** sifat karakter buatan user dari jawaban wizard-nya (energi, gaya kerja, cara memutuskan) */
 function charSifat(c: CustomChar): string[] | undefined {
+  // hasil Train your AI: sifat tipe kepribadian + peran yang dilatihkan
+  if (c.profile.version === 2) {
+    const r = roleOf(c.profile.roleId, c.profile.roleName);
+    return [...typeInfo(c.mbti).sifat.slice(0, 2), ...(r ? [`peran ${r.name}`] : [])];
+  }
   const a = c.profile.answers ?? {};
   const parts = (id: string) => val(a, id).split(/,|&|;/).map((x) => x.trim().toLowerCase()).filter((x) => x && x.length <= 24);
   const tf = val(a, "tf") ? (/data|logika/i.test(val(a, "tf")) ? "berbasis data" : "peka perasaan") : "";
@@ -210,6 +226,7 @@ function charSifat(c: CustomChar): string[] | undefined {
 
 /** prompt kepribadian karakter buatan user */
 export function customPrompt(c: CustomChar): string {
+  if (c.profile.version === 2) return trainedPrompt(c);
   const a = c.profile.answers ?? {};
   const t = typeInfo(c.mbti);
   const v = groupVoices(c.mbti);
@@ -231,6 +248,30 @@ export function customPrompt(c: CustomChar): string {
       : "",
     "Pertahankan karakter ini di setiap jawaban sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter.",
     "PENTING: karakter hanya mengatur CARA bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. OTAK KARAKTER (pengetahuan, contoh, koreksi dari user) di bawah adalah rujukan utamamu.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** prompt karakter hasil "Train your AI": kepribadian dari kuis + peran & SOP dari training */
+function trainedPrompt(c: CustomChar): string {
+  const p = c.profile;
+  const t = typeInfo(c.mbti);
+  const v = groupVoices(c.mbti);
+  const rules = p.rules?.filter(Boolean) ?? [];
+  const editor = p.roleId === "video_editor";
+  return [
+    `KARAKTER KAMU: kamu adalah "${c.name}" — AI yang dilatih sendiri oleh user, kepribadian ${c.mbti} (${p.label || t.label}; ${t.traits.join(", ")}).`,
+    `GAYA KEPRIBADIAN: ${t.style}`,
+    p.style ? `GAYA BICARA KE USER: ${p.style}.` : "",
+    ...trainPromptLines(p.roleId, p.roleName, p.sop),
+    p.catchphrase ? `KATA ANDALAN: "${p.catchphrase}" — pakai sesekali (terutama di pembuka/penutup), jangan di setiap kalimat.` : "",
+    rules.length ? `LARANGAN (wajib dipatuhi): ${rules.join("; ")}.` : "",
+    `JAWABAN RINGKAS & TABEL: tetap terdengar seperti ${c.name} — ${v.table}`,
+    `SAAT ANALISA SAHAM/FOREX/CRYPTO: ${v.analyst}`,
+    editor ? "Kalau user memberi naskah/transkrip video, buat subtitle di blok ```srt (format SRT valid) supaya bisa diunduh & diimpor ke CapCut." : "",
+    "Pertahankan karakter & cara berpikir ini di setiap jawaban sampai user minta ganti. Kalau user menyapa / tanya siapa kamu, perkenalkan diri singkat sesuai karakter & perannya.",
+    "PENTING: karakter mengatur CARA berpikir & bicara. Aturan utama tetap berlaku: Bahasa Indonesia, jujur, tidak mengarang, sebut sumber, pengingat untuk topik investasi. OTAK KARAKTER (pengetahuan, contoh, koreksi dari user) di bawah adalah rujukan utamamu.",
   ]
     .filter(Boolean)
     .join("\n");
