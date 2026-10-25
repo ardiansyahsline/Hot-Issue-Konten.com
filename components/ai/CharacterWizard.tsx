@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { SMART_HERO } from "@/lib/aiModels";
 import { CHIBI_HAIRS, CHIBI_PROPS, CHIBI_SKINS, GROUPS, MBTI_TYPES, isBuiltinHero, registerCustom, typeGroup, typeInfo, type Prop } from "@/lib/aiPersona";
@@ -89,8 +89,13 @@ export default function CharacterWizard({
   const [tab, setTab] = useState<"image" | "chibi">(initial?.avatar.kind === "image" ? "image" : "chibi");
   const [chibi, setChibi] = useState(initial?.avatar.kind === "chibi" ? initial.avatar : { kind: "chibi" as const, hair: 3, skin: CHIBI_SKINS[0], hc: CHIBI_HAIRS[1], prop: "orb" as Prop });
   const [img, setImg] = useState<string | null>(initial?.avatar.kind === "image" ? initial.avatar.data : null);
-  const [call, setCall] = useState(ip?.call ?? CALLS[0]);
-  const [emoji, setEmoji] = useState(ip?.emoji ?? EMOJIS[0]);
+  // karakter versi lama: pakai jawaban "cara memanggil" & "emoji" lamanya kalau cocok dengan pilihan yang ada
+  const v1Ans = (k: string) => {
+    const a = ip?.answers?.[k];
+    return typeof a === "string" ? a : "";
+  };
+  const [call, setCall] = useState(ip?.call ?? (CALLS.includes(v1Ans("call")) ? v1Ans("call") : CALLS[0]));
+  const [emoji, setEmoji] = useState(ip?.emoji ?? (EMOJIS.includes(v1Ans("emoji")) ? v1Ans("emoji") : EMOJIS[0]));
   const [sum, setSum] = useState<Summary | null>(
     initial
       ? { label: ip?.label ?? "", role: ip?.role ?? "", style: ip?.style ?? "", catchphrase: ip?.catchphrase ?? "", rules: ip?.rules ?? [], sop: ip?.sop ?? "" }
@@ -100,6 +105,12 @@ export default function CharacterWizard({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [imgBusy, setImgBusy] = useState(false);
+  /** jawaban training per peran: ganti peran lalu kembali -> jawaban lama muncul lagi */
+  const trainCache = useRef<Record<string, Training>>({});
+  /** ringkasan otomatis terakhir — kolom yang sudah diedit user (beda dari versi otomatis) tidak ditimpa saat ringkasan dibuat ulang */
+  const genRef = useRef<Summary | null | undefined>(undefined);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   const role = roleOf(roleId, customRole);
   const pages: Page[] = useMemo(
@@ -121,7 +132,10 @@ export default function CharacterWizard({
 
   const scored = scoreQuiz(quiz);
   const quizType = scored.complete ? scored.type : "";
-  const type = MBTI_TYPES.includes(typeOverride) ? typeOverride : quizType || "INFJ";
+  // kuis belum lengkap (mis. habis "Ulangi kuis") -> tetap pakai tipe yang tersimpan, bukan tipe asal
+  const storedType = initial && MBTI_TYPES.includes(initial.mbti) ? initial.mbti : "";
+  const type = MBTI_TYPES.includes(typeOverride) ? typeOverride : quizType || storedType || "INFJ";
+  const typeKnown = scored.complete || MBTI_TYPES.includes(typeOverride);
   const prof = typeProfile(type);
 
   const nm = name.trim();
@@ -157,9 +171,12 @@ export default function CharacterWizard({
     setDirty(true);
     if (!multi) advanceFrom(step, 180);
   };
-  /** ganti peran -> jawaban training peran lama dikosongkan (pertanyaannya beda) */
+  /** ganti peran -> pertanyaan training ikut ganti; jawaban peran lama disimpan dulu (kalau balik, muncul lagi) */
   const chooseRole = (id: string) => {
-    if (id !== roleId) setTraining({ picks: {}, other: {} });
+    if (id !== roleId) {
+      if (roleId) trainCache.current[roleId] = training;
+      setTraining(trainCache.current[id] ?? { picks: {}, other: {} });
+    }
     setRoleId(id);
     setDirty(true);
     setErr(null);
@@ -174,16 +191,31 @@ export default function CharacterWizard({
     const larangan = r?.questions.filter((q) => q.topic === "larangan").flatMap((q) => training.picks[q.id] ?? []) ?? [];
     return {
       label: typeInfo(type).label,
-      role: r ? `${r.name} — ${r.mission}` : "Asisten serba bisa",
+      // belum pilih peran (edit cepat karakter lama) -> peran, larangan & SOP lama dipertahankan
+      role: r ? `${r.name} — ${r.mission}` : sum?.role || "Asisten serba bisa",
       style: `Panggil user: ${call}; ${emoji}`,
       catchphrase: sum?.catchphrase ?? "",
-      rules: larangan,
-      sop: r ? compileSop(r, training) : "",
+      rules: r ? larangan : (sum?.rules ?? []),
+      sop: r ? compileSop(r, training) : (sum?.sop ?? ""),
     };
   };
+  // patokan "versi otomatis": karakter Train your AI = hasil hitung dari jawabannya (suntingan manual terdeteksi & dijaga);
+  // karakter lama = isi tersimpan (boleh diperbarui otomatis)
+  if (genRef.current === undefined) genRef.current = !initial ? null : v2 ? buildSummary() : sum;
   const toSummary = () => {
+    if (!typeKnown && !storedType) return go("quiz");
     if (dirty || !sum) {
-      setSum(buildSummary());
+      const fresh = buildSummary();
+      const prev = genRef.current;
+      setSum((s) => {
+        if (!s || !prev) return fresh;
+        const out: Summary = { ...fresh };
+        for (const k of Object.keys(fresh) as (keyof Summary)[]) {
+          if (JSON.stringify(s[k]) !== JSON.stringify(prev[k])) Object.assign(out, { [k]: s[k] });
+        }
+        return out;
+      });
+      genRef.current = fresh;
       setDirty(false);
     }
     go("summary");
@@ -226,7 +258,15 @@ export default function CharacterWizard({
     }
     setSaving(true);
     setErr(null);
-    const profile: CharProfile = {
+    const edited = {
+      label: sum.label.trim(),
+      role: sum.role.trim(),
+      style: sum.style.trim(),
+      catchphrase: sum.catchphrase.trim(),
+      rules: sum.rules.map((r) => r.trim()).filter(Boolean),
+    };
+    // karakter lama yang hanya diubah nama/tampilan (belum dilatih ulang) tetap versi lama — jawaban lamanya tidak hilang
+    const profile: CharProfile = initial && !v2 && !role ? { ...initial.profile, ...edited } : {
       version: 2,
       answers: {},
       quiz,
@@ -236,11 +276,7 @@ export default function CharacterWizard({
       training,
       call,
       emoji,
-      label: sum.label.trim(),
-      role: sum.role.trim(),
-      style: sum.style.trim(),
-      catchphrase: sum.catchphrase.trim(),
-      rules: sum.rules.map((r) => r.trim()).filter(Boolean),
+      ...edited,
       sop: sum.sop.trim(),
     };
     const row = { name: nm, mbti: type, avatar: curAvatar, profile };
@@ -258,6 +294,21 @@ export default function CharacterWizard({
     onSaved(c);
   };
 
+  // fokus masuk ke dialog saat dibuka, kembali ke tombol pemicu saat ditutup
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus({ preventScroll: true });
+    return () => prev?.focus?.({ preventScroll: true });
+  }, []);
+  // pindah halaman: gulir ke atas; tombol yang tadi diklik hilang -> fokus dipindah ke isi halaman baru (keyboard tidak "nyasar")
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.scrollTop = 0;
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.isConnected) body.focus({ preventScroll: true });
+  }, [step]);
+
   /* ---------- tampilan per halaman ---------- */
   const qq = page.k === "quiz" ? QUIZ_QS[page.i] : null;
   const tq = page.k === "train" && role ? role.questions[page.i] : null;
@@ -267,7 +318,7 @@ export default function CharacterWizard({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-3" role="dialog" aria-modal="true" aria-label="Train your AI">
-      <div className="flex max-h-[92dvh] w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900" style={{ boxShadow: "var(--shadow-pop)" }}>
+      <div ref={panelRef} tabIndex={-1} className="flex max-h-[92dvh] w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 outline-none" style={{ boxShadow: "var(--shadow-pop)" }}>
         <div className="flex items-center gap-3 border-b border-zinc-800/80 px-4 py-3">
           <div className="min-w-0">
             <div className="font-display text-[15px] font-bold">{initial ? `✎ Latih ulang ${initial.name}` : "🧠 Train your AI"}</div>
@@ -294,8 +345,10 @@ export default function CharacterWizard({
                         ? "0%"
                         : page.k === "quiz"
                           ? `${((page.i + 1) / (QUIZ_QS.length + 1)) * 100}%`
-                          : page.k === "train" && role
-                            ? `${((page.i + 2) / (role.questions.length + 1)) * 100}%`
+                          : page.k === "role"
+                            ? `${100 / ((role?.questions.length ?? 10) + 1)}%`
+                            : page.k === "train" && role
+                              ? `${((page.i + 2) / (role.questions.length + 1)) * 100}%`
                             : page.k === "summary" || page.k === "result"
                               ? "100%"
                               : "40%",
@@ -305,7 +358,7 @@ export default function CharacterWizard({
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div ref={bodyRef} tabIndex={-1} className="flex-1 overflow-y-auto px-4 py-4 outline-none">
           {page.k === "intro" && (
             <div className="space-y-4">
               <div className="flex items-center gap-3">
@@ -333,7 +386,14 @@ export default function CharacterWizard({
                   </li>
                 ))}
               </ol>
-              {initial && !v2 && <p className="rounded-xl border border-dashed border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">Karakter ini dibuat dengan versi lama. Jalankan Train your AI sampai selesai untuk menambahkan peran & SOP-nya.</p>}
+              {initial && !v2 && (
+                <div className="rounded-xl border border-dashed border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">
+                  Karakter ini dibuat dengan versi lama. Jalankan Train your AI sampai selesai untuk menambahkan peran & SOP-nya.{" "}
+                  <button type="button" onClick={() => go("identity")} className="font-semibold text-orange-500 hover:underline">
+                    Atau ubah nama & tampilan saja »
+                  </button>
+                </div>
+              )}
               <p className="text-[11px] text-zinc-500">Kuis berdasarkan teori tipe kepribadian 4 dimensi (Extroversion–Introversion, Sensing–Intuition, Thinking–Feeling, Judging–Perceiving). Hasilnya kecenderungan, bukan ukuran kemampuan.</p>
             </div>
           )}
@@ -426,7 +486,7 @@ export default function CharacterWizard({
                     </option>
                   ))}
                 </select>
-                <button type="button" onClick={() => (setQuiz({}), setTypeOverride(""), go("quiz"))} className="font-semibold text-orange-500 hover:underline">
+                <button type="button" onClick={() => (setQuiz({}), setTypeOverride(""), setDirty(true), go("quiz"))} className="font-semibold text-orange-500 hover:underline">
                   ↻ Ulangi kuis
                 </button>
               </div>
@@ -462,8 +522,13 @@ export default function CharacterWizard({
                     <span className="text-[18px]">✍️</span>
                     <input
                       value={customRole}
-                      onFocus={() => chooseRole(CUSTOM_ROLE)}
-                      onChange={(e) => (setCustomRole(e.target.value), chooseRole(CUSTOM_ROLE))}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setCustomRole(v);
+                        setDirty(true);
+                        // baru dianggap pilih "peran lain" setelah benar-benar mengetik (sekadar diketuk tidak menghapus jawaban)
+                        if (v.trim()) chooseRole(CUSTOM_ROLE);
+                      }}
                       maxLength={60}
                       placeholder="Peran lain… mis. Admin keuangan, Social media specialist"
                       className="input py-1.5 text-[13px]"
@@ -629,10 +694,10 @@ export default function CharacterWizard({
                   <div className="text-[12px] font-semibold" style={{ color: g.color }}>
                     {g.icon} {type} · {sum.label || typeInfo(type).label}
                   </div>
-                  <div className="truncate text-[11.5px] text-zinc-500">{role ? `${role.icon} ${role.name}` : "Peran belum dipilih"}</div>
+                  <div className="truncate text-[11.5px] text-zinc-500">{role ? `${role.icon} ${role.name}` : sum.role || "Peran belum dipilih"}</div>
                 </div>
               </div>
-              <p className="text-[11.5px] text-zinc-500">✎ Semua bisa diedit sebelum disimpan. SOP di bawah dikirim ke AI setiap kali ia menjawab.</p>
+              <p className="text-[11.5px] text-zinc-500">✎ Semua bisa diedit sebelum disimpan.{(role || sum.sop) && " SOP di bawah dikirim ke AI setiap kali ia menjawab."}</p>
               <div className="grid grid-cols-1 gap-y-1 text-[12.5px] sm:grid-cols-[84px_1fr] sm:items-center sm:gap-x-3 sm:gap-y-2">
                 <span className={rowLabel}>Tipe</span>
                 <select
@@ -655,8 +720,12 @@ export default function CharacterWizard({
                 <textarea value={sum.role} rows={3} maxLength={240} onChange={(e) => setSum({ ...sum, role: e.target.value.replace(/\n/g, " ") })} className="input resize-y py-1.5 text-[13px] leading-snug" />
                 <span className={rowLabel}>Gaya</span>
                 <input value={sum.style} maxLength={400} onChange={(e) => setSum({ ...sum, style: e.target.value })} className="input py-1.5 text-[13px]" />
-                <span className={rowLabelTop}>SOP</span>
-                <textarea value={sum.sop} rows={9} maxLength={9000} onChange={(e) => setSum({ ...sum, sop: e.target.value })} className="input resize-y py-1.5 font-mono text-[12px] leading-relaxed" placeholder="Cara berpikir & SOP dari pelatihanmu" />
+                {(role || sum.sop) && (
+                  <>
+                    <span className={rowLabelTop}>SOP</span>
+                    <textarea value={sum.sop} rows={9} maxLength={9000} onChange={(e) => setSum({ ...sum, sop: e.target.value })} className="input resize-y py-1.5 font-mono text-[12px] leading-relaxed" placeholder="Cara berpikir & SOP dari pelatihanmu" />
+                  </>
+                )}
                 <span className={rowLabel}>Ciri khas</span>
                 <input value={sum.catchphrase} maxLength={120} onChange={(e) => setSum({ ...sum, catchphrase: e.target.value })} placeholder="kata andalan (opsional)" className="input py-1.5 text-[13px]" />
                 <span className={rowLabelTop}>Larangan</span>
@@ -680,7 +749,7 @@ export default function CharacterWizard({
               Batal
             </button>
           )}
-          {initial && v2 && page.k !== "summary" && (
+          {initial && v2 && page.k !== "summary" && !!role && typeKnown && (
             <button type="button" onClick={toSummary} className="text-[12px] font-semibold text-zinc-500 hover:text-zinc-300">
               Ke ringkasan »
             </button>
