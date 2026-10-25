@@ -117,6 +117,8 @@ export default function CharacterWizard({
   const [imgBusy, setImgBusy] = useState(false);
   /** jawaban training per peran: ganti peran lalu kembali -> jawaban lama muncul lagi */
   const trainCache = useRef<Record<string, Training>>({});
+  /** peran bawaan terakhir — kolom "peran lain" dikosongkan lagi -> kembali ke peran ini */
+  const lastPreset = useRef(roleId && roleId !== CUSTOM_ROLE ? roleId : "");
   /** ringkasan otomatis terakhir — kolom yang sudah diedit user (beda dari versi otomatis) tidak ditimpa saat ringkasan dibuat ulang */
   const genRef = useRef<Gen | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -167,9 +169,12 @@ export default function CharacterWizard({
   /** maju otomatis ke halaman berikutnya (klik dobel tidak melompati pertanyaan) */
   const advanceFrom = (from: number, ms: number) => setTimeout(() => setStep((s) => (s === from ? from + 1 : s)), ms);
   const answerQuiz = (qid: string, i: number) => {
-    setQuiz((a) => ({ ...a, [qid]: i }));
-    setTypeOverride("");
-    setDirty(true);
+    // ketuk ulang jawaban yang sama = lanjut saja (tipe yang dipilih manual tidak dibatalkan)
+    if (quiz[qid] !== i) {
+      setQuiz((a) => ({ ...a, [qid]: i }));
+      setTypeOverride("");
+      setDirty(true);
+    }
     advanceFrom(step, 160);
   };
   const pick = (qid: string, lab: string, multi: boolean) => {
@@ -185,6 +190,7 @@ export default function CharacterWizard({
   const chooseRole = (id: string) => {
     if (id !== roleId) {
       if (roleId) trainCache.current[roleId] = training;
+      if (roleId && roleId !== CUSTOM_ROLE) lastPreset.current = roleId;
       setTraining(trainCache.current[id] ?? { picks: {}, other: {} });
     }
     setRoleId(id);
@@ -222,6 +228,10 @@ export default function CharacterWizard({
         : { sum: { ...summarize(initial.name, ip?.answers ?? {}, initial.mbti), sop: "" }, roleId: "", roleName: "" };
   const toSummary = () => {
     if (!typeKnown && !storedType) return go("quiz");
+    if (roleId === CUSTOM_ROLE && !customRole.trim()) {
+      go("role");
+      return setErr("Tulis nama perannya dulu.");
+    }
     if (dirty || !sum) {
       const fresh = buildSummary();
       const rn = nameKey(roleId, customRole);
@@ -555,6 +565,7 @@ export default function CharacterWizard({
                         setDirty(true);
                         // baru dianggap pilih "peran lain" setelah benar-benar mengetik (sekadar diketuk tidak menghapus jawaban)
                         if (v.trim()) chooseRole(CUSTOM_ROLE);
+                        else if (roleId === CUSTOM_ROLE && lastPreset.current) chooseRole(lastPreset.current);
                       }}
                       // nama peran sudah ada -> ketuk / Enter memilihnya lagi (jawaban latihannya kembali)
                       onClick={() => customRole.trim() && roleId !== CUSTOM_ROLE && chooseRole(CUSTOM_ROLE)}
@@ -784,7 +795,7 @@ export default function CharacterWizard({
               Batal
             </button>
           )}
-          {initial && v2 && page.k !== "summary" && !!role && typeKnown && (
+          {initial && v2 && page.k !== "summary" && !!role && typeKnown && !(roleId === CUSTOM_ROLE && !customRole.trim()) && (
             <button type="button" onClick={toSummary} className="text-[12px] font-semibold text-zinc-500 hover:text-zinc-300">
               Ke ringkasan »
             </button>
