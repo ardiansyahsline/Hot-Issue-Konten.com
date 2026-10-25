@@ -109,7 +109,7 @@ export function TrainAiShot() {
     { t: 4.62, ...aV(1.025), ease: EASE.soft },
     // dorong ke kartu peran terpilih di 4,8
     { t: 4.98, ...aV(1.085), ease: EASE.out },
-    { t: 6.3, ...aV(1.11), ease: EASE.soft },
+    { t: 6.3, ...aV(1.19), ease: EASE.soft },
   ];
   // denyut kamera kecil di tiap ketukan jawaban + guncangan whoosh konfeti
   const kick = HIT.concat([ROLE]).reduce((a, h) => a + (s >= h ? 0.016 * Math.exp(-(s - h) * 11) : 0), 0) + (s >= RES ? 0.03 * Math.exp(-(s - RES) * 7) : 0);
@@ -188,6 +188,7 @@ export function TrainAiShot() {
               nextOn={nextOn}
               nextPress={nextPress}
               footerFx={<TapFx f={f} fps={fps} hit={NEXT} x="62%" y="55%" from={[-30, -60]} />}
+              sheen={prog(f, fps, 0.2, 1.0, EASE.inOut)}
             >
               {T_QUIZ.map((q, i) => (
                 <Page key={q.qi} f={f} fps={fps} enter={qEnter[i]} exit={i < 2 ? qEnter[i + 1] - 0.02 : resEnter - 0.02}>

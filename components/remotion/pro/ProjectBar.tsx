@@ -27,6 +27,8 @@ export default function ProjectBar({
   onRename,
   onDelete,
   onRetrySave,
+  onTeaser,
+  teaserBusy,
 }: {
   projects: ProjectRow[];
   activeId: string | null;
@@ -39,6 +41,9 @@ export default function ProjectBar({
   onRename: (title: string) => void;
   onDelete: () => void;
   onRetrySave: () => void;
+  /** buat proyek baru dari timeline Teaser CS Tracker bawaan (lib/studio/teaser.ts) */
+  onTeaser?: () => void;
+  teaserBusy?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -152,6 +157,17 @@ export default function ProjectBar({
         <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={onNew}>
           ＋ Proyek baru
         </button>
+        {onTeaser && (
+          <button
+            type="button"
+            className="btn-ghost px-2.5 py-1.5 text-[12px]"
+            disabled={teaserBusy}
+            title="Proyek baru berisi 11 adegan teaser premium — tinggal bikin suara VO lalu download (dengan / tanpa VO)"
+            onClick={onTeaser}
+          >
+            {teaserBusy ? "Membuka…" : "🎞️ Buka Teaser CS Tracker"}
+          </button>
+        )}
         {activeId && (
           <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px] hover:text-red-400" onClick={() => setAskDel(true)} aria-label="Hapus proyek">
             🗑

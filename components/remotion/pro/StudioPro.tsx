@@ -7,6 +7,7 @@ import { StudioVideo, studioMeta } from "@/components/remotion/studio/StudioVide
 import { musicBeats } from "@/components/remotion/studio/audio";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
+import { teaserTimelineRaw } from "@/lib/studio/teaser";
 import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, snapScenesToBeats, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
@@ -304,6 +305,28 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setSave("saved");
   }, [sb, flushAll, setPid]);
 
+  /** 🎞️ Teaser CS Tracker: proyek baru dari timeline teaser bawaan (11 adegan premium) lewat jalur simpan proyek yang sama */
+  const openTeaser = useCallback(async () => {
+    setCreating(true);
+    const raw = teaserTimelineRaw();
+    const tl = tidyTimeline(raw, catRef.current);
+    const name = typeof raw.title === "string" && raw.title ? raw.title : "Teaser CS Tracker";
+    const { data, error } = await sb.from("studio_projects").insert({ title: name, timeline: tl }).select("id, title, updated_at").single();
+    setCreating(false);
+    if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuka teaser. Coba lagi."));
+    const row = data as ProjectRow;
+    flushAll();
+    setProjects((ps) => [row, ...ps]);
+    setPid(row.id);
+    setTitle(row.title);
+    setBarErr(null);
+    tlRef.current = tl;
+    setTimeline(tl);
+    setSelected(null);
+    setSave("saved");
+    playerRef.current?.seekTo(0);
+  }, [sb, flushAll, setPid]);
+
   const rename = useCallback(
     async (t: string) => {
       const id = idRef.current;
@@ -391,6 +414,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         onRename={(t) => void rename(t)}
         onDelete={() => void remove()}
         onRetrySave={retrySave}
+        onTeaser={() => void openTeaser()}
+        teaserBusy={creating}
       />
 
       {/* HP: chat → preview → rencana → suara & export. Layar lebar: kiri chat + rencana, kanan sticky */}

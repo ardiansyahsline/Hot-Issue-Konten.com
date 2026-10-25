@@ -3,9 +3,9 @@
 /** Layar hasil karya: desain berita gaya TWS, laporan/PPT yang dibalik, landing page brand, dan foto/klip user. */
 import { Video } from "@remotion/media";
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { Easing, Img } from "remotion";
+import { Easing, Img, useRemotionEnvironment } from "remotion";
 import { storagePathOf } from "@/lib/studio/urls";
-import { useImgFallback } from "../safeImg";
+import { useImgFallback, useMediaProbe } from "../safeImg";
 import { useSrc } from "../theme";
 import {
   Btn,
@@ -966,9 +966,13 @@ const isVideo = (src: string) => {
 /** foto / klip dari user memenuhi layar (cover) dengan zoom pelan; kosong → bidang warna brand. title = keterangan di bawah */
 export function MediaScreen({ e }: { e: Env }) {
   const { t, brand } = e;
-  // foto gagal dimuat (404 dll.) → bidang warna brand (tanpa onError, <Img> membatalkan render).
-  // Klip: render di laptop jatuh ke OffthreadVideo saat gagal → onError-nya juga ke cadangan (render di browser tetap gagal: batasan @remotion/media)
+  // foto / klip gagal dimuat (404 dll.) → bidang warna brand (tanpa onError, <Img> membatalkan render).
+  // Klip: saat render, file dicek dulu (useMediaProbe) sebelum <Video> dipasang — <Video loop> yang gagal di render browser langsung
+  // cancelRender, di render laptop jatuh ke <OffthreadVideo> yang menolak loop. Di pratinjau (Player), onError <Video> → cadangan.
+  const { isRendering } = useRemotionEnvironment();
   const [src, onMediaError] = useImgFallback(e.src);
+  const vid = !!src && isVideo(src);
+  const probed = useMediaProbe(vid && isRendering ? src : null, onMediaError);
   const z = 1 + 0.08 * clamp01(t.f / Math.max(1, t.d));
   const fit: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
   const cap = e.title && pop(t, en(t, 10), { damping: 16 });
@@ -976,8 +980,21 @@ export function MediaScreen({ e }: { e: Env }) {
     <div style={{ position: "absolute", inset: 0, overflow: "hidden", background: "#000", fontFamily: fontOf(brand) }}>
       <div style={{ position: "absolute", inset: 0, transform: `scale(${z})` }}>
         {src ? (
-          isVideo(src) ? (
-            <Video src={src} muted loop objectFit="cover" style={fit} fallbackOffthreadVideoProps={{ onError: onMediaError }} />
+          vid ? (
+            probed && (
+              <Video
+                src={src}
+                muted
+                loop
+                objectFit="cover"
+                style={fit}
+                // cadangan terakhir: induk melepas <Video> di batch yang sama (sebelum <OffthreadVideo> pengganti sempat dipasang)
+                onError={() => {
+                  onMediaError();
+                  return "fallback";
+                }}
+              />
+            )
           ) : (
             <Img src={src} onError={onMediaError} style={fit} />
           )

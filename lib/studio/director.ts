@@ -662,24 +662,33 @@ const BIG_EDIT =
 const SMALL_EDIT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;
 
+/**
+ * sudah ada timeline tapi minta video LAIN (rencana baru). Wajib ada kata benda video/versi/konten (atau "yang buat/untuk …"),
+ * supaya revisi kecil seperti "satu lagi, logonya digedein" / "buat lagi transisinya" tidak ikut dianggap rencana baru.
+ */
+const NEW_VIDEO =
+  /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(satu|1) (video|versi|konten) lagi\b|\b(bikin|buat)(in|kan)? (juga|lagi) (video|versi|konten|yang (buat|untuk|versi)|(buat|untuk) (fitur|produk|brand|layanan))\b/i;
+
 /** revisi kecil pada timeline yang sudah ada → boleh pakai mesin cepat (rencana baru / revisi besar → mesin berat) */
 export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   if (!hasTimeline) return false;
   const t = String(text ?? "").trim();
   if (!t || t.length > 240 || /^📌/.test(t)) return false;
-  if (BIG_EDIT.test(t)) return false;
+  // revisi besar / minta video lain → bukan revisi kecil, walau menyebut durasi/logo/warna ("bikinin juga video buat fitur X, 30 detik")
+  if (BIG_EDIT.test(t) || NEW_VIDEO.test(t)) return false;
   return SMALL_EDIT.test(t);
 }
 
-/** satu kata/frasa basa-basi: sapaan, terima kasih, "oke", pujian singkat (+ sapaan orang: kak, bang, Harley, ya, dong…) */
+/**
+ * satu kata/frasa basa-basi: sapaan, terima kasih, "oke", pujian singkat (+ sapaan orang: kak, bang, Harley, ya, dong…).
+ * Tawa pakai [a-z]*, BUKAN \w*: "_" juga cocok dengan CHAT_SEP (\p{P}) → tiap "_" bisa dibelah dua cara → backtracking eksponensial (ReDoS).
+ */
 const PLEASANTRY =
-  "(halo+|hallo+|hai+|hi+|hey+|selamat (pagi|siang|sore|malam)|makasih+|makasi+|terima ?kasih( banyak)?|thanks?|thank you|thx|oke+y?|ok+|okay|sip+|siap|mantap+|mantul|keren+|bagus+|nice|noted|good|great|cakep|wkwk\\w*|haha\\w*|hehe\\w*)(\\s+(kak|ka|bang|mas|mbak|bro|sis|min|harley|ya+|yah|deh|dong|banget|bgt|sekali|nih))*";
+  "(halo+|hallo+|hai+|hi+|hey+|selamat (pagi|siang|sore|malam)|(makasih+|makasi+|terima ?kasih)( banyak)?|thanks?|thank you|thx|oke+y?|ok+|okay|sip+|siap|mantap+|mantul|keren+|bagus+|nice|noted|good|great|cakep|wkwk[a-z]*|haha[a-z]*|hehe[a-z]*)(\\s+(kak|ka|bang|mas|mbak|bro|sis|min|harley|ya+|yah|deh|dong|banget|bgt|sekali|nih))*";
 /** pemisah antar basa-basi: spasi, tanda baca, emoji */
 const CHAT_SEP = "[\\s\\p{P}\\p{S}\\p{Extended_Pictographic}\\uFE0F\\u200D]";
 /** obrolan ringan: SELURUH pesan hanya basa-basi ("Oke makasih kak! 🙏"). "Halo, aku mau bikin video…" bukan obrolan (lanjut dinilai sebagai brief). */
 const CHITCHAT = new RegExp(`^${CHAT_SEP}*${PLEASANTRY}(${CHAT_SEP}+${PLEASANTRY})*${CHAT_SEP}*$`, "iu");
-/** sudah ada timeline tapi minta video LAIN (rencana baru) */
-const NEW_VIDEO = /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(bikin|buat)(in|kan)? (juga|lagi)\b|\b(satu|1) (video )?lagi\b/i;
 /** pertanyaan cara pakai / kenapa — dijawab singkat tanpa rencana */
 const HOWTO = /^\s*((gimana|bagaimana|gmn) ?(cara|caranya)\b|caranya\b|cara (pakai|bikin|buat|download|unduh|export|ekspor|upload|ganti|hapus|simpan|share|bagi)\b|kenapa\b|mengapa\b|kok\b)/i;
 /** kata yang menandakan brief video (bukan sekadar obrolan) */

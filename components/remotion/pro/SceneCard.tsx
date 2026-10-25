@@ -89,6 +89,8 @@ export default function SceneCard({
   const long = shown.map((l, i) => ({ i, n: wordCount(l) })).filter((x) => x.n > MAX_WORDS_PER_LINE);
   const voSec = s.vo ? speakSec(s.vo.text) : 0;
   const peek = s.text[0] || s.vo?.text || s.layout.title || s.visual;
+  // adegan premium teaser (buatan tangan): teks/VO/SFX boleh diubah, visual (jenis tampilan, latar, kamera, durasi) dikunci
+  const teaser = s.layout.kind === "teaser";
   const headId = `scene-${s.id}`;
 
   return (
@@ -142,21 +144,32 @@ export default function SceneCard({
 
       {open && (
         <div id={`${headId}-body`} className="space-y-3.5 border-t border-zinc-800/70 px-2.5 pb-3 pt-3 sm:px-3">
+          {teaser && (
+            <p role="note" data-teaser-note className="rounded-xl border border-orange-500/30 bg-orange-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-orange-200">
+              🎞️ Adegan premium buatan tangan — teks/VO/SFX boleh diubah, visual tetap.
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Nama adegan">{(id) => <Txt id={id} value={s.name} maxLength={40} onCommit={(v) => patch({ name: v })} />}</Field>
-            <Field label="Durasi" hint={`${MIN_DUR}–${MAX_DUR} detik`}>
-              {(id) => (
-                <div className="flex items-center gap-1.5">
-                  <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
-                    −
-                  </button>
-                  <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} commitOnBlur className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
-                  <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Tambah 0,1 detik" onClick={() => dur(s.dur + 0.1)}>
-                    +
-                  </button>
-                  <span className="text-[12px] text-zinc-500">dtk</span>
-                </div>
-              )}
+            <Field label="Durasi" hint={teaser ? "Dikunci di ketukan musik (adegan premium)" : `${MIN_DUR}–${MAX_DUR} detik`}>
+              {(id) =>
+                teaser ? (
+                  <div id={id} className="flex h-9 items-center text-[13px] tabular-nums text-zinc-300">
+                    {fmtSec(s.dur, 2)}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
+                      −
+                    </button>
+                    <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} commitOnBlur className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
+                    <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Tambah 0,1 detik" onClick={() => dur(s.dur + 0.1)}>
+                      +
+                    </button>
+                    <span className="text-[12px] text-zinc-500">dtk</span>
+                  </div>
+                )
+              }
             </Field>
           </div>
 
@@ -220,38 +233,46 @@ export default function SceneCard({
             )}
           </Field>
 
-          <Field label="🎨 Catatan visual / storyboard" hint="Apa yang terlihat di layar.">
-            {(id) => <Txt id={id} multiline value={s.visual} maxLength={400} onCommit={(v) => patch({ visual: v })} />}
-          </Field>
-
-          {/* tampilan */}
-          <div className="space-y-3 rounded-xl border border-zinc-800/80 p-2.5 sm:p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Jenis tampilan">
-                {(id) => (
-                  <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
-                    {(s.layout.kind === "teaser" ? LAYOUTS : PLAN_LAYOUTS).map((k) => (
-                      <option key={k} value={k}>
-                        {LAYOUT_LABEL[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-              <Field label="Latar">
-                {(id) => (
-                  <select id={id} className={sel} value={s.bg.kind} onChange={(e) => patch((x) => ({ bg: { ...x.bg, kind: e.target.value as BgKind } }))}>
-                    {(["gradient", "particles", "solid", "grid", ...(s.bg.kind === "media" ? (["media"] as const) : [])] as BgKind[]).map((k) => (
-                      <option key={k} value={k}>
-                        {BG_LABEL[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
+          {teaser ? (
+            <div className="rounded-xl border border-zinc-800/80 px-3 py-2 text-[12px] text-zinc-400">
+              <span className="font-semibold text-zinc-300">🎨 Visual:</span> {s.visual || LAYOUT_LABEL.teaser}
             </div>
-            <LayoutFields l={s.layout} set={setLayout} />
-          </div>
+          ) : (
+            <Field label="🎨 Catatan visual / storyboard" hint="Apa yang terlihat di layar.">
+              {(id) => <Txt id={id} multiline value={s.visual} maxLength={400} onCommit={(v) => patch({ visual: v })} />}
+            </Field>
+          )}
+
+          {/* tampilan (adegan premium teaser: dikunci) */}
+          {!teaser && (
+            <div className="space-y-3 rounded-xl border border-zinc-800/80 p-2.5 sm:p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Jenis tampilan">
+                  {(id) => (
+                    <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
+                      {(s.layout.kind === "teaser" ? LAYOUTS : PLAN_LAYOUTS).map((k) => (
+                        <option key={k} value={k}>
+                          {LAYOUT_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+                <Field label="Latar">
+                  {(id) => (
+                    <select id={id} className={sel} value={s.bg.kind} onChange={(e) => patch((x) => ({ bg: { ...x.bg, kind: e.target.value as BgKind } }))}>
+                      {(["gradient", "particles", "solid", "grid", ...(s.bg.kind === "media" ? (["media"] as const) : [])] as BgKind[]).map((k) => (
+                        <option key={k} value={k}>
+                          {BG_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+              </div>
+              <LayoutFields l={s.layout} set={setLayout} />
+            </div>
+          )}
 
           {/* gerak */}
           <div className="grid gap-3 sm:grid-cols-3">
@@ -288,17 +309,19 @@ export default function SceneCard({
             ) : (
               <div className="hidden sm:block" />
             )}
-            <Field label="Gerak kamera">
-              {(id) => (
-                <select id={id} className={sel} value={s.camera} onChange={(e) => patch({ camera: e.target.value as Camera })}>
-                  {(Object.keys(CAMERA_LABEL) as Camera[]).map((k) => (
-                    <option key={k} value={k}>
-                      {CAMERA_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
+            {!teaser && (
+              <Field label="Gerak kamera">
+                {(id) => (
+                  <select id={id} className={sel} value={s.camera} onChange={(e) => patch({ camera: e.target.value as Camera })}>
+                    {(Object.keys(CAMERA_LABEL) as Camera[]).map((k) => (
+                      <option key={k} value={k}>
+                        {CAMERA_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            )}
             <Field label="Level musik">
               {(id) => (
                 <select id={id} className={sel} value={s.music} onChange={(e) => patch({ music: e.target.value as MusicLevel })}>

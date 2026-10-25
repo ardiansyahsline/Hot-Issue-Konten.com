@@ -56,10 +56,10 @@ const btnGhost: CSSProperties = { borderRadius: 12, border: `1px solid ${Z[800]}
 export function TapFx({ f, fps, hit, x, y, from = [46, 70] }: { f: number; fps: number; hit: number; x: number | string; y: number | string; from?: [number, number] }) {
   const s = f / fps;
   const a = hit - 0.3;
-  const b = hit + 0.34;
+  const b = hit + 0.24;
   if (s < a || s > b) return null;
   const inP = prog(f, fps, a, hit - 0.04, EASE.out);
-  const outP = prog(f, fps, hit + 0.12, b, EASE.in);
+  const outP = prog(f, fps, hit + 0.08, b, EASE.in);
   const dx = from[0] * (1 - inP) + 16 * outP;
   const dy = from[1] * (1 - inP) + 26 * outP;
   const hf = Math.round(hit * fps);
@@ -170,6 +170,11 @@ export function TrainModal({
   nextPress = 1,
   children,
   footerFx,
+  sheen = 0,
+  headOp = 1,
+  subOp = 1,
+  barsOp = 1,
+  dim = 0,
 }: {
   w: number;
   h: number;
@@ -181,7 +186,16 @@ export function TrainModal({
   nextPress?: number;
   children: ReactNode;
   footerFx?: ReactNode;
+  /** posisi kilau kaca 0..1 saat modal masuk */
+  sheen?: number;
+  /** opasitas judul header / teks tahap / progres — memudar saat kamera mendorong header ke pita caption */
+  headOp?: number;
+  subOp?: number;
+  barsOp?: number;
+  /** rack focus: header & footer ikut buram + redup (0..1) */
+  dim?: number;
 }) {
+  const soft: CSSProperties | undefined = dim > 0.02 ? { filter: `blur(${(dim * 2.6).toFixed(2)}px)`, opacity: 1 - dim * 0.5 } : undefined;
   return (
     <div
       style={{
@@ -200,22 +214,26 @@ export function TrainModal({
         lineHeight: 1.5,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px", ...soft }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 700, lineHeight: 1.45 }}>🧠 Train your AI</div>
-          <div style={{ fontSize: 11.5, color: Z[500], whiteSpace: "nowrap", overflow: "hidden", height: 17 }}>{sub}</div>
+          <div style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 700, lineHeight: 1.45, opacity: headOp }}>🧠 Train your AI</div>
+          <div style={{ fontSize: 11.5, color: Z[500], whiteSpace: "nowrap", overflow: "hidden", height: 17, opacity: subOp }}>{sub}</div>
         </div>
-        <span style={{ marginLeft: "auto", borderRadius: 8, padding: "4px 8px", color: Z[500], fontSize: 14 }}>✕</span>
+        <span style={{ marginLeft: "auto", borderRadius: 8, padding: "4px 8px", color: Z[500], fontSize: 14, opacity: headOp }}>✕</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4, padding: "12px 16px 0" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4, padding: "12px 16px 0", opacity: barsOp, ...soft }}>
         {T_STAGES.map((st, i) => (
           <span key={st} style={{ position: "relative", height: 6, borderRadius: 99, background: Z[800], overflow: "hidden" }}>
             <span style={{ display: "block", height: "100%", borderRadius: 99, background: OR, width: `${(clamp01(bars[i] ?? 0) * 100).toFixed(2)}%`, boxShadow: `0 0 8px ${rgba(OR, 0.7)}` }} />
           </span>
         ))}
       </div>
-      <div style={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}>{children}</div>
-      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px" }}>
+      <div style={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {children}
+        {/* isi yang terpotong tepi bawah memudar (gradasi linear ke warna modal — aman untuk web renderer) */}
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 26, background: `linear-gradient(180deg, ${rgba(Z[900], 0)} 0%, ${rgba(Z[900], 0.92)} 70%, ${Z[900]} 100%)`, pointerEvents: "none" }} />
+      </div>
+      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px", ...soft }}>
         <span style={btnGhost}>← Kembali</span>
         <span
           style={{
@@ -236,6 +254,7 @@ export function TrainModal({
           {footerFx}
         </span>
       </div>
+      {sheen > 0 && sheen < 1 && <Shine p={sheen} alpha={0.09} radius={16} angle={115} />}
     </div>
   );
 }
@@ -297,7 +316,7 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
             >
               {isPick && (
                 <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
-                  <Ripple f={f} fps={fps} hit={hit} x={312} y={28} />
+                  <Ripple f={f} fps={fps} hit={hit} x={334} y={34} />
                   {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.22} radius={12} />}
                 </span>
               )}
@@ -322,7 +341,7 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
                 {String.fromCharCode(65 + i)}
               </span>
               <span style={{ position: "relative", minWidth: 0 }}>{o.label}</span>
-              {isPick && <TapFx f={f} fps={fps} hit={hit} x={312} y={28} />}
+              {isPick && <TapFx f={f} fps={fps} hit={hit} x="calc(100% - 13px)" y="calc(100% - 9px)" from={[40, 64]} />}
             </div>
           );
         })}
@@ -415,28 +434,43 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
   const G = T_GROUP;
   const bgP = prog(f, fps, enter, at + 0.15, EASE.inOut);
   const decoP = prog(f, fps, enter + 0.12, at, EASE.out);
-  // chibi muncul tepat di ketukan (frame hit sudah terlihat): ts-pop = scale .4 → 1.06 → 1
-  const chib = springAt(f, fps, at - 1.4 / fps, { damping: 10, stiffness: 210, mass: 0.7 });
+  // chibi muncul tepat di ketukan: pegas mulai 3 frame lebih awal → di frame pukulan sudah ±90% & tajam, puncak overshoot 1–3 frame sesudahnya (ts-pop .4 → 1.06 → 1)
+  const chib = springAt(f, fps, at - 3 / fps, { damping: 10, stiffness: 210, mass: 0.7 });
   // lompat sekali (hero-hop) di ketukan konfeti
   const hk = (s - hopAt) / 0.44;
   const hop = hk > 0 && hk < 1 ? Math.sin(hk * Math.PI) * (hk < 0.5 ? 1 : 1) : 0;
   const squash = hk > 0.85 && hk < 1.15 ? 1 - 0.06 * Math.sin(((hk - 0.85) / 0.3) * Math.PI) : 1;
-  const chipP = springAt(f, fps, at + 0.42, { damping: 18, stiffness: 160 });
+  const chipP = springAt(f, fps, at + 0.3, { damping: 18, stiffness: 160 });
+  // ledakan cahaya hangat di BELAKANG chibi & huruf saat konfeti (huruf tetap terbaca)
+  const wb = (s - hopAt) / 0.45;
   const sweep = prog(f, fps, at + 0.32, at + 0.9, EASE.inOut);
   return (
-    <div style={{ position: "relative", overflow: "hidden", borderRadius: 16, height: 228 }}>
+    <div style={{ position: "relative", overflow: "hidden", borderRadius: 16 }}>
       {/* latar radial lembut warna kelompok (radial-gradient TypeScene → SVG) */}
       <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: "absolute", inset: 0 }} aria-hidden>
         <defs>
           <radialGradient id="trainTsBg" cx="50%" cy="100%" r="100%">
-            <stop offset="0%" stopColor={G.color} stopOpacity={(0.34 * bgP).toFixed(3)} />
-            <stop offset="45%" stopColor={G.color} stopOpacity={(0.13 * bgP).toFixed(3)} />
+            <stop offset="0%" stopColor={G.color} stopOpacity={(0.22 * bgP).toFixed(3)} />
+            <stop offset="45%" stopColor={G.color} stopOpacity={(0.08 * bgP).toFixed(3)} />
             <stop offset="72%" stopColor={G.color} stopOpacity="0" />
           </radialGradient>
         </defs>
         <rect width="100" height="100" fill="url(#trainTsBg)" />
       </svg>
       <Rays s={s} at={at} c={G.color} />
+      {wb > 0 && wb < 1 && (
+        <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 118, width: 320, height: 320, marginLeft: -160, marginTop: -160, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+          <defs>
+            <radialGradient id="trainWarm" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#fff7ed" stopOpacity="0.85" />
+              <stop offset="35%" stopColor="#fde68a" stopOpacity="0.45" />
+              <stop offset="100%" stopColor={OR} stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <circle r={40 + 70 * EASE.out(wb)} fill="url(#trainWarm)" opacity={(1 - wb).toFixed(3)} />
+          <circle r={30 + 90 * EASE.out(wb)} fill="none" stroke="#fde68a" strokeWidth={2.5 * (1 - wb)} opacity={(0.8 * (1 - wb)).toFixed(3)} />
+        </svg>
+      )}
       <Charge s={s} from={enter + 0.04} at={at} c={G.color} />
       <svg viewBox="0 0 232 110" preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: decoP }} aria-hidden>
         <DecoNF s={Math.max(0, s - enter)} c={G.color} />
@@ -453,11 +487,11 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
         >
           <HeroArt hero={T_DRAFT} size={128} still title={`Karakter ${T_TYPE}`} />
         </div>
-        <div style={{ position: "relative", marginTop: 4, display: "flex", gap: 6, perspective: 380 }}>
+        <div style={{ position: "relative", marginTop: 4, display: "flex", gap: 6 }}>
           {T_TYPE.split("").map((l, i) => {
-            const ti = at + i * 0.1;
-            const p = springAt(f, fps, ti - 1.2 / fps, { damping: 11, stiffness: 230, mass: 0.6 });
-            const fl = clamp01(1 - (s - ti) / 0.22);
+            const ti = at + (i * 2.5 - 3) / fps;
+            const p = springAt(f, fps, ti, { damping: 11, stiffness: 230, mass: 0.6 });
+            const fl = clamp01(1 - (s - Math.max(ti, at)) / 0.22);
             const pulse = s > hopAt ? 1 + 0.08 * Math.exp(-(s - hopAt - i * 0.04) * 8) * Math.max(0, Math.sin((s - hopAt - i * 0.04) * 22)) : 1;
             return (
               <span
@@ -474,14 +508,14 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
                   color: "#fff",
                   fontSize: 18,
                   fontWeight: 900,
-                  transform: `rotateX(${((1 - p) * 90).toFixed(2)}deg) scale(${((0.6 + 0.4 * p) * pulse).toFixed(4)})`,
+                  transform: `perspective(160px) rotateX(${((1 - p) * 90).toFixed(2)}deg) scale(${((0.6 + 0.4 * p) * pulse).toFixed(4)})`,
                   opacity: clamp01(p * 2),
                   boxShadow: `0 8px 18px -8px ${G.color}, 0 0 ${(24 * fl).toFixed(1)}px ${rgba("#ffffff", 0.5 * fl)}`,
                   overflow: "hidden",
                 }}
               >
                 {l}
-                {fl > 0 && s >= ti && <span style={{ position: "absolute", inset: 0, background: `rgba(255,255,255,${(0.7 * fl).toFixed(3)})` }} />}
+                {fl > 0 && s >= at && <span style={{ position: "absolute", inset: 0, background: `rgba(255,255,255,${(0.7 * fl).toFixed(3)})` }} />}
               </span>
             );
           })}
@@ -510,8 +544,8 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
 }
 
 export function ResultBody({ f, fps, enter, at, hopAt }: { f: number; fps: number; enter: number; at: number; hopAt: number }) {
-  const k = springAt(f, fps, at + 0.5, { damping: 18, stiffness: 150 });
-  const d = springAt(f, fps, at + 0.66, { damping: 20, stiffness: 140 });
+  const k = springAt(f, fps, at + 0.2, { damping: 18, stiffness: 150 });
+  const d = springAt(f, fps, at + 0.55, { damping: 20, stiffness: 140 });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <TypeSceneFx f={f} fps={fps} enter={enter} at={at} hopAt={hopAt} />
@@ -533,7 +567,7 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
   const hf = Math.round(hit * fps);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.375, color: Z[100] }}>Mau dilatih jadi apa AI-mu?</div>
+      <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.375, color: Z[100], opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6).toFixed(2)}px)` : undefined }}>Mau dilatih jadi apa AI-mu?</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
         {ROLES.map((r, i) => {
           const isPick = r.id === T_ROLE;
@@ -555,15 +589,15 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                 padding: 10,
                 textAlign: "left",
                 transform: `translateY(${((1 - ap) * 26).toFixed(2)}px) scale(${sc.toFixed(4)})`,
-                opacity: clamp01(ap * 1.4) * (1 - dim * 0.45),
-                filter: dim > 0.05 ? `blur(${(dim * 2.2).toFixed(2)}px)` : undefined,
+                opacity: clamp01(ap * 1.4) * (1 - dim * 0.5),
+                filter: dim > 0.05 ? `blur(${(dim * 2.6).toFixed(2)}px)` : undefined,
                 boxShadow: on ? `0 0 0 1px ${rgba(OR, 0.4)}, 0 14px 30px -12px ${rgba(OR, 0.8)}` : undefined,
                 zIndex: isPick ? 2 : 1,
               }}
             >
               {isPick && (
                 <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
-                  <Ripple f={f} fps={fps} hit={hit} x={142} y={24} />
+                  <Ripple f={f} fps={fps} hit={hit} x={146} y={20} />
                   {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.3} radius={12} />}
                 </span>
               )}
@@ -577,12 +611,13 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                   ✓ cocok dengan tipe {T_TYPE}
                 </div>
               )}
-              {isPick && <TapFx f={f} fps={fps} hit={hit} x={142} y={24} from={[-40, 80]} />}
-              {isPick && <Burst f={f} fps={fps} at={hit} x={142} y={24} />}
+              {/* ketuk di pojok kanan atas kartu yang kosong (nama & deskripsi tetap terbaca) */}
+              {isPick && <TapFx f={f} fps={fps} hit={hit} x="calc(100% - 22px)" y={20} from={[44, 74]} />}
+              {isPick && <Burst f={f} fps={fps} at={hit} x={146} y={20} />}
             </div>
           );
         })}
-        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.45, filter: focus > 0.05 ? `blur(${(focus * 2.2).toFixed(2)}px)` : undefined }}>
+        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6).toFixed(2)}px)` : undefined }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 18 }}>✍️</span>
             <span style={{ flex: 1, minWidth: 0, borderRadius: 12, border: `1px solid ${Z[800]}`, background: Z[950], padding: "6px 12px", fontSize: 13, color: Z[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -596,66 +631,69 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
 }
 
 // ---------------------------------------------------------------------------------------------
-// konfeti (deterministik, random(seed)) + gelombang kejut "whoosh"
+// konfeti (deterministik, random(seed)) — ditembakkan dari "meriam" di sisi layar supaya huruf tipe di tengah tetap terbaca
 // ---------------------------------------------------------------------------------------------
 const CONF_COLORS = [OR, "#fb923c", T_GROUP.color, "#34d399", "#fde68a", "#ffffff", "#f472b6", "#38bdf8", OR];
-type Bit = { vx: number; vy: number; drag: number; rot0: number; spin: number; flip: number; ph: number; w: number; h: number; c: string; shape: number; delay: number; sway: number };
+type Bit = { cx: number; cy: number; vx: number; vy: number; drag: number; rot0: number; spin: number; flip: number; ph: number; w: number; h: number; c: string; shape: number; delay: number; sway: number };
+export type Cannon = { x: number; y: number; /** arah tembak (radian, -π/2 = lurus ke atas) */ ang: number; spread: number };
 
-export function Confetti({ f, fps, at, ox, oy, n = 78, scale = 1 }: { f: number; fps: number; at: number; ox: number; oy: number; n?: number; scale?: number }) {
+export function Confetti({ f, fps, at, cannons, n = 44, scale = 1 }: { f: number; fps: number; at: number; cannons: Cannon[]; n?: number; scale?: number }) {
+  const key = cannons.map((c) => `${c.x.toFixed(0)},${c.y.toFixed(0)},${c.ang.toFixed(3)},${c.spread.toFixed(3)}`).join("|");
   const bits = useMemo<Bit[]>(
     () =>
-      Array.from({ length: n }, (_, i) => {
-        const r = (k: string) => random(`train-confetti-${i}-${k}`);
-        const ang = -Math.PI / 2 + (r("a") - 0.5) * Math.PI * 1.35;
-        const sp = (1300 + r("s") * 1900) * scale;
-        const shape = r("k") < 0.62 ? 0 : r("k2") < 0.55 ? 1 : 2;
-        return {
-          vx: Math.cos(ang) * sp,
-          vy: Math.sin(ang) * sp - 260 * scale,
-          drag: 2.6 + r("d") * 1.4,
-          rot0: r("r") * 360,
-          spin: (r("sp") - 0.5) * 900,
-          flip: 8 + r("f") * 14,
-          ph: r("p") * Math.PI * 2,
-          w: (shape === 2 ? 7 : 12 + r("w") * 8) * scale,
-          h: (shape === 2 ? 30 + r("h") * 16 : 18 + r("h") * 10) * scale,
-          c: CONF_COLORS[Math.floor(r("c") * CONF_COLORS.length) % CONF_COLORS.length],
-          shape,
-          delay: r("dl") * 0.06,
-          sway: 5 + r("sw") * 5,
-        };
-      }),
-    [n, scale],
+      cannons.flatMap((cn, ci) =>
+        Array.from({ length: n }, (_, i) => {
+          const r = (k: string) => random(`train-confetti-${ci}-${i}-${k}`);
+          const ang = cn.ang + (r("a") - 0.5) * cn.spread;
+          const sp = (1100 + r("s") * 1700) * scale;
+          const shape = r("k") < 0.62 ? 0 : r("k2") < 0.55 ? 1 : 2;
+          // mulai ≥ 70 px dari mulut meriam (tidak menumpuk di satu titik)
+          const r0 = (70 + r("r0") * 40) * scale;
+          return {
+            cx: cn.x + Math.cos(ang) * r0,
+            cy: cn.y + Math.sin(ang) * r0,
+            vx: Math.cos(ang) * sp,
+            vy: Math.sin(ang) * sp,
+            drag: 2.4 + r("d") * 1.4,
+            rot0: r("r") * 360,
+            spin: (r("sp") - 0.5) * 900,
+            flip: 8 + r("f") * 14,
+            ph: r("p") * Math.PI * 2,
+            w: (shape === 2 ? 7 : 12 + r("w") * 8) * scale,
+            h: (shape === 2 ? 30 + r("h") * 16 : 18 + r("h") * 10) * scale,
+            c: CONF_COLORS[Math.floor(r("c") * CONF_COLORS.length) % CONF_COLORS.length],
+            shape,
+            delay: r("dl") * 0.07,
+            sway: 5 + r("sw") * 5,
+          };
+        }),
+      ),
+    [key, n, scale],
   );
   const t = f / fps - at;
-  if (t < 0 || t > 1.7) return null;
+  if (t < 0 || t > 1.9) return null;
   const g = 1100 * scale;
-  // gelombang kejut (whoosh) dari pusat
-  const ring = clamp01(t / 0.5);
   return (
-    <svg width={2} height={2} style={{ position: "absolute", left: ox, top: oy, overflow: "visible", pointerEvents: "none" }} aria-hidden>
-      <defs>
-        <radialGradient id="trainBurst" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-          <stop offset="30%" stopColor="#fde68a" stopOpacity="0.55" />
-          <stop offset="100%" stopColor={OR} stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      {t < 0.35 && <circle cx={0} cy={0} r={(90 + 260 * EASE.out(t / 0.35)) * scale} fill="url(#trainBurst)" opacity={(1 - t / 0.35).toFixed(3)} />}
-      {ring < 1 && <circle cx={0} cy={0} r={(50 + 470 * EASE.out(ring)) * scale} fill="none" stroke={`rgba(255,255,255,${(0.75 * (1 - ring) * (1 - ring)).toFixed(3)})`} strokeWidth={(4 * (1 - ring) + 0.8) * scale} />}
+    <svg width={2} height={2} style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+      {/* kilatan moncong meriam */}
+      {t < 0.22 &&
+        cannons.map((c, i) => (
+          <circle key={`m${i}`} cx={c.x + Math.cos(c.ang) * 60 * scale} cy={c.y + Math.sin(c.ang) * 60 * scale} r={(30 + 70 * EASE.out(t / 0.22)) * scale} fill="#fde68a" opacity={(0.35 * (1 - t / 0.22)).toFixed(3)} />
+        ))}
       {bits.map((b, i) => {
         const tt = t - b.delay;
         if (tt < 0) return null;
         const e = Math.exp(-b.drag * tt);
         const swayA = Math.min(1, tt * 1.5) * 22 * scale;
-        const x = (b.vx * (1 - e)) / b.drag + Math.sin(tt * b.sway + b.ph) * swayA;
-        const y = (b.vy * (1 - e)) / b.drag + 0.5 * g * tt * tt * (1 / (1 + tt * 0.9));
+        const x = b.cx + (b.vx * (1 - e)) / b.drag + Math.sin(tt * b.sway + b.ph) * swayA;
+        const y = b.cy + (b.vy * (1 - e)) / b.drag + 0.5 * g * tt * tt * (1 / (1 + tt * 0.9));
         const vx = b.vx * e;
         const vy = b.vy * e + g * tt;
         const v = Math.hypot(vx, vy);
         const ang = (Math.atan2(vy, vx) * 180) / Math.PI;
-        const st = 1 + Math.min(2.4, v / 1100);
-        const op = tt < 0.95 ? 1 : Math.max(0, 1 - (tt - 0.95) / 0.55);
+        // regangan motion blur dibatasi (≤ 1,6×) supaya terbaca sebagai kertas, bukan serpihan
+        const st = 1 + Math.min(0.6, v / 2400);
+        const op = tt < 1.1 ? 1 : Math.max(0, 1 - (tt - 1.1) / 0.7);
         if (op <= 0) return null;
         const fl = Math.cos(tt * b.flip + b.ph);
         const tf = `translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${ang.toFixed(1)}) scale(${st.toFixed(3)} 1) rotate(${(-ang).toFixed(1)}) rotate(${(b.rot0 + b.spin * tt).toFixed(1)}) scale(1 ${fl.toFixed(3)})`;

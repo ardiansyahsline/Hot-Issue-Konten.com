@@ -2,7 +2,7 @@
 
 import { Player, type PlayerRef } from "@remotion/player";
 import { useEffect, useRef, useState } from "react";
-import { COMPOSITIONS, type Comp } from "./compositions";
+import { COMPOSITIONS, fileOf, type Comp } from "./compositions";
 
 type RenderState =
   | { s: "idle" }
@@ -18,6 +18,28 @@ function saveUrl(url: string, name: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+/** nama file download dari alamat (…/teaser-cs-tracker.mp4 → teaser-cs-tracker.mp4) */
+const nameOf = (url: string, fallback: string) => decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() || "") || fallback;
+
+/**
+ * Cek file jadi benar-benar ada (HEAD) sebelum tombol download ditampilkan — file teaser disajikan route terlindungi
+ * dan bisa saja belum diunggah (404). Hasil: true ada, false tidak ada, undefined masih dicek.
+ */
+function useFileExists(url: string | undefined): boolean | undefined {
+  const [known, setKnown] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!url || url in known) return;
+    let live = true;
+    fetch(url, { method: "HEAD", cache: "no-store" })
+      .then((r) => live && setKnown((k) => ({ ...k, [url]: r.ok })))
+      .catch(() => live && setKnown((k) => ({ ...k, [url]: false })));
+    return () => {
+      live = false;
+    };
+  }, [url, known]);
+  return url ? known[url] : false;
 }
 
 /** HP (terutama iPhone) sering tidak bisa download langsung -> pakai menu Bagikan / Simpan Video */
@@ -93,7 +115,12 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
   };
 
   const busy = render.s === "rendering";
-  const edited = JSON.stringify(props) !== JSON.stringify(comp.defaultProps);
+  // pilihan versi (mis. Pakai VO) bukan editan teks: file jadi versi itu tetap bisa langsung didownload
+  const textOnly = (p: Record<string, unknown>) => Object.fromEntries(Object.entries(p).filter(([k]) => !comp.fields.some((f) => f.key === k && f.variant)));
+  const edited = JSON.stringify(textOnly(props)) !== JSON.stringify(textOnly(comp.defaultProps));
+  const file = fileOf(comp, props);
+  const fileOk = useFileExists(file);
+  const ready = !!file && fileOk === true;
   const secs = Math.round(comp.durationInFrames / comp.fps);
 
   return (
@@ -138,7 +165,7 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
         </div>
 
         <div className="card space-y-3 p-4">
-          <div className="label mb-0">Ubah teks</div>
+          <div className="label mb-0">{comp.fields.some((f) => f.type === "text") ? "Ubah teks" : "Pilihan"}</div>
           {comp.fields.map((f) =>
             f.type === "toggle" ? (
               <label key={f.key} className="flex cursor-pointer items-start gap-2.5 text-sm">
@@ -175,21 +202,23 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
 
         <div className="card space-y-3 p-4">
           <div className="label mb-0">Download video</div>
-          {comp.file && !edited && (
+          {ready && file && !edited && (
             <>
-              <a href={comp.file} download={`${comp.id}.mp4`} className="btn-primary w-full">
+              <a href={file} download={nameOf(file, `${comp.id}.mp4`)} className="btn-primary w-full">
                 ⬇️ Download MP4 sekarang
               </a>
               <p className="text-[11px] text-zinc-500">
                 Video versi teks awal, langsung download tanpa nunggu.{" "}
-                <a href={comp.file} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
+                <a href={file} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
                   Buka di tab baru
                 </a>{" "}
                 kalau di HP nggak mau kedownload (tekan lama videonya → Simpan).
               </p>
             </>
           )}
-          {comp.file && edited && render.s === "idle" && (
+          {file && !edited && fileOk === undefined && <p className="text-[11px] text-zinc-500">Cek file jadi…</p>}
+          {file && !edited && fileOk === false && <p className="text-[11px] text-zinc-500">File jadi belum tersedia — bikin langsung di browser lewat tombol di bawah.</p>}
+          {ready && edited && render.s === "idle" && (
             <p className="text-[11px] text-amber-400">Teks sudah diubah — klik tombol di bawah buat bikin video versi baru.</p>
           )}
           {render.s === "rendering" ? (
@@ -205,8 +234,8 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
               </div>
             </>
           ) : (
-            <button type="button" className={comp.file && !edited ? "btn-ghost w-full" : "btn-primary w-full"} onClick={start}>
-              🎬 {comp.file && !edited ? "Bikin ulang di browser" : `Bikin file video (${secs} detik)`}
+            <button type="button" className={ready && !edited ? "btn-ghost w-full" : "btn-primary w-full"} onClick={start}>
+              🎬 {ready && !edited ? "Bikin ulang di browser" : `Bikin file video (${secs} detik)`}
             </button>
           )}
           {render.s === "done" && (
@@ -230,7 +259,7 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
           )}
           {render.s === "error" && <p className="text-xs text-red-400">Gagal bikin video: {render.msg}</p>}
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop). Belum ada suara — tambahin musik / voice over di CapCut biar makin UGC.
+            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop), tanpa suara. {comp.note}
           </p>
         </div>
       </div>
