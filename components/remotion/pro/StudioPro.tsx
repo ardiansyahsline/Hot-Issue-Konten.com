@@ -8,6 +8,7 @@ import { musicBeats } from "@/components/remotion/studio/audio";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { teaserTimelineRaw } from "@/lib/studio/teaser";
+import { keepTeaserVisual } from "./teaserLock";
 import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, snapScenesToBeats, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
@@ -210,6 +211,9 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     },
     [queueSave],
   );
+
+  /** perubahan dari editor rencana & timeline: visual + durasi adegan premium teaser dikunci (VO panjang tetap lewat `change`) */
+  const changeEdit = useCallback((next: Timeline) => change(keepTeaserVisual(tlRef.current, next)), [change]);
 
   // musik upload / katalog tanpa ketukan -> dideteksi di laptop, hasilnya masuk lewat change
   const beatHint = useBeats(timeline, projectId, tlRef, change);
@@ -440,7 +444,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
             {opening ? (
               <div className="card h-64 animate-pulse" />
             ) : timeline ? (
-              <PlanCard timeline={timeline} onChange={change} catalog={catalog} selected={selected} onSelect={selectScene} beatHint={beatHint} />
+              <PlanCard timeline={timeline} onChange={changeEdit} catalog={catalog} selected={selected} onSelect={selectScene} beatHint={beatHint} />
             ) : (
               <div className="rounded-2xl border border-dashed border-zinc-800 p-5 text-center text-[13px] text-zinc-500">📋 Rencana video (naskah, adegan, musik & SFX) muncul di sini setelah ngobrol sama Harley.</div>
             )}
@@ -449,7 +453,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
         <div className="contents lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100dvh-6rem)] lg:min-w-0 lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pb-1">
           <div className="order-2 min-w-0 space-y-4">
-            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={change} opening={opening} beatHint={beatHint} />
+            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={changeEdit} opening={opening} beatHint={beatHint} />
           </div>
           {timeline && (
             <div className="order-4 min-w-0 space-y-4">

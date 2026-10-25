@@ -35,7 +35,7 @@ export type ScenePatch = Partial<Scene> | ((s: Scene) => Partial<Scene>);
 
 /** perkiraan lama bicara (detik) dari jumlah kata */
 const speakSec = (text: string) => wordCount(text) * 0.34;
-const MAX_SFX = 6;
+const MAX_SFX = 8; // sama dengan batas normalizeTimeline (lib/studio/timeline.ts)
 
 // satu SFX diputar dalam satu waktu (tombol ▶ di daftar SFX)
 let playing: HTMLAudioElement | null = null;

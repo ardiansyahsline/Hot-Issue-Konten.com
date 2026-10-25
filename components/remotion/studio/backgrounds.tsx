@@ -6,10 +6,11 @@
  */
 import { Video } from "@remotion/media";
 import type { CSSProperties, ReactNode } from "react";
-import { AbsoluteFill, Img, random, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Img, random, useCurrentFrame, useRemotionEnvironment, useVideoConfig } from "remotion";
 import type { Background, Brand } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 import { blurCss, Glow, Scrim, useSvgId } from "./fx";
+import { useImgFallback, useMediaProbe } from "./safeImg";
 import { mix, rgba, useSrc } from "./theme";
 
 const VIDEO_EXT = new Set(["mp4", "webm", "mov", "m4v", "mkv", "ogv"]);
@@ -22,11 +23,32 @@ export function isVideoSrc(src: string | null | undefined): boolean {
   return VIDEO_EXT.has(ext);
 }
 
-/** foto / video yang menutupi kotak induk (video selalu tanpa suara: suara diatur lewat mix Studio) */
+/**
+ * foto / video yang menutupi kotak induk (video selalu tanpa suara: suara diatur lewat mix Studio).
+ * File gagal dimuat (upload sudah dihapus, 404) → bidang gelap, render tidak batal (pola sama dengan MediaScreen di screens/content).
+ */
 export function MediaFill({ src, fit = "cover", style }: { src: string; fit?: "cover" | "contain"; style?: CSSProperties }) {
   const res = useSrc();
+  const { isRendering } = useRemotionEnvironment();
+  const [ok, onError] = useImgFallback(res(src));
+  const vid = !!ok && isVideoSrc(src);
+  const probed = useMediaProbe(vid && isRendering ? ok : null, onError);
   const css: CSSProperties = { width: "100%", height: "100%", objectFit: fit, display: "block", ...style };
-  return isVideoSrc(src) ? <Video src={res(src)} muted loop objectFit={fit} style={css} /> : <Img src={res(src)} style={css} />;
+  if (!ok) return <div style={{ ...css, background: "linear-gradient(160deg, #18181b 0%, #09090b 100%)" }} />;
+  if (!vid) return <Img src={ok} onError={onError} style={css} />;
+  return probed ? (
+    <Video
+      src={ok}
+      muted
+      loop
+      objectFit={fit}
+      style={css}
+      onError={() => {
+        onError();
+        return "fallback";
+      }}
+    />
+  ) : null;
 }
 
 const palette = (bg: Background, brand: Brand) => {

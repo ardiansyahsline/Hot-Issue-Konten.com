@@ -12,32 +12,38 @@ import { AbsoluteFill, random } from "remotion";
 import { sceneStartSecs, type TeaserShot } from "@/lib/studio/timeline";
 import { SceneBg } from "../../backgrounds";
 import { blurCss } from "../../fx";
-import { useScene, useStudio } from "../../theme";
+import { useScene, useStudio, type Box } from "../../theme";
 import { BEAT, Cam, Caption, clamp01, EASE, Flash, rgba, springAt, Sweep, useShot, type CamKey } from "../kit";
 import { GlitchBands, MontageDepth, SceneFreeze, StudioUi, UI, UI_W } from "./montage-parts";
 
 type Enter = "drop" | "whip" | "shake" | "spin" | "glitch";
 /**
  * potongan montage: `from` = detik mulai di adegan ini (titik pukulan SFX), `at` = detik momen terbaik di adegan sumber,
- * `z/x/y` = bidikan close-up (zoom, geser px), `drift` = gerak lambat (frame sumber per frame montage).
+ * `drift` = gerak lambat (frame sumber per frame montage). Bidikan close-up (punch-in): elemen hero di (`hx`,`hy`) — px kanvas
+ * adegan sumber dengan kotak aman tanpa subtitle (B0) — diperbesar `z` kali dan diletakkan di tengah kotak aman, tinggi `ty`
+ * (0 = atas kotak, 1 = bawah). Zoom juga mendorong judul adegan sumber keluar bingkai (1 pesan per layar); judul yang masih
+ * tersisa dipotong dengan jendela `win` = [atas, bawah] (pecahan kotak aman, koordinat layar), tepinya dilembutkan letterbox.
  */
-type Cut = { shot: TeaserShot; from: number; at: number; enter: Enter; z: number; x: number; y: number; drift: number };
+type Cut = { shot: TeaserShot; from: number; at: number; enter: Enter; z: number; hx: number; hy: number; ty: number; drift: number; win?: [number, number] };
+
+/** kotak aman 9:16 tanpa ruang subtitle (FORMATS["9:16"].safe) — acuan koordinat hero */
+const B0 = { x: 64, y: 210, w: 866, h: 1310 };
 
 const CUTS: Cut[] = [
-  // 0,0 bass-drop-jumpstart → HOT naik ke #1 (dashboard)
-  { shot: "dashboard", from: 0, at: 3.5, enter: "drop", z: 1.0, x: 0, y: 0, drift: 0.6 },
-  // 0,3 (setengah ketukan) → status Disetujui (video review)
-  { shot: "videoReview", from: BEAT * 0.5, at: 3.62, enter: "whip", z: 1.0, x: 0, y: 0, drift: 0.5 },
-  // 0,6 transisi-shaker-snap → reaksi chat tim
-  { shot: "chat", from: BEAT, at: 4.45, enter: "shake", z: 1.0, x: 0, y: 0, drift: 0.8 },
-  // 1,2 transisi-snap-spin → AI: chart BTC / analisa
-  { shot: "ai", from: BEAT * 2, at: 10.5, enter: "spin", z: 1.0, x: 0, y: 0, drift: 0.5 },
-  // 1,8 transisi-shaker-snap → TWS: angka 3D slam
-  { shot: "tws", from: BEAT * 3, at: 1.7, enter: "shake", z: 1.0, x: 0, y: 0, drift: 0.5 },
-  // 2,1 (setengah ketukan) → Train AI: tipe muncul
-  { shot: "trainAi", from: BEAT * 3.5, at: 3.4, enter: "whip", z: 1.0, x: 0, y: 0, drift: 0.5 },
-  // 2,4 glitch-tinggi → musik + laporan/PPT
-  { shot: "musicReport", from: BEAT * 4, at: 1.5, enter: "glitch", z: 1.0, x: 0, y: 0, drift: 0.5 },
+  // 0,0 bass-drop-jumpstart → kartu #1 🔥 HOT "Video ditolak padahal sesuai brief" (dashboard)
+  { shot: "dashboard", from: 0, at: 3.5, enter: "drop", z: 1.3, hx: 436, hy: 1000, ty: 0.47, drift: 0.6, win: [0.13, 9] },
+  // 0,3 (setengah ketukan) → pill "Disetujui" + centang hijau (video review), dropdown sudah tertutup
+  { shot: "videoReview", from: BEAT * 0.5, at: 3.8, enter: "whip", z: 1.25, hx: 600, hy: 666, ty: 0.54, drift: 0.3, win: [-9, 1.03] },
+  // 0,6 transisi-shaker-snap → lampiran screenshot clipper (identitas diburamkan) di chat tim
+  { shot: "chat", from: BEAT, at: 5.5, enter: "shake", z: 1.2, hx: 500, hy: 850, ty: 0.52, drift: 0.4 },
+  // 1,2 transisi-snap-spin → AI: chart BTC/USDT 4H dengan Resistance / Support
+  { shot: "ai", from: BEAT * 2, at: 11.0, enter: "spin", z: 1.25, hx: 565, hy: 890, ty: 0.5, drift: 0.4 },
+  // 1,8 transisi-shaker-snap → TWS: angka 3D "-11,57%"
+  { shot: "tws", from: BEAT * 3, at: 1.7, enter: "shake", z: 1.4, hx: 500, hy: 770, ty: 0.47, drift: 0.4, win: [0.14, 9] },
+  // 2,1 (setengah ketukan) → Train AI: huruf E N F P + "ENFP · Si Penyemangat" (sebelum rack focus)
+  { shot: "trainAi", from: BEAT * 3.5, at: 3.0, enter: "whip", z: 1.3, hx: 500, hy: 930, ty: 0.5, drift: 0.3 },
+  // 2,4 glitch-tinggi → Musik: baris "Fokus kerja ▶ diputar"
+  { shot: "musicReport", from: BEAT * 4, at: 1.5, enter: "glitch", z: 1.45, hx: 560, hy: 930, ty: 0.49, drift: 0.3 },
 ];
 /** 3,0 transisi-snap-spin → Studio */
 const STUDIO_AT = BEAT * 5;
@@ -93,25 +99,42 @@ function exitFx(next: Enter, left: number, W: number): Partial<Fx> {
   }
 }
 
-/** satu potongan montage dengan transformasinya */
-function CutLayer({ cut, lf, fx, W }: { cut: Cut; lf: number; fx: Fx; W: number }) {
+/** satu potongan montage dengan transformasinya: titik hero jadi pusat zoom (efek masuk/keluar ikut berpusat di hero) */
+function CutLayer({ cut, lf, fx, box, W, H }: { cut: Cut; lf: number; fx: Fx; box: Box; W: number; H: number }) {
   const push = 1 + 0.035 * clamp01(lf / 18);
   const s = cut.z * push * fx.s;
-  return (
+  // hero dipetakan ke kotak aman sekarang (kotak lebih pendek kalau ada subtitle)
+  const hx = box.x + (cut.hx - B0.x) * (box.w / B0.w);
+  const hy = box.y + (cut.hy - B0.y) * (box.h / B0.h);
+  const tx = box.x + box.w / 2;
+  const ty = box.y + box.h * cut.ty;
+  const layer = (
     <AbsoluteFill
       style={{
-        transform: `translate(${(cut.x + fx.x).toFixed(1)}px, ${(cut.y + fx.y).toFixed(1)}px) scale(${s.toFixed(4)}) rotate(${fx.r.toFixed(2)}deg)`,
+        transformOrigin: `${hx.toFixed(1)}px ${hy.toFixed(1)}px`,
+        transform: `translate(${(tx - hx + fx.x).toFixed(1)}px, ${(ty - hy + fx.y).toFixed(1)}px) scale(${s.toFixed(4)}) rotate(${fx.r.toFixed(2)}deg)`,
         filter: blurCss(fx.blur),
         opacity: fx.op,
       }}
     >
-      <SceneFreeze shot={cut.shot} at={cut.at} drift={lf * cut.drift} />
+      <SceneFreeze shot={cut.shot} at={cut.at} drift={lf * cut.drift} noText />
     </AbsoluteFill>
+  );
+  if (!cut.win) return layer;
+  // jendela: hanya bagian layar [atas, bawah] yang tampil (overflow, aman untuk render browser)
+  const top = Math.max(0, box.y + box.h * cut.win[0]);
+  const bottom = Math.min(H, box.y + box.h * cut.win[1]);
+  return (
+    <div style={{ position: "absolute", left: 0, top, width: W, height: Math.max(0, bottom - top), overflow: "hidden" }}>
+      <div style={{ position: "absolute", left: 0, top: -top, width: W, height: H }}>{layer}</div>
+    </div>
   );
 }
 
 /** potongan-potongan cepat (dipakai juga di dalam preview Studio, kedalaman 1) */
 function Cuts({ f, fps, W, H }: { f: number; fps: number; W: number; H: number }) {
+  const { box } = useScene();
+  const { brand } = useStudio();
   const S = CUTS.map((c) => Math.round(c.from * fps));
   const end = Math.round(STUDIO_AT * fps);
   let ci = -1;
@@ -128,9 +151,12 @@ function Cuts({ f, fps, W, H }: { f: number; fps: number; W: number; H: number }
   const glitch = cut.enter === "glitch" ? Math.max(0, 1 - lf / 7) : 0;
   return (
     <AbsoluteFill>
-      {prev && prevFx && <CutLayer cut={prev} lf={S[ci] - S[ci - 1] + lf} fx={prevFx} W={W} />}
-      <CutLayer cut={cut} lf={lf} fx={fx} W={W} />
-      {glitch > 0 && <GlitchBands amt={glitch} seed={`g${lf}`} W={W} H={H} render={() => <CutLayer cut={cut} lf={lf} fx={fx} W={W} />} />}
+      {prev && prevFx && <CutLayer cut={prev} lf={S[ci] - S[ci - 1] + lf} fx={prevFx} box={box} W={W} H={H} />}
+      <CutLayer cut={cut} lf={lf} fx={fx} box={box} W={W} H={H} />
+      {glitch > 0 && <GlitchBands amt={glitch} seed={`g${lf}`} W={W} H={H} render={() => <CutLayer cut={cut} lf={lf} fx={fx} box={box} W={W} H={H} />} />}
+      {/* letterbox gelap atas & bawah: sisa judul / UI adegan sumber di tepi bingkai tenggelam, mata ke hero di tengah */}
+      <div style={{ position: "absolute", left: 0, top: 0, width: W, height: box.y + 300, background: `linear-gradient(180deg, ${rgba(brand.bg, 0.97)} 0%, ${rgba(brand.bg, 0.94)} ${(((box.y + 110) / (box.y + 300)) * 100).toFixed(1)}%, ${rgba(brand.bg, 0)} 100%)` }} />
+      <div style={{ position: "absolute", left: 0, top: box.y + box.h * 0.86, width: W, height: H - (box.y + box.h * 0.86), background: `linear-gradient(0deg, ${rgba(brand.bg, 0.95)} 0%, ${rgba(brand.bg, 0.88)} 55%, ${rgba(brand.bg, 0)} 100%)` }} />
     </AbsoluteFill>
   );
 }
@@ -156,49 +182,61 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
 
   const pc = { x: wx(UI.player.x + UI.player.w / 2), y: wy(UI.player.y + UI.player.h / 2) };
   const btn = { x: wx(UI.button.x + UI.button.w / 2), y: wy(UI.button.y + UI.button.h / 2) };
+  // titik ketuk: kanan teks tombol (teks "⬇️ Download MP4 (…)" tetap terbaca saat diketuk)
+  const tap = { x: btn.x + UI.button.w * k * 0.37, y: btn.y };
   const A = STUDIO_AT;
   const close = camOn(pc.x, pc.y, 2.0, W / 2, 880, W, H);
   const settle = camOn(pc.x, pc.y, 1.86, W / 2, 900, W, H);
   // bidikan lebar: tab Studio sampai Preview, tepat di bawah teks
-  const wide = camOn(W / 2, Y0, 0.94, W / 2, box.y + 182, W, H);
-  // bidikan akhir: baris timeline (blok adegan) sampai tombol download, di atas 12% bawah kotak aman (ruang subtitle)
-  const top = wy(UI.y.tl - 6);
+  const wide = camOn(W / 2, Y0, 0.88, W / 2, box.y + 236, W, H);
+  // bidikan akhir (close-up): penggaris timeline + blok adegan "10. Montage + Studio" sampai tombol download, mengisi kotak aman
+  // di bawah teks. Subtitle sudah dipotong dari kotak oleh StudioVideo (subs) → cukup sisakan 5% bawah. Sisi kiri/kanan boleh terpotong sedikit.
+  const top = wy(UI.scenesRow - UI.rows.ruler - 4);
   const bot = wy(UI.y.end);
-  const T0 = box.y + 180;
-  const T1 = box.y + box.h * 0.88;
-  const zEnd = Math.max(0.78, Math.min(1.08, (T1 - T0) / (bot - top)));
-  const fin = (z: number) => camOn(W / 2, (top + bot) / 2, z, W / 2, (T0 + T1) / 2, W, H);
+  const T0 = box.y + 232;
+  const T1 = box.y + box.h * 0.95;
+  const zEnd = Math.max(0.8, Math.min(1.32, (T1 - T0) / (bot - top)));
+  const midW = (top + bot) / 2;
+  const midS = (T0 + T1) / 2;
+  const fin = camOn(wx(UI_W / 2), midW, zEnd, W / 2, midS, W, H);
+  // dorongan akhir kecil (×1,06) berpusat di tombol / progress: tombol diam di layar, sekitarnya membesar
+  const btnS = { x: W / 2 + (btn.x - wx(UI_W / 2)) * zEnd, y: midS + (btn.y - midW) * zEnd };
+  const push = camOn(btn.x, btn.y, zEnd * 1.06, btnS.x, btnS.y, W, H);
+  const tapAt = A + BEAT * 2; // 4,2 dtk tepat di ketukan (frame 126 adegan)
   const keys: CamKey[] = [
     { t: A, ...close, r: -18 },
     { t: A + 0.2, ...settle, r: 0, ease: EASE.out },
-    { t: A + 0.62, ...wide, ease: EASE.inOut },
-    { t: A + 0.86, ...wide },
-    { t: A + 1.14, ...fin(zEnd * 0.97), ease: EASE.inOut },
-    { t: A + 2.3, ...fin(zEnd), ease: EASE.out },
+    { t: A + 0.6, ...wide, ease: EASE.inOut },
+    { t: A + 0.86, ...wide, z: wide.z * 1.012 },
+    // pan ke timeline + download, mendarat tepat saat tombol diketuk
+    { t: tapAt, ...fin, ease: EASE.inOut },
+    { t: A + 1.75, ...push, ease: EASE.inOut },
   ];
 
-
-  const tapAt = A + 1.22; // 4,2 dtk (ketukan)
-  const press = s < tapAt - 0.05 ? 1 : 1 - 0.05 * Math.max(0, 1 - Math.abs(s - tapAt) / 0.12);
-  const progress = s < tapAt + 0.16 ? 0 : clamp01((s - tapAt - 0.16) / 1.6) * 0.82 + 0.06;
-  const sheen = clamp01((s - (A + 1.0)) / 0.5);
-  const ripple = clamp01((s - tapAt) / 0.4);
+  const press = 1 - 0.05 * Math.max(0, 1 - Math.abs(s - tapAt) / 0.1);
+  const progress = s < tapAt + 0.13 ? 0 : clamp01((s - tapAt - 0.13) / 1.6) * 0.82 + 0.06;
+  const sheen = clamp01((s - (A + 0.95)) / 0.45);
+  const barSheen = clamp01((s - (A + 1.45)) / 0.4);
+  const ripple = clamp01((s - tapAt) / 0.32);
+  // jari: turun ke tombol (0,25 dtk), tekan tepat di ketukan, lalu terangkat menjauh sebelum progress muncul (tidak menutupi teks)
+  const finger = s >= tapAt - 0.25 && s < tapAt + 0.2;
+  const fIn = clamp01((tapAt - s) / 0.25) + clamp01((s - tapAt - 0.06) / 0.14) * 0.8;
   return (
     <AbsoluteFill>
       <Cam keys={keys}>
         <div style={{ position: "absolute", left: X0, top: Y0, width: UI_W, height: UI.y.end, transform: `scale(${k.toFixed(4)})`, transformOrigin: "0 0" }}>
-          <StudioUi head={head} press={press} progress={progress} sheen={sheen} dim={clamp01((s - A - 0.86) / 0.3)} player={<Replay frame={replayF} W={W} H={H} />} />
+          <StudioUi head={head} press={press} progress={progress} sheen={sheen} barSheen={barSheen} dim={clamp01((s - A - 0.86) / 0.3)} player={<Replay frame={replayF} W={W} H={H} />} />
         </div>
-        {/* jari mengetuk Download MP4 */}
+        {/* jari mengetuk Download MP4 (kanan teks tombol) + riak di titik yang sama */}
         {ripple > 0 && ripple < 1 && (
-          <div style={{ position: "absolute", left: btn.x - 70, top: btn.y - 70, width: 140, height: 140, borderRadius: 999, border: `5px solid ${rgba("#ffffff", 0.85 * (1 - ripple))}`, transform: `scale(${(0.35 + ripple * 1.1).toFixed(3)})` }} />
+          <div style={{ position: "absolute", left: tap.x - 50, top: tap.y - 50, width: 100, height: 100, borderRadius: 999, border: `4px solid ${rgba("#ffffff", 0.85 * (1 - ripple) * (1 - ripple))}`, transform: `scale(${(0.4 + ripple * 0.8).toFixed(3)})` }} />
         )}
-        {s >= tapAt - 0.25 && s < tapAt + 0.35 && (
-          <div style={{ position: "absolute", left: btn.x - 34 + 40 * clamp01((tapAt - s) / 0.25), top: btn.y - 34 + 60 * clamp01((tapAt - s) / 0.25), width: 68, height: 68, borderRadius: 999, background: "rgba(255,255,255,0.9)", boxShadow: "0 10px 30px rgba(0,0,0,0.45)", opacity: clamp01((s - (tapAt - 0.25)) / 0.1) * clamp01((tapAt + 0.35 - s) / 0.12), transform: `scale(${s > tapAt - 0.03 && s < tapAt + 0.1 ? 0.86 : 1})` }} />
+        {finger && (
+          <div style={{ position: "absolute", left: tap.x - 26 + 34 * fIn, top: tap.y - 26 + 52 * fIn, width: 52, height: 52, borderRadius: 999, background: "rgba(255,255,255,0.9)", boxShadow: "0 10px 30px rgba(0,0,0,0.45)", opacity: clamp01((s - (tapAt - 0.25)) / 0.1) * clamp01((tapAt + 0.2 - s) / 0.12), transform: `scale(${s > tapAt - 0.03 && s < tapAt + 0.1 ? 0.84 : 1})` }} />
         )}
       </Cam>
       {/* teks layar di atas (latar digelapkan supaya UI yang lewat di bawahnya tidak mengganggu) */}
-      <div style={{ position: "absolute", left: 0, top: 0, width: W, height: box.y + 240, background: `linear-gradient(180deg, ${rgba(brand.bg, 0.97)} 0%, ${rgba(brand.bg, 0.9)} 55%, ${rgba(brand.bg, 0)} 100%)`, opacity: clamp01((s - A - 0.06) / 0.2) }} />
+      <div style={{ position: "absolute", left: 0, top: 0, width: W, height: box.y + 232, background: `linear-gradient(180deg, ${rgba(brand.bg, 0.97)} 0%, ${rgba(brand.bg, 0.95)} ${(((box.y + 186) / (box.y + 232)) * 100).toFixed(1)}%, ${rgba(brand.bg, 0)} 100%)`, opacity: clamp01((s - A - 0.06) / 0.2) }} />
       <Caption lines={[text[0] ?? "Dibikin di sini"]} at={A + 0.22} pos="top" size={112} emphasis={["sini"]} />
       <Sweep at={A + 0.5} len={0.7} alpha={0.16} />
     </AbsoluteFill>

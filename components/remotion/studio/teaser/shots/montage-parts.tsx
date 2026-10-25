@@ -70,14 +70,16 @@ class Guard extends Component<{ children: ReactNode; name: string }, { bad: bool
  * Adegan asli `shot` dibekukan di detik `at` (detik dari awal adegan sumber) + `drift` frame (gerak lambat kecil supaya tetap hidup).
  * Konteks adegan diganti dengan adegan sumber (durasi, teks, indeks); kotak aman = kotak montage (semua adegan teaser sama).
  */
-export function SceneFreeze({ shot, at, drift = 0 }: { shot: TeaserShot; at: number; drift?: number }) {
+export function SceneFreeze({ shot, at, drift = 0, noText = false }: { shot: TeaserShot; at: number; drift?: number; noText?: boolean }) {
   const { tl, fps } = useStudio();
   const here = useScene();
   const found = useMemo(() => findScene(tl, shot), [tl, shot]);
   const value = useMemo<SceneCtxValue>(() => {
     const dur = secToFrames(found.scene.dur, fps);
-    return { scene: found.scene, i: found.i, n: here.n, dur, box: here.box, subs: here.subs, tempo: clamp(dur / (3 * fps), 0.6, 1.4) };
-  }, [found, fps, here.n, here.box, here.subs]);
+    // noText: teks layar adegan sumber dikosongkan (Caption dari scene.text tidak tampil; "" juga mematikan teks cadangan `text[0] ?? …`)
+    const scene = noText ? { ...found.scene, text: [""] } : found.scene;
+    return { scene, i: found.i, n: here.n, dur, box: here.box, subs: here.subs, tempo: clamp(dur / (3 * fps), 0.6, 1.4) };
+  }, [found, fps, here.n, here.box, here.subs, noText]);
   const Shot = SOURCE[shot];
   if (!Shot) return null;
   const frame = Math.round(clamp(at * fps + drift, 0, value.dur - 1));
@@ -131,7 +133,7 @@ export const UI_W = 394;
 export const UI = (() => {
   const gap = 14;
   const tabs = 36;
-  const bar = 58;
+  const bar = 96;
   const prevHead = 40;
   const playerW = 196;
   const playerH = Math.round((playerW * 16) / 9);
@@ -217,7 +219,7 @@ function voBlocks(tl: Timeline): VoBlock[] {
 }
 
 /** isi Studio Pro (kolom HP 394 px CSS). `head` = posisi playhead (detik teaser), `player` = isi pemutar, `press`/`progress` = tombol download */
-export function StudioUi({ head, player, press, progress, sheen, dim = 0 }: { head: number; player: ReactNode; press: number; progress: number; sheen: number; dim?: number }) {
+export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, dim = 0 }: { head: number; player: ReactNode; press: number; progress: number; sheen: number; barSheen?: number; dim?: number }) {
   const { tl, fps } = useStudio();
   const { scene: cur } = useScene();
   const total = totalSec(tl);
@@ -273,15 +275,22 @@ export function StudioUi({ head, player, press, progress, sheen, dim = 0 }: { he
         ))}
       </div>
 
-      {/* ProjectBar */}
-      <div style={cardStyle({ position: "absolute", left: 0, top: UI.y.bar, width: UI_W, height: UI.bar, display: "flex", alignItems: "center", gap: 8, padding: "0 10px" })}>
-        <span style={{ fontSize: 18 }}>📁</span>
-        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: Z[100], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{tl.title || "Teaser CS Tracker"}</div>
-          <div style={{ fontSize: 11.5, color: Z[500], whiteSpace: "nowrap" }}>Diubah baru saja · 3 proyek</div>
+      {/* ProjectBar (tata letak HP: judul proyek, lalu tombol-tombol — termasuk 🎞️ Buka Teaser CS Tracker yang membuat proyek ini) */}
+      <div style={cardStyle({ position: "absolute", left: 0, top: UI.y.bar, width: UI_W, height: UI.bar, padding: "10px 10px" })}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, height: 36, padding: "0 4px" }}>
+          <span style={{ fontSize: 18 }}>📁</span>
+          <div style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: Z[100], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{tl.title || "Teaser CS Tracker"}</div>
+            <div style={{ fontSize: 11.5, color: Z[500], whiteSpace: "nowrap" }}>Diubah baru saja · 3 proyek</div>
+          </div>
+          <span style={{ fontSize: 11, color: Z[500] }}>▾</span>
         </div>
-        <span style={{ fontSize: 11.5, color: "#34d399", whiteSpace: "nowrap" }}>✓ Tersimpan</span>
-        <span style={ghostBtn({ padding: "6px 10px" })}>✏️</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, height: 30, overflow: "hidden" }}>
+          <span style={ghostBtn({ height: 30, padding: "0 10px" })}>✏️</span>
+          <span style={ghostBtn({ height: 30, padding: "0 10px" })}>＋ Proyek baru</span>
+          <span style={ghostBtn({ height: 30, padding: "0 10px", borderColor: "rgba(249,115,22,0.45)", color: "#fed7aa" })}>🎞️ Buka Teaser CS Tracker</span>
+          <span style={ghostBtn({ height: 30, padding: "0 9px", flex: "none" })}>🗑</span>
+        </div>
       </div>
 
       {/* PreviewPane */}
@@ -446,7 +455,12 @@ export function StudioUi({ head, player, press, progress, sheen, dim = 0 }: { he
           ) : (
             <div>
               <div style={{ height: 10, borderRadius: 999, overflow: "hidden", background: Z[800] }}>
-                <div style={{ width: `${Math.round(progress * 100)}%`, height: "100%", borderRadius: 999, background: "#f97316", boxShadow: "0 0 12px rgba(249,115,22,0.8)" }} />
+                <div style={{ position: "relative", width: `${Math.round(progress * 100)}%`, height: "100%", borderRadius: 999, overflow: "hidden", background: "#f97316", boxShadow: "0 0 12px rgba(249,115,22,0.8)" }}>
+                  {/* kilau lewat di bar progress (detik 4,45–4,85) */}
+                  {barSheen > 0 && barSheen < 1 && (
+                    <div style={{ position: "absolute", inset: 0, background: `linear-gradient(100deg, rgba(255,255,255,0) ${barSheen * 220 - 60}%, rgba(255,255,255,0.75) ${barSheen * 220 - 35}%, rgba(255,255,255,0) ${barSheen * 220 - 10}%)` }} />
+                  )}
+                </div>
               </div>
               <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", fontSize: 12, color: Z[400] }}>
                 <span>Bikin video… {Math.round(progress * 100)}% — jangan tutup tab ini</span>

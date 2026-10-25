@@ -18,6 +18,8 @@ const nextConfig = {
     "/api/studio/catalog": ["./assets/audio/**/*"],
     // daftar musik di assets/audio/music ikut dibaca AI Sutradara
     "/api/studio/chat": ["./assets/audio/music/**/*"],
+    // MP4 teaser internal (bukan public/) disajikan lewat route terlindungi — path dinamis tidak terlacak otomatis
+    "/api/studio/video/**": ["./assets/videos/**/*.mp4"],
   },
   // pptxgenjs (bikin PowerPoint di browser) menyebut modul Node "node:fs"/"node:https" yang tidak dipakai di browser
   webpack(config, { isServer, webpack }) {

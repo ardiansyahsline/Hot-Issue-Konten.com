@@ -51,7 +51,7 @@ export const COMPOSITIONS: Comp[] = [
     defaultProps: TEASER_DEFAULTS,
     file: (p) => (p.vo === false ? TEASER_FILES.novo : TEASER_FILES.vo),
     note: "Mau suara VO sendiri? Buka Studio Pro → 🎞️ Buka Teaser CS Tracker → Bikin suara VO, lalu Download (Dengan VO / Tanpa VO).",
-    fields: [{ key: "vo", label: "Pakai VO", type: "toggle", variant: true, hint: "Matikan buat versi musik + SFX + teks (tanpa subtitle VO)." }],
+    fields: [{ key: "vo", label: "Pakai VO", type: "toggle", variant: true, hint: "Pilih file jadi: dengan VO / tanpa VO. Preview & render di browser selalu tanpa suara VO." }],
   },
   {
     id: "ugc-fitur-cs-tracker",

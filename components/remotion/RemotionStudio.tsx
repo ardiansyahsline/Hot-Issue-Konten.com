@@ -32,8 +32,9 @@ function useFileExists(url: string | undefined): boolean | undefined {
   useEffect(() => {
     if (!url || url in known) return;
     let live = true;
-    fetch(url, { method: "HEAD", cache: "no-store" })
-      .then((r) => live && setKnown((k) => ({ ...k, [url]: r.ok })))
+    // redirect manual: sesi habis -> middleware 307 ke /login (200 HTML) tidak boleh dianggap "file ada"
+    fetch(url, { method: "HEAD", cache: "no-store", redirect: "manual" })
+      .then((r) => live && setKnown((k) => ({ ...k, [url]: r.status === 200 && (r.headers.get("content-type") ?? "").startsWith("video/") })))
       .catch(() => live && setKnown((k) => ({ ...k, [url]: false })));
     return () => {
       live = false;
