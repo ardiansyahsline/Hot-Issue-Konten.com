@@ -227,15 +227,17 @@ export default function CharacterWizard({
   const buildSummary = (): Summary => {
     const r = role;
     const larangan = r?.questions.filter((q) => q.topic === "larangan").flatMap((q) => training.picks[q.id] ?? []) ?? [];
+    // tanpa peran: pakai isi "tanpa peran" terakhir (bukan sisa peran yang baru dilepas lewat "ubah nama & tampilan saja")
+    const keep = (!r && genRef.current?.roleId ? sumCache.current[""]?.s : undefined) ?? sum;
     return {
       label: typeInfo(type).label,
       // belum pilih peran (edit cepat karakter lama) -> peran, larangan & SOP lama dipertahankan
-      role: r ? `${r.name} — ${r.mission}` : sum?.role || "Asisten serba bisa",
+      role: r ? `${r.name} — ${r.mission}` : keep?.role || "Asisten serba bisa",
       // karakter lama tanpa latih ulang: gaya dibuat dengan rumus lamanya (energi, saat user panik, panjang jawaban tetap ada)
       style: r || v2 || !initial ? `Panggil user: ${call}; ${emoji}` : summarize(nm || initial.name, v1Answers(), type).style,
       catchphrase: sum?.catchphrase ?? "",
-      rules: r ? larangan : (sum?.rules ?? []),
-      sop: r ? compileSop(r, training) : (sum?.sop ?? ""),
+      rules: r ? larangan : (keep?.rules ?? []),
+      sop: r ? compileSop(r, training) : (keep?.sop ?? ""),
     };
   };
   // patokan "versi otomatis" (kolom yang beda dari patokan = diedit manual): karakter Train your AI = ringkasan otomatis yang
