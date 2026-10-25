@@ -98,6 +98,25 @@ function Ripple({ f, fps, hit, x, y, color = OR }: { f: number; fps: number; hit
   return <span style={{ position: "absolute", left: x - r, top: y - r, width: r * 2, height: r * 2, borderRadius: 999, background: rgba(color, 0.3 * (1 - k)), pointerEvents: "none" }} />;
 }
 
+/** bintang kecil memancar dari titik ketuk (Sparkles screens/ui versi detik) */
+function Burst({ f, fps, at, x, y, n = 8, r = 46, color = "#fde68a" }: { f: number; fps: number; at: number; x: number; y: number; n?: number; r?: number; color?: string }) {
+  const k = (f - Math.round(at * fps)) / (0.55 * fps);
+  if (k < 0 || k > 1) return null;
+  const e = EASE.out(k);
+  return (
+    <svg width={2} height={2} style={{ position: "absolute", left: x, top: y, overflow: "visible", pointerEvents: "none", zIndex: 19 }} aria-hidden>
+      {Array.from({ length: n }, (_, i) => {
+        const a = (i / n) * Math.PI * 2 + 0.35;
+        const d = r * (0.35 + 0.9 * e) * (i % 2 ? 0.8 : 1);
+        const sz = (3.4 + (i % 3)) * (1 - k * 0.8);
+        const cx = Math.cos(a) * d;
+        const cy = Math.sin(a) * d;
+        return <path key={i} d={`M${cx} ${cy - sz * 2}L${cx + sz * 0.5} ${cy - sz * 0.5}L${cx + sz * 2} ${cy}L${cx + sz * 0.5} ${cy + sz * 0.5}L${cx} ${cy + sz * 2}L${cx - sz * 0.5} ${cy + sz * 0.5}L${cx - sz * 2} ${cy}L${cx - sz * 0.5} ${cy - sz * 0.5}Z`} fill={i % 2 ? color : "#ffffff"} opacity={(1 - k).toFixed(3)} />;
+      })}
+    </svg>
+  );
+}
+
 /** pantulan kecil saat dipilih: tekan (antisipasi) → melonjak → tenang */
 const bump = (f: number, fps: number, hit: number) => {
   const k = (f - Math.round(hit * fps)) / fps;
@@ -263,7 +282,6 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
-                overflow: "hidden",
                 borderRadius: 12,
                 border: `1px solid ${on ? OR : Z[800]}`,
                 background: on ? rgba(OR, 0.1) : "transparent",
@@ -277,7 +295,12 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
                 boxShadow: on ? `0 0 0 1px ${rgba(OR, 0.35)}, 0 10px 26px -12px ${rgba(OR, 0.75)}` : undefined,
               }}
             >
-              {isPick && <Ripple f={f} fps={fps} hit={hit} x={250} y={26} />}
+              {isPick && (
+                <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
+                  <Ripple f={f} fps={fps} hit={hit} x={312} y={28} />
+                  {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.22} radius={12} />}
+                </span>
+              )}
               <span
                 style={{
                   position: "relative",
@@ -299,8 +322,7 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
                 {String.fromCharCode(65 + i)}
               </span>
               <span style={{ position: "relative", minWidth: 0 }}>{o.label}</span>
-              {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.22} radius={12} />}
-              {isPick && <TapFx f={f} fps={fps} hit={hit} x={250} y={26} />}
+              {isPick && <TapFx f={f} fps={fps} hit={hit} x={312} y={28} />}
             </div>
           );
         })}
@@ -527,7 +549,6 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
               style={{
                 position: "relative",
                 minWidth: 0,
-                overflow: "hidden",
                 borderRadius: 12,
                 border: `1px solid ${on ? OR : Z[800]}`,
                 background: on ? rgba(OR, 0.1) : "transparent",
@@ -540,7 +561,12 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                 zIndex: isPick ? 2 : 1,
               }}
             >
-              {isPick && <Ripple f={f} fps={fps} hit={hit} x={110} y={44} />}
+              {isPick && (
+                <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
+                  <Ripple f={f} fps={fps} hit={hit} x={142} y={24} />
+                  {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.3} radius={12} />}
+                </span>
+              )}
               <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 18, lineHeight: 1.4 }}>{r.icon}</span>
                 <b style={{ minWidth: 0, fontSize: 13, lineHeight: 1.25, fontWeight: 700, color: on ? "#ffffff" : Z[100] }}>{r.name}</b>
@@ -551,8 +577,8 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                   ✓ cocok dengan tipe {T_TYPE}
                 </div>
               )}
-              {shine > 0 && shine < 1 && <Shine p={shine} alpha={0.3} radius={12} />}
-              {isPick && <TapFx f={f} fps={fps} hit={hit} x={110} y={44} from={[-40, 80]} />}
+              {isPick && <TapFx f={f} fps={fps} hit={hit} x={142} y={24} from={[-40, 80]} />}
+              {isPick && <Burst f={f} fps={fps} at={hit} x={142} y={24} />}
             </div>
           );
         })}
@@ -608,8 +634,15 @@ export function Confetti({ f, fps, at, ox, oy, n = 78, scale = 1 }: { f: number;
   const ring = clamp01(t / 0.5);
   return (
     <svg width={2} height={2} style={{ position: "absolute", left: ox, top: oy, overflow: "visible", pointerEvents: "none" }} aria-hidden>
-      {ring < 1 && <circle cx={0} cy={0} r={(60 + 520 * EASE.out(ring)) * scale} fill="none" stroke={`rgba(255,255,255,${(0.55 * (1 - ring)).toFixed(3)})`} strokeWidth={(10 * (1 - ring) + 1) * scale} />}
-      {ring < 1 && <circle cx={0} cy={0} r={(40 + 380 * EASE.out(ring)) * scale} fill="none" stroke={rgba(OR, 0.6 * (1 - ring))} strokeWidth={(6 * (1 - ring) + 1) * scale} />}
+      <defs>
+        <radialGradient id="trainBurst" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
+          <stop offset="30%" stopColor="#fde68a" stopOpacity="0.55" />
+          <stop offset="100%" stopColor={OR} stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      {t < 0.35 && <circle cx={0} cy={0} r={(90 + 260 * EASE.out(t / 0.35)) * scale} fill="url(#trainBurst)" opacity={(1 - t / 0.35).toFixed(3)} />}
+      {ring < 1 && <circle cx={0} cy={0} r={(50 + 470 * EASE.out(ring)) * scale} fill="none" stroke={`rgba(255,255,255,${(0.75 * (1 - ring) * (1 - ring)).toFixed(3)})`} strokeWidth={(4 * (1 - ring) + 0.8) * scale} />}
       {bits.map((b, i) => {
         const tt = t - b.delay;
         if (tt < 0) return null;

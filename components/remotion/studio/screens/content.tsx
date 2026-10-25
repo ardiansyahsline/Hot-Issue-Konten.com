@@ -5,6 +5,7 @@ import { Video } from "@remotion/media";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Easing, Img } from "remotion";
 import { storagePathOf } from "@/lib/studio/urls";
+import { useImgFallback } from "../safeImg";
 import { useSrc } from "../theme";
 import {
   Btn,
@@ -781,6 +782,8 @@ export function WebsiteScreen({ e }: { e: Env }) {
   // gambar pratinjau gagal dimuat → contoh website otomatis (tanpa onError, <Img> membatalkan render)
   const [bad, setBad] = useState<string | null>(null);
   const shot = e.src && e.src !== bad ? e.src : null;
+  // logo brand gagal dimuat → ubin inisial + nama brand
+  const [logoSrc, onLogoError] = useImgFallback(brand.logo ? res(brand.logo) : null);
   const bg = brand.bg || "#09090b";
   const dark = lumOf(bg) < 0.55;
   const ink = dark ? brand.text || "#fafafa" : "#0a0a0a";
@@ -808,15 +811,15 @@ export function WebsiteScreen({ e }: { e: Env }) {
   const h1 = wide ? 62 : 36;
   const pad = wide ? 72 : 20;
 
-  const logo = brand.logo ? (
-    <Img src={res(brand.logo)} style={{ height: wide ? 34 : 30, width: "auto", maxWidth: 140, objectFit: "contain" }} />
+  const logo = logoSrc ? (
+    <Img src={logoSrc} onError={onLogoError} style={{ height: wide ? 34 : 30, width: "auto", maxWidth: 140, objectFit: "contain" }} />
   ) : (
     <span style={{ width: wide ? 34 : 30, height: wide ? 34 : 30, borderRadius: 10, background: grad, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: wide ? 17 : 15 }}>{Array.from(brand.name.trim())[0]?.toUpperCase() ?? "B"}</span>
   );
   const nav = (
     <div style={{ position: "absolute", left: 0, right: 0, top, height: navH, display: "flex", alignItems: "center", gap: 14, padding: `0 ${pad}px`, borderBottom: `1px solid ${line}`, background: rgba(bg, 0.92), zIndex: 20 }}>
       {logo}
-      {!brand.logo && <b style={{ fontSize: wide ? 17 : 15.5, fontWeight: 800, color: ink }}>{brand.name}</b>}
+      {!logoSrc && <b style={{ fontSize: wide ? 17 : 15.5, fontWeight: 800, color: ink }}>{brand.name}</b>}
       <span style={{ flex: 1 }} />
       {wide && ["Fitur", "Harga", "Cerita", "Tentang"].map((x) => <span key={x} style={{ fontSize: 14, fontWeight: 550, color: sub }}>{x}</span>)}
       <span style={{ borderRadius: 999, background: grad, color: "#fff", padding: wide ? "8px 16px" : "6px 12px", fontSize: wide ? 13.5 : 12, fontWeight: 700 }}>Coba gratis</span>
@@ -963,17 +966,20 @@ const isVideo = (src: string) => {
 /** foto / klip dari user memenuhi layar (cover) dengan zoom pelan; kosong → bidang warna brand. title = keterangan di bawah */
 export function MediaScreen({ e }: { e: Env }) {
   const { t, brand } = e;
+  // foto gagal dimuat (404 dll.) → bidang warna brand (tanpa onError, <Img> membatalkan render).
+  // Klip: render di laptop jatuh ke OffthreadVideo saat gagal → onError-nya juga ke cadangan (render di browser tetap gagal: batasan @remotion/media)
+  const [src, onMediaError] = useImgFallback(e.src);
   const z = 1 + 0.08 * clamp01(t.f / Math.max(1, t.d));
   const fit: CSSProperties = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
   const cap = e.title && pop(t, en(t, 10), { damping: 16 });
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden", background: "#000", fontFamily: fontOf(brand) }}>
       <div style={{ position: "absolute", inset: 0, transform: `scale(${z})` }}>
-        {e.src ? (
-          isVideo(e.src) ? (
-            <Video src={e.src} muted loop objectFit="cover" style={fit} />
+        {src ? (
+          isVideo(src) ? (
+            <Video src={src} muted loop objectFit="cover" style={fit} fallbackOffthreadVideoProps={{ onError: onMediaError }} />
           ) : (
-            <Img src={e.src} style={fit} />
+            <Img src={src} onError={onMediaError} style={fit} />
           )
         ) : (
           <div style={{ position: "absolute", inset: 0, background: `linear-gradient(160deg, ${mixHex(brand.primary, "#000000", 0.25)} 0%, ${mixHex(brand.bg || "#09090b", "#000000", 0.2)} 70%)`, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>

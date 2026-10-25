@@ -484,11 +484,14 @@ export type DirectorParsed = {
   broken: string | null;
 };
 
-/** pisahkan jawaban AI: prosa, kartu pertanyaan, dan timeline */
-export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {}): DirectorParsed {
-  const src = String(text ?? "");
+/** letak rencana yang dipakai di jawaban AI: [start, end) di teks asli, isi JSON-nya, dan apakah sudah di pagar ```studio yang tertutup */
+type PlanSpan = { start: number; end: number; body: string; studio: boolean };
+
+/** cari rencana di jawaban AI (logika tunggal untuk parseDirector & withStudioFence) */
+function locatePlan(src: string): { raw: Record<string, unknown> | null; broken: string | null; partial: boolean; prose: string; span: PlanSpan | null } {
   let raw: Record<string, unknown> | null = null;
   let broken: string | null = null;
+  let span: PlanSpan | null = null;
   // blok rencana: ```studio (utama), ```timeline / ```json yang berisi scenes. Yang terakhir valid dipakai.
   for (const m of src.matchAll(HIDDEN_ALL)) {
     const label = m[1].toLowerCase();
@@ -497,6 +500,8 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     if (parsed) {
       raw = parsed;
       broken = null;
+      const at = m.index ?? 0;
+      span = { start: at, end: at + m[0].length, body: m[2], studio: label === "studio" };
     } else if (label !== "json" || /"scenes"/.test(m[2])) broken = m[2];
   }
   // blok rencana yang belum ditutup (jawaban terpotong)
@@ -510,8 +515,10 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
       const label = lastOpen[1].toLowerCase();
       if (label !== "ask" && !raw) {
         const parsed = rawTimeline(looseJson(after));
-        if (parsed) raw = parsed;
-        else if (label !== "json" || /"scenes"/.test(after)) broken = after;
+        if (parsed) {
+          raw = parsed;
+          span = { start: lastOpen.index, end: src.length, body: after, studio: false };
+        } else if (label !== "json" || /"scenes"/.test(after)) broken = after;
       }
     }
   }
@@ -521,13 +528,23 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     const a = prose.indexOf("{");
     const b = prose.lastIndexOf("}");
     if (a >= 0 && b > a && /"scenes"\s*:/.test(prose.slice(a, b + 1))) {
-      const parsed = rawTimeline(looseJson(prose.slice(a, b + 1)));
+      const json = prose.slice(a, b + 1);
+      const parsed = rawTimeline(looseJson(json));
       if (parsed) {
         raw = parsed;
         prose = prose.slice(0, a) + prose.slice(b + 1);
+        const at = src.indexOf(json);
+        if (at >= 0) span = { start: at, end: at + json.length, body: json, studio: false };
       }
     }
   }
+  return { raw, broken: raw ? null : broken, partial, prose, span };
+}
+
+/** pisahkan jawaban AI: prosa, kartu pertanyaan, dan timeline */
+export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {}): DirectorParsed {
+  const src = String(text ?? "");
+  const { raw, broken, partial, prose } = locatePlan(src);
   const ask = splitChoice(src);
   return {
     prose: prose.replace(/\n{3,}/g, "\n\n").trim(),
@@ -535,8 +552,22 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     timeline: raw ? normalizeTimeline(raw, { extraSfx: opts.extraSfx }) : null,
     partial,
     raw,
-    broken: raw ? null : broken,
+    broken,
   };
+}
+
+/**
+ * Rencana yang dipakai parseDirector tapi tidak ditulis di pagar ```studio yang tertutup (pagar ```timeline / ```json,
+ * blok terpotong tanpa penutup, atau JSON tanpa pagar) dipindah ke pagar ```studio — isi & hasil parse-nya tetap sama.
+ * Dipakai sebelum jawaban disimpan, supaya semua rencana yang benar-benar diterapkan tersimpan dalam satu bentuk
+ * (hitungan kuota mesin berat mencari ```studio). Teks tanpa rencana yang dipakai dikembalikan apa adanya.
+ */
+export function withStudioFence(text: string): string {
+  const src = String(text ?? "");
+  const { raw, span } = locatePlan(src);
+  if (!raw || !span || span.studio) return src;
+  // tanpa tambahan baris di luar pagar → prosa hasil parse tetap persis sama
+  return `${src.slice(0, span.start)}\`\`\`studio\n${span.body.trim()}\n\`\`\`${src.slice(span.end)}`;
 }
 
 /**

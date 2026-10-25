@@ -27,9 +27,11 @@ const ROLE = 4.8;
 /** auto-lanjut kuis website (setTimeout 160 ms) */
 const ADV = 0.16;
 
-/** lebar modal (px CSS) & pengali px CSS → px kanvas */
+/** lebar modal (px CSS); pengali px CSS → px kanvas dihitung dari tinggi kotak aman (dengan/tanpa ruang subtitle) */
 const MW = 380;
-const S = 2.1;
+/** tinggi modal minimum supaya pilihan D kuis tidak terpotong footer (px CSS) */
+const MH_NEED = 494;
+const MH_MAX = 540;
 
 /** keyframe kamera yang membidik titik dunia (px, py) ke titik layar (sx, sy) pada zoom z (origin = tengah kanvas) */
 const aim = (W: number, H: number, px: number, py: number, z: number, sx: number, sy: number) => ({ z, x: sx - (W / 2 + (px - W / 2) * z), y: sy - (H / 2 + (py - H / 2) * z) });
@@ -67,10 +69,12 @@ export function TrainAiShot() {
   const { f, fps, s, box, W, H, brand, text } = useShot();
 
   // ---------------- tata letak dunia (px kanvas) ----------------
-  const capBottom = box.y + 118;
-  const mTop = box.y + 150;
-  const mBot = box.y + box.h - 6;
-  const MH = Math.round((mBot - mTop) / S);
+  const capBottom = box.y + 110;
+  const top0 = box.y + 138;
+  const avail = box.y + box.h - 6 - top0;
+  const S = Math.min(2.1, Math.max(1.6, avail / MH_NEED));
+  const MH = Math.min(MH_MAX, Math.round(avail / S));
+  const mTop = top0 + Math.max(0, (avail - MH * S) * 0.5);
   const mw = MW * S;
   const cx = box.x + box.w / 2;
   const mLeft = cx - mw / 2;
