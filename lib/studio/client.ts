@@ -204,11 +204,17 @@ export type Catalog = {
 const BUILTIN_IDS = new Set(SFX_BUILTIN.map((s) => s.id));
 const builtinCatalog = (): Catalog => ({ sfx: SFX_BUILTIN.map((s) => ({ ...s, src: sfxSrc(s.file) })), music: [], bed: true, complete: false });
 
+/** angka dari JSON; hanya null / undefined / bukan angka yang dianggap kosong (tp 0 = puncak 0 dBTP, jangan jadi bawaan) */
+const fin = (v: unknown, d: number) => {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : d;
+};
+
 function parseCatalog(raw: unknown): Catalog {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const sfx = (Array.isArray(o.sfx) ? o.sfx : [])
     .filter((s): s is SfxMeta & { src: string } => !!s && typeof s === "object" && typeof (s as SfxMeta).id === "string" && typeof (s as { src?: unknown }).src === "string")
-    .map((s) => ({ ...s, tags: Array.isArray(s.tags) ? s.tags : [], dur: Number(s.dur) || 1, lufs: Number(s.lufs) || -20, tp: Number(s.tp) || -3, hit: Number(s.hit) || 0, peak: Number(s.peak) || 0, use: s.use ?? "", cat: s.cat || "ui" }));
+    .map((s) => ({ ...s, tags: Array.isArray(s.tags) ? s.tags : [], dur: Number(s.dur) || 1, lufs: fin(s.lufs, -20), tp: fin(s.tp, -3), hit: fin(s.hit, 0), peak: fin(s.peak, 0), use: s.use ?? "", cat: s.cat || "ui" }));
   const music = (Array.isArray(o.music) ? o.music : [])
     .filter((m): m is { name: string; src: string; lufs?: number | null } => !!m && typeof m === "object" && typeof (m as { src?: unknown }).src === "string")
     .map((m) => ({ name: String(m.name || m.src.split("/").pop() || "Musik"), src: m.src, lufs: typeof m.lufs === "number" ? m.lufs : null }));

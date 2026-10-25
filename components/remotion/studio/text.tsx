@@ -311,8 +311,10 @@ export function subsRoom(tl: Timeline, audio: "all" | "vo" | "novo" = "all"): bo
   const on = tl.scenes.map((_, i) => subsOn(tl, i, audio));
   const cues = buildSubs(tl).filter((c) => on[c.scene]);
   const starts = sceneStartSecs(tl);
-  // jendela tampil sama dengan <Subtitles>: c.s - 0,04 sampai c.end
-  return on.map((b, j) => b || cues.some((c) => c.s - 0.04 < starts[j] + tl.scenes[j].dur && c.end > starts[j]));
+  // jendela tampil sama dengan <Subtitles>: c.s - 0,04 sampai c.end. Toleransi 0,1 dtk: ekor fade cue yang cuma lewat sedikit
+  // ke adegan tetangga (fitVo memberi jeda 0,25 dtk, ekor cue 0,3 dtk) tidak membuat seluruh adegan itu menyisakan ruang subtitle
+  const SPILL = 0.1;
+  return on.map((b, j) => b || cues.some((c) => Math.min(c.end, starts[j] + tl.scenes[j].dur) - Math.max(c.s - 0.04, starts[j]) > SPILL));
 }
 
 /** bar subtitle di bawah, tepat di atas area caption TikTok (masih di zona aman) */

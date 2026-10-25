@@ -253,6 +253,29 @@ const MUSIC_DESC: Record<MusicLevel, string> = {
 };
 
 const dtk = (n: number) => String(Math.round(n * 10) / 10).replace(".", ",");
+/** detik dengan presisi ketukan: 0.517 -> "0,517" */
+const dtk3 = (n: number) => String(Math.round(n * 1000) / 1000).replace(".", ",");
+
+/** samakan dengan komposisi (audio.tsx): trailer bed = 100 BPM, ketukan pertama di detik 0 */
+const BED_BPM = 100;
+const BED_BEAT = 60 / BED_BPM;
+
+/**
+ * grid ketukan musik timeline untuk AI: jarak antar ketukan + ketukan pertama (detik). Urutannya sama dengan musicBeats
+ * di komposisi: trailer bed → BED_BPM, file musik → hasil deteksi (median jarak) → BPM + offset. null kalau tidak diketahui.
+ */
+function beatGridOf(m: Timeline["music"]): { beat: number; first: number } | null {
+  if (m.src === "none") return null;
+  if (m.src === "bed") return { beat: BED_BEAT, first: 0 };
+  const b = [...(m.beats ?? [])].sort((x, y) => x - y);
+  const gaps = b
+    .slice(1)
+    .map((x, i) => x - b[i])
+    .filter((g) => g > 0.05)
+    .sort((x, y) => x - y);
+  if (gaps.length) return { beat: gaps[Math.floor(gaps.length / 2)], first: b[0] };
+  return m.bpm ? { beat: 60 / m.bpm, first: m.offset ?? 0 } : null;
+}
 
 /** katalog TETAP: SFX bawaan, layout + props, layar mockup, transisi, level musik, rasio */
 export function directorCatalog(): string {
@@ -317,14 +340,22 @@ export function directorSession(p: DirectorSessionInput): string {
   const voices = p.voices ?? [];
   out.push(voices.length ? ["## BANK SUARA SIAP (voice.mode \"bank\" + voiceId)", ...voices.map((v) => `- ${v.id} — ${safeName(v.name)}${v.style ? ` (${safeName(v.style)})` : ""}`)].join("\n") : "## BANK SUARA SIAP\n(belum ada yang siap — kalau mode \"bank\", website memakai suara bawaan / cadangan)");
   const music = p.music ?? [];
-  out.push(["## MUSIK TERSEDIA (music.src)", "- bed — trailer bed bebas hak cipta dari SFX (bawaan)", ...music.map((m) => `- ${safeName(m.name)} → src: ${m.src}`)].join("\n"));
+  out.push(
+    [
+      "## MUSIK TERSEDIA (music.src)",
+      `- bed — trailer bed bebas hak cipta dari SFX (bawaan) · ${BED_BPM} BPM mulai detik 0: 1 ketukan = ${dtk(BED_BEAT)} dtk, 1 bar = ${dtk(BED_BEAT * 4)} dtk → pakai durasi adegan kelipatan ${dtk(BED_BEAT)} dtk (${[2, 3, 4, 5, 6].map((k) => dtk(BED_BEAT * k)).join(" / ")} …) supaya potongan jatuh di ketukan`,
+      ...music.map((m) => `- ${safeName(m.name)} → src: ${m.src}`),
+    ].join("\n")
+  );
   if (p.timeline) {
     const tl = p.timeline;
     const voDone = tl.vo?.lines.length ?? 0;
+    const grid = beatGridOf(tl.music);
     out.push(
       [
         `## TIMELINE SEKARANG (${tl.scenes.length} adegan, total ${dtk(tl.scenes.reduce((a, s) => a + s.dur, 0))} dtk — versi terbaru, termasuk editan user)`,
         compactTimeline(tl),
+        grid ? `Ketukan musik sekarang: tiap ${dtk3(grid.beat)} dtk mulai detik ${dtk3(grid.first)} (±${Math.round(60 / grid.beat)} BPM) — usahakan batas adegan (jumlah dur dari awal) jatuh di ketukan.` : "",
         voDone ? `VO sudah dibuat untuk ${voDone} adegan. Kalau teks VO suatu adegan diubah, website akan minta VO adegan itu dibuat ulang.` : "",
       ]
         .filter(Boolean)
@@ -349,17 +380,22 @@ function prune(v: unknown): unknown {
   return v;
 }
 
-/** timeline dalam JSON ringkas untuk AI (tanpa data VO hasil generate & daftar ketukan yang panjang) */
+/** timeline dalam JSON ringkas untuk AI (tanpa data VO hasil generate & daftar ketukan yang panjang — diganti jarak ketukan + ketukan pertama) */
 export function compactTimeline(tl: Timeline): string {
   const rest: Record<string, unknown> = { ...tl };
   delete rest.vo;
   delete rest.v;
   delete rest.fps;
   const { beats, ...music } = tl.music;
+  const grid = beatGridOf(tl.music);
   return JSON.stringify(
     prune({
       ...rest,
-      music: { ...music, ...(beats?.length ? { beatsDetected: beats.length } : {}) },
+      music: {
+        ...music,
+        ...(beats?.length ? { beatsDetected: beats.length } : {}),
+        ...(grid ? { beatSec: Math.round(grid.beat * 1000) / 1000, firstBeatSec: Math.round(grid.first * 1000) / 1000 } : {}),
+      },
       scenes: tl.scenes.map((s) => ({ ...s, sfx: s.sfx.map((c) => ({ id: c.id, at: c.at, ...(c.gain !== undefined ? { gain: c.gain } : {}), ...(c.on ? {} : { on: false }) })) })),
     })
   );
@@ -596,6 +632,32 @@ export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   if (!t || t.length > 240 || /^📌/.test(t)) return false;
   if (BIG_EDIT.test(t)) return false;
   return SMALL_EDIT.test(t);
+}
+
+/** obrolan ringan di awal pesan: sapaan, terima kasih, "oke" */
+const CHITCHAT = /^\s*(halo+|hallo|hai+|hi+|hey|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks|thank you|thx|oke+|ok|okay|sip+|siap|mantap|keren|bagus|nice|noted|wkwk\w*|haha\w*)\b/i;
+/** pertanyaan cara pakai / kenapa — dijawab singkat tanpa rencana */
+const HOWTO = /^\s*((gimana|bagaimana|gmn) ?(cara|caranya)\b|caranya\b|cara (pakai|bikin|buat|download|unduh|export|ekspor|upload|ganti|hapus|simpan|share|bagi)\b|kenapa\b|mengapa\b|kok\b)/i;
+/** kata yang menandakan brief video (bukan sekadar obrolan) */
+const BRIEF = /\b(video|teaser|trailer|promo(si)?|iklan|konten|explainer|reels?|tiktok|shorts|youtube|instagram|feed|storyboard|naskah)(nya)?\b/i;
+
+/**
+ * Giliran yang butuh mesin berat (kreatif): jawaban kartu, rencana baru, atau revisi besar.
+ * Revisi kecil, sapaan / terima kasih, dan pertanyaan cara pakai cukup mesin cepat (hemat kuota harian).
+ * `afterAsk` = jawaban AI terakhir berupa kartu pertanyaan (pesan ini kemungkinan jawabannya → lanjut rencana).
+ */
+export function needsHeavy(text: string, o: { hasTimeline: boolean; afterAsk?: boolean }): boolean {
+  const t = String(text ?? "").trim();
+  if (/^📌\s*(Jawaban|Lewati)/i.test(t)) return true;
+  if (!t || isSmallEdit(t, o.hasTimeline)) return false;
+  if (BIG_EDIT.test(t)) return true;
+  if (t.length <= 200 && HOWTO.test(t)) return false;
+  const brief = BRIEF.test(t);
+  const question = /\?\s*$/.test(t);
+  if (o.afterAsk && !(question && !brief)) return true;
+  if (t.length <= 160 && !brief && (question || CHITCHAT.test(t))) return false;
+  // sudah ada timeline: pesan pendek = revisi ringan / obrolan (kecuali minta video baru); belum ada: brief video
+  return o.hasTimeline ? t.length > 60 || /\b(video|rencana|proyek) baru\b/i.test(t) : brief || t.length >= 25;
 }
 
 /** pesan lama untuk riwayat: blok rencana diringkas (timeline terbaru sudah ada di sesi), kartu jadi daftar pertanyaannya */

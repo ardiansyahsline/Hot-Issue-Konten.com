@@ -21,6 +21,7 @@
  */
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { BRANDS, type Brand } from "@/lib/studio/timeline";
+import { isVideoSrc } from "./backgrounds";
 import { useDevice } from "./devices";
 import { AiScreen, StudioScreen, TrainAiScreen } from "./screens/ai";
 import { DesignScreen, MediaScreen, ReportScreen, WebsiteScreen } from "./screens/content";
@@ -114,7 +115,8 @@ export function AppScreen(p: ScreenProps) {
       .slice(0, 8)
       .map((x) => x.slice(0, 120)),
     title: String(p.title ?? "").trim().slice(0, 90),
-    src: p.src ?? null,
+    // video hanya untuk layar media; layar lain (website / desain) memakai <Img> → sisa klip dari layar media diabaikan
+    src: p.src && (p.kind === "media" || !isVideoSrc(p.src)) ? p.src : null,
     w: view.w,
     h: view.h,
     top: view.top,

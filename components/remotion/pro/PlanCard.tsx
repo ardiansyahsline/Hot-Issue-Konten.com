@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BED_BPM } from "@/components/remotion/studio/audio";
 import { reloadStudioCatalog, type Catalog } from "@/lib/studio/client";
 import { SFX_BUILTIN } from "@/lib/studio/sfxMeta";
-import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, isPresetLogo, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 import SceneCard, { type ScenePatch, type SfxItem } from "./SceneCard";
 import { Field, Seg, Toggle, Txt, UploadBtn } from "./fields";
@@ -147,8 +147,11 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
   const allOpen = tl.scenes.every((s) => open.has(s.id));
 
   // ---------- brand ----------
-  const pickBrand = (id: BrandId) =>
-    set({ brand: id === "custom" ? { ...tl.brand, id: "custom", name: tl.brand.id === "custom" ? tl.brand.name : "Brand saya" } : { ...BRANDS[id], logo: tl.brand.logo ?? null } });
+  const pickBrand = (id: BrandId) => {
+    // logo upload user ikut pindah; logo bawaan preset diganti logo bawaan brand baru (brand "Lainnya": tanpa logo)
+    const own = isPresetLogo(tl.brand.logo) ? null : (tl.brand.logo ?? null);
+    set({ brand: id === "custom" ? { ...tl.brand, id: "custom", name: tl.brand.id === "custom" ? tl.brand.name : "Brand saya", logo: own } : { ...BRANDS[id], logo: own ?? BRANDS[id].logo ?? null } });
+  };
   const setBrand = (p: Partial<Brand>) => update((t) => ({ ...t, brand: { ...t.brand, ...p } }));
 
   // ---------- musik ----------
@@ -222,7 +225,8 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
           <ColorPick label="Warna aksen" value={tl.brand.accent} onChange={(accent) => setBrand({ accent })} />
           <div className="flex flex-wrap items-center gap-2">
             <UploadBtn accept="image/*" sub="logo" label={tl.brand.logo ? "🔁 Ganti logo" : "⬆️ Logo"} onDone={(r) => setBrand({ logo: r.src })} />
-            {tl.brand.logo && (
+            {/* logo bawaan preset tidak bisa dilepas (kosong = otomatis logo bawaan lagi) */}
+            {tl.brand.logo && !isPresetLogo(tl.brand.logo) && (
               <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-400">
                 <span className="max-w-[140px] truncate">🏷️ {storagePathOf(tl.brand.logo)?.split("/").pop() ?? "logo"}</span>
                 <button type="button" className="font-semibold text-zinc-500 hover:text-red-400" onClick={() => setBrand({ logo: null })}>

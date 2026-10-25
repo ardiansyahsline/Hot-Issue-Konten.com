@@ -3,7 +3,7 @@ Tes mandiri voice-worker TANPA GPU / model / internet (bisa dijalankan di laptop
   .venv\\Scripts\\python selftest.py            (semua tes)
   .venv\\Scripts\\python selftest.py tts render (hanya tes yang namanya mengandung kata itu)
 Yang dites: pemecah kalimat & jeda, angka→kata & WER, pemetaan timestamp kata, post-processing ffmpeg, normalisasi LUFS,
-pemilih take (ASR dipalsukan), builder full.mp3 + SRT, ketukan musik, pembersih referensi, klaim job (HTTP dipalsukan),
+pemilih take (ASR dipalsukan), builder full.mp3 + SRT, ketukan musik, pembersih referensi, klaim job (HTTP dipalsukan), cek akses pemilik job,
 alur job tts / clean / beats lengkap (Supabase & mesin suara dipalsukan), penulisan ulang URL render, mixing & loudnorm 2 tahap,
 tebakan kategori SFX, pendeteksi isi repo model.
 """
@@ -33,7 +33,7 @@ import numpy as np  # noqa: E402
 from studio_worker import beats, clean, ff, jobs_beats, jobs_clean, jobs_render, jobs_tts, meter, mix, post, seed, sfxlib  # noqa: E402
 from studio_worker import text as T  # noqa: E402
 from studio_worker.engines import chatterbox_engine as cbe  # noqa: E402
-from studio_worker.jobctx import JobCtx, JobError, Runtime  # noqa: E402
+from studio_worker.jobctx import JobCtx, JobError, Runtime, owner_can_use_studio  # noqa: E402
 from studio_worker.supa import Supa  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -402,6 +402,17 @@ def t_klaim_job_http_palsu():
     return f"{len(calls)} request"
 
 
+@test
+def t_akses_studio_pemilik_job():
+    sb = FakeSupa()
+    sb.tables["profiles"] = [{"id": "adm", "role": "admin"}, {"id": "u1", "role": "user"}, {"id": "u2", "role": "user"}]
+    sb.tables["studio_access"] = [{"user_id": "u1"}]
+    assert owner_can_use_studio(sb, "adm") and owner_can_use_studio(sb, "u1"), "admin & user di studio_access boleh"
+    assert not owner_can_use_studio(sb, "u2"), "akses dicabut (tidak ada di studio_access) → tidak boleh"
+    assert owner_can_use_studio(sb, None), "job sistem tanpa created_by tetap jalan"
+    return "admin / studio_access / dicabut / job sistem"
+
+
 def _save(sb: FakeSupa, path: str) -> str:
     p = TMP / path.replace("/", "_")
     p.write_bytes(sb.files[path])
@@ -574,10 +585,23 @@ def t_tulis_ulang_url_render():
         assert re.fullmatch(r"/public/[\w./-]+", v) and ".." not in v  # lolos safeMediaSrc() di timeline.ts
     assert jobs_render.copy_assets(REPO, pub) >= 39 and (pub / "sfx" / "ui-pop.mp3").exists()
     sb = FakeSupa()
-    sb.tables["studio_sfx"] = [{"id": "fs-123", "path": "sfx/fs-123.mp3", "cat": "whoosh", "tags": ["whoosh"], "dur": 1.2, "lufs": -18, "tp": -2, "hit": 0.1, "peak": 0.2, "use_for": "tes"}]
-    sb.files["sfx/fs-123.mp3"] = b"mp3"
+    sb.tables["studio_sfx"] = [
+        {"id": "fs-123", "path": "sfx/fs-123.mp3", "cat": "whoosh", "tags": ["whoosh"], "dur": 1.2, "lufs": -18, "tp": -2, "hit": 0.1, "peak": 0.2, "use_for": "tes"},
+        {"id": "fs-0", "path": "sfx/fs-0.mp3", "cat": "impact", "tags": [], "dur": 2, "lufs": -20, "tp": 0, "hit": 0, "peak": 0, "use_for": None},  # Freesound: tp 0
+    ]
+    sb.files["sfx/fs-123.mp3"] = sb.files["sfx/fs-0.mp3"] = b"mp3"
     ex = jobs_render.extra_sfx(sb, {"scenes": [{"sfx": [{"id": "fs-123", "at": 0}, {"id": "ui-pop", "at": 1}]}]}, pub, REPO)
     assert len(ex) == 1 and ex[0]["id"] == "fs-123" and re.fullmatch(r"/public/st/[0-9a-f]{16}\.mp3", ex[0]["src"]), ex
+    ex0 = jobs_render.extra_sfx(sb, {"scenes": [{"sfx": [{"id": "fs-0", "at": 0}]}]}, pub, REPO)
+    assert len(ex0) == 1 and ex0[0]["tp"] == 0.0 and ex0[0]["lufs"] == -20.0, "tp 0 (puncak skala penuh) jangan jadi -3"
+    # logo brand bawaan: alamat tetap, file disalin ke <public>/brand/; kalau file repo tidak ada → logo dibuang
+    pub2 = TMP / "render" / "public-logo"
+    out2, miss2 = jobs_render.rewrite_timeline({"brand": {"logo": "/konten-logo.png"}, "scenes": [{"layout": {"src": "/brand/tws-logo.svg"}}]}, pub2, REPO, fetch)
+    assert out2["brand"]["logo"] == "/konten-logo.png" and out2["scenes"][0]["layout"]["src"] == "/brand/tws-logo.svg" and not miss2, (out2, miss2)
+    assert (pub2 / "brand" / "konten-logo.png").exists() and (pub2 / "brand" / "tws-logo.svg").exists()
+    out3, miss3 = jobs_render.rewrite_timeline({"brand": {"logo": "/konten-logo.png"}, "scenes": []}, TMP / "render" / "public-x", TMP, fetch)
+    assert out3["brand"]["logo"] is None and miss3 == ["/konten-logo.png"], (out3, miss3)
+    assert (pub / "brand" / "konten-logo.png").exists() and (pub / "brand" / "tws-logo.svg").exists(), "copy_assets juga menyalin logo bawaan"
     bundle = TMP / "render" / "bundle"
     n = jobs_render.stage_builtin_assets(REPO, bundle)
     assert n >= 40 and (bundle / "api" / "studio" / "asset" / "sfx" / "ui-pop.mp3").exists()

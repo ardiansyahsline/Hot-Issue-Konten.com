@@ -40,6 +40,8 @@ DATA_URL = re.compile(r"^data:(audio|image)/([\w.+-]+);base64,([A-Za-z0-9+/=]+)$
 MAX_UPLOAD = 200 * 1024 * 1024
 EXT_OF = {"mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav", "png": ".png", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif", "svg+xml": ".svg"}
 SHARED_DIRS = {"voices", "sfx", "tts", "vo"}  # folder storage yang boleh dibaca semua user Studio
+# logo brand bawaan (BRANDS di lib/studio/timeline.ts) → file di folder public repo; remotion/Root.tsx memetakannya ke <public>/brand/<file>
+PRESET_LOGOS = {"/konten-logo.png": "konten-logo.png", "/brand/tws-logo.svg": "brand/tws-logo.svg"}
 
 
 # ---------------------------------------------------------------- cek kesiapan
@@ -109,7 +111,17 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
         if s in done:
             return done[s]
         out = s
-        if s.startswith("/api/studio/asset/"):
+        if s in PRESET_LOGOS:  # alamat tetap, filenya disalin ke <public>/brand/
+            src = repo / "public" / PRESET_LOGOS[s]
+            dst = public / "brand" / src.name
+            if src.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists():
+                    shutil.copyfile(src, dst)
+            else:
+                missing.append(s)
+                bad.add(s)
+        elif s.startswith("/api/studio/asset/"):
             m = ASSET.match(urlsplit(s).path)
             f = unquote(m.group(2)) if m else ""
             if m and SAFE_FILE.match(f):
@@ -159,7 +171,7 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
 
     def walk(v):
         if isinstance(v, str):
-            return fix(v) if v.startswith(("/api/studio/", "data:")) else v
+            return fix(v) if v.startswith(("/api/studio/", "data:")) or v in PRESET_LOGOS else v
         if isinstance(v, list):
             return [walk(x) for x in v]
         if isinstance(v, dict):
@@ -192,7 +204,8 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
 
 
 def copy_assets(repo: Path, public: Path) -> int:
-    """semua SFX & musik repo → <public>/sfx & <public>/music (remotion/Root.tsx memetakan /api/studio/asset/<dir>/<file> ke sana)"""
+    """semua SFX & musik repo → <public>/sfx & <public>/music (remotion/Root.tsx memetakan /api/studio/asset/<dir>/<file> ke sana),
+    logo brand bawaan → <public>/brand/<file>"""
     n = 0
     for d in ("sfx", "music"):
         src = repo / "assets" / "audio" / d
@@ -203,6 +216,12 @@ def copy_assets(repo: Path, public: Path) -> int:
             if f.is_file() and SAFE_FILE.match(f.name) and not (public / d / f.name).exists():
                 shutil.copyfile(f, public / d / f.name)
                 n += 1
+    for rel in PRESET_LOGOS.values():
+        f = repo / "public" / rel
+        if f.is_file() and not (public / "brand" / f.name).exists():
+            (public / "brand").mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(f, public / "brand" / f.name)
+            n += 1
     return n
 
 
@@ -215,6 +234,11 @@ def builtin_ids(repo: Path) -> set[str]:
         return set()  # tidak terbaca: semua id dicari di studio_sfx (aman, sfxById tetap mengutamakan bawaan)
     m = re.search(r"SFX_BUILTIN\b[^=]*=\s*\[(.*?)^\];", src, re.S | re.M)
     return set(re.findall(r"""[{,]\s*id\s*:\s*["'`]([^"'`]+)["'`]""", m.group(1))) if m else set()
+
+
+def _num(v, d: float) -> float:
+    """angka dari studio_sfx; hanya None yang pakai nilai bawaan (0 sah: SFX Freesound disimpan tp 0 = puncak skala penuh)"""
+    return float(v) if v is not None else d
 
 
 def extra_sfx(supa, tl: dict, public: Path, repo: Path) -> list[dict]:
@@ -239,7 +263,7 @@ def extra_sfx(supa, tl: dict, public: Path, repo: Path) -> list[dict]:
         out.append(
             {
                 "id": r["id"], "file": Path(p).name, "cat": r.get("cat") or "ui", "tags": r.get("tags") or [], "dur": float(r.get("dur") or 1),
-                "lufs": float(r.get("lufs") or -20), "tp": float(r.get("tp") or -3), "hit": float(r.get("hit") or 0), "peak": float(r.get("peak") or 0),
+                "lufs": _num(r.get("lufs"), -20.0), "tp": _num(r.get("tp"), -3.0), "hit": _num(r.get("hit"), 0.0), "peak": _num(r.get("peak"), 0.0),
                 "use": r.get("use_for") or "", "src": f"/public/st/{name}",
             }
         )

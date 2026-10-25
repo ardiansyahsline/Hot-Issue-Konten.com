@@ -22,9 +22,16 @@ export const RATIOS = Object.keys(FORMATS) as Ratio[];
 export type BrandId = "konten" | "tws" | "custom";
 export type FontId = "jakarta" | "inter" | "interTight";
 export type Brand = { id: BrandId; name: string; primary: string; accent: string; bg: string; text: string; font: FontId; logo?: string | null };
+/**
+ * logo bawaan brand preset: gambar di public/ website (dipakai kalau user belum upload logo sendiri).
+ * Renderer laptop memetakannya ke <public>/brand/<nama file> (remotion/Root.tsx laptopSrc; voice-worker menyalin filenya).
+ */
+export const PRESET_LOGOS = { konten: "/konten-logo.png", tws: "/brand/tws-logo.svg" } as const;
+/** true kalau src = logo bawaan brand preset (bukan logo upload user) */
+export const isPresetLogo = (v: unknown): boolean => v === PRESET_LOGOS.konten || v === PRESET_LOGOS.tws;
 export const BRANDS: Record<"konten" | "tws", Brand> = {
-  konten: { id: "konten", name: "Konten.com", primary: "#f97316", accent: "#fb8a3c", bg: "#09090b", text: "#fafafa", font: "jakarta" },
-  tws: { id: "tws", name: "TWS", primary: "#2f5ff0", accent: "#3a6bff", bg: "#000000", text: "#ffffff", font: "interTight" },
+  konten: { id: "konten", name: "Konten.com", primary: "#f97316", accent: "#fb8a3c", bg: "#09090b", text: "#fafafa", font: "jakarta", logo: PRESET_LOGOS.konten },
+  tws: { id: "tws", name: "TWS", primary: "#2f5ff0", accent: "#3a6bff", bg: "#000000", text: "#ffffff", font: "interTight", logo: PRESET_LOGOS.tws },
 };
 
 export type TransitionKind = "cut" | "fade" | "slide" | "zoom" | "mask" | "whip" | "glitch";
@@ -285,11 +292,12 @@ const color = (v: unknown, d: string) => (typeof v === "string" && HEX.test(v.tr
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const strs = (v: unknown, max: number, len = 120) => arr(v).map((x) => str(x, len)).filter(Boolean).slice(0, max);
 /**
- * URL media hanya boleh dari route Studio sendiri (tidak boleh URL luar sembarangan).
+ * URL media hanya boleh dari route Studio sendiri (tidak boleh URL luar sembarangan), atau logo bawaan brand preset (PRESET_LOGOS).
  * `/public/…` dipakai renderer di laptop (voice-worker menyalin file ke folder public sementara).
  */
 export const safeMediaSrc = (v: unknown): string | null => {
   const s = str(v, 600);
+  if (isPresetLogo(s)) return s;
   return (/^\/api\/studio\/(asset|file)\b/.test(s) || /^\/public\/[\w./-]+$/.test(s)) && !s.includes("..") ? s : null;
 };
 
@@ -374,7 +382,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     bg: color(b.bg, base.bg),
     text: color(b.text, base.text),
     font: oneOf(b.font, ["jakarta", "inter", "interTight"] as const, base.font),
-    logo: safeMediaSrc(b.logo),
+    // tanpa logo upload: brand preset pakai logo bawaannya (brand "Lainnya" tetap tanpa logo → huruf pertama nama)
+    logo: safeMediaSrc(b.logo) ?? (brandId === "custom" ? null : (base.logo ?? null)),
   };
   const catalog = new Map([...SFX_BUILTIN, ...(opts.extraSfx ?? [])].map((s) => [s.id, s]));
   const seen = new Set<string>();

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import {
@@ -553,7 +554,16 @@ function LayoutFields({ l, set }: { l: Layout; set: (p: Partial<Layout>) => void
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Layar yang tampil">
             {(id) => (
-              <select id={id} className={sel} value={l.screen ?? "dashboard"} onChange={(e) => set({ screen: e.target.value as ScreenKind })}>
+              <select
+                id={id}
+                className={sel}
+                value={l.screen ?? "dashboard"}
+                onChange={(e) => {
+                  const screen = e.target.value as ScreenKind;
+                  // klip video hanya tampil di layar Media → lepas saat pindah layar (tidak tersimpan diam-diam)
+                  set({ screen, ...(screen !== "media" && isVideoSrc(l.src) ? { src: null } : {}) });
+                }}
+              >
                 {SCREENS.map((k) => (
                   <option key={k} value={k}>
                     {SCREEN_LABEL[k]}

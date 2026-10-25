@@ -14,6 +14,7 @@ import {
   historyText,
   isSmallEdit,
   mergeRevision,
+  needsHeavy,
   parseDirector,
   visibleProse,
   type DirectorAttachment,
@@ -193,6 +194,9 @@ export async function POST(req: NextRequest) {
 
     const cardAnswer = /^📌\s*(Jawaban|Lewati)/i.test(content);
     const small = !cardAnswer && isSmallEdit(content, !!current);
+    const afterAsk = /```ask/i.test(lastAssistant);
+    // mesin berat hanya untuk giliran kreatif (rencana baru / revisi besar / jawaban kartu); sapaan & pertanyaan cara pakai -> mesin cepat
+    const creative = needsHeavy(content, { hasTimeline: !!current, afterAsk });
     const notes: string[] = [];
     if (cardAnswer)
       notes.push(
@@ -200,12 +204,12 @@ export async function POST(req: NextRequest) {
           ? "User MELEWATI kartu pertanyaan: langsung buat rencana lengkap pakai asumsi terbaik (sebut asumsinya 1 baris). JANGAN bertanya lagi."
           : "User SUDAH MENJAWAB kartu pertanyaan: langsung buat rencana lengkap sesuai jawabannya. JANGAN bertanya lagi."
       );
-    else if (/```ask/i.test(lastAssistant)) notes.push("Kamu baru saja bertanya. Kalau pesan user ini sudah cukup menjawab, langsung buat rencana — jangan bertanya lagi.");
+    else if (afterAsk) notes.push("Kamu baru saja bertanya. Kalau pesan user ini sudah cukup menjawab, langsung buat rencana — jangan bertanya lagi.");
     if (current && !cardAnswer)
       notes.push("Sudah ada TIMELINE SEKARANG: permintaan perubahan = REVISI (kirim timeline LENGKAP hasil revisi, id adegan lama dipertahankan). Kalau user jelas minta video yang benar-benar baru, buat rencana baru.");
     if (small) notes.push("Ini revisi kecil: ubah hanya bagian yang diminta, sisanya persis sama.");
 
-    // 4) calon mesin: revisi kecil -> mesin teks cepat; rencana baru / revisi besar -> mesin berat (hemat kuota harian)
+    // 4) calon mesin: revisi kecil / obrolan -> mesin teks cepat; rencana baru / revisi besar -> mesin berat (hemat kuota harian)
     const isDead = (m: string) => isDeadModel(health.get(m));
     const pool = (catalog.ids.length ? catalog.ids : [...health.values()].filter((h) => healthRank(h) === 0).map((h) => h.model)).filter((m) => isChatModel(m) && !isDead(m));
     const ranked = rankTextModels(pool);
@@ -216,7 +220,7 @@ export async function POST(req: NextRequest) {
       .map((x) => x.m);
     let candidates: string[] = [];
     let heavyOn = false;
-    if (!small) {
+    if (creative) {
       const heavy = heavyModelFrom(catalog.ids);
       if (heavy && !isDead(heavy) && !coolingDown(heavy) && healthRank(health.get(heavy)) !== 2 && (await heavyQuotaOk(supabase, user.id, owner))) {
         candidates.push(heavy);
@@ -705,11 +709,13 @@ async function loadMusic(db: Db, uid: string): Promise<DirectorMusic[]> {
 
 /**
  * Batas pemakaian mesin berat untuk Studio per user per hari (WIB). Env AI_STUDIO_HEAVY_DAILY_LIMIT,
- * kalau kosong ikut AI_HEAVY_DAILY_LIMIT (default 15). Pemilik AI tidak dibatasi. Kartu pertanyaan tidak dihitung.
+ * kalau kosong ikut AI_HEAVY_DAILY_LIMIT (default 15). Pemilik AI tidak dibatasi. Yang dihitung hanya jawaban berisi rencana
+ * (blok ```studio) — obrolan & kartu pertanyaan tidak.
  */
 async function heavyQuotaOk(db: Db, uid: string, owner: boolean) {
   if (owner) return true;
-  const limit = Number(process.env.AI_STUDIO_HEAVY_DAILY_LIMIT ?? process.env.AI_HEAVY_DAILY_LIMIT ?? 15);
+  // kosong / tidak diisi = bawaan 15; 0 = hanya pemilik AI
+  const limit = Number(process.env.AI_STUDIO_HEAVY_DAILY_LIMIT?.trim() || process.env.AI_HEAVY_DAILY_LIMIT?.trim() || 15);
   if (!Number.isFinite(limit) || limit <= 0) return limit !== 0;
   const wib = new Date(Date.now() + 7 * 3600_000);
   const start = new Date(Date.UTC(wib.getUTCFullYear(), wib.getUTCMonth(), wib.getUTCDate()) - 7 * 3600_000).toISOString();
@@ -721,7 +727,7 @@ async function heavyQuotaOk(db: Db, uid: string, owner: boolean) {
       .eq("role", "assistant")
       .eq("error", false)
       .ilike("model", "%sonnet%")
-      .not("content", "ilike", "%```ask%")
+      .ilike("content", "%```studio%")
       .gte("created_at", start);
     return error ? true : (count ?? 0) < limit;
   } catch {

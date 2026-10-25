@@ -10,6 +10,7 @@
  *   /api/studio/asset/music/<file> → <public>/music/<file>    (musik repo)
  *   /api/studio/file?p=<path>      → <public>/storage/<path>  (worker sendiri menulis ulang URL ini jadi /public/st/<hash>.<ext>)
  *   /public/<path>                 → <public>/<path>
+ *   /konten-logo.png, /brand/tws-logo.svg (logo bawaan brand preset) → <public>/brand/<file> (disalin worker dari public/ repo)
  */
 import "@fontsource-variable/inter";
 import "@fontsource-variable/plus-jakarta-sans";
@@ -18,7 +19,7 @@ import type { FC } from "react";
 import { Composition, staticFile, type CalculateMetadataFunction } from "remotion";
 import { StudioVideo, studioMeta, type StudioVideoProps } from "@/components/remotion/studio/StudioVideo";
 import { SrcCtx } from "@/components/remotion/studio/theme";
-import { defaultTimeline } from "@/lib/studio/timeline";
+import { defaultTimeline, isPresetLogo } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
 
 /** "a%20b/c.mp3" → staticFile("a b/c.mp3") (staticFile meng-encode sendiri) */
@@ -40,6 +41,7 @@ export function laptopSrc(src: string): string {
   const store = storagePathOf(src);
   if (store) return pub(`storage/${store}`);
   if (src.startsWith("/public/")) return pub(src.slice("/public/".length));
+  if (isPresetLogo(src)) return pub(`brand/${src.split("/").pop()}`);
   return src;
 }
 

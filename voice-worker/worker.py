@@ -35,7 +35,7 @@ from studio_worker import VERSION, jobs_beats, jobs_clean, jobs_render, jobs_tts
 from studio_worker import log as vlog  # noqa: E402
 from studio_worker.asr import Asr  # noqa: E402
 from studio_worker.engines import Engines  # noqa: E402
-from studio_worker.jobctx import Cancelled, JobCtx, JobError, Runtime  # noqa: E402
+from studio_worker.jobctx import Cancelled, JobCtx, JobError, Runtime, owner_can_use_studio  # noqa: E402
 from studio_worker.supa import Supa, SupaError  # noqa: E402
 
 log = vlog.setup(CFG.logs)
@@ -47,6 +47,7 @@ FAIL = {
     "beats": "Deteksi ketukan musik gagal di laptop.",
     "render": "Render di laptop gagal — coba render di browser dulu.",
 }
+REVOKED = "Akses Studio pemilik job sudah dicabut."
 stop = threading.Event()
 _hits = {"n": 0}
 
@@ -200,6 +201,8 @@ def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
     t0 = time.time()
     log.info("Mulai job %s %s", kind, job["id"])
     try:
+        if not owner_can_use_studio(rt.supa, job.get("created_by")):  # akses dicabut admin setelah job masuk antrian
+            raise JobError(REVOKED)
         if kind == "tts":
             jobs_tts.run(ctx)
         elif kind == "clean":

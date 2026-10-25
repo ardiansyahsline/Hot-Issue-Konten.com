@@ -31,6 +31,16 @@ class Runtime:
     status: dict = field(default_factory=lambda: {"status": "siap", "job": None})
 
 
+def owner_can_use_studio(supa, owner: str | None) -> bool:
+    """pemilik job (created_by) masih boleh pakai Studio? sama dengan can_use_studio() di migration-20: admin, atau ada di studio_access.
+    RLS hanya mengecek saat job masuk antrian, jadi akses yang dicabut sesudahnya dicek lagi di sini. Job tanpa pemilik (job sistem) tetap jalan."""
+    if not owner:
+        return True
+    if supa.select("studio_access", select="user_id", user_id=f"eq.{owner}", limit="1"):
+        return True
+    return bool(supa.select("profiles", select="id", id=f"eq.{owner}", role="eq.admin", limit="1"))
+
+
 class JobCtx:
     def __init__(self, rt: Runtime, table: str, job: dict, min_gap: float = 1.5):
         self.rt = rt

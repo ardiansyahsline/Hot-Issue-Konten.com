@@ -33,7 +33,7 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - **Mode terang / gelap:** tombol ☀️/🌙 di pojok kanan atas, dan pilihannya tersimpan di browser.
 - **5 role:** Admin, CS, Video Review, Discord Moderator, User (lihat tabel hak akses di bawah).
 - **Admin:** buat akun, ganti role lewat dropdown, reset password, dan hapus akun.
-- **🎞️ Remotion (khusus admin):** bikin video dari kode pakai [Remotion](https://www.remotion.dev). Sudah ada video **UGC fitur CS Tracker** (9:16, ±45 detik, buat TikTok/Reels/Shorts) dengan zoom in/out, caption, dan adegan ngetik prompt ke AI. Teks hook, prompt, dan CTA bisa diubah, lalu **Bikin file video** → MP4 langsung jadi di browser (tanpa server). Remotion gratis untuk perorangan / perusahaan ≤ 3 orang; selebihnya isi `NEXT_PUBLIC_REMOTION_LICENSE_KEY` di Vercel.
+- **🎬 Studio Pro (admin + maks 3 user yang diberi akses):** bikin video pendek pakai [Remotion](https://www.remotion.dev). Ceritakan video yang kamu mau ke **Harley** (AI sutradara) → muncul rencana adegan → cek di preview & timeline (adegan, suara VO, musik, SFX, subtitle) → **Export** jadi MP4 (dirender di browser, atau di laptop kalau mesin laptop menyala). Suara VO bisa dari bank suara di laptop (gratis), suara cadangan, atau ElevenLabs Premium (berbayar, opsional). Video **UGC fitur CS Tracker** yang lama tetap ada di tab **Template lama**. Akses diatur admin di **Admin → 🎬 Akses Studio**. Cara pasang: Langkah 1p.
 - **Akun saya:** ganti nama dan password sendiri.
 
 ## Hak akses per role
@@ -77,6 +77,14 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - Semua Catatan & Saran kategori **Bug** dipindah jadi Hot Issue kategori **Bug platform** (lampiran, tanggapan, dan reaksi ikut pindah), dan pilihan Bug di Catatan & Saran dihapus.
 - Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
 - Tabel notifikasi (langganan push browser & pengaturan per orang).
+
+**Langkah 1p — Update 20 (🎬 Studio Pro):** jalankan `supabase/migration-20-studio.sql` (kalau belum, jalankan dulu `migration-15` sampai `migration-19` berurutan). Lalu:
+1. **Beri akses:** buka **Admin → 🎬 Akses Studio**, pilih user, klik **Beri akses** (maks 3 orang; admin otomatis punya akses). Menu **🎬 Studio** muncul untuk user itu (minta refresh halaman kalau belum muncul).
+2. **AI Harley** memakai OmniRoute yang sama dengan tab ✨ AI (Langkah 1n).
+3. **Env opsional** di Vercel (penjelasannya ada di `.env.example`): `FREESOUND_API_KEY` (cari SFX CC0 di website), `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` (suara Premium berbayar), `AI_STUDIO_HEAVY_DAILY_LIMIT` (batas mesin AI berat per user per hari, bawaan 15), `NEXT_PUBLIC_REMOTION_LICENSE_KEY`. Tanpa env ini Studio tetap jalan (cari SFX & suara Premium saja yang tidak muncul).
+4. **Mesin suara di laptop (opsional, gratis):** suara VO dari bank suara + render MP4 di laptop Windows. Cara pasang ada di [`voice-worker/README.md`](voice-worker/README.md). Kalau laptop mati, website otomatis memakai suara cadangan.
+
+Lisensi singkat: Remotion gratis untuk perorangan / perusahaan ≤ 3 orang; selebihnya wajib beli lisensi lalu isi `NEXT_PUBLIC_REMOTION_LICENSE_KEY`. Suara cadangan (**Edge-TTS**) memakai layanan Microsoft yang tidak resmi, jadi bisa berhenti kapan saja. SFX dari Freesound hanya yang CC0 (bebas dipakai). Bank suara hanya untuk suara sendiri atau yang sudah memberi izin. Kredit lengkap ada di `voice-worker/README.md`.
 
 **Langkah 1o — Update 15 (AI: kirim gambar, analisa chart, baca data CS Tracker, nama hero):** jalankan `supabase/migration-14-ai-gambar-data.sql`. Supaya AI bisa membaca gambar, sambungkan provider **Gemini** di dashboard OmniRoute (key gratis dari aistudio.google.com/apikey). Opsional env Vercel: `AI_DEFAULT_MODEL` (default `smart` = pilih otomatis) dan `AI_VISION_MODEL` (model khusus gambar).
 
@@ -215,6 +223,8 @@ npm run dev                  # buka http://localhost:3000
 | Menu Admin tidak muncul | Jalankan `jadikan-admin.sql`, lalu logout dan login lagi. |
 | Admin gagal buat akun | `SUPABASE_SERVICE_ROLE_KEY` belum di-set di Vercel. Tambahkan lalu redeploy. |
 | Build gagal di Vercel | Cek 2 env `NEXT_PUBLIC_…` sudah terisi, lalu redeploy. |
+| Studio error "Jalankan supabase/migration-20-studio.sql dulu" | Jalankan `migration-20-studio.sql` (Langkah 1p), lalu refresh halaman. |
+| Menu 🎬 Studio tidak muncul | Hanya admin dan user yang diberi akses di **Admin → 🎬 Akses Studio**. Setelah diberi akses, refresh halaman. |
 
 ## Peringatan "Dangerous" di Chrome
 

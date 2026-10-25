@@ -4,9 +4,10 @@ import { Player, type PlayerRef } from "@remotion/player";
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { StudioVideo, studioMeta } from "@/components/remotion/studio/StudioVideo";
+import { musicBeats } from "@/components/remotion/studio/audio";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { FORMATS, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
+import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, snapScenesToBeats, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
@@ -64,6 +65,19 @@ function dropStaleFullVo(prev: Timeline | null, next: Timeline): Timeline {
   const b = at(next);
   const moved = vo.lines.length !== prev.vo.lines.length || vo.lines.some((l) => Math.abs((a.get(l.sceneId) ?? -1) - (b.get(l.sceneId) ?? -2)) > 1e-3);
   return moved ? { ...next, vo: { ...vo, full: null } } : next;
+}
+
+/**
+ * rencana baru dari Harley -> batas adegan ditempel ke ketukan musik (sama seperti tombol "Tempel ke ketukan"), hanya kalau
+ * ada ketukan, belum ada VO (VO yang sudah dibuat bisa terpotong), durasi adegan memang diubah AI (revisi teks saja tidak
+ * menggeser durasi yang diatur user), dan total tetap ≤ MAX_TOTAL.
+ */
+function snapPlan(prev: Timeline | null, tl: Timeline): Timeline {
+  if (tl.vo?.lines.length) return tl;
+  const timed = !prev || tl.scenes.length !== prev.scenes.length || tl.scenes.some((s, i) => s.id !== prev.scenes[i].id || Math.abs(s.dur - prev.scenes[i].dur) > 1e-6);
+  if (!timed) return tl;
+  const next = snapScenesToBeats(tl, musicBeats(tl, totalSec(tl) + 1));
+  return totalSec(next) <= MAX_TOTAL + 1e-6 ? next : tl;
 }
 
 export default function StudioPro({ active = true }: { active?: boolean }) {
@@ -330,7 +344,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   );
   const onPlan = useCallback(
     (raw: unknown) => {
-      const tl = keepDataVo(tlRef.current, tidyTimeline(raw, catRef.current));
+      const prev = tlRef.current;
+      const tl = snapPlan(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current)));
       change(tl);
       setSelected(null);
       playerRef.current?.seekTo(0);

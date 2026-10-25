@@ -2,7 +2,7 @@
 
 /** Layar hasil karya: desain berita gaya TWS, laporan/PPT yang dibalik, landing page brand, dan foto/klip user. */
 import { Video } from "@remotion/media";
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { Easing, Img } from "remotion";
 import { storagePathOf } from "@/lib/studio/urls";
 import { useSrc } from "../theme";
@@ -226,7 +226,10 @@ function wrapTitle(s: string, max = 18, rows = 3) {
 
 type Tws = { big: string; lines: string[]; kicker: string; text: string; rows: [string, string][]; note: string };
 
-function TwsCover({ t, at, d, src }: { t: Clock; at: number; d: Tws; src: string | null }) {
+function TwsCover({ t, at, d, src: src0 }: { t: Clock; at: number; d: Tws; src: string | null }) {
+  // gambar gagal dimuat → grafik bawaan (tanpa onError, <Img> membatalkan render)
+  const [bad, setBad] = useState<string | null>(null);
+  const src = src0 && src0 !== bad ? src0 : null;
   const tone = toneOf(d.big);
   const p = pop(t, at + 4, { damping: 12, stiffness: 110 });
   const zoom = 1.1 - 0.1 * ramp(t, at, at + t.fps * 6, 0, 1, Easing.out(Easing.quad));
@@ -236,7 +239,7 @@ function TwsCover({ t, at, d, src }: { t: Clock; at: number; d: Tws; src: string
       <div style={{ position: "absolute", inset: 0, transform: `scale(${zoom})` }}>
         {src ? (
           <>
-            <Img src={src} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "50% 28%" }} />
+            <Img src={src} onError={() => setBad(src)} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "50% 28%" }} />
             <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.42)" }} />
           </>
         ) : (
@@ -775,6 +778,9 @@ export function WebsiteScreen({ e }: { e: Env }) {
   const { t, wide, brand } = e;
   const gid = useSid("ws");
   const res = useSrc();
+  // gambar pratinjau gagal dimuat → contoh website otomatis (tanpa onError, <Img> membatalkan render)
+  const [bad, setBad] = useState<string | null>(null);
+  const shot = e.src && e.src !== bad ? e.src : null;
   const bg = brand.bg || "#09090b";
   const dark = lumOf(bg) < 0.55;
   const ink = dark ? brand.text || "#fafafa" : "#0a0a0a";
@@ -849,8 +855,8 @@ export function WebsiteScreen({ e }: { e: Env }) {
   const visual = (
     <div style={{ position: "relative", width: vw, height: vh, flex: "none", opacity: clamp01(vp * 1.4), transform: `translateY(${(1 - vp) * 40 + Math.sin(t.f / 30) * 4}px) rotate(${(1 - vp) * 4}deg)` }}>
       <div style={{ position: "absolute", inset: 0, borderRadius: 20, background: panel, border: `1px solid ${line}`, boxShadow: `0 40px 80px -30px rgba(0,0,0,0.7), 0 0 0 1px ${rgba(pri, 0.08)}`, overflow: "hidden", padding: wide ? 20 : 14, boxSizing: "border-box" }}>
-        {e.src ? (
-          <Img src={e.src} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        {shot ? (
+          <Img src={shot} onError={() => setBad(shot)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
         ) : (
           <>
             <div style={{ display: "flex", gap: 6 }}>

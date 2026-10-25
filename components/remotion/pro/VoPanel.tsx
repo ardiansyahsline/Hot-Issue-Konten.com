@@ -88,6 +88,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const [note, setNote] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const handled = useRef<string | null>(null);
+  /** job bank yang dibuat di panel ini selama halaman terbuka (bukan job lama yang diingat dari localStorage) */
+  const startedHere = useRef(new Set<string>());
   const tlRef = useRef(tl);
   tlRef.current = tl;
   const voicesRef = useRef(voices);
@@ -184,6 +186,12 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     } else if (job.status === "gagal") {
       handled.current = job.id;
       rememberJob(jobKey, null);
+      // job lama (diingat dari localStorage / tab atau perangkat lain) atau suara sudah bukan bank -> jangan timpa VO diam-diam,
+      // cukup tampilkan error + tombol cadangan
+      if (!startedHere.current.has(job.id) || tlRef.current.voice.mode !== "bank") {
+        setRun({ s: "error", msg: "Mesin suara di laptop gagal bikin VO.", detail: job.message ?? undefined, fallback: true });
+        return;
+      }
       // mesin laptop gagal -> otomatis cadangan Edge (sama seperti saat laptop mati); pesan umum laptop ("…pakai cadangan") tidak diulang
       const why = job.message && !/cadangan/i.test(job.message) ? ` (${job.message.slice(0, 160).replace(/\.$/, "")})` : "";
       void genTts("edge", `Mesin suara laptop gagal bikin VO${why} — sementara pakai suara cadangan (VO sementara). Suara bank bisa dicoba lagi nanti lewat "Generate ulang VO".`);
@@ -260,6 +268,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     try {
       const j = await createVoiceJob({ kind: "tts", project_id: projectId, voice_id: voice.id, engine: "auto", lines, settings: { exaggeration: exg, cfg_weight: cfg, takes: 2 } });
       handled.current = null;
+      startedHere.current.add(j.id);
       rememberJob(jobKey, j.id);
       setRun({ s: "job", id: j.id });
     } catch (e) {
