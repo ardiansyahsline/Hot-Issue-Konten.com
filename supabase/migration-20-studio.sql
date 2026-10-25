@@ -234,6 +234,15 @@ alter table public.studio_workers enable row level security;
 grant select on public.studio_workers to authenticated;
 drop policy if exists "studio_workers_read" on public.studio_workers;
 create policy "studio_workers_read" on public.studio_workers for select to authenticated using (public.can_use_studio());
+-- jam detak jantung diisi jam database (bukan jam laptop yang bisa meleset); penanda "mati" (tahun 2000) tetap dipakai apa adanya
+create or replace function public.studio_workers_stamp()
+returns trigger language plpgsql as $$
+begin
+  if new.last_seen > timestamptz '2001-01-01' then new.last_seen := now(); end if;
+  return new;
+end $$;
+drop trigger if exists studio_workers_stamp on public.studio_workers;
+create trigger studio_workers_stamp before insert or update on public.studio_workers for each row execute function public.studio_workers_stamp();
 
 -- ---------- 7. SFX tambahan (dari script Sonniss lokal / Freesound CC0) ----------
 create table if not exists public.studio_sfx (

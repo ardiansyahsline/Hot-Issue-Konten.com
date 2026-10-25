@@ -36,7 +36,8 @@ export async function GET() {
   if (q.status === "fulfilled" && !q.value.error) queue = q.value.count ?? 0;
 
   const t = lastSeen ? Date.parse(lastSeen) : NaN;
-  const online = Number.isFinite(t) && Date.now() - t < ONLINE_MS;
+  // detak dari "masa depan" (jam tidak sinkron) dianggap mati, supaya job tidak menumpuk di antrian laptop yang sudah mati
+  const online = Number.isFinite(t) && Date.now() - t < ONLINE_MS && t < Date.now() + 30_000;
 
   return NextResponse.json(
     {
