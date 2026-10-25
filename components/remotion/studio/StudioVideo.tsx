@@ -35,7 +35,7 @@ export const TAIL_SEC = 0.5;
 /** timeline yang aman dipakai: kalau strukturnya rusak (mis. props.json dari luar), dinormalisasi dulu */
 export function safeTimeline(t: unknown): Timeline {
   const o = t as Partial<Timeline> | null;
-  const ok = !!o && typeof o === "object" && Array.isArray(o.scenes) && o.scenes.length > 0 && !!o.ratio && !!FORMATS[o.ratio] && !!o.brand && typeof o.brand === "object" && !!o.voice && !!o.music
+  const ok = !!o && typeof o === "object" && Array.isArray(o.scenes) && o.scenes.length > 0 && !!o.ratio && !!FORMATS[o.ratio] && !!o.brand && typeof o.brand === "object" && typeof o.brand.text === "string" && typeof o.brand.bg === "string" && !!o.voice && !!o.music
     && o.scenes.every((s) => !!s && typeof s === "object" && typeof s.dur === "number" && !!s.layout && !!s.bg && !!s.transition && Array.isArray(s.text) && Array.isArray(s.sfx));
   return ok ? (o as Timeline) : normalizeTimeline(t);
 }
