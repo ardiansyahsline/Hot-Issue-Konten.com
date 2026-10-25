@@ -16,7 +16,7 @@ import { StudioAudio } from "./audio";
 import { SceneBg } from "./backgrounds";
 import { Grain, SafeZoneOverlay, Vignette } from "./fx";
 import { dofFor, SceneLayout } from "./layouts";
-import { subsOn, subsReserve, Subtitles } from "./text";
+import { subsReserve, subsRoom, Subtitles } from "./text";
 import { BODY, clamp, fontOf, SceneCtx, StudioCtx, useStudio, type Box, type SceneCtxValue, type StudioCtxValue } from "./theme";
 import { CameraRig, camSafeBox, Layer, SceneTransition, trFrames, type Tr } from "./transitions";
 
@@ -95,8 +95,8 @@ export const StudioVideo: FC<StudioVideoProps> = ({ timeline, showSafeZone = fal
     });
   }, [tl, fps]);
 
-  const subs = useMemo(() => tl.scenes.map((_, i) => subsOn(tl, i, audio)), [tl, audio]);
-  // area isi per adegan = zona aman, dikurangi ruang subtitle kalau subtitle tampil,
+  const subs = useMemo(() => subsRoom(tl, audio), [tl, audio]);
+  // area isi per adegan = zona aman, dikurangi ruang subtitle kalau ada subtitle yang tampil di adegan itu (termasuk VO adegan sebelumnya yang lewat batas),
   // lalu diperkecil sesuai gerak kamera supaya isi tetap di zona aman saat kamera membesar / bergeser
   const boxes = useMemo<Box[]>(() => {
     const reserve = subsReserve(tl.ratio) * k;

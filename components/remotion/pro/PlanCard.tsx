@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BED_BPM } from "@/components/remotion/studio/audio";
-import type { Catalog } from "@/lib/studio/client";
+import { reloadStudioCatalog, type Catalog } from "@/lib/studio/client";
 import { SFX_BUILTIN } from "@/lib/studio/sfxMeta";
 import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
@@ -264,7 +264,16 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
             )}
           </Field>
           <div className="flex flex-wrap items-center gap-2">
-            <UploadBtn accept="audio/*" sub="music" label="⬆️ Upload musik" onDone={(r) => set({ music: { src: r.src, name: r.name.replace(/\.[^.]+$/, "").slice(0, 80), bpm: null, beats: null, offset: 0, gain: music.gain ?? 0, lufs: null } })} />
+            <UploadBtn
+              accept="audio/*"
+              sub="music"
+              label="⬆️ Upload musik"
+              onDone={(r) => {
+                set({ music: { src: r.src, name: r.name.replace(/\.[^.]+$/, "").slice(0, 80), bpm: null, beats: null, offset: 0, gain: music.gain ?? 0, lufs: null } });
+                // muat ulang katalog supaya musik upload tetap ada di daftar walau user pindah ke musik lain
+                void reloadStudioCatalog();
+              }}
+            />
             <button
               type="button"
               disabled={beats.length < 2 || music.src === "none"}

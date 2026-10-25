@@ -190,8 +190,10 @@ export async function POST(req: Request) {
     cat: guessCat(s),
     tags: (s.tags ?? []).slice(0, 12).map((x) => clip(x, 30).toLowerCase()).filter(Boolean),
     dur,
+    // loudness belum diukur di server (tidak ada decoder mp3; kolom wajib terisi) -> perkiraan aman:
+    // puncak dianggap penuh (0 dBTP) supaya sfxGain & limiter di audio.tsx tidak mendorong SFX sampai pecah
     lufs: -20,
-    tp: -3,
+    tp: 0,
     hit: 0,
     peak: 0,
     use_for: clip(`Freesound: ${name}`, 160),

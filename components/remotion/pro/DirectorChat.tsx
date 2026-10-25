@@ -8,7 +8,7 @@ import HeroArt from "@/components/ai/HeroArt";
 import Markdown from "@/components/ai/Markdown";
 import { personaOf } from "@/lib/aiPersona";
 import { splitChoice, type Choice } from "@/lib/choiceCard";
-import { uploadStudioFile } from "@/lib/studio/client";
+import { reloadStudioCatalog, uploadStudioFile } from "@/lib/studio/client";
 import type { Timeline } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { createClient } from "@/lib/supabase/client";
@@ -304,7 +304,11 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
       const preview = kind === "image" || kind === "logo" ? URL.createObjectURL(f) : undefined;
       setPending((p) => [...p, { key, name: f.name, kind, status: "up", preview }]);
       uploadStudioFile(f, "uploads", mode).then(
-        (r) => setPending((p) => p.map((x) => (x.key === key ? { ...x, status: "ok", path: r.path } : x))),
+        (r) => {
+          setPending((p) => p.map((x) => (x.key === key ? { ...x, status: "ok", path: r.path } : x)));
+          // musik upload masuk daftar musik di kartu rencana
+          if (mode === "music") void reloadStudioCatalog();
+        },
         (e) => setPending((p) => p.map((x) => (x.key === key ? { ...x, status: "err", err: e instanceof Error && e.message.length < 80 ? e.message : "gagal upload" } : x))),
       );
     }

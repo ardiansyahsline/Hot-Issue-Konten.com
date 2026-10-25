@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import {
   LAYOUTS,
@@ -23,6 +24,7 @@ import {
   type TransitionKind,
 } from "@/lib/studio/timeline";
 import { sfxSrc, storagePathOf } from "@/lib/studio/urls";
+import FreesoundPanel from "./FreesoundPanel";
 import { Field, Num, Seg, Toggle, Txt, UploadBtn } from "./fields";
 import { BG_LABEL, CAMERA_LABEL, DIR_LABEL, LAYOUT_LABEL, MUSIC_LABEL, SCREEN_LABEL, TRANSITION_LABEL, commaList, fmtSec, parseNum, wordCount } from "./planUtils";
 
@@ -335,11 +337,23 @@ function IconBtn({ label, onClick, disabled, children }: { label: string; onClic
   );
 }
 
-/** daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog */
+/** daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog / Freesound CC0 */
 function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxItem[]; patch: (p: ScenePatch) => void }) {
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState("");
+  const [fsOpen, setFsOpen] = useState(false);
+  /** id SFX Freesound yang baru ditambah, menunggu katalog termuat ulang */
+  const [want, setWant] = useState<string | null>(null);
+  const freesound = useStudioStatus()?.freesound === true;
   const byId = useMemo(() => new Map(sfxList.map((m) => [m.id, m])), [sfxList]);
+
+  // cue SFX Freesound dipasang setelah SFX-nya ada di katalog (kalau belum, cue-nya dibuang saat timeline dirapikan)
+  useEffect(() => {
+    if (!want || !byId.has(want)) return;
+    const id = want;
+    setWant(null);
+    patch((x) => (x.sfx.length >= MAX_SFX ? {} : { sfx: [...x.sfx, { id, at: 0, on: true }] }));
+  }, [want, byId, patch]);
   const found = useMemo(() => {
     const t = q.trim().toLowerCase();
     const list = t ? sfxList.filter((m) => [m.id, m.cat, m.use, ...m.tags].join(" ").toLowerCase().includes(t)) : sfxList;
@@ -420,6 +434,14 @@ function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxIte
             ))}
             {!found.length && <li className="px-1.5 py-2 text-[12px] text-zinc-500">Tidak ketemu. Coba kata lain.</li>}
           </ul>
+          {freesound &&
+            (fsOpen ? (
+              <FreesoundPanel initial={q.trim()} full={full} onAdd={setWant} onClose={() => setFsOpen(false)} />
+            ) : (
+              <button type="button" className="mt-2 text-[12px] font-semibold text-orange-400 hover:text-orange-300" onClick={() => setFsOpen(true)}>
+                🌐 Cari SFX gratis (Freesound CC0)
+              </button>
+            ))}
           <p className="mt-1.5 text-[11px] text-zinc-500">Maks {MAX_SFX} SFX per adegan & maks 2 SFX keras di detik yang sama (sisanya otomatis dibuang).</p>
         </div>
       )}
@@ -543,6 +565,17 @@ function LayoutFields({ l, set }: { l: Layout; set: (p: Partial<Layout>) => void
           <Field label="Kemiringan 3D (derajat)" hint="-25 sampai 25. 0 = lurus.">
             {(id) => <Num id={id} value={l.tilt} min={-25} max={25} placeholder="0" onCommit={(v) => set({ tilt: v })} />}
           </Field>
+          {/* layar Media / Website menampilkan layout.src (Website: gambar pratinjau, opsional) */}
+          {l.screen === "media" && (
+            <div className="sm:col-span-2">
+              <SrcUpload src={l.src} accept="image/*,video/*" what="klip / gambar" empty="Foto / klip yang tampil di dalam layar." onChange={(src) => set({ src })} />
+            </div>
+          )}
+          {l.screen === "website" && (
+            <div className="sm:col-span-2">
+              <SrcUpload src={l.src} accept="image/*" what="gambar website" empty="Opsional: screenshot website. Kosong = contoh website otomatis." onChange={(src) => set({ src })} />
+            </div>
+          )}
           <div className="sm:col-span-2">{items("Isi layar (opsional)", "Satu baris per item, mis. judul issue / pesan chat.")}</div>
         </div>
       );
@@ -570,23 +603,10 @@ function LayoutFields({ l, set }: { l: Layout; set: (p: Partial<Layout>) => void
           <div className="sm:col-span-2">{t("Teks kecil", "subtitle", 140)}</div>
         </div>
       );
-    case "media": {
-      const name = storagePathOf(l.src)?.split("/").pop();
+    case "media":
       return (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <UploadBtn accept="image/*,video/*" sub="media" label={l.src ? "🔁 Ganti klip / gambar" : "⬆️ Upload klip / gambar"} onDone={(r) => set({ src: r.src })} />
-            {l.src ? (
-              <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-400">
-                <span className="truncate">📎 {name || "file terpasang"}</span>
-                <button type="button" className="font-semibold text-zinc-500 hover:text-red-400" onClick={() => set({ src: null })}>
-                  Lepas
-                </button>
-              </span>
-            ) : (
-              <span className="text-[11.5px] text-zinc-500">Bisa juga kirim lewat chat (📎 Klip/gambar).</span>
-            )}
-          </div>
+          <SrcUpload src={l.src} accept="image/*,video/*" what="klip / gambar" empty="Bisa juga kirim lewat chat (📎 Klip/gambar)." onChange={(src) => set({ src })} />
           <div className="flex flex-wrap items-center gap-4">
             <Seg
               label="Cara tampil"
@@ -604,7 +624,6 @@ function LayoutFields({ l, set }: { l: Layout; set: (p: Partial<Layout>) => void
           </div>
         </div>
       );
-    }
     case "quote":
       return (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -613,6 +632,26 @@ function LayoutFields({ l, set }: { l: Layout; set: (p: Partial<Layout>) => void
         </div>
       );
   }
+}
+
+/** upload gambar / klip untuk layout.src + nama file & tombol Lepas */
+function SrcUpload({ src, accept, what, empty, onChange }: { src: string | null | undefined; accept: string; what: string; empty: string; onChange: (src: string | null) => void }) {
+  const name = storagePathOf(src)?.split("/").pop();
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <UploadBtn accept={accept} sub="media" label={src ? `🔁 Ganti ${what}` : `⬆️ Upload ${what}`} onDone={(r) => onChange(r.src)} />
+      {src ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-400">
+          <span className="truncate">📎 {name || "file terpasang"}</span>
+          <button type="button" className="font-semibold text-zinc-500 hover:text-red-400" onClick={() => onChange(null)}>
+            Lepas
+          </button>
+        </span>
+      ) : (
+        <span className="text-[11.5px] text-zinc-500">{empty}</span>
+      )}
+    </div>
+  );
 }
 
 function SideFields({ label, side, onChange }: { label: string; side: Side | undefined; onChange: (s: Side) => void }) {

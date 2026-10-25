@@ -303,6 +303,18 @@ export function buildSubs(tl: Timeline): SubCue[] {
   });
 }
 
+/**
+ * adegan yang perlu ruang subtitle: subtitle-nya sendiri tampil, ATAU tertimpa subtitle VO adegan lain yang suaranya
+ * lewat batas adegan (subtitle ikut adegan pemilik VO, jadi tetap tampil walau adegan ini subtitle-nya mati / tanpa VO)
+ */
+export function subsRoom(tl: Timeline, audio: "all" | "vo" | "novo" = "all"): boolean[] {
+  const on = tl.scenes.map((_, i) => subsOn(tl, i, audio));
+  const cues = buildSubs(tl).filter((c) => on[c.scene]);
+  const starts = sceneStartSecs(tl);
+  // jendela tampil sama dengan <Subtitles>: c.s - 0,04 sampai c.end
+  return on.map((b, j) => b || cues.some((c) => c.s - 0.04 < starts[j] + tl.scenes[j].dur && c.end > starts[j]));
+}
+
 /** bar subtitle di bawah, tepat di atas area caption TikTok (masih di zona aman) */
 export function Subtitles({ tl, audio = "all" }: { tl: Timeline; audio?: "all" | "vo" | "novo" }) {
   const frame = useCurrentFrame();
