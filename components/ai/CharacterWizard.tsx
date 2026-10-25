@@ -211,6 +211,13 @@ export default function CharacterWizard({
       setTraining({ picks: {}, other: {} });
       setDirty(true);
     }
+    if (initial && type !== initial.mbti) {
+      // julukan bawaan ikut kembali ke tipe tersimpan (julukan ketikan sendiri tetap)
+      const lab = typeInfo(initial.mbti).label;
+      const auto = [genRef.current?.sum.label, typeInfo(type).label];
+      setSum((s) => (s ? { ...s, label: auto.includes(s.label) ? lab : s.label } : s));
+      if (genRef.current) genRef.current = { ...genRef.current, sum: { ...genRef.current.sum, label: lab } };
+    }
     if (initial) setTypeOverride(initial.mbti);
     setErr(null);
     setStep(1 + QUIZ_QS.length + 2); // halaman nama & tampilan (tanpa halaman latihan)
