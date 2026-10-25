@@ -32,6 +32,9 @@ import { splitReports } from "@/lib/kontenDesign";
 import { splitDeck } from "@/lib/deck";
 import { splitMusic } from "@/lib/musicCmd";
 import MusicCmdCard from "./MusicCmdCard";
+import DesignCard from "./DesignCard";
+import PhotoGrid from "./PhotoGrid";
+import { splitDesigns, splitPhotos } from "@/lib/visual";
 import { findDuplicates, folderSupported, listingText, pickFolder, readContents, scanFolder, scanFromFiles, splitFilePlan, type Scan } from "@/lib/localFolder";
 
 export type AiConv = { id: string; title: string; model: string | null; updated_at: string };
@@ -452,7 +455,7 @@ export default function AiChat({
   }, [supabase]);
   const plainAnswer = (content: string) => {
     const sa = splitAnalysis(splitPlan(splitChart(splitAsk(content).text).text).text);
-    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text)
+    return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitPhotos(splitDesigns(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text)
       .replace(/\n---\n🌐[\s\S]*$/, "")
       .trim();
   };
@@ -1426,8 +1429,11 @@ export default function AiChat({
                                 const dk0 = splitDeck(fp.text);
                                 const rp = splitReports(dk0.text);
                                 const mu = splitMusic(rp.text);
+                                // desain (```design → PNG) & foto asli (```photos)
+                                const dz = splitDesigns(mu.text);
+                                const ph = splitPhotos(dz.text);
                                 // kartu pertanyaan balik dari AI (```ask)
-                                const ch = splitChoice(mu.text);
+                                const ch = splitChoice(ph.text);
                                 const dk = { ...dk0, partial: dk0.partial || rp.partial };
                                 const sa = { ...sa0, text: ch.text };
                                 const short = sa.text.replace(/\n---\n🌐[\s\S]*$/, "").length < 700;
@@ -1464,6 +1470,9 @@ export default function AiChat({
                                         const ans = cardAnswerAfter(m.id);
                                         return ans ? <AnsweredCard title={ch.choice.title} answer={ans} /> : <ChoiceCard choice={ch.choice} disabled={busy || m.id !== lastAssistant?.id} onSubmit={(t) => run(t)} />;
                                       })()}
+                                    {(dz.partial || ph.partial) && streaming && <p className="mt-2 text-[12.5px] text-zinc-500">⏳ {dz.partial ? `Menggambar desain${dz.designs.length ? ` (opsi ${dz.designs.length + 1})` : ""}…` : "Mencari foto…"}</p>}
+                                    {ph.photos && !streaming && <PhotoGrid ask={ph.photos} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
+                                    {dz.designs.length > 0 && !streaming && <DesignCard designs={dz.designs} disabled={busy || m.id !== lastAssistant?.id} onSend={(t) => run(t)} />}
                                     {mu.cmd && !streaming && <MusicCmdCard id={String(m.id)} cmd={mu.cmd} fresh={m.id === lastAssistant?.id && !!m.doneAt && Date.now() - m.doneAt < 90000} />}
                                   </>
                                 );
@@ -1481,7 +1490,7 @@ export default function AiChat({
                                     navigator.clipboard?.writeText(
                                       (() => {
                                         const sa = splitAnalysis(splitPlan(splitChart(splitAsk(m.content).text).text).text);
-                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitChoice(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text);
+                                        return tidyAnswer((sa.card ? `${analysisText(sa.card)}\n\n` : "") + splitChoice(splitPhotos(splitDesigns(splitMusic(splitReports(splitDeck(splitFilePlan(sa.text).text).text).text).text).text).text).text);
                                       })()
                                     ).then(() => {
                                       setCopied(m.id);
