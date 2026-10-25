@@ -174,6 +174,7 @@ export function TrainModal({
   headOp = 1,
   subOp = 1,
   barsOp = 1,
+  footOp = 1,
   dim = 0,
 }: {
   w: number;
@@ -192,10 +193,13 @@ export function TrainModal({
   headOp?: number;
   subOp?: number;
   barsOp?: number;
+  /** opasitas footer — memudar saat kamera mendorongnya keluar kotak aman (ke zona subtitle / UI TikTok) */
+  footOp?: number;
   /** rack focus: header & footer ikut buram + redup (0..1) */
   dim?: number;
 }) {
-  const soft: CSSProperties | undefined = dim > 0.02 ? { filter: `blur(${(dim * 2.6).toFixed(2)}px)`, opacity: 1 - dim * 0.5 } : undefined;
+  const dOp = 1 - dim * 0.5;
+  const soft: CSSProperties | undefined = dim > 0.02 ? { filter: `blur(${(dim * 2.6).toFixed(2)}px)`, opacity: dOp } : undefined;
   return (
     <div
       style={{
@@ -221,7 +225,7 @@ export function TrainModal({
         </div>
         <span style={{ marginLeft: "auto", borderRadius: 8, padding: "4px 8px", color: Z[500], fontSize: 14, opacity: headOp }}>✕</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4, padding: "12px 16px 0", opacity: barsOp, ...soft }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 4, padding: "12px 16px 0", ...soft, opacity: barsOp * dOp }}>
         {T_STAGES.map((st, i) => (
           <span key={st} style={{ position: "relative", height: 6, borderRadius: 99, background: Z[800], overflow: "hidden" }}>
             <span style={{ display: "block", height: "100%", borderRadius: 99, background: OR, width: `${(clamp01(bars[i] ?? 0) * 100).toFixed(2)}%`, boxShadow: `0 0 8px ${rgba(OR, 0.7)}` }} />
@@ -233,7 +237,7 @@ export function TrainModal({
         {/* isi yang terpotong tepi bawah memudar (gradasi linear ke warna modal — aman untuk web renderer) */}
         <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 26, background: `linear-gradient(180deg, ${rgba(Z[900], 0)} 0%, ${rgba(Z[900], 0.92)} 70%, ${Z[900]} 100%)`, pointerEvents: "none" }} />
       </div>
-      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px", ...soft }}>
+      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(39,39,42,0.8)", padding: "12px 16px", ...soft, opacity: footOp * dOp }}>
         <span style={btnGhost}>← Kembali</span>
         <span
           style={{
@@ -434,13 +438,13 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
   const G = T_GROUP;
   const bgP = prog(f, fps, enter, at + 0.15, EASE.inOut);
   const decoP = prog(f, fps, enter + 0.12, at, EASE.out);
-  // chibi muncul tepat di ketukan: pegas mulai 3 frame lebih awal → di frame pukulan sudah ±90% & tajam, puncak overshoot 1–3 frame sesudahnya (ts-pop .4 → 1.06 → 1)
-  const chib = springAt(f, fps, at - 3 / fps, { damping: 10, stiffness: 210, mass: 0.7 });
+  // chibi muncul tepat di ketukan: pegas mulai 4 frame lebih awal → di frame pukulan sudah ±90% & tajam, puncak overshoot 1–3 frame sesudahnya (ts-pop .4 → 1.06 → 1)
+  const chib = springAt(f, fps, at - 4 / fps, { damping: 10, stiffness: 210, mass: 0.7 });
   // lompat sekali (hero-hop) di ketukan konfeti
   const hk = (s - hopAt) / 0.44;
   const hop = hk > 0 && hk < 1 ? Math.sin(hk * Math.PI) * (hk < 0.5 ? 1 : 1) : 0;
   const squash = hk > 0.85 && hk < 1.15 ? 1 - 0.06 * Math.sin(((hk - 0.85) / 0.3) * Math.PI) : 1;
-  const chipP = springAt(f, fps, at + 0.3, { damping: 18, stiffness: 160 });
+  const chipP = springAt(f, fps, at, { damping: 18, stiffness: 160 });
   // ledakan cahaya hangat di BELAKANG chibi & huruf saat konfeti (huruf tetap terbaca)
   const wb = (s - hopAt) / 0.45;
   const sweep = prog(f, fps, at + 0.32, at + 0.9, EASE.inOut);
@@ -468,7 +472,7 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
             </radialGradient>
           </defs>
           <circle r={40 + 70 * EASE.out(wb)} fill="url(#trainWarm)" opacity={(1 - wb).toFixed(3)} />
-          <circle r={30 + 90 * EASE.out(wb)} fill="none" stroke="#fde68a" strokeWidth={2.5 * (1 - wb)} opacity={(0.8 * (1 - wb)).toFixed(3)} />
+          <circle r={30 + 90 * EASE.out(wb)} fill="none" stroke="#fde68a" strokeWidth={1.6 * (1 - wb)} opacity={(0.45 * (1 - wb)).toFixed(3)} />
         </svg>
       )}
       <Charge s={s} from={enter + 0.04} at={at} c={G.color} />
@@ -489,7 +493,7 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
         </div>
         <div style={{ position: "relative", marginTop: 4, display: "flex", gap: 6 }}>
           {T_TYPE.split("").map((l, i) => {
-            const ti = at + (i * 2.5 - 3) / fps;
+            const ti = at + (i * 1.6 - 4) / fps;
             const p = springAt(f, fps, ti, { damping: 11, stiffness: 230, mass: 0.6 });
             const fl = clamp01(1 - (s - Math.max(ti, at)) / 0.22);
             const pulse = s > hopAt ? 1 + 0.08 * Math.exp(-(s - hopAt - i * 0.04) * 8) * Math.max(0, Math.sin((s - hopAt - i * 0.04) * 22)) : 1;
@@ -515,7 +519,7 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
                 }}
               >
                 {l}
-                {fl > 0 && s >= at && <span style={{ position: "absolute", inset: 0, background: `rgba(255,255,255,${(0.7 * fl).toFixed(3)})` }} />}
+                {fl > 0 && s >= at && <span style={{ position: "absolute", inset: 0, background: `rgba(255,255,255,${(0.45 * fl).toFixed(3)})` }} />}
               </span>
             );
           })}
@@ -543,9 +547,10 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
   );
 }
 
-export function ResultBody({ f, fps, enter, at, hopAt }: { f: number; fps: number; enter: number; at: number; hopAt: number }) {
-  const k = springAt(f, fps, at + 0.2, { damping: 18, stiffness: 150 });
-  const d = springAt(f, fps, at + 0.55, { damping: 20, stiffness: 140 });
+export function ResultBody({ f, fps, enter, at, hopAt, descAt }: { f: number; fps: number; enter: number; at: number; hopAt: number; descAt: number }) {
+  // nama tipe ikut naik di pukulan (frame hero tidak kosong di bawah huruf)
+  const k = springAt(f, fps, at - 2 / fps, { damping: 18, stiffness: 150 });
+  const d = springAt(f, fps, descAt, { damping: 20, stiffness: 140 });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <TypeSceneFx f={f} fps={fps} enter={enter} at={at} hopAt={hopAt} />
@@ -675,11 +680,6 @@ export function Confetti({ f, fps, at, cannons, n = 44, scale = 1 }: { f: number
   const g = 1100 * scale;
   return (
     <svg width={2} height={2} style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }} aria-hidden>
-      {/* kilatan moncong meriam */}
-      {t < 0.22 &&
-        cannons.map((c, i) => (
-          <circle key={`m${i}`} cx={c.x + Math.cos(c.ang) * 60 * scale} cy={c.y + Math.sin(c.ang) * 60 * scale} r={(30 + 70 * EASE.out(t / 0.22)) * scale} fill="#fde68a" opacity={(0.35 * (1 - t / 0.22)).toFixed(3)} />
-        ))}
       {bits.map((b, i) => {
         const tt = t - b.delay;
         if (tt < 0) return null;

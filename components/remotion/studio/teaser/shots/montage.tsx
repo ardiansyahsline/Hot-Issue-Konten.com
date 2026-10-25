@@ -54,7 +54,7 @@ function enterFx(kind: Enter, lf: number, fps: number, W: number): Partial<Fx> {
   switch (kind) {
     case "drop": {
       const p = springAt(lf, fps, 0, { damping: 13, stiffness: 210, mass: 0.7 });
-      return { s: 1 + 0.34 * (1 - p), blur: Math.max(0, 7 * (1 - lf / 4)) };
+      return { s: 1 + 0.34 * (1 - p), blur: Math.max(0, 5 * (1 - lf / 4)) };
     }
     case "whip": {
       const q = outC(clamp01(lf / 4));
@@ -63,11 +63,11 @@ function enterFx(kind: Enter, lf: number, fps: number, W: number): Partial<Fx> {
     case "shake": {
       const q = outC(clamp01(lf / 6));
       const amp = 26 * Math.max(0, 1 - lf / 9);
-      return { s: 1 + 0.16 * (1 - q), x: amp * (random(`sx${lf}`) * 2 - 1), y: amp * (random(`sy${lf}`) * 2 - 1), r: amp * 0.05 * (random(`sr${lf}`) * 2 - 1), blur: lf < 2 ? 5 : 0 };
+      return { s: 1 + 0.16 * (1 - q), x: amp * (random(`sx${lf}`) * 2 - 1), y: amp * (random(`sy${lf}`) * 2 - 1), r: amp * 0.05 * (random(`sr${lf}`) * 2 - 1), blur: lf < 2 ? 3 - lf * 1.5 : 0 };
     }
     case "spin": {
       const p = springAt(lf, fps, 0, { damping: 15, stiffness: 190, mass: 0.7 });
-      return { r: -26 * (1 - p), s: 1 + 0.3 * (1 - p), blur: 12 * (1 - outC(clamp01(lf / 6))) };
+      return { r: -22 * (1 - p), s: 1 + 0.26 * (1 - p), blur: 6 * (1 - outC(clamp01(lf / 4))) };
     }
     case "glitch": {
       const q = clamp01(lf / 7);
@@ -162,9 +162,9 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
   // bidikan lebar: tab Studio sampai Preview, tepat di bawah teks
   const wide = camOn(W / 2, Y0, 0.94, W / 2, box.y + 182, W, H);
   // bidikan akhir: baris timeline (blok adegan) sampai tombol download, di atas 12% bawah kotak aman (ruang subtitle)
-  const top = wy(UI.y.tl + 58);
+  const top = wy(UI.y.tl - 6);
   const bot = wy(UI.y.end);
-  const T0 = box.y + 170;
+  const T0 = box.y + 180;
   const T1 = box.y + box.h * 0.88;
   const zEnd = Math.max(0.78, Math.min(1.08, (T1 - T0) / (bot - top)));
   const fin = (z: number) => camOn(W / 2, (top + bot) / 2, z, W / 2, (T0 + T1) / 2, W, H);
@@ -187,7 +187,7 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
     <AbsoluteFill>
       <Cam keys={keys}>
         <div style={{ position: "absolute", left: X0, top: Y0, width: UI_W, height: UI.y.end, transform: `scale(${k.toFixed(4)})`, transformOrigin: "0 0" }}>
-          <StudioUi head={head} press={press} progress={progress} sheen={sheen} player={<Replay frame={replayF} W={W} H={H} />} />
+          <StudioUi head={head} press={press} progress={progress} sheen={sheen} dim={clamp01((s - A - 0.86) / 0.3)} player={<Replay frame={replayF} W={W} H={H} />} />
         </div>
         {/* jari mengetuk Download MP4 */}
         {ripple > 0 && ripple < 1 && (
@@ -198,7 +198,7 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
         )}
       </Cam>
       {/* teks layar di atas (latar digelapkan supaya UI yang lewat di bawahnya tidak mengganggu) */}
-      <div style={{ position: "absolute", left: 0, top: 0, width: W, height: box.y + 240, background: `linear-gradient(180deg, ${rgba(brand.bg, 0.96)} 0%, ${rgba(brand.bg, 0.88)} 55%, ${rgba(brand.bg, 0)} 100%)`, opacity: clamp01((s - A - 0.06) / 0.2) }} />
+      <div style={{ position: "absolute", left: 0, top: 0, width: W, height: box.y + 240, background: `linear-gradient(180deg, ${rgba(brand.bg, 0.97)} 0%, ${rgba(brand.bg, 0.9)} 55%, ${rgba(brand.bg, 0)} 100%)`, opacity: clamp01((s - A - 0.06) / 0.2) }} />
       <Caption lines={[text[0] ?? "Dibikin di sini"]} at={A + 0.22} pos="top" size={112} emphasis={["sini"]} />
       <Sweep at={A + 0.5} len={0.7} alpha={0.16} />
     </AbsoluteFill>
@@ -215,13 +215,13 @@ function useMontageStart() {
 /** pemutar preview Studio: montage ini diputar ulang (kedalaman 1, tanpa Studio di dalamnya) */
 function Replay({ frame, W, H }: { frame: number; W: number; H: number }) {
   const { scene } = useScene();
-  const { brand } = useStudio();
+  const { brand, fps } = useStudio();
   const sc = UI.player.w / W;
   return (
     <div style={{ position: "absolute", left: 0, top: 0, width: W, height: H, transform: `scale(${sc.toFixed(5)})`, transformOrigin: "0 0", overflow: "hidden", background: brand.bg }}>
       <MontageDepth.Provider value={1}>
         <SceneBg bg={scene.bg} brand={brand} blur={0} />
-        <Cuts f={frame} fps={30} W={W} H={H} />
+        <Cuts f={frame} fps={fps} W={W} H={H} />
       </MontageDepth.Provider>
     </div>
   );
@@ -238,7 +238,7 @@ export function MontageShot() {
       {depth === 0 && f >= studioF && <StudioPart f={f} fps={fps} W={W} H={H} />}
       {depth === 0 && (
         <>
-          <Flash at={0} len={0.24} max={0.85} />
+          <Flash at={0} len={0.24} max={0.7} />
           <Flash at={BEAT} len={0.12} max={0.3} />
           <Flash at={BEAT * 3} len={0.12} max={0.3} />
           <Flash at={STUDIO_AT} len={0.14} max={0.22} color="#fdba74" />

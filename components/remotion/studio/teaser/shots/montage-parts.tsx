@@ -217,7 +217,7 @@ function voBlocks(tl: Timeline): VoBlock[] {
 }
 
 /** isi Studio Pro (kolom HP 394 px CSS). `head` = posisi playhead (detik teaser), `player` = isi pemutar, `press`/`progress` = tombol download */
-export function StudioUi({ head, player, press, progress, sheen }: { head: number; player: ReactNode; press: number; progress: number; sheen: number }) {
+export function StudioUi({ head, player, press, progress, sheen, dim = 0 }: { head: number; player: ReactNode; press: number; progress: number; sheen: number; dim?: number }) {
   const { tl, fps } = useStudio();
   const { scene: cur } = useScene();
   const total = totalSec(tl);
@@ -262,6 +262,8 @@ export function StudioUi({ head, player, press, progress, sheen }: { head: numbe
   const R = UI.rows;
   return (
     <div style={{ position: "relative", width: UI_W, height: UI.y.end, fontFamily: FONT, color: Z[100] }}>
+      {/* bagian atas (tab, proyek, preview) — buram & redup saat fokus pindah ke timeline + download (depth of field) */}
+      <div style={{ position: "absolute", left: 0, top: 0, width: UI_W, height: UI.y.tl, opacity: 1 - 0.8 * dim, filter: dim > 0.02 ? `blur(${(dim * 2.5).toFixed(2)}px)` : undefined }}>
       {/* StudioTabs: pil 3 kolom, tab aktif bergradasi oranye */}
       <div style={{ position: "absolute", left: 0, top: UI.y.tabs, width: UI_W, height: UI.tabs, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", padding: 4, boxSizing: "border-box", borderRadius: 999, border: "1px solid rgba(39,39,42,0.8)", background: Z[900], fontSize: 11.5, fontWeight: 600 }}>
         {["🎬 Studio Pro", "🧩 Template lama", "🎙️ Bank suara"].map((l, i) => (
@@ -313,6 +315,8 @@ export function StudioUi({ head, player, press, progress, sheen }: { head: numbe
             {clockLabel(head)} / {clockLabel(total)}
           </div>
         </div>
+      </div>
+
       </div>
 
       {/* TimelineEditor */}

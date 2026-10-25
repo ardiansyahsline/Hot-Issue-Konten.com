@@ -42,7 +42,8 @@ const ROWS: Row[] = [
     spell: "Kenalin. Si-es Treker.",
     text: ["CS Tracker"],
     visual: "Logo CS Tracker + light sweep",
-    sfx: [["riser-blastoff", 0], ["braam-epik-1", 0], ["impact-chord", 0]],
+    // maks 2 SFX keras bersamaan: riser memuncak + impact di 0; braam (puncaknya jauh di belakang) masuk sebagai ombak di 0,3
+    sfx: [["riser-blastoff", 0], ["impact-chord", 0], ["braam-epik-1", 0.3]],
     music: "high",
     tr: "zoom",
   },

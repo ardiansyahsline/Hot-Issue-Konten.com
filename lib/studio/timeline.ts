@@ -424,7 +424,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     const voText = voRaw ? str(voRaw.text, 400) : "";
     const tr = (s.transition && typeof s.transition === "object" ? s.transition : { kind: s.transition }) as Record<string, unknown>;
     const bg = (s.bg && typeof s.bg === "object" ? s.bg : {}) as Record<string, unknown>;
-    // SFX: hanya dari katalog, maks 6 per adegan, urut waktu, maks 2 SFX keras berdekatan
+    // SFX: hanya dari katalog, maks 8 per adegan, urut waktu, maks 2 SFX keras berdekatan
     const cues = arr(s.sfx)
       .map((c) => {
         const x = (c && typeof c === "object" ? c : { id: c }) as Record<string, unknown>;
@@ -432,7 +432,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       })
       .filter((c) => catalog.has(c.id))
       .sort((a, b2) => a.at - b2.at)
-      .slice(0, 6);
+      .slice(0, 8);
     const loudKept: number[] = [];
     const sfx = cues.filter((c) => {
       if (!isLoudSfx(catalog.get(c.id))) return true;
