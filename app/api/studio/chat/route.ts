@@ -21,7 +21,7 @@ import {
   type DirectorVoice,
 } from "@/lib/studio/director";
 import { normalizeTimeline, type Timeline } from "@/lib/studio/timeline";
-import type { SfxMeta } from "@/lib/studio/sfxMeta";
+import { SFX_BUILTIN, type SfxMeta } from "@/lib/studio/sfxMeta";
 import { STUDIO_BUCKET, musicSrc, storageSrc } from "@/lib/studio/urls";
 
 export const runtime = "nodejs";
@@ -615,6 +615,7 @@ async function imageUrl(db: Db, p: string): Promise<string | null> {
 
 const SFX_LIMIT = 500; // sama dengan /api/studio/catalog: 500 SFX tambahan tertua (urut created_at)
 const SFX_ID = /^[a-z0-9][a-z0-9-]{1,60}$/; // sama dengan cek kolom studio_sfx.id
+const SFX_BUILTIN_IDS = new Set(SFX_BUILTIN.map((s) => s.id));
 
 /** id SFX yang dipakai timeline mentah (editan user / database) — dicari di studio_sfx supaya tidak ikut terbuang saat dinormalisasi */
 function usedSfxIds(raw: unknown): string[] {
@@ -634,21 +635,28 @@ function usedSfxIds(raw: unknown): string[] {
  * SFX tambahan (Freesound CC0 / Sonniss lokal) dari tabel studio_sfx. Tabel belum ada -> kosong.
  * list = 500 tertua (urutan & batas sama dengan katalog editor) — sumber daftar SFX TAMBAHAN di prompt.
  * allow = list + SFX tambahan yang sudah dipakai timeline sekarang — id yang boleh lolos normalisasi (timeline user & jawaban AI).
+ * Baca gagal -> id yang sudah dipakai tetap masuk allow (placeholder kalau tidak bisa dicek), supaya cue Freesound/Sonniss
+ * tidak hilang permanen saat revisi disimpan. Yang dibuang cuma id karangan AI yang memang tidak ada.
  */
 async function loadExtraSfx(db: Db, used: string[]): Promise<{ list: SfxMeta[]; allow: SfxMeta[] }> {
   const cols = "id, path, cat, tags, dur, lufs, tp, hit, peak, use_for";
+  // placeholder sama seperti keepMeta di planUtils: hanya untuk cek id & loudness saat normalisasi, tidak ikut tersimpan
+  const keep = (have: Set<string>) =>
+    used.filter((id) => !SFX_BUILTIN_IDS.has(id) && !have.has(id)).map((id): SfxMeta => ({ id, file: "", cat: "ui", tags: [], dur: 1, lufs: -20, tp: -3, hit: 0, peak: 0, use: "" }));
   try {
     const [all, usedRes] = await Promise.all([
       db.from("studio_sfx").select(cols).order("created_at", { ascending: true }).limit(SFX_LIMIT),
       used.length ? db.from("studio_sfx").select(cols).in("id", used) : null,
     ]);
-    if (all.error || !all.data) return { list: [], allow: [] };
-    const list = sfxRows(all.data);
+    const list = !all.error && all.data ? sfxRows(all.data) : [];
     const have = new Set(list.map((s) => s.id));
     const more = usedRes && !usedRes.error && usedRes.data ? sfxRows(usedRes.data).filter((s) => !have.has(s.id)) : [];
+    for (const s of more) have.add(s.id);
+    // cek id yang dipakai gagal -> pertahankan semuanya (tidak bisa dibedakan mana yang benar-benar sudah dihapus)
+    if (usedRes && (usedRes.error || !usedRes.data)) more.push(...keep(have));
     return { list, allow: more.length ? [...list, ...more] : list };
   } catch {
-    return { list: [], allow: [] };
+    return { list: [], allow: keep(new Set()) };
   }
 }
 

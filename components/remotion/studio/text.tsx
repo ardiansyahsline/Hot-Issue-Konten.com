@@ -296,8 +296,7 @@ export function buildSubs(tl: Timeline): SubCue[] {
     timed.set(i, alignWords(line.words, tw).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e })));
   });
   return cues.map((c, k) => {
-    let si = 0;
-    for (let i = 0; i < starts.length; i++) if (starts[i] <= c.s + 1e-3) si = i;
+    const si = c.scene; // adegan pemilik VO, walau suaranya lewat batas adegan
     const ws = timed.get(si)?.filter((w) => w.s >= c.s - 1e-4 && w.e <= c.e + 1e-4) ?? [];
     const next = cues[k + 1]?.s ?? Infinity;
     return { ...c, end: Math.min(next, c.e + 0.3), scene: si, words: ws.length ? ws : null };

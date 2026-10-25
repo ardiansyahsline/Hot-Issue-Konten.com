@@ -242,21 +242,32 @@ export const nearestBeat = (t: number, beats: number[]) => beats.reduce((best, b
 
 /**
  * Tempel batas adegan ke ketukan terdekat (maks geser `maxShift` detik) supaya potongan & impact jatuh di ketukan.
- * Durasi adegan disesuaikan, total video ikut berakhir di ketukan terakhir yang dekat.
+ * Durasi adegan disesuaikan, total video ikut berakhir di ketukan terakhir yang dekat — tapi tidak pernah lebih panjang
+ * dari total semula / MAX_TOTAL (kalau lewat, normalizeTimeline diam-diam membuang adegan terakhir).
  */
 export function snapScenesToBeats<T extends Pick<Timeline, "scenes" | "fps">>(tl: T, beats: number[], maxShift = 0.35): T {
   if (beats.length < 2) return tl;
+  // batas dibulatkan ke frame & durasi = selisih batas, jadi pembulatan tidak menumpuk
+  const fr = (t: number) => Math.round(t * tl.fps) / tl.fps;
+  const cap = Math.floor(Math.min(MAX_TOTAL, totalSec(tl)) * tl.fps + 1e-6) / tl.fps;
+  const grid = beats.map(fr);
+  const n = tl.scenes.length;
   const bounds = [0];
   let acc = 0;
-  for (const s of tl.scenes) {
+  tl.scenes.forEach((s, i) => {
     acc += s.dur;
-    // tiap batas dicek terhadap batas sebelumnya (yang mungkin sudah digeser) supaya durasi tetap MIN_DUR..MAX_DUR
+    // tiap batas dicek terhadap batas sebelumnya (yang mungkin sudah digeser) supaya durasi tetap MIN_DUR..MAX_DUR,
+    // dan tidak lewat `cap` dikurangi ruang minimal (MIN_DUR) untuk adegan-adegan sesudahnya
     const prev = bounds[bounds.length - 1];
-    const ok = (t: number) => t - prev >= MIN_DUR && t - prev <= MAX_DUR;
-    const b = nearestBeat(acc, beats.filter(ok));
-    bounds.push(ok(b) && Math.abs(b - acc) <= maxShift ? b : ok(acc) ? acc : prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur)));
-  }
-  const scenes = tl.scenes.map((s, i) => ({ ...s, dur: Math.round((bounds[i + 1] - bounds[i]) * tl.fps) / tl.fps }));
+    const hi = fr(cap - MIN_DUR * (n - 1 - i));
+    const ok = (t: number) => t - prev >= MIN_DUR - 1e-6 && t - prev <= MAX_DUR + 1e-6 && t <= hi + 1e-6;
+    const a = fr(acc);
+    const b = nearestBeat(a, grid.filter(ok));
+    bounds.push(ok(b) && Math.abs(b - acc) <= maxShift ? b : ok(a) ? a : Math.min(hi, fr(prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur)))));
+  });
+  const scenes = tl.scenes.map((s, i) => ({ ...s, dur: fr(bounds[i + 1] - bounds[i]) }));
+  // timeline aneh (mis. adegan < MIN_DUR) yang tidak muat di `cap` -> biarkan apa adanya daripada menyimpan hasil yang kepanjangan
+  if (scenes.some((s) => s.dur < MIN_DUR - 1e-6) || totalSec({ scenes }) > MAX_TOTAL + 1e-6) return tl;
   return { ...tl, scenes };
 }
 
@@ -570,9 +581,10 @@ export function alignWords(eng: Word[], text: string[]): Word[] {
 }
 
 /** potongan subtitle per adegan: dari timestamp per kata kalau ada, kalau tidak dari perkiraan kecepatan bicara */
-export function subtitleCues(tl: Timeline): { s: number; e: number; text: string }[] {
+export function subtitleCues(tl: Timeline): { s: number; e: number; text: string; scene: number }[] {
   const starts = sceneStartSecs(tl);
-  const cues: { s: number; e: number; text: string }[] = [];
+  // scene = adegan pemilik VO (bukan adegan tempat potongan mulai: VO yang lebih panjang dari adegannya tetap milik adegan itu)
+  const cues: { s: number; e: number; text: string; scene: number }[] = [];
   tl.scenes.forEach((sc, i) => {
     if (!sc.vo?.text || tl.muteVo) return;
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
@@ -588,7 +600,7 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
     // kelompokkan maks 6 kata / potongan, putus di tanda baca
     let cur: typeof ws = [];
     const flush = () => {
-      if (cur.length) cues.push({ s: cur[0].s, e: cur[cur.length - 1].e, text: cur.map((w) => w.w).join(" ") });
+      if (cur.length) cues.push({ s: cur[0].s, e: cur[cur.length - 1].e, text: cur.map((w) => w.w).join(" "), scene: i });
       cur = [];
     };
     for (const w of ws) {

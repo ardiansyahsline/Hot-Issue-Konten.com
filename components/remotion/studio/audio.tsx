@@ -18,14 +18,15 @@ import { useMemo } from "react";
 import { Sequence, useVideoConfig } from "remotion";
 import { SFX_BUILTIN, sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
 import { beatGrid, dbToGain, DUCK_DB, isLoudSfx, MUSIC_LEVEL_DB, sceneStarts, secToFrames, sfxGain, TARGET_LUFS, totalFrames, type MusicLevel, type Timeline, type VoTrack } from "@/lib/studio/timeline";
-import { sfxEnv } from "@/lib/studio/sfxEnv";
+import { SFX_ENV_FPS, sfxEnv } from "@/lib/studio/sfxEnv";
 import { sfxSrc } from "@/lib/studio/urls";
 import { clamp, clamp01, useSrc } from "./theme";
 
 export type AudioMode = "all" | "vo" | "novo";
 
 type Clip = { key: string; src: string; from: number; trim: number; dur: number; vol: number; gate: boolean; name: string };
-type Loop = { key: string; src: string; vol: Float32Array; end: number; name: string };
+/** loopFrames = panjang potongan yang diulang (kosong = seluruh file) */
+type Loop = { key: string; src: string; vol: Float32Array; end: number; name: string; loopFrames?: number };
 /** `gate` = selubung akhir per frame (1 → 0 setelah ketukan terakhir), `stop` = frame semua musik & SFX berhenti */
 export type AudioPlan = { clips: Clip[]; loops: Loop[]; gate: Float32Array; stop: number };
 
@@ -55,6 +56,8 @@ const srcOf = (m: SfxMeta): string | null => (BUILTIN_IDS.has(m.id) ? sfxSrc(m.f
 /** bahan trailer bed (lihat assets/audio/music/BACA-INI.md & assets/audio/teaser/cue-sheet.md) */
 const BED = { pulse: "trailer-pulse-sedang", sustain: "trailer-pulse-panjang", riser: "riser-blastoff", braam1: "braam-epik-1", braam2: "braam-epik-2", booms: ["boom-trailer-1", "boom-trailer-3", "boom-trailer-2"] };
 export const BED_BPM = 100;
+/** file trailer-pulse: groove/pukulan hanya 32 ketukan (19,2 dtk) pertama, sisanya ekor sunyi -> yang diulang hanya bagian itu */
+const BED_LOOP_BEATS = 32;
 
 /** rata-rata bergerak (jendela 2r+1) untuk menghaluskan perubahan level antar adegan */
 function smooth(a: Float32Array, r: number): Float32Array {
@@ -238,7 +241,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
         vol[f] = base * dbToGain(lvl[f] + DUCK_DB * duck[f]) * g[f] * fadeIn(f) * gate[f];
         musicPeak[f] += vol[f] * tp;
       }
-      loops.push({ key: `bed-${id}`, src: s, vol, end: stop, name: `Musik cadangan · ${id}` });
+      loops.push({ key: `bed-${id}`, src: s, vol, end: stop, name: `Musik cadangan · ${id}`, loopFrames: Math.round(((BED_LOOP_BEATS * 60) / BED_BPM) * fps) });
     };
     layer(BED.pulse, new Set<MusicLevel>(["mid", "high", "drop"]));
     layer(BED.sustain, new Set<MusicLevel>(["low"]));
@@ -295,12 +298,13 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
   const voPk = new Float32Array(N);
   const vg = useVo && tl.vo ? voGain(tl.vo.engine) : 0;
   for (let f = 0; f < N; f++) voPk[f] = speak[f] ? VO_PEAK * vg : 0;
-  const addEnv = (env: Float32Array | null, tpLin: number, vol: (f: number) => number, from: number, len: number, offset: number, loop: boolean) => {
+  const addEnv = (env: Float32Array | null, tpLin: number, vol: (f: number) => number, from: number, len: number, offset: number, loop: boolean, loopLen?: number) => {
+    const cycle = env ? Math.max(1, Math.min(env.length, loopLen ?? env.length)) : 1;
     for (let k = 0; k < len; k++) {
       const f = from + k;
       if (f >= N) break;
       const idx = offset + k;
-      const pk = env ? (loop ? env[idx % env.length] : env[idx] ?? 0) : tpLin;
+      const pk = env ? (loop ? env[idx % cycle] : env[idx] ?? 0) : tpLin;
       const a = pk * vol(f);
       if (a > 0) rest[f] += Math.pow(a, PNORM);
     }
@@ -314,7 +318,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
   for (const l of loops) {
     const id = l.key.startsWith("bed-") ? l.key.slice(4) : "";
     const env = id ? sfxEnv(id) : null;
-    addEnv(env, TRACK_PEAK, (f) => l.vol[f], 0, Math.min(N, l.end), 0, true);
+    addEnv(env, TRACK_PEAK, (f) => l.vol[f], 0, Math.min(N, l.end), 0, true, l.loopFrames ? Math.round((l.loopFrames * SFX_ENV_FPS) / fps) : undefined);
   }
   const raw = new Float32Array(N);
   for (let f = 0; f < N; f++) {
@@ -347,7 +351,7 @@ export function StudioAudio({ tl, audio = "all", sfxExtra }: { tl: Timeline; aud
     <>
       {plan.loops.map((l) => (
         <Sequence key={l.key} from={0} durationInFrames={Math.max(1, l.end)} layout="none" name={l.name}>
-          <Audio src={res(l.src)} loop loopVolumeCurveBehavior="extend" volume={(f) => at(l.vol, f)} name={l.name} />
+          <Audio src={res(l.src)} loop durationInFrames={l.loopFrames} loopVolumeCurveBehavior="extend" volume={(f) => at(l.vol, f)} name={l.name} />
         </Sequence>
       ))}
       {plan.clips.map((c) => (

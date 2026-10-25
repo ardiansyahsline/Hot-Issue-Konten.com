@@ -85,7 +85,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     const snap = tl; // pakai timeline saat tombol diklik
     let note: string | undefined;
     try {
-      const wr = await import("@remotion/web-renderer");
+      const [wr] = await Promise.all([import("@remotion/web-renderer"), import("@/components/remotion/studio/fonts").then((m) => m.registerStudioFonts())]);
       let container: WebRendererContainer;
       let videoCodec: WebRendererVideoCodec | null = null;
       let audioCodec: WebRendererAudioCodec | null;
