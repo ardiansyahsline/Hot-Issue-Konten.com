@@ -775,8 +775,8 @@ export default function CharacterWizard({
                 <input value={sum.label} maxLength={60} onChange={(e) => setSum({ ...sum, label: e.target.value })} className="input py-1.5 text-[13px]" />
                 <span className={rowLabel}>Peran</span>
                 <textarea value={sum.role} rows={3} maxLength={600} onChange={(e) => setSum({ ...sum, role: e.target.value.replace(/\n/g, " ") })} className="input resize-y py-1.5 text-[13px] leading-snug" />
-                <span className={rowLabel}>Gaya</span>
-                <input value={sum.style} maxLength={400} onChange={(e) => setSum({ ...sum, style: e.target.value })} className="input py-1.5 text-[13px]" />
+                <span className={rowLabelTop}>Gaya</span>
+                <textarea value={sum.style} rows={2} maxLength={800} onChange={(e) => setSum({ ...sum, style: e.target.value })} className="input resize-y py-1.5 text-[13px] leading-snug" />
                 {(role || sum.sop) && (
                   <>
                     <span className={rowLabelTop}>SOP</span>
