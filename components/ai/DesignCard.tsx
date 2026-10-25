@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SIZES, sanitizeDesign, withUtm, type Design } from "@/lib/visual";
 import { twsSlideHtml, type TwsDeck } from "@/lib/tws";
 import { FONT_LINKS } from "@/lib/domToSvg";
+import type { Face } from "@/lib/removeBg";
 
 /**
  * Desain dari AI (blok ```design / ```tws): HTML/CSS/SVG dirender di iframe sandbox (tanpa script, CSP ketat,
@@ -130,7 +131,7 @@ function fitText(doc: Document): Check {
 
 /* ---------- isian gambar (latar & foto tokoh) — disimpan per slide selama halaman terbuka, ikut ke revisi berikutnya ---------- */
 type Pic = { src: string; label?: string; page?: string; credit?: string; download?: string; web?: boolean };
-type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; personList?: Pic[]; personAt?: number; ambient?: string; ambientSrc?: string; tried?: { bg?: boolean; person?: boolean } };
+type Fill = { bg?: Pic; person?: Pic & { cut?: boolean }; graphic?: boolean; bgList?: Pic[]; bgAt?: number; personList?: Pic[]; personAt?: number; ambient?: string; ambientSrc?: string; face?: Face; tried?: { bg?: boolean; person?: boolean } };
 const fills = new Map<string, Fill>();
 const listeners = new Set<() => void>();
 const setFill = (k: string, f: Partial<Fill>) => {
@@ -169,7 +170,7 @@ async function findPhotos(q: string, web = false): Promise<PhotoItem[]> {
 function htmlOf(d: Design, f: Fill | undefined): string {
   if (d.tws) {
     const sl = d.tws.deck.slides[d.tws.index];
-    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit, brand: d.tws.deck.brand === "tws", ambient: f?.ambient });
+    return twsSlideHtml(sl, d.tws.index + 1, { bg: f?.graphic ? undefined : f?.bg?.src, person: f?.person?.src, cut: f?.person?.cut, credit: f?.bg?.credit, brand: d.tws.deck.brand === "tws", ambient: f?.ambient, face: f?.face });
   }
   let h = d.html;
   if (f?.bg && !f.graphic) h = h.replace(/<img([^>]*?)data-slot="bg"([^>]*?)>/g, (_m, a: string, b: string) => `<img${(a + b).replace(/\ssrc="[^"]*"/, "")} data-slot="bg" src="${f.bg!.src}">`);
@@ -237,18 +238,26 @@ function ambientOf(src: string): Promise<string | null> {
   return p;
 }
 
-/** hitung ulang ambient tiap kali foto latar cover (yang ada angka 3D-nya) berganti */
-function useAmbient(designs: Design[]) {
+/**
+ * tiap kali foto latar cover (yang ada angka 3D-nya) berganti: hitung warna cahayanya (ambient) dan cari wajah di foto
+ * itu -> template menggeser foto supaya kepala tidak ketutup angka. Tokoh yang sudah terpotong tidak perlu (ada di depan angka).
+ */
+function useScene(designs: Design[]) {
   const store = useFills();
   useEffect(() => {
     designs.forEach((d) => {
       if (!d.tws || !d.tws.deck.slides[d.tws.index].big) return;
       const k = keyOf(d);
       const f = store.get(k);
-      const src = f?.person && !f.person.cut ? f.person.src : f?.graphic ? undefined : f?.bg?.src;
+      const cut = !!f?.person?.cut;
+      const src = f?.person && !cut ? f.person.src : f?.graphic ? undefined : f?.bg?.src;
       if (!src || f?.ambientSrc === src) return;
-      setFill(k, { ambientSrc: src, ambient: undefined });
+      setFill(k, { ambientSrc: src, ambient: undefined, face: undefined });
       void ambientOf(src).then((a) => fills.get(k)?.ambientSrc === src && a && setFill(k, { ambient: a }));
+      if (!cut)
+        void import("@/lib/removeBg")
+          .then(({ detectFace }) => detectFace(src))
+          .then((face) => fills.get(k)?.ambientSrc === src && face && setFill(k, { face }));
     });
   });
 }
@@ -728,7 +737,7 @@ function Viewer({ designs, deck, disabled, onSend }: { designs: Design[]; deck?:
 
 export default function DesignCard({ designs, deck, disabled, onSend }: { designs: Design[]; deck?: TwsDeck; disabled?: boolean; onSend: (t: string) => void }) {
   useAutoFill(designs, true);
-  useAmbient(designs);
+  useScene(designs);
   const slides = !!deck || designs.some((d) => d.slide);
   const options = !slides && designs.length > 1;
   const wide = designs.every((d) => SIZES[d.size].w > SIZES[d.size].h);

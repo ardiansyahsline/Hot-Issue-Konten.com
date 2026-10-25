@@ -7,13 +7,29 @@ const VERSION = "1.1.0";
 const WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/wasm`;
 const MODEL = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
 
+const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+
 type Segmenter = { segment(img: HTMLImageElement | HTMLCanvasElement): { confidenceMasks?: { width: number; height: number; getAsFloat32Array(): Float32Array }[]; close?(): void } };
+type FaceDet = { detect(img: HTMLCanvasElement): { detections: { boundingBox?: { originX: number; originY: number; width: number; height: number }; categories?: { score: number }[] }[] } };
 let segP: Promise<Segmenter> | null = null;
+let faceP: Promise<FaceDet> | null = null;
+let filesP: Promise<{ v: typeof import("@mediapipe/tasks-vision"); fileset: Awaited<ReturnType<typeof import("@mediapipe/tasks-vision").FilesetResolver.forVisionTasks>> }> | null = null;
+
+/** library + wasm dimuat sekali, dipakai bersama penghapus latar & pendeteksi wajah */
+function vision() {
+  filesP ??= (async () => {
+    const v = await import("@mediapipe/tasks-vision");
+    return { v, fileset: await v.FilesetResolver.forVisionTasks(WASM) };
+  })().catch((e) => {
+    filesP = null;
+    throw e;
+  });
+  return filesP;
+}
 
 async function segmenter(): Promise<Segmenter> {
   segP ??= (async () => {
-    const v = await import("@mediapipe/tasks-vision");
-    const fileset = await v.FilesetResolver.forVisionTasks(WASM);
+    const { v, fileset } = await vision();
     return (await v.ImageSegmenter.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MODEL, delegate: "CPU" },
       runningMode: "IMAGE",
@@ -35,6 +51,47 @@ const load = (src: string) =>
     im.onerror = rej;
     im.src = src;
   });
+
+/** posisi kepala di foto (pecahan 0..1 dari lebar/tinggi foto): top = perkiraan ujung rambut, bottom = dagu */
+export type Face = { top: number; bottom: number; cx: number; aspect: number };
+
+/** cari wajah terbesar di foto (MediaPipe Face Detector, Apache-2.0) — null kalau tidak ketemu / gagal */
+export async function detectFace(src: string): Promise<Face | null> {
+  try {
+    faceP ??= (async () => {
+      const { v, fileset } = await vision();
+      return (await v.FaceDetector.createFromOptions(fileset, { baseOptions: { modelAssetPath: FACE_MODEL, delegate: "CPU" }, runningMode: "IMAGE", minDetectionConfidence: 0.5 })) as unknown as FaceDet;
+    })().catch((e) => {
+      faceP = null;
+      throw e;
+    });
+    const img = await load(src);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const det = await faceP;
+    // model wajah "jarak dekat" -> wajah kecil (foto berita ramai) dicari lagi di potongan tengah-atas yang diperbesar
+    const crops: [number, number, number, number][] = [[0, 0, 1, 1], [0.2, 0, 0.6, 0.65], [0, 0, 0.55, 0.65], [0.45, 0, 0.55, 0.65]];
+    for (const [cx0, cy0, cw, ch] of crops) {
+      const sw = W * cw, sh = H * ch;
+      const k = Math.min(cw === 1 ? 1 : 3, 900 / Math.max(sw, sh));
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(sw * k);
+      cv.height = Math.round(sh * k);
+      cv.getContext("2d")!.drawImage(img, W * cx0, H * cy0, sw, sh, 0, 0, cv.width, cv.height);
+      const best = det
+        .detect(cv)
+        .detections.map((d) => d.boundingBox)
+        .filter((b): b is NonNullable<typeof b> => !!b && b.width > 8)
+        .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+      if (!best) continue;
+      // koordinat potongan -> pecahan foto utuh; kotak deteksi mulai dari alis -> ujung kepala (+ peci/rambut) ±55% tinggi kotak di atasnya
+      const fx = (x: number) => (W * cx0 + x / k) / W, fy = (y: number) => (H * cy0 + y / k) / H;
+      return { top: Math.max(0, fy(best.originY - best.height * 0.55)), bottom: Math.min(1, fy(best.originY + best.height)), cx: fx(best.originX + best.width / 2), aspect: W / H };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /** foto (data URL / URL same-origin) -> PNG transparan (orang saja, dipotong rapat) atau null kalau gagal */
 export async function removeBackground(src: string): Promise<string | null> {

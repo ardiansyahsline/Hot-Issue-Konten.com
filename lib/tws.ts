@@ -18,7 +18,8 @@ export const TWS_FONTS = ["Inter Tight"];
 export type TwsTone = "gold" | "red" | "green" | "blue" | "white";
 export type TwsGraphic = "chart-up" | "chart-down" | "coins" | "exchange" | "arrows" | "bank" | "globe";
 /** isian gambar dari website: latar, foto tokoh (cut = latarnya sudah dihapus), kredit foto kecil di pojok */
-export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string; /** logo TWS hanya kalau user memang minta konten TWS */ brand?: boolean; /** warna rata-rata foto latar (#rrggbb) — angka 3D ikut disinari warna ini */ ambient?: string };
+export type TwsImg = { bg?: string; person?: string; cut?: boolean; credit?: string; /** logo TWS hanya kalau user memang minta konten TWS */ brand?: boolean; /** warna rata-rata foto latar (#rrggbb) — angka 3D ikut disinari warna ini */ ambient?: string;
+  /** posisi kepala di foto latar (pecahan 0..1) — foto digeser supaya kepala tidak tertutup angka */ face?: { top: number; bottom: number; cx: number; aspect: number } };
 type Img = TwsImg;
 export type TwsRow = { label: string; value?: string; note?: string; icon?: string };
 export type TwsItem = { label: string; a?: string; b?: string; pct?: string; value?: string; top?: string; icon?: string };
@@ -44,6 +45,8 @@ export type TwsSlide = {
   graphic?: TwsGraphic;
   /** nama tokoh (foto dari upload user / foto berita web) */
   person?: string;
+  /** pembingkaian tokoh: close = wajah besar, half = kepala s.d. pinggang (default, barang yang dipegang tetap kelihatan), full = badan */
+  frame?: "close" | "half" | "full";
 };
 export type TwsDeck = { title?: string; asOf?: string; slides: TwsSlide[]; caption?: string; hashtags?: string[]; sources?: { title: string; url: string }[]; /** "tws" = pakai logo & gaya ajakan TWS (hanya kalau user menyebut TWS) */ brand?: "tws" };
 
@@ -86,6 +89,7 @@ export function splitTws(text: string): { text: string; deck: TwsDeck | null; pa
           bg: s(x.bg, 80) || undefined,
           graphic: GRAPHICS.includes(x.graphic as TwsGraphic) ? (x.graphic as TwsGraphic) : undefined,
           person: s(x.person, 60) || undefined,
+          frame: (["close", "half", "full"].includes(String(x.frame)) ? x.frame : undefined) as TwsSlide["frame"],
         };
       })
       .slice(0, 6);
@@ -129,7 +133,7 @@ const BASE_CSS = `
 .latar.redup img{filter:brightness(.58) saturate(1.15) contrast(1.06)}
 .vign{position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 24%,rgba(0,0,0,0) 76%,rgba(0,0,0,.5) 100%)}
 .fade{position:absolute;inset:0;z-index:5;background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 15%,rgba(0,0,0,0) 46%,rgba(0,0,0,.7) 62%,rgba(0,0,0,.95) 76%,#000 88%)}
-.tokoh{position:absolute;z-index:4;bottom:236px;height:870px;left:50%;transform:translateX(-47%);-webkit-mask-image:linear-gradient(180deg,#000 78%,transparent 100%);mask-image:linear-gradient(180deg,#000 78%,transparent 100%)}
+.tokoh{position:absolute;z-index:4;left:50%;transform:translateX(-50%)}
 .tokoh img{height:100%;width:auto;max-width:none;display:block;filter:drop-shadow(0 0 34px rgba(61,110,247,.38)) drop-shadow(0 30px 40px rgba(0,0,0,.6))}
 .kredit{position:absolute;right:20px;bottom:12px;z-index:12;font-size:15px;color:rgba(255,255,255,.5)}
 .udara{position:absolute;left:0;right:0;top:0;height:760px;z-index:2}
@@ -171,8 +175,8 @@ function mix(a: string, b: string, t: number): string {
 function big3d(text: string, tone: TwsTone, ambient?: string): string {
   const t = TONE3D[tone];
   const amb = ambient && /^#[0-9a-f]{6}$/i.test(ambient) ? ambient : null;
-  // angka besar (±900 px lebar), makin panjang teksnya makin kecil
-  const size = Math.round(Math.max(130, Math.min(320, 900 / (Math.max(3, text.length) * 0.6))));
+  // angka besar (±820 px lebar, tinggi muat di atas kepala tokoh), makin panjang teksnya makin kecil
+  const size = Math.round(Math.max(130, Math.min(300, 820 / (Math.max(3, text.length) * 0.6))));
   const y = 46 + size * 0.86;
   const id = `n${tone}`;
   const txt = esc(text);
@@ -313,6 +317,28 @@ const latar = (img: Img, sl: TwsSlide, style = "", cls = "") =>
 /** ukuran huruf judul cover: baris terpanjang harus muat ±950 px (huruf kapital tebal ≈ 0,6 em) */
 const coverSize = (lines: string[]) => Math.max(52, Math.min(80, Math.round(950 / (Math.max(8, ...lines.map((l) => l.length)) * 0.6))));
 
+/*
+ * Tata letak cover (kanvas 1080×1350): angka 3D di atas (±y 140–360), kepala tokoh mulai di bawahnya, judul di bawah (±y 980–1240).
+ * Tokoh terpotong ada di DEPAN angka (boleh sedikit menimpa ujung bawah angka); foto utuh ada di BELAKANG angka,
+ * jadi fotonya digeser supaya kepala tidak tertutup. Pembingkaian "half" menjaga tangan / barang yang dipegang tetap di atas judul.
+ */
+const HEAD_CUT = 330;
+const HEAD_PHOTO = 405;
+const CUT_H: Record<NonNullable<TwsSlide["frame"]>, number> = { close: 1150, half: 860, full: 720 };
+
+/** posisi foto utuh supaya kepala (hasil deteksi wajah) berada tepat di bawah angka & di tengah */
+function photoBox(face: NonNullable<Img["face"]>, frame: TwsSlide["frame"]): string {
+  let w = 1080, h = w / face.aspect;
+  if (h < 1350 - HEAD_PHOTO + 120) (h = 1350 - HEAD_PHOTO + 120), (w = h * face.aspect);
+  // wajah terlalu kecil -> diperbesar secukupnya (maks 1,8×), "full" tidak diperbesar
+  const want = frame === "close" ? 300 : frame === "full" ? 0 : 210;
+  const zoom = Math.min(1.8, Math.max(1, want / Math.max(1, (face.bottom - face.top) * h)));
+  (w *= zoom), (h *= zoom);
+  const left = Math.min(0, Math.max(1080 - w, 540 - face.cx * w));
+  const top = Math.min(440, Math.max(1350 - 160 - h, HEAD_PHOTO - face.top * h));
+  return `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(w)}px;height:${Math.round(h)}px`;
+}
+
 function cover(sl: TwsSlide, img: Img): string {
   const lines = sl.title?.length ? sl.title : ["JUDUL BERITA", "DI SINI"];
   const tone = toneOf(sl);
@@ -323,12 +349,22 @@ function cover(sl: TwsSlide, img: Img): string {
   // kabut gelap + rona warna angka di bagian atas foto: angka tampak "berada" di adegan, bukan ditempel
   const air = sl.big ? `<div class="udara" data-layer="Cahaya Angka" style="background:radial-gradient(ellipse 70% 42% at 50% 17%,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 100%),radial-gradient(ellipse 60% 34% at 50% 20%,${TONE3D[tone].glow.replace(/[\d.]+\)$/, ".22)")} 0%,rgba(0,0,0,0) 100%)"></div>` : "";
   const big = sl.big ? `<div data-layer="Angka 3D" class="big3d">${big3d(sl.big, tone, img.ambient)}</div>` : "";
-  const person = cut ? `<div data-layer="Foto Tokoh" class="tokoh"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>` : "";
-  // foto tokoh utuh (belum terpotong) + ada angka: foto diturunkan supaya wajah di bawah angka, bagian atasnya diisi
-  // versi buram foto yang sama -> warnanya nyambung, angka "melayang" di atas kepala seperti referensi
-  const drop = !!(sl.big && img.person && !cut && base.bg === img.person);
+  // tokoh terpotong: ujung kepala di HEAD_CUT, tinggi sesuai pembingkaian; memudar ke hitam tepat di atas judul
+  const ph = CUT_H[sl.frame ?? "half"];
+  const fadeFrom = Math.round(((1000 - HEAD_CUT) / ph) * 100), fadeTo = Math.min(100, Math.round(((1160 - HEAD_CUT) / ph) * 100));
+  const person = cut
+    ? `<div data-layer="Foto Tokoh" class="tokoh" style="top:${sl.big ? HEAD_CUT : HEAD_CUT - 110}px;bottom:auto;height:${ph}px;-webkit-mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%);mask-image:linear-gradient(180deg,#000 ${fadeFrom}%,transparent ${fadeTo}%)"><img data-slot="person" src="${esc(img.person!)}" alt=""></div>`
+    : "";
+  // foto utuh (tokoh belum terpotong / foto berita berisi orang) + ada angka: foto digeser supaya kepala di bawah angka,
+  // celah di atasnya diisi versi buram foto yang sama -> warnanya nyambung, angka "melayang" di atas kepala
+  const drop = !!(sl.big && base.bg && !cut && ((img.person && base.bg === img.person) || img.face));
+  const fadeTop = "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 200px);mask-image:linear-gradient(180deg,transparent 0,#000 200px)";
   const bgLayer = drop
-    ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div>${latar(base, sl, "top:250px;-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 26%);mask-image:linear-gradient(180deg,transparent 0,#000 26%)")}`
+    ? `<div data-layer="Latar Buram" class="latar" style="filter:blur(28px) brightness(.55) saturate(1.2);transform:scale(1.15)"><img src="${esc(base.bg!)}" alt=""></div><div data-layer="Latar" class="latar">${
+        img.face
+          ? `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;max-width:none;object-fit:fill;${photoBox(img.face, sl.frame)};${fadeTop}">`
+          : `<img data-slot="bg" src="${esc(base.bg!)}" alt="" style="position:absolute;left:0;top:300px;height:auto;min-height:1050px;${fadeTop}">`
+      }</div>`
     : latar(base, sl, "", cut ? "redup" : "");
   return `<div class="art">${bgLayer}<div class="vign" data-layer="Vignette"></div>${air}${big}${person}<div class="fade" data-layer="Gradasi"></div>${logo(img.brand)}${titleHtml(lines, sl.hl, "judul", `font-size:${coverSize(lines)}px`)}${sl.note ? `<div class="note" data-layer="Catatan">${esc(sl.note)}</div>` : ""}${kredit(base)}</div>`;
 }
@@ -489,7 +525,7 @@ export function twsRules(asOf: string, brand = false): string {
     "3) Tulis SATU blok ```tws berisi JSON satu kali (jangan tulis HTML). Format:",
     '```tws\n{"title":"BI Rate Oktober 2026","asOf":"21 Oktober 2026",' +
       (brand ? '"brand":"tws",' : "") +
-      '"slides":[\n {"type":"cover","big":"5,75%","tone":"gold","title":["BREAKING! BI TAHAN","SUKU BUNGA 5,75%,","DI LUAR EKSPEKTASI"],"hl":3,"person":"Perry Warjiyo","bg":"bank indonesia headquarters jakarta night"},\n {"type":"text","kicker":"Keputusan RDG 20–21 Oktober 2026","text":"BI Rate ditahan di **5,75%** untuk keempat kalinya","caption":"Mayoritas ekonom memperkirakan naik ke 6,00%","rows":[{"label":"Deposit Facility","value":"5,00%","note":"naik"},{"label":"Lending Facility","value":"6,50%","note":"tetap"}],"note":"*Data per 21 Oktober 2026","bg":"bank indonesia monetary policy press conference"},\n {"type":"ath","title":["BUTUH NAIK BERAPA","SAMPAI BALIK ATH?"],"hl":2,"head":["ATH","SEKARANG"],"items":[{"label":"BTC","a":"$126.000","b":"$81.774","pct":"+54%"}],"note":"*Harga per 23 Oktober 2026"},\n {"type":"bars","title":["IHSG IJO,","BURSA ASIA LOYO"],"hl":2,"sub":"Penutupan 14 Oktober 2026","items":[{"label":"IHSG","value":"5.943,02","pct":"+0,29%"},{"label":"Nikkei","value":"67.744,29","pct":"-0,05%"}],"note":"*Sumber: Katadata"},\n {"type":"timeline","title":["RP100 RIBU BISA","DIPAKAI BUAT APA?"],"hl":2,"sub":"DULU VS SEKARANG","items":[{"top":"1960","label":"2 rumah"}]},\n ' +
+      '"slides":[\n {"type":"cover","big":"5,75%","tone":"gold","title":["BREAKING! BI TAHAN","SUKU BUNGA 5,75%,","DI LUAR EKSPEKTASI"],"hl":3,"person":"Perry Warjiyo","frame":"half","bg":"bank indonesia headquarters jakarta night"},\n {"type":"text","kicker":"Keputusan RDG 20–21 Oktober 2026","text":"BI Rate ditahan di **5,75%** untuk keempat kalinya","caption":"Mayoritas ekonom memperkirakan naik ke 6,00%","rows":[{"label":"Deposit Facility","value":"5,00%","note":"naik"},{"label":"Lending Facility","value":"6,50%","note":"tetap"}],"note":"*Data per 21 Oktober 2026","bg":"bank indonesia monetary policy press conference"},\n {"type":"ath","title":["BUTUH NAIK BERAPA","SAMPAI BALIK ATH?"],"hl":2,"head":["ATH","SEKARANG"],"items":[{"label":"BTC","a":"$126.000","b":"$81.774","pct":"+54%"}],"note":"*Harga per 23 Oktober 2026"},\n {"type":"bars","title":["IHSG IJO,","BURSA ASIA LOYO"],"hl":2,"sub":"Penutupan 14 Oktober 2026","items":[{"label":"IHSG","value":"5.943,02","pct":"+0,29%"},{"label":"Nikkei","value":"67.744,29","pct":"-0,05%"}],"note":"*Sumber: Katadata"},\n {"type":"timeline","title":["RP100 RIBU BISA","DIPAKAI BUAT APA?"],"hl":2,"sub":"DULU VS SEKARANG","items":[{"top":"1960","label":"2 rumah"}]},\n ' +
       cta +
       '\n],"caption":"caption siap copas (2–4 kalimat, fakta + ajakan diskusi)","hashtags":[' +
       (brand ? '"#TWS",' : "") +
@@ -497,6 +533,7 @@ export function twsRules(asOf: string, brand = false): string {
     "   - type: cover (judul + angka 3D), text (kalimat besar + **kata kunci** biru, boleh rows data), ath (tabel butuh naik berapa sampai ATH), bars (perbandingan naik/turun, mis. IHSG vs bursa Asia), timeline (dulu vs sekarang), cta (ajakan, slide terakhir).",
     "   - cover: title 2–3 baris HURUF BESAR (maks ±20 huruf/baris, singkat & padat), hl = nomor baris yang disorot kotak biru (biasanya baris terakhir = inti beritanya). big = angka utama SANGAT pendek (\"-11%\", \"5,75%\", \"RP1,2 T\", \"40x\", maks 7 karakter). tone: gold netral/positif, red turun/bahaya, green naik.",
     "   - person (WAJIB di cover, pikir seperti redaktur berita): tokoh publik yang PALING dikaitkan publik dengan berita itu, tulis NAMA LENGKAP resmi. Contoh: kebijakan pemerintah / IHSG anjlok / MSCI turunkan status Indonesia → \"Prabowo Subianto\" (atau Menkeu kalau beritanya soal APBN/pajak); BI Rate / rupiah → \"Perry Warjiyo\"; OJK → Ketua OJK; perusahaan → CEO-nya (\"Jensen Huang\", \"Elon Musk\"); crypto → tokoh yang disebut berita (\"Michael Saylor\", \"Changpeng Zhao\"); The Fed → Ketua The Fed. Kosongkan HANYA kalau memang tidak ada tokoh yang relevan (mis. harga emas harian). Website mencari foto tokoh itu sendiri di internet lalu memotong latarnya — user TIDAK perlu upload. Kamu tidak menggambar wajah.",
+    "   - frame (pembingkaian tokoh, pahami konteks fotonya): \"half\" (default: kepala s.d. pinggang — pakai kalau tokoh biasanya tampil memegang/menunjuk sesuatu yang penting untuk berita, mis. koin bitcoin, dokumen, emas), \"close\" (wajah besar, untuk berita yang menonjolkan ekspresi/pernyataan tokoh), \"full\" (badan, mis. tokoh sedang berpidato/berjalan).",
     "   - bg = kata kunci foto adegan dalam Bahasa Inggris yang spesifik & dramatis sesuai isi slide (mis. \"indonesia stock exchange building jakarta\", \"stock market screen red numbers crash\", \"gold bars vault\", \"bitcoin coins dark\"). Isi bg di cover DAN tiap slide text supaya tiap slide punya foto berbeda. graphic = cadangan latar grafis: chart-up | chart-down | coins | exchange | bank | arrows | globe.",
     "   - text: 1 kalimat besar maks ±14 kata (pendek = huruf makin besar & makin mirip referensi), **kata kunci** 2–5 kata. caption = 1 kalimat kecil penjelas. Pakai rows hanya kalau ada 2–3 angka pembanding.",
     "   - Satu gambar → 1 slide cover. Carousel → 3–6 slide: cover → isi → (infografis) → cta.",

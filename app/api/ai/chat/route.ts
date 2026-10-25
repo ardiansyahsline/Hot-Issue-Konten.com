@@ -455,9 +455,10 @@ export async function POST(req: NextRequest) {
         : "auto";
   const userNote = answered ? (lastText.match(/\(([^)]{2,200})\)/)?.[1] ?? "") : "";
   // 🧠 tugas berat & penting (PPT/laporan, report campaign, analisa lengkap, baca data folder, teks panjang, atau diminta):
+  //    konten/desain berita (baru maupun revisi) selalu ke mesin terpintar (Sonnet) supaya pilihan tokoh & isinya paham konteks.
   //    + analisa trading / trade plan. Jawaban ditulis mesin Sonnet; Haiku tetap jadi "perencana" (mikir dulu, browsing) + cadangan.
   //    Dibatasi per user per hari. Di halaman Usage pemakaiannya digabung ke baris Haiku.
-  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: twsResearch || (visualMode && VISUAL_COMPLEX.test(designFollow ? `${prevRequest}\n${lastText}` : taskText)), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
+  const heavyWhy = smallTalk ? null : heavyReason(taskText, { approach, folderData: !!folder?.contents, design: twsMode || (visualMode && VISUAL_COMPLEX.test(designFollow ? `${prevRequest}\n${lastText}` : taskText)), trade: tradeIntent && !!web.chart, data: useData, web: web.sources.length > 0 });
   let heavyOn = false;
   if (heavyWhy) {
     const hm = heavyModelFrom(models);
