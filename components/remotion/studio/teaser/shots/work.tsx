@@ -6,8 +6,8 @@
  * momen visual tepat di detik SFX lib/studio/teaser.ts:
  *  - Dashboard (5,4 dtk; 0–0,3 tertutup whip dari Reveal): swoosh-readout 0,3 (angka mulai berjalan) → semua angka mendarat di
  *    ketukan 0,6 · koin-ting 1,2 (laporan ke-3 → topik naik ke #1) · ui-scifi-ping 2,4 (badge 🔥 HOT menyala di #1 + light sweep,
- *    kamera dorong ke baris #1) · 2,95–5,8 kamera tetap hidup: dorong pelan + kick di tiap ketukan, lalu orbit/geser menyamping
- *    (4,45–5,05) dan naik searah transisi slide-up berikutnya
+ *    kamera dorong ke baris #1) · 2,95–5,8 kamera tetap hidup tanpa jeda: dorong pelan ke badge HOT + kick di tiap ketukan, lalu orbit
+ *    (tarik mundur + roll + ayunan 3D, puncak 4,45) yang mengalir langsung ke gerak naik searah transisi slide-up berikutnya
  *  - Data clipper (kontak, link) = placeholder tersamar + balok skeleton solid (lihat Redacted di work-parts.tsx).
  *  - Render browser: radius CSS blur di dalam World dikali skala dunia S (canvas blur tidak ikut transform; CLI sudah ikut).
  *  - Video Review: whoosh 0,6 (kartu kasus mendarat) · ui-accept 1,8 (status → Diproses) · whoosh 2,4 (kartu berikut)
@@ -241,6 +241,7 @@ const D = {
 const D_READ = 0.3; // swoosh-readout: angka mulai berjalan (whip masuk dari Reveal selesai di 0,3)
 const D_SLAM = 0.6; // ketukan: semua angka mendarat
 const D_TING = 1.2; // koin-ting: laporan ke-3 → naik ke #1
+const TAIL_T = 2.95; // sesudah dorongan ping: ekor kamera per kanal (lihat `tail` di DashboardShot)
 const D_PING = 2.4; // ui-scifi-ping: badge HOT menyala
 /** jendela kamera mengikuti baris yang naik (blur gerak dihitung manual per baris) */
 const FOLLOW: [number, number] = [1.12, 2.05];
@@ -280,16 +281,27 @@ export function DashboardShot() {
     { t: FOLLOW[1], wx: 181, wy: row0, z: 1.1 },
     { t: 2.28, wx: 178, wy: row0 + 2, z: 1.085, ty: tyHero, ease: EASE.soft }, // antisipasi: mundur sedikit
     { t: 2.47, wx: 168, wy: row0 - 4, z: 1.19, ease: EASE.out }, // dorong ke baris #1 tepat di ping
-    { t: 2.95, wx: 166, wy: row0 - 6, z: 1.18, ease: EASE.soft },
-    { t: 4.45, wx: 160, wy: row0 - 8, z: 1.26, ease: EASE.inOut }, // dorong pelan terus ke badge HOT (montage membekukan 3,5)
-    { t: 5.05, wx: 184, wy: row0 - 1, z: 1.235, r: -1.1, ease: EASE.inOut }, // orbit: geser menyamping + miring, judul & PIC ikut terbaca
-    { t: 5.8, wx: 186, wy: row0 + 118, z: 1.27, r: -0.4, ease: EASE.in }, // isi naik searah transisi slide-up berikutnya (5,4–5,8)
+    { t: TAIL_T, wx: 166, wy: row0 - 6, z: 1.18, ease: EASE.soft },
   ];
+  // ekor 2,95–5,8: tiap kanal punya keyframe sendiri. Easing per segmen berlaku untuk semua kanal sekaligus, jadi titik balik
+  // zoom/geser di satu keyframe dulu menghentikan seluruh kamera (jeda di 4,45 & 5,05). Di sini titik balik zoom/geser (4,45)
+  // tidak menghentikan pan vertikal & roll yang terus mengalir sampai gerak naik searah transisi slide-up (5,4–5,8).
+  // Zona aman 9:16 (64 px kiri · 930 px kanan): pada zoom puncak 1,24 (+kick 0,01) baris #1 (x dunia 20–287) hanya muat
+  // di wx ≈ 163–166 → geser menyamping dibuat oleh ayunan 3D (tilt) & roll, bukan oleh wx.
+  const tail = {
+    x: [{ t: TAIL_T, v: 166 }, { t: 4.45, v: 164, ease: EASE.soft }, { t: 5.8, v: 166, ease: EASE.soft }],
+    // diam di sekitar baris #1 (montage membekukan 3,5) lalu makin cepat naik: x⁴ → 4,45 ≈ +10 · 5,05 ≈ +37 · 5,8 = +126
+    y: [{ t: TAIL_T, v: row0 - 6 }, { t: 5.8, v: row0 + 120, ease: (x: number) => x ** 4 }],
+    z: [{ t: TAIL_T, v: 1.18 }, { t: 4.45, v: 1.24, ease: EASE.soft }, { t: 5.8, v: 1.21, ease: EASE.soft }], // dorong ke badge HOT, lalu tarik mundur
+    r: [{ t: TAIL_T, v: 0 }, { t: 5.8, v: -1.1, ease: EASE.soft }], // roll pelan yang terus berjalan
+  };
+  const track = (keys: { t: number; v: number; ease?: (x: number) => number }[], t: number) =>
+    camAtTime(keys.map((k) => ({ t: k.t, x: k.v, ease: k.ease })), t).x;
   const baseKeys = wkeys.map((k) => ({ t: k.t, x: k.wx, y: k.wy, z: k.z, r: k.r, ease: k.ease }));
   const tyKeys = wkeys.map((k) => ({ t: k.t, x: k.ty, ease: k.ease }));
   const camW = (fr: number) => {
     const t = fr / fps;
-    const v = camAtTime(baseKeys, t);
+    const v = t > TAIL_T ? { x: track(tail.x, t), y: track(tail.y, t), z: track(tail.z, t), r: track(tail.r, t) } : camAtTime(baseKeys, t);
     let wy = v.y;
     if (t > FOLLOW[0] && t < FOLLOW[1]) {
       const fy = rowC(camSlot(fr));
@@ -322,8 +334,7 @@ export function DashboardShot() {
       { t: 1.9, rx: 4, ry: 2, ease: EASE.soft },
       { t: 2.4, rx: 0.5, ry: 0, ease: EASE.inOut },
       { t: 4.45, rx: -1.5, ry: -3, ease: EASE.soft },
-      { t: 5.05, rx: 1.2, ry: 3.4, ease: EASE.inOut }, // orbit bersama geser menyamping
-      { t: 5.8, rx: 3, ry: 2, ease: EASE.soft },
+      { t: 5.8, rx: 3, ry: 3, ease: EASE.soft }, // satu ayunan orbit 3D tanpa titik balik di tengah (gerak menyamping tanpa menggeser teks keluar zona aman)
     ],
     s,
   );
@@ -371,8 +382,9 @@ export function DashboardShot() {
               <PageTitle title="Dashboard Hot Issues" sub="Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang." />
             </div>
             {STATS.map((st, i) => {
-              // masuk bertingkat saat whip dari Reveal mereda (0,1–0,3) → sudah diam & terbaca waktu angka mulai berjalan di 0,3
-              const p = springFrom(f, fps, 0.06 + i * 0.045, { damping: 13, stiffness: 170, mass: 0.7 });
+              // masuk bertingkat di bawah whip dari Reveal (mulai 0,03–0,15) → kelima kartu sudah opak penuh & hampir di tempat waktu
+              // angka mulai berjalan di 0,3 (sisa pantulan pegas beberapa px mereda bersama dolly kamera sampai 0,42)
+              const p = springFrom(f, fps, 0.03 + i * 0.03, { damping: 13, stiffness: 170, mass: 0.7 });
               const col = i % 2;
               const r = Math.floor(i / 2);
               const wide = i === 4;
@@ -411,7 +423,7 @@ export function DashboardShot() {
             }}
           >
             <div style={{ height: D.headH, boxSizing: "border-box", padding: "12px 20px", borderBottom: "1px solid rgba(39,39,42,0.8)", fontSize: 12, lineHeight: "16px", color: Z[500], whiteSpace: "nowrap", filter: blurCss(Math.max(restBlur * 0.5, vblur(camV)) * bk) }}>
-              {LIST_TOTAL} issue · paling HOT & paling banyak laporan di atas
+              {LIST_TOTAL} issue · paling HOT & banyak laporan di atas
             </div>
             {rows
               .slice()
