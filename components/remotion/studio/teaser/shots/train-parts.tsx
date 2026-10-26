@@ -46,7 +46,8 @@ export const T_QN = QUIZ_QS.length;
 
 export const OR = "#f97316";
 const OR300 = "#fdba74";
-const SHADOW_POP = "inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px -8px rgba(0,0,0,0.6)";
+/** bayangan modal tanpa inset & spread (keduanya diabaikan @remotion/web-renderer → CLI & render browser sama) */
+const SHADOW_POP = "0 8px 20px rgba(0,0,0,0.45)";
 const btnGhost: CSSProperties = { borderRadius: 12, border: `1px solid ${Z[800]}`, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, color: Z[300], whiteSpace: "nowrap" };
 
 // ---------------------------------------------------------------------------------------------
@@ -67,7 +68,7 @@ export function TapFx({ f, fps, hit, x, y, from = [46, 70] }: { f: number; fps: 
   const ring = (f - hf) / (0.42 * fps);
   const op = clamp01(inP * 1.6) * (1 - outP);
   return (
-    <span style={{ position: "absolute", left: x, top: y, width: 0, height: 0, zIndex: 20, pointerEvents: "none" }}>
+    <span style={{ position: "absolute", left: x, top: y, width: 0, height: 0, pointerEvents: "none" }}>
       {ring >= 0 && ring <= 1 && (
         <span style={{ position: "absolute", left: -16, top: -16, width: 32, height: 32, borderRadius: 999, border: `2.5px solid rgba(255,255,255,${(0.9 * (1 - ring)).toFixed(3)})`, transform: `scale(${(1 + EASE.out(ring) * 1.9).toFixed(3)})` }} />
       )}
@@ -103,8 +104,10 @@ function Burst({ f, fps, at, x, y, n = 8, r = 46, color = "#fde68a" }: { f: numb
   const k = (f - Math.round(at * fps)) / (0.55 * fps);
   if (k < 0 || k > 1) return null;
   const e = EASE.out(k);
+  // svg berukuran nyata (render browser menggambar svg sebagai gambar seukuran kotaknya → overflow:visible terpotong)
+  const R = Math.ceil(r * 1.3 + 12);
   return (
-    <svg width={2} height={2} style={{ position: "absolute", left: x, top: y, overflow: "visible", pointerEvents: "none", zIndex: 19 }} aria-hidden>
+    <svg width={2 * R} height={2 * R} viewBox={`${-R} ${-R} ${2 * R} ${2 * R}`} style={{ position: "absolute", left: x - R, top: y - R, pointerEvents: "none" }} aria-hidden>
       {Array.from({ length: n }, (_, i) => {
         const a = (i / n) * Math.PI * 2 + 0.35;
         const d = r * (0.35 + 0.9 * e) * (i % 2 ? 0.8 : 1);
@@ -128,7 +131,8 @@ const bump = (f: number, fps: number, hit: number) => {
 // ---------------------------------------------------------------------------------------------
 // halaman (masuk geser dari kanan dengan pegas, keluar ke kiri + blur sebanding kecepatan)
 // ---------------------------------------------------------------------------------------------
-export function Page({ f, fps, enter, exit, children }: { f: number; fps: number; enter: number; exit?: number; children: ReactNode }) {
+/** `bk` = pengali radius blur: render browser menerapkan CSS blur di ruang layar (tidak ikut skala transform induk) → isi pengali skala total di sana, 1 di CLI */
+export function Page({ f, fps, enter, exit, bk = 1, children }: { f: number; fps: number; enter: number; exit?: number; bk?: number; children: ReactNode }) {
   const s = f / fps;
   if (enter > 0 && s < enter) return null;
   if (exit !== undefined && s > exit + 0.24) return null;
@@ -149,7 +153,7 @@ export function Page({ f, fps, enter, exit, children }: { f: number; fps: number
         top: 16,
         transform: `translateX(${a.x.toFixed(2)}px)`,
         opacity: clamp01(a.pin * 1.5) * (1 - a.pout),
-        filter: blur > 0.2 ? `blur(${blur.toFixed(2)}px)` : undefined,
+        filter: blur > 0.2 ? `blur(${(blur * bk).toFixed(2)}px)` : undefined,
       }}
     >
       {children}
@@ -176,6 +180,7 @@ export function TrainModal({
   barsOp = 1,
   footOp = 1,
   dim = 0,
+  bk = 1,
 }: {
   w: number;
   h: number;
@@ -197,9 +202,11 @@ export function TrainModal({
   footOp?: number;
   /** rack focus: header & footer ikut buram + redup (0..1) */
   dim?: number;
+  /** pengali radius blur (lihat Page) */
+  bk?: number;
 }) {
   const dOp = 1 - dim * 0.5;
-  const soft: CSSProperties | undefined = dim > 0.02 ? { filter: `blur(${(dim * 2.6).toFixed(2)}px)`, opacity: dOp } : undefined;
+  const soft: CSSProperties | undefined = dim > 0.02 ? { filter: `blur(${(dim * 2.6 * bk).toFixed(2)}px)`, opacity: dOp } : undefined;
   return (
     <div
       style={{
@@ -212,7 +219,7 @@ export function TrainModal({
         borderRadius: 16,
         border: `1px solid ${Z[800]}`,
         background: Z[900],
-        boxShadow: `${SHADOW_POP}, 0 40px 90px -30px rgba(0,0,0,0.85)`,
+        boxShadow: `${SHADOW_POP}, 0 40px 80px rgba(0,0,0,0.6)`,
         fontFamily: FONT,
         color: Z[100],
         lineHeight: 1.5,
@@ -258,6 +265,8 @@ export function TrainModal({
           {footerFx}
         </span>
       </div>
+      {/* garis sorot kaca di tepi atas (pengganti box-shadow inset) */}
+      <div style={{ position: "absolute", left: 12, right: 12, top: 0, height: 1, background: "rgba(255,255,255,0.06)", pointerEvents: "none" }} />
       {sheen > 0 && sheen < 1 && <Shine p={sheen} alpha={0.09} radius={16} angle={115} />}
     </div>
   );
@@ -315,9 +324,11 @@ export function QuizCard({ f, fps, qi, pick, hit, enter }: { f: number; fps: num
                 textAlign: "left",
                 transform: `translateX(${((1 - ap) * 36).toFixed(2)}px) scale(${sc.toFixed(4)})`,
                 opacity: clamp01(ap * 1.4),
-                boxShadow: on ? `0 0 0 1px ${rgba(OR, 0.35)}, 0 10px 26px -12px ${rgba(OR, 0.75)}` : undefined,
+                boxShadow: on ? `0 10px 18px ${rgba(OR, 0.26)}` : undefined,
               }}
             >
+              {/* cincin luar 1px (pengganti box-shadow "0 0 0 1px" yang tidak digambar render browser) */}
+              {on && <span style={{ position: "absolute", left: -2, top: -2, right: -2, bottom: -2, borderRadius: 13, border: `1px solid ${rgba(OR, 0.35)}`, pointerEvents: "none" }} />}
               {isPick && (
                 <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
                   <Ripple f={f} fps={fps} hit={hit} x={334} y={34} />
@@ -395,8 +406,9 @@ function Rays({ s, at, c }: { s: number; at: number; c: string }) {
   const fade = 1 - clamp01((s - at - 1.6) / 1.2) * 0.55;
   const rot = (s - at) * 14;
   return (
-    <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 92, width: 300, height: 300, marginLeft: -150, marginTop: -150, opacity: p * fade, pointerEvents: "none", overflow: "visible" }} aria-hidden>
-      <g transform={`rotate(${rot.toFixed(2)}) scale(${(0.6 + 0.4 * EASE.out(p)).toFixed(3)})`}>
+    // opasitas di <g> (bukan di style <svg>): render browser menyerialisasi svg beserta style-nya lalu menerapkan opasitas elemen lagi → dobel
+    <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 92, width: 300, height: 300, marginLeft: -150, marginTop: -150, pointerEvents: "none" }} aria-hidden>
+      <g opacity={(p * fade).toFixed(3)} transform={`rotate(${rot.toFixed(2)}) scale(${(0.6 + 0.4 * EASE.out(p)).toFixed(3)})`}>
         {Array.from({ length: 12 }, (_, i) => (
           <path key={i} d="M0 0 L-7 -98 L7 -98 Z" fill={i % 2 ? rgba(c, 0.22) : "rgba(255,255,255,0.08)"} transform={`rotate(${i * 30})`} />
         ))}
@@ -413,7 +425,7 @@ function Charge({ s, from, at, c }: { s: number; from: number; at: number; c: st
   const r = burst > 0 ? 40 + 120 * EASE.out(burst) : 4 + 30 * p * p;
   const op = burst > 0 ? 1 - burst : 0.25 + 0.75 * p;
   return (
-    <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 80, width: 200, height: 200, marginLeft: -100, marginTop: -100, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+    <svg viewBox="-170 -170 340 340" style={{ position: "absolute", left: "50%", top: 80, width: 340, height: 340, marginLeft: -170, marginTop: -170, pointerEvents: "none" }} aria-hidden>
       <defs>
         <radialGradient id="trainCharge" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
@@ -463,7 +475,7 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
       </svg>
       <Rays s={s} at={at} c={G.color} />
       {wb > 0 && wb < 1 && (
-        <svg viewBox="-100 -100 200 200" style={{ position: "absolute", left: "50%", top: 118, width: 320, height: 320, marginLeft: -160, marginTop: -160, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+        <svg viewBox="-130 -130 260 260" style={{ position: "absolute", left: "50%", top: 118, width: 416, height: 416, marginLeft: -208, marginTop: -208, pointerEvents: "none" }} aria-hidden>
           <defs>
             <radialGradient id="trainWarm" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#fff7ed" stopOpacity="0.85" />
@@ -476,8 +488,10 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
         </svg>
       )}
       <Charge s={s} from={enter + 0.04} at={at} c={G.color} />
-      <svg viewBox="0 0 232 110" preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: decoP }} aria-hidden>
-        <DecoNF s={Math.max(0, s - enter)} c={G.color} />
+      <svg viewBox="0 0 232 110" preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} aria-hidden>
+        <g opacity={decoP.toFixed(3)}>
+          <DecoNF s={Math.max(0, s - enter)} c={G.color} />
+        </g>
       </svg>
       <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 16, paddingBottom: 12 }}>
         <div
@@ -512,9 +526,10 @@ export function TypeSceneFx({ f, fps, enter, at, hopAt }: { f: number; fps: numb
                   color: "#fff",
                   fontSize: 18,
                   fontWeight: 900,
-                  transform: `perspective(160px) rotateX(${((1 - p) * 90).toFixed(2)}deg) scale(${((0.6 + 0.4 * p) * pulse).toFixed(4)})`,
+                  // balik sumbu X sebagai scaleY(cos θ) (2D): rotateX 3D bersarang hilang di render browser saat sudutnya besar
+                  transform: `scale(${((0.6 + 0.4 * p) * pulse).toFixed(4)}) scaleY(${Math.max(0.002, Math.cos((1 - p) * Math.PI * 0.5)).toFixed(4)})`,
                   opacity: clamp01(p * 2),
-                  boxShadow: `0 8px 18px -8px ${G.color}, 0 0 ${(24 * fl).toFixed(1)}px ${rgba("#ffffff", 0.5 * fl)}`,
+                  boxShadow: `0 6px 12px ${rgba(G.color, 0.45)}, 0 0 ${(24 * fl).toFixed(1)}px ${rgba("#ffffff", 0.5 * fl)}`,
                   overflow: "hidden",
                 }}
               >
@@ -568,11 +583,11 @@ export function ResultBody({ f, fps, enter, at, hopAt, descAt }: { f: number; fp
 // ---------------------------------------------------------------------------------------------
 // halaman pilih peran
 // ---------------------------------------------------------------------------------------------
-export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number; enter: number; hit: number; focus: number }) {
+export function RoleBody({ f, fps, enter, hit, focus, bk = 1 }: { f: number; fps: number; enter: number; hit: number; focus: number; /** pengali radius blur (lihat Page) */ bk?: number }) {
   const hf = Math.round(hit * fps);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.375, color: Z[100], opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6).toFixed(2)}px)` : undefined }}>Mau dilatih jadi apa AI-mu?</div>
+      <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.375, color: Z[100], opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6 * bk).toFixed(2)}px)` : undefined }}>Mau dilatih jadi apa AI-mu?</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
         {ROLES.map((r, i) => {
           const isPick = r.id === T_ROLE;
@@ -595,11 +610,11 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
                 textAlign: "left",
                 transform: `translateY(${((1 - ap) * 26).toFixed(2)}px) scale(${sc.toFixed(4)})`,
                 opacity: clamp01(ap * 1.4) * (1 - dim * 0.5),
-                filter: dim > 0.05 ? `blur(${(dim * 2.6).toFixed(2)}px)` : undefined,
-                boxShadow: on ? `0 0 0 1px ${rgba(OR, 0.4)}, 0 14px 30px -12px ${rgba(OR, 0.8)}` : undefined,
-                zIndex: isPick ? 2 : 1,
+                filter: dim > 0.05 ? `blur(${(dim * 2.6 * bk).toFixed(2)}px)` : undefined,
+                boxShadow: on ? `0 12px 20px ${rgba(OR, 0.28)}` : undefined,
               }}
             >
+              {on && <span style={{ position: "absolute", left: -2, top: -2, right: -2, bottom: -2, borderRadius: 13, border: `1px solid ${rgba(OR, 0.4)}`, pointerEvents: "none" }} />}
               {isPick && (
                 <span style={{ position: "absolute", inset: 0, borderRadius: 12, overflow: "hidden", pointerEvents: "none" }}>
                   <Ripple f={f} fps={fps} hit={hit} x={146} y={20} />
@@ -622,11 +637,11 @@ export function RoleBody({ f, fps, enter, hit, focus }: { f: number; fps: number
             </div>
           );
         })}
-        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6).toFixed(2)}px)` : undefined }}>
+        <div style={{ gridColumn: "span 2 / span 2", borderRadius: 12, border: `1px dashed ${Z[800]}`, padding: 10, opacity: 1 - focus * 0.5, filter: focus > 0.05 ? `blur(${(focus * 2.6 * bk).toFixed(2)}px)` : undefined }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 18 }}>✍️</span>
             <span style={{ flex: 1, minWidth: 0, borderRadius: 12, border: `1px solid ${Z[800]}`, background: Z[950], padding: "6px 12px", fontSize: 13, color: Z[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              Peran lain… mis. Admin keuangan, Social media specialist
+              Peran lain… mis. Admin keuangan, Social…
             </span>
           </div>
         </div>
@@ -642,7 +657,7 @@ const CONF_COLORS = [OR, "#fb923c", T_GROUP.color, "#34d399", "#fde68a", "#fffff
 type Bit = { cx: number; cy: number; vx: number; vy: number; drag: number; rot0: number; spin: number; flip: number; ph: number; w: number; h: number; c: string; shape: number; delay: number; sway: number };
 export type Cannon = { x: number; y: number; /** arah tembak (radian, -π/2 = lurus ke atas) */ ang: number; spread: number };
 
-export function Confetti({ f, fps, at, cannons, n = 44, scale = 1 }: { f: number; fps: number; at: number; cannons: Cannon[]; n?: number; scale?: number }) {
+export function Confetti({ f, fps, at, cannons, W, H, n = 44, scale = 1 }: { f: number; fps: number; at: number; cannons: Cannon[]; /** ukuran kanvas (svg berukuran nyata: render browser memotong isi di luar kotak svg) */ W: number; H: number; n?: number; scale?: number }) {
   const key = cannons.map((c) => `${c.x.toFixed(0)},${c.y.toFixed(0)},${c.ang.toFixed(3)},${c.spread.toFixed(3)}`).join("|");
   const bits = useMemo<Bit[]>(
     () =>
@@ -679,7 +694,7 @@ export function Confetti({ f, fps, at, cannons, n = 44, scale = 1 }: { f: number
   if (t < 0 || t > 1.9) return null;
   const g = 1100 * scale;
   return (
-    <svg width={2} height={2} style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }} aria-hidden>
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }} aria-hidden>
       {bits.map((b, i) => {
         const tt = t - b.delay;
         if (tt < 0) return null;

@@ -26,10 +26,22 @@ export const ORANGE4 = "#fb923c";
 export const GRAD = "linear-gradient(180deg,#fb8a3c,#ea580c)";
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
+/**
+ * cincin luar setebal `w` px di sekeliling induk ber-border 1px (pengganti box-shadow "0 0 0 Npx" yang tidak tergambar di
+ * @remotion/web-renderer). Induk wajib position:relative & tidak overflow:hidden. Taruh sebagai anak PERTAMA (urutan DOM = urutan gambar).
+ */
+export function Ring({ w, r, color, edge = 1 }: { w: number; r: number; color: string; edge?: number }) {
+  const o = -(edge + w);
+  return <span aria-hidden style={{ position: "absolute", left: o, top: o, right: o, bottom: o, borderRadius: r + w, border: `${w.toFixed(2)}px solid ${color}`, boxSizing: "border-box", pointerEvents: "none" }} />;
+}
+
 // ------------------------------------------------------------------ header ------------------------------------------------------------------
 /** baris atas halaman AI (AiChat header): pill mode + tombol pelangi Train your AI (gerak warna & kilau dari frame) */
 export function AiHeader({ f }: { f: number }) {
+  // gerak warna pelangi = background-size 300% + background-position bergulir (berulang) di CSS. Web-renderer tidak mengulang
+  // tile background → dibuat strip 2 siklus (600%) yang digeser translateX, hasilnya sama di CLI & render browser.
   const flow = (f * 2.4) % 300;
+  const flowU = ((2 * flow) / 100) % 3;
   const shine = ((f % 72) / 72) * 2.6 - 1.2;
   return (
     <div style={{ height: 46, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "0 12px", borderBottom: `1px solid ${rgba(Z[800], 0.8)}` }}>
@@ -51,13 +63,23 @@ export function AiHeader({ f }: { f: number }) {
           fontWeight: 800,
           color: "#fff",
           whiteSpace: "nowrap",
-          background: "linear-gradient(90deg, #f97316, #ec4899, #8b5cf6, #f97316)",
-          backgroundSize: "300% 100%",
-          backgroundPosition: `${flow.toFixed(1)}% 0%`,
-          boxShadow: "0 6px 16px -6px rgba(236,72,153,0.6)",
+          background: "#f97316",
+          boxShadow: "0 4px 9px rgba(236,72,153,0.32)",
           overflow: "hidden",
         }}
       >
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: "600%",
+            backgroundImage: "linear-gradient(90deg, #f97316 0%, #ec4899 16.667%, #8b5cf6 33.333%, #f97316 50%, #ec4899 66.667%, #8b5cf6 83.333%, #f97316 100%)",
+            transform: `translateX(${(-(flowU / 6) * 100).toFixed(3)}%)`,
+          }}
+        />
         <span
           aria-hidden
           style={{
@@ -105,16 +127,20 @@ export function Composer({
 }) {
   const ready = draft.length > 0;
   const caretOn = focus && (ready || Math.floor(f / 9) % 2 === 0);
+  const ringW = (focus ? 4 : 0) + glow * 6;
   return (
     <div
       style={{
+        position: "relative",
         borderRadius: 16,
         border: `1px solid ${focus ? rgba(ORANGE, 0.75) : Z[800]}`,
         background: Z[900],
         padding: 10,
-        boxShadow: `0 0 0 ${(focus ? 4 : 0) + glow * 6}px ${rgba(ORANGE, 0.12 + glow * 0.2)}, 0 18px 40px -20px rgba(0,0,0,0.9)`,
+        boxShadow: "0 12px 22px rgba(0,0,0,0.5)",
       }}
     >
+      {/* cincin fokus = div ber-border (box-shadow spread "0 0 0 Npx" tidak tergambar di web-renderer) */}
+      {ringW > 0.05 && <Ring w={ringW} r={16} color={rgba(ORANGE, 0.12 + glow * 0.2)} />}
       <div style={{ height: 40, boxSizing: "border-box", padding: "1px 8px", fontSize: 14, lineHeight: "19px", color: Z[100], overflow: "hidden" }}>
         {caretOn && !ready && <Caret pre />}
         {ready ? <span>{draft}</span> : <span style={{ color: Z[500] }}>Tanya apa aja… (Ctrl+V buat tempel screenshot)</span>}
@@ -205,7 +231,7 @@ export function Composer({
               backgroundImage: GRAD,
               opacity: ready ? 1 : 0.4,
               transform: `scale(${(press * back).toFixed(3)})`,
-              boxShadow: ready ? `0 8px 18px -8px ${rgba(ORANGE, 0.9)}` : undefined,
+              boxShadow: ready ? `0 5px 10px ${rgba(ORANGE, 0.4)}` : undefined,
             }}
           >
             <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -312,7 +338,7 @@ export function UserBubble({ text, p }: { text: string; p: number }) {
           lineHeight: 1.45,
           color: "#fff",
           backgroundImage: GRAD,
-          boxShadow: `0 12px 26px -14px ${rgba(ORANGE, 0.9)}`,
+          boxShadow: `0 7px 14px ${rgba(ORANGE, 0.32)}`,
           whiteSpace: "nowrap",
           transform: `translateY(${((1 - p) * 26).toFixed(1)}px) scale(${(0.86 + 0.14 * p).toFixed(3)})`,
           transformOrigin: "100% 100%",
@@ -343,6 +369,7 @@ export function HelperLine({ max, p, glow, pop = 0, shine = 0 }: { max: number; 
       <TextShine p={shine} glow="rgba(251,146,60,.9)" style={{ display: "inline-block", maxWidth: max, transform: `scale(${(1 + pop * 0.12).toFixed(4)})`, transformOrigin: "0% 60%" }}>
         <span
           style={{
+            position: "relative",
             display: "inline-block",
             maxWidth: max,
             whiteSpace: "nowrap",
@@ -353,9 +380,10 @@ export function HelperLine({ max, p, glow, pop = 0, shine = 0 }: { max: number; 
             fontSize: fs,
             lineHeight: 1.3,
             color: Z[400],
-            boxShadow: `0 1px 2px rgba(0,0,0,0.4)${hot > 0.01 ? `, 0 0 0 ${(hot * 4).toFixed(1)}px ${rgba(ORANGE, 0.2 * hot)}, 0 0 ${(pop * 26).toFixed(1)}px ${rgba(ORANGE, 0.45 * pop)}` : ""}`,
+            boxShadow: `0 1px 2px rgba(0,0,0,0.4)${pop > 0.01 ? `, 0 0 ${(pop * 26).toFixed(1)}px ${rgba(ORANGE, 0.45 * pop)}` : ""}`,
           }}
         >
+          {hot * 4 > 0.05 && <Ring w={hot * 4} r={12} color={rgba(ORANGE, 0.2 * hot)} />}
           👋 Kamu dibantu oleh <b style={{ fontWeight: 650, color: Z[100] }}>{tg.name}</b> · <span style={{ color: pop > 0.01 ? ORANGE4 : Z[400] }}>{tg.kind}</span>
           {full ? ` — ${tg.sifat}` : ""}
         </span>
@@ -400,7 +428,7 @@ export function ChoiceCard({ t, title, q, opts, pick, tapAt, inAt, tapF }: { t: 
         borderRadius: 16,
         border: `1px solid ${Z[800]}`,
         background: Z[900],
-        boxShadow: "0 1px 2px rgba(0,0,0,0.4), 0 22px 46px -26px rgba(0,0,0,0.9)",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.4), 0 14px 24px rgba(0,0,0,0.4)",
       }}
     >
       <div style={{ padding: "12px 14px 4px" }}>
@@ -531,13 +559,15 @@ export function ThinkingLive({ f, fps, steps, doneAt, hot }: { f: number; fps: n
   return (
     <div
       style={{
+        position: "relative",
         borderRadius: 12,
         border: `1px solid ${hot > 0.01 ? rgba(ORANGE, 0.25 + 0.35 * hot) : Z[800]}`,
         background: rgba(Z[900], 0.6 + 0.4 * hot),
         padding: "9px 12px 10px",
-        boxShadow: hot > 0.01 ? `0 24px 50px -24px rgba(0,0,0,0.9), 0 0 0 ${(hot * 3).toFixed(1)}px ${rgba(ORANGE, 0.08 * hot)}` : undefined,
+        boxShadow: hot > 0.01 ? `0 14px 26px ${rgba("#000000", 0.5 * hot)}` : undefined,
       }}
     >
+      {hot * 3 > 0.05 && <Ring w={hot * 3} r={12} color={rgba(ORANGE, 0.08 * hot)} />}
       <div style={{ fontSize: 12.5, fontWeight: 700, color: ORANGE4, lineHeight: 1.4 }}>
         {HERO} ({p.type}): “{personaIntro(HERO)}”
       </div>
@@ -660,7 +690,7 @@ export function AnalysisCard({
   const dot = { good: "#4ade80", warn: "#fbbf24", bad: "#f87171" };
   return (
     <div
-      style={{ position: "relative", borderRadius: 18, overflow: "hidden", border: "1px solid #1e293b", background: "#0b1220", color: "#e5e7eb", boxShadow: "0 18px 40px -26px rgba(15,23,42,0.9)" }}
+      style={{ position: "relative", borderRadius: 18, overflow: "hidden", border: "1px solid #1e293b", background: "#0b1220", color: "#e5e7eb", boxShadow: "0 10px 20px rgba(15,23,42,0.45)" }}
     >
       <div style={{ padding: "13px 15px 11px", background: "#111a2e", borderBottom: "1px solid #1e293b" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -711,7 +741,6 @@ export function AnalysisCard({
                     fontWeight: 750,
                     lineHeight: 1.25,
                     color: tileV[tone],
-                    fontVariantNumeric: "tabular-nums",
                     textShadow: tone === "down" && flash > 0 ? `0 0 ${(flash * 18).toFixed(1)}px rgba(248,113,113,${(0.8 * flash).toFixed(2)})` : undefined,
                   }}
                 >

@@ -6,12 +6,15 @@
  *   teks Penyelesaian "belum ada respons" = status Menunggu asli)
  * - panel "Mirip topik yang sudah ada" (components/SimilarTopics.tsx) dengan topik kembar
  * - notifikasi chat grup generik yang menumpuk (bukan tampilan aplikasi chat mana pun)
- * Identitas clipper (email / link TikTok) selalu diburamkan (Blur).
+ * Identitas clipper (email / link TikTok) TIDAK pernah digambar sebagai teks asli: hanya placeholder tersamar ("•••••@gmail.com",
+ * "tiktok.com/@•••••/video/••••") + blur hiasan, jadi tetap aman di render browser (filter anak bisa menggantikan filter induk).
+ * Kompatibel @remotion/web-renderer: tanpa box-shadow spread / inset (pakai border / outline / latar opak hasil mix),
+ * tanpa latar berlapis "gradien, #warna", tanpa z-index (urutan DOM yang menentukan).
  */
 import type { CSSProperties, ReactNode } from "react";
 import { Blur, FONT, Icon, Z } from "../../screens/ui";
-import { rgba } from "../../theme";
-import { RED } from "./intro-parts";
+import { mix, rgba } from "../../theme";
+import { RED, softBlur } from "./intro-parts";
 
 // ---------------------------------------------------------------------------------------------
 // Sheet "Video Review WA"
@@ -54,12 +57,20 @@ const FIRST_ROW = 212;
 const GRID = "#2a2a2f";
 const ink = { head: Z[200], cell: "#b9b9c1", dim: Z[500] };
 
+/** kontak clipper: placeholder tersamar (bukan data asli), blur hanya hiasan */
+const CONTACT_MASK: Record<string, string> = { e: "•••••••@gmail.com", u: "tiktok.com/@•••••/video/••••" };
+
 function Contact({ kind, size }: { kind: string; size: number }) {
   return (
-    <Blur px={7}>
-      <span style={{ color: "#7dd3fc", textDecoration: "underline", fontSize: size }}>{kind === "e" ? "clipper.akun88@gmail.com" : "tiktok.com/@clipper_xx/video/7431"}</span>
+    <Blur px={4}>
+      <span style={{ color: "#7dd3fc", textDecoration: "underline", fontSize: size, letterSpacing: "0.02em" }}>{CONTACT_MASK[kind] ?? CONTACT_MASK.e}</span>
     </Blur>
   );
+}
+
+/** cincin merah baris kembar: border (bukan box-shadow inset) + tint + glow luar biasa (tanpa spread) */
+function RowRing({ style }: { style?: CSSProperties }) {
+  return <div style={{ position: "absolute", left: 0, top: 0, right: 0, height: SHEET_ROW_H, boxSizing: "border-box", border: `3px solid ${RED}`, background: rgba(RED, 0.05), boxShadow: `0 0 36px ${rgba(RED, 0.6)}`, pointerEvents: "none", ...style }} />;
 }
 
 function cellStyle(ci: number, v: string, ri: number): CSSProperties {
@@ -77,7 +88,7 @@ function cellStyle(ci: number, v: string, ri: number): CSSProperties {
 export function SheetRow({ ri, fs = 25, cols = [0, 1, 2, 3, 4, 5], num = true, outline, blur = 0 }: { ri: number; fs?: number; cols?: number[]; num?: boolean; outline?: boolean; blur?: number }) {
   const r = SHEET_ROWS[ri % SHEET_ROWS.length];
   return (
-    <div style={{ display: "flex", height: SHEET_ROW_H, position: "relative", fontFamily: FONT, fontSize: fs, boxShadow: outline ? `inset 0 0 0 3px ${RED}` : undefined, filter: blur > 0.3 ? `blur(${blur.toFixed(1)}px)` : undefined, opacity: blur > 0.3 ? 0.55 : undefined, zIndex: outline ? 2 : undefined }}>
+    <div style={{ display: "flex", height: SHEET_ROW_H, position: "relative", fontFamily: FONT, fontSize: fs, filter: blur > 0.3 ? softBlur(blur) : undefined, opacity: blur > 0.3 ? 0.55 : undefined }}>
       {num && <div style={{ width: SHEET_NUM_W, flex: "none", display: "flex", alignItems: "center", justifyContent: "center", background: "#1c1c20", color: ink.dim, borderRight: `1px solid ${GRID}`, borderBottom: `1px solid ${GRID}`, fontSize: fs * 0.82 }}>{FIRST_ROW + ri}</div>}
       {cols.map((ci) => {
         const v = r[ci] ?? "";
@@ -87,7 +98,7 @@ export function SheetRow({ ri, fs = 25, cols = [0, 1, 2, 3, 4, 5], num = true, o
           </div>
         );
       })}
-      {outline && <div style={{ position: "absolute", inset: 0, boxShadow: `0 0 36px ${rgba(RED, 0.6)}, inset 0 0 0 999px ${rgba(RED, 0.05)}`, pointerEvents: "none" }} />}
+      {outline && <RowRing />}
     </div>
   );
 }
@@ -98,11 +109,11 @@ export function SheetRow({ ri, fs = 25, cols = [0, 1, 2, 3, 4, 5], num = true, o
  */
 export function Sheet({ rows = SHEET_ROWS.length, sel = 3, fs = 25, focus, blur = 0 }: { rows?: number; sel?: number; fs?: number; focus?: number[]; blur?: number }) {
   const letters = "ABCDEF";
-  const soft = blur > 0.3 ? `blur(${(blur * 0.5).toFixed(1)}px)` : undefined;
+  const soft = blur > 0.3 ? softBlur(blur * 0.5) : undefined;
   return (
-    <div style={{ width: SHEET_W, background: "#111114", borderRadius: 18, overflow: "hidden", border: `1px solid ${GRID}`, boxShadow: "0 40px 120px -30px rgba(0,0,0,0.9)", fontFamily: FONT }}>
+    <div style={{ position: "relative", width: SHEET_W, background: "#111114", borderRadius: 18, overflow: "hidden", border: `1px solid ${GRID}`, boxShadow: "0 40px 120px -30px rgba(0,0,0,0.9)", fontFamily: FONT }}>
       {/* judul file */}
-      <div style={{ filter: soft, height: 74, display: "flex", alignItems: "center", gap: 16, padding: "0 26px", background: "#18181b", borderBottom: `1px solid ${GRID}` }}>
+      <div style={{ filter: soft, height: 74, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 16, padding: "0 26px", background: "#18181b", borderBottom: `1px solid ${GRID}` }}>
         <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke={Z[400]} strokeWidth={1.8}>
           <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" />
           <path d="M3.5 9h17M3.5 14.5h17M9.5 3.5v17" />
@@ -111,7 +122,7 @@ export function Sheet({ rows = SHEET_ROWS.length, sel = 3, fs = 25, focus, blur 
         <span style={{ fontSize: 22, color: Z[500] }}>· terakhir diedit 2 menit lalu</span>
       </div>
       {/* bar formula */}
-      <div style={{ filter: soft, height: 58, display: "flex", alignItems: "center", gap: 18, padding: "0 26px", background: "#141417", borderBottom: `1px solid ${GRID}`, fontSize: 24, color: Z[300] }}>
+      <div style={{ filter: soft, height: 58, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 18, padding: "0 26px", background: "#141417", borderBottom: `1px solid ${GRID}`, fontSize: 24, color: Z[300] }}>
         <span style={{ color: Z[500], fontStyle: "italic", fontWeight: 600 }}>fx</span>
         <span style={{ width: 1, height: 30, background: GRID }} />
         <span>belum ada respons</span>
@@ -135,8 +146,15 @@ export function Sheet({ rows = SHEET_ROWS.length, sel = 3, fs = 25, focus, blur 
         ))}
       </div>
       {Array.from({ length: rows }, (_, ri) => (
-        <SheetRow key={ri} ri={ri} fs={fs} outline={DUP_ROWS.has(ri)} blur={focus && !focus.includes(ri) ? blur : 0} />
+        <SheetRow key={ri} ri={ri} fs={fs} blur={focus && !focus.includes(ri) ? blur : 0} />
       ))}
+      {/* cincin baris kembar digambar SETELAH semua baris (glow di atas baris tetangga; web-renderer mengabaikan z-index) */}
+      {Array.from(DUP_ROWS)
+        .filter((ri) => ri < rows)
+        .map((ri) => {
+          const b = focus && !focus.includes(ri) ? blur : 0;
+          return <RowRing key={ri} style={{ top: SHEET_HEAD_H + ri * SHEET_ROW_H, filter: b > 0.3 ? softBlur(b) : undefined, opacity: b > 0.3 ? 0.55 : undefined }} />;
+        })}
     </div>
   );
 }
@@ -181,7 +199,7 @@ export function SimilarItem({ i, k = 2.2, style }: { i: number; k?: number; styl
 /** panel amber "Mirip topik yang sudah ada." + daftar topik kembar; `items[i]` = progres muncul tiap item (0..1) */
 export function SimilarPanel({ w, k = 2.2, items }: { w: number; k?: number; items: number[] }) {
   return (
-    <div style={{ width: w, borderRadius: 16 * k, border: `1px solid ${rgba("#f59e0b", 0.3)}`, background: `linear-gradient(180deg, ${rgba("#f59e0b", 0.09)} 0%, ${rgba("#f59e0b", 0.05)} 100%), #0d0d10`, padding: 12 * k, fontFamily: FONT, boxShadow: "0 50px 120px -40px rgba(0,0,0,0.95)" }}>
+    <div style={{ width: w, borderRadius: 16 * k, border: `1px solid ${rgba("#f59e0b", 0.3)}`, background: `linear-gradient(180deg, ${mix("#0d0d10", "#f59e0b", 0.09)} 0%, ${mix("#0d0d10", "#f59e0b", 0.05)} 100%)`, padding: 12 * k, fontFamily: FONT, boxShadow: "0 50px 120px -40px rgba(0,0,0,0.95)" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 * k }}>
         <p style={{ margin: 0, fontSize: 12.5 * k, lineHeight: 1.4, color: "#fcd34d" }}>
           <b>Mirip topik yang sudah ada.</b> Kalau kasusnya sama, tambahkan sebagai laporan
@@ -273,7 +291,7 @@ const STATUS_TONE: Record<string, [string, string]> = {
 export function StatusChip({ label, size = 30 }: { label: "Open" | "In Progress" | "Resolved"; size?: number }) {
   const [fg, c] = STATUS_TONE[label];
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", borderRadius: 999, padding: `${size * 0.22}px ${size * 0.62}px`, fontFamily: FONT, fontSize: size, fontWeight: 650, color: fg, background: "#121214", boxShadow: `inset 0 0 0 999px ${rgba(c, 0.15)}, inset 0 0 0 2px ${rgba(c, 0.32)}`, whiteSpace: "nowrap" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", borderRadius: 999, padding: `${size * 0.22 - 2}px ${size * 0.62 - 2}px`, fontFamily: FONT, fontSize: size, fontWeight: 650, color: fg, background: mix("#121214", c, 0.15), border: `2px solid ${rgba(c, 0.32)}`, whiteSpace: "nowrap" }}>
       {label}
     </span>
   );
@@ -282,7 +300,7 @@ export function StatusChip({ label, size = 30 }: { label: "Open" | "In Progress"
 /** HotBadge: bg-red-600/20 text-red-300 ring-red-500/40, "🔥 HOT" (ikon api, bukan emoji) */
 export function HotChip({ size = 32 }: { size?: number }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: size * 0.2, borderRadius: 999, padding: `${size * 0.22}px ${size * 0.6}px`, fontFamily: FONT, fontSize: size, fontWeight: 800, color: "#fca5a5", background: "#160b0b", boxShadow: `inset 0 0 0 999px ${rgba("#dc2626", 0.2)}, inset 0 0 0 2px ${rgba(RED, 0.4)}`, whiteSpace: "nowrap", letterSpacing: "0.02em" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: size * 0.2, borderRadius: 999, padding: `${size * 0.22 - 2}px ${size * 0.6 - 2}px`, fontFamily: FONT, fontSize: size, fontWeight: 800, color: "#fca5a5", background: mix("#160b0b", "#dc2626", 0.2), border: `2px solid ${rgba(RED, 0.4)}`, whiteSpace: "nowrap", letterSpacing: "0.02em" }}>
       <Icon name="flame" size={size * 0.95} color="#fca5a5" />
       HOT
     </span>
@@ -292,7 +310,7 @@ export function HotChip({ size = 32 }: { size?: number }) {
 /** UserAvatar: inisial di zinc-800 (akun sendiri oranye) */
 export function InitialAvatar({ name, size = 84, me }: { name: string; size?: number; me?: boolean }) {
   return (
-    <span style={{ width: size, height: size, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: me ? "#3a2312" : Z[800], color: me ? "#fb923c" : Z[100], fontFamily: FONT, fontSize: size * 0.42, fontWeight: 750, boxShadow: `inset 0 0 0 2px ${rgba(me ? "#f97316" : Z[600], 0.45)}` }}>
+    <span style={{ width: size, height: size, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: me ? "#3a2312" : Z[800], color: me ? "#fb923c" : Z[100], fontFamily: FONT, fontSize: size * 0.42, fontWeight: 750, boxSizing: "border-box", border: `2px solid ${rgba(me ? "#f97316" : Z[600], 0.45)}` }}>
       {name[0]}
     </span>
   );

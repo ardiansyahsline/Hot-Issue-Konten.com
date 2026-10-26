@@ -263,6 +263,13 @@ export function TwsShot() {
   const cardOp = clamp01((s - NUM_IN) / 0.08);
   const cardBounce = s >= DROP ? -10 * Math.exp(-(s - DROP) * 10) * Math.sin((s - DROP) * 26) : 0;
   const cardScale = 0.62 + 0.38 * cardIn;
+  // render browser (@remotion/web-renderer): blur CSS = ctx.filter canvas, digambar dalam px LAYAR, tidak ikut skala transform
+  // 2D (induk maupun elemen itu sendiri) → nilai blur dikali skala layar elemennya supaya sama dengan laptop. Pengecualian:
+  // elemen ber-transform 3D / ber-mask (dan isinya) di-precompose di ukuran CSS-nya → blur sudah ikut skala, faktor 1.
+  // Laptop: faktor selalu 1 (keluaran tidak berubah).
+  const wb = (k: number) => (web ? k * camNow.z : 1);
+  const bkCard = wb(U * cardScale);
+  const composerK = UC * (1 - composerOut * 0.12);
   const pos = carousel(s);
   const act = s >= FLIP2 ? 2 : s >= FLIP1 ? 1 : 0;
   // DOF saat angka slam: kartu di belakang buram & redup, fokus kembali saat angka terbang ke slotnya
@@ -318,7 +325,9 @@ export function TwsShot() {
                     WebkitMaskImage: dof > 0.01 ? `linear-gradient(180deg, rgba(0,0,0,${(1 - dof).toFixed(3)}) 0%, rgba(0,0,0,${(1 - 0.7 * dof).toFixed(3)}) 70%, #000 100%)` : undefined,
                   }}
                 >
-                  <div style={{ position: "absolute", inset: 0, filter: blurCss(swipeBlur(f, fps) / U + dof * 1.6 + slamDof * 3) }}>
+                  {/* blur di px kartu. Render browser: dikali bkCard, KECUALI saat mask DOF aktif (elemen ber-mask di-precompose
+                      di ukuran CSS-nya lalu diperbesar → blur di dalamnya sudah ikut skala) */}
+                  <div style={{ position: "absolute", inset: 0, filter: blurCss((swipeBlur(f, fps) / U + dof * 1.6 + slamDof * 3) * (dof > 0.01 ? 1 : bkCard)) }}>
                     {prep.map((p, i) => {
                       const d = i - pos;
                       if (Math.abs(d) > 1.05) return null;
@@ -330,8 +339,14 @@ export function TwsShot() {
                             position: "absolute",
                             left: 0,
                             top: 0,
-                            // perspektif di dalam transform (web-renderer hanya membaca matriks transform, bukan properti `perspective`)
-                            transform: `perspective(900px) translateX(${(d * (SLIDE_W + GAP_SLIDE) * PS).toFixed(2)}px) rotateY(${rot.toFixed(2)}deg) scale(${(1 - Math.min(1, Math.abs(d)) * 0.08).toFixed(4)})`,
+                            // perspektif di dalam transform (web-renderer hanya membaca matriks transform, bukan properti `perspective`).
+                            // Render browser: slide (hampir) diam (|d| < 0,005, sisa ayunan carousel) pakai transform 2D saja → tidak
+                            // di-precompose 3D (precompose = digambar di ukuran CSS kecil lalu diperbesar → teks slide lembek). Selisih
+                            // rotateY ≤ 0,13° / perspektif < 0,4 px: tidak terlihat.
+                            transform:
+                              web && Math.abs(d) < 0.005
+                                ? `translateX(${(d * (SLIDE_W + GAP_SLIDE) * PS).toFixed(2)}px) scale(${(1 - Math.abs(d) * 0.08).toFixed(4)})`
+                                : `perspective(900px) translateX(${(d * (SLIDE_W + GAP_SLIDE) * PS).toFixed(2)}px) rotateY(${rot.toFixed(2)}deg) scale(${(1 - Math.min(1, Math.abs(d)) * 0.08).toFixed(4)})`,
                             transformOrigin: d > 0 ? "0% 50%" : "100% 50%",
                           }}
                         >
@@ -380,16 +395,16 @@ export function TwsShot() {
                     mengabaikan z-index & menggambar menurut urutan DOM; Chromium/laptop: z-index tetap berlaku). */}
                 <div style={{ marginTop: 8 }}>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    <DlBtn dim={dim} busy={busy} order={1}>
+                    <DlBtn dim={dim} bk={bkCard} busy={busy} order={1}>
                       ⬇ PNG
                     </DlBtn>
-                    <DlBtn dim={dim} busy={busy} order={3}>
+                    <DlBtn dim={dim} bk={bkCard} busy={busy} order={3}>
                       ⬇ HTML
                     </DlBtn>
-                    <DlBtn dim={dim} busy={busy} order={4}>
+                    <DlBtn dim={dim} bk={bkCard} busy={busy} order={4}>
                       ⬇ ZIP PNG
                     </DlBtn>
-                    <DlBtn dim={dim} busy={busy} order={5}>
+                    <DlBtn dim={dim} bk={bkCard} busy={busy} order={5}>
                       ⬇ ZIP SVG
                     </DlBtn>
                     <DlBtn hero lift={lift} press={press} busy={busy} order={2}>
@@ -432,13 +447,13 @@ export function TwsShot() {
                 left: PCX - (CW * UC) / 2,
                 top: PCY - 124 * UC,
                 width: CW,
-                transform: `translateY(${(composerOut * 90 * UC).toFixed(1)}px) scale(${(UC * (1 - composerOut * 0.12)).toFixed(4)})`,
+                transform: `translateY(${(composerOut * 90 * UC).toFixed(1)}px) scale(${composerK.toFixed(4)})`,
                 transformOrigin: "0 0",
                 opacity: 1 - composerOut,
-                filter: blurCss(composerOut * 8),
+                filter: blurCss(composerOut * 8 * wb(composerK)),
               }}
             >
-              <ChatBits f={f} fps={fps} />
+              <ChatBits f={f} fps={fps} bk={wb(composerK)} />
               <Composer text={sent ? "" : typed} typing={s < 0.8 && s > 0.08} f={f} fps={fps} s={s} t={t} />
             </div>
           )}
@@ -455,7 +470,7 @@ export function TwsShot() {
                 transform: `translateY(${((1 - cardIn) * 140 + cardBounce).toFixed(1)}px) scale(${(U * cardScale).toFixed(4)})`,
                 transformOrigin: `${CW / 2}px ${PREV_Y + PH / 2}px`,
                 opacity: cardOp,
-                filter: blurCss((1 - cardIn) * 9),
+                filter: blurCss((1 - cardIn) * 9 * bkCard),
                 fontFamily: FONT,
               }}
             >
@@ -561,6 +576,8 @@ function HeroNumber({ html, x, st, f, fps }: { html: string; x: number; st: Hero
           background: "transparent",
           transformOrigin: `${NUM_CX}px ${NUM_CY}px`,
           transform: `perspective(1100px) translateY(${st.ty.toFixed(1)}px) rotateX(${st.rx.toFixed(2)}deg) scale(${st.k.toFixed(4)})`,
+          // tanpa pengali `wb`: transform 3D (perspective/rotateX) membuat web-renderer meng-precompose elemen ini di ukuran
+          // CSS-nya lalu memperbesarnya → blur sudah ikut skala, sama dengan laptop (dicek frame 1022/1024 web vs CLI)
           filter: blurCss(st.blur),
         }}
       >
@@ -717,7 +734,8 @@ function PreviewSweeps({ f, fps }: { f: number; fps: number }) {
 // UI website (dibuat ulang dari AiChat & DesignCard)
 // ---------------------------------------------------------------------------------------------
 /** tombol btn DesignCard: rounded-lg border-zinc-800 px-2.5 py-1 text-[12px] font-semibold (disabled:opacity-50 saat ⏳) */
-function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, busy, order }: { children: ReactNode; hero?: boolean; lift?: number; press?: number; dim?: number; busy?: boolean; order?: number }) {
+/** bk = pengali blur DOF (render browser: skala layar kartu, lihat `wb` di TwsShot) */
+function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, bk = 1, busy, order }: { children: ReactNode; hero?: boolean; lift?: number; press?: number; dim?: number; bk?: number; busy?: boolean; order?: number }) {
   const st: CSSProperties = {
     position: "relative",
     order,
@@ -744,7 +762,7 @@ function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, busy, order }: { 
   } else {
     // fokus ke tombol hero: tombol lain redup & sedikit buram (DOF); saat ⏳ tetap ≤ 0,5 seperti disabled
     st.opacity = Math.min(busy ? 0.5 : 1, 1 - 0.62 * dim);
-    st.filter = blurCss(dim * 0.7);
+    st.filter = blurCss(dim * 0.7 * bk);
   }
   return (
     <span style={st}>
@@ -820,7 +838,7 @@ function Touch({ f, at, x, y, from = [40, 60] }: { f: number; at: number; x: str
 }
 
 /** layar kosong AiChat (HeroArt + sapaan) → crossfade ke gelembung pesan user + "⏳ Menyusun desain berita…" */
-function ChatBits({ f, fps }: { f: number; fps: number }) {
+function ChatBits({ f, fps, bk = 1 }: { f: number; fps: number; bk?: number }) {
   const sendF = SEND * fps;
   const g = clamp01((f - sendF) / 5);
   const hi = springAt(f, fps, 0.05, { damping: 16, stiffness: 150, mass: 0.8 });
@@ -840,7 +858,7 @@ function ChatBits({ f, fps }: { f: number; fps: number }) {
             paddingBottom: 14,
             opacity: clamp01(hi * 1.4) * (1 - g),
             transform: `translateY(${((1 - hi) * 18 - g * 12).toFixed(1)}px)`,
-            filter: blurCss(g * 4),
+            filter: blurCss(g * 4 * bk),
           }}
         >
           <HeroArt hero="Harley" size={76} still />

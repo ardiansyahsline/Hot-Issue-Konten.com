@@ -10,12 +10,12 @@
  *  ui-pop 4,8                 → kartu peran 🎬 Video Editor (✓ cocok dengan tipe ENFP) dipilih, rack focus ke kartu
  */
 import type { ReactNode } from "react";
-import { AbsoluteFill, Easing } from "remotion";
+import { AbsoluteFill, Easing, useRemotionEnvironment } from "remotion";
 import { BRANDS } from "@/lib/studio/timeline";
 import { Glow } from "../../fx";
 import { AiScreen } from "../../screens/ai";
 import { mkClock, ORANGE_GRAD, type Env } from "../../screens/ui";
-import { Cam, camAtTime, Caption, clamp01, Depth, EASE, Flash, prog, rgba, springAt, Sweep, useShot, type CamKey } from "../kit";
+import { Cam, camAtTime, Caption, clamp01, Depth, EASE, Flash, prog, rgba, sixWords, springAt, Sweep, useShot, type CamKey } from "../kit";
 import { Confetti, OR, Page, QuizCard, ResultBody, RoleBody, StageSub, T_GROUP, T_QUIZ, T_STAGES, TapFx, TrainModal, type Cannon } from "./train-parts";
 
 /** detik pukulan SFX (relatif awal adegan) */
@@ -24,6 +24,8 @@ const RES = 2.4;
 const CONF = 3.0;
 const NEXT = 4.2;
 const ROLE = 4.8;
+/** caption masuk setelah transisi whip selesai (0,4 dtk): kata yang naik di bawah blur transisi terpotong jadi balok di render browser */
+const CAP_AT = 0.4;
 /** auto-lanjut kuis website (setTimeout 160 ms) */
 const ADV = 0.16;
 
@@ -74,17 +76,55 @@ function AiBackdrop({ W, H }: { W: number; H: number }) {
   );
 }
 
-/** pita caption padat sampai bawah caption lalu memudar — isi yang terdorong kamera ke atas tidak jadi "teks hantu" di belakang caption */
+/**
+ * pita caption padat sampai bawah caption lalu memudar — isi yang terdorong kamera ke atas tidak jadi "teks hantu" di belakang caption.
+ * Div setinggi pita (bukan seluas kanvas) dengan color-stop PERSEN: @remotion/web-renderer tidak mengerti stop px (disebar merata → kanvas gelap).
+ */
 function TopScrim({ y, bg }: { y: number; bg: string }) {
-  return <AbsoluteFill style={{ pointerEvents: "none", background: `linear-gradient(180deg, ${bg} 0px, ${bg} ${Math.round(y)}px, ${rgba(bg, 0.78)} ${Math.round(y + 34)}px, ${rgba(bg, 0)} ${Math.round(y + 120)}px)` }} />;
+  const h = Math.max(1, Math.round(y + 120));
+  const P = (v: number) => `${((v / h) * 100).toFixed(2)}%`;
+  return <div style={{ position: "absolute", left: 0, top: 0, right: 0, height: h, pointerEvents: "none", background: `linear-gradient(180deg, ${bg} 0%, ${bg} ${P(y)}, ${rgba(bg, 0.78)} ${P(y + 34)}, ${rgba(bg, 0)} 100%)` }} />;
+}
+
+/**
+ * lebar perkiraan satu baris caption dalam em (font display 800, letter-spacing -0.035em, jarak kata 0.24em seperti Caption di kit).
+ * Sengaja sedikit lebih lebar dari aslinya (Jakarta/Inter/Inter Tight) → kalau perkiraan bilang muat, baris asli pasti tidak terlipat.
+ */
+const chW = (c: string) => {
+  if ("iljI.,:;'!|ı".includes(c)) return 0.32;
+  if ("frtJ()-/".includes(c)) return 0.46;
+  if ("mw".includes(c)) return 0.94;
+  if ("MW".includes(c)) return 1.02;
+  if (/[A-Z]/.test(c)) return 0.78;
+  if (/[a-z]/.test(c)) return 0.62;
+  if (/[0-9]/.test(c)) return 0.66;
+  return (c.codePointAt(0) ?? 0) > 0x2000 ? 1.2 : 0.72;
+};
+const lineEm = (line: string) => {
+  const ws = line.split(/\s+/).filter(Boolean);
+  return ws.reduce((a, w) => a + Array.from(w).reduce((b, c) => b + chW(c) - 0.035, 0), 0) + Math.max(0, ws.length - 1) * 0.24;
+};
+
+/** teks layar custom (scene.text, maks 2 baris × 6 kata): ukuran font menyesuaikan supaya tiap baris tetap satu baris; tinggi pita dipakai tata letak modal */
+function captionFit(text: string[], boxW: number, portrait: boolean) {
+  const lines = text.map(sixWords).filter(Boolean).slice(0, 2);
+  if (!lines.length) return { lines, fs: 0, h: 0 };
+  const base = portrait ? (lines.length > 1 ? 84 : 92) : 78;
+  const room = boxW * 0.88; // sisa ±12% untuk font lebih lebar (Inter) & selisih perkiraan
+  const fs = Math.round(Math.max(40, Math.min(base, ...lines.map((l) => room / lineEm(l)))));
+  // kalimat yang tetap terlalu panjang di font minimum boleh terlipat → hitung barisnya supaya modal turun secukupnya
+  const rows = lines.reduce((a, l) => a + Math.max(1, Math.ceil((lineEm(l) * fs) / boxW)), 0);
+  return { lines, fs, h: rows * fs * 1.12 };
 }
 
 export function TrainAiShot() {
-  const { f, fps, s, box, W, H, brand, text } = useShot();
+  const { f, fps, s, box, W, H, brand, text, portrait } = useShot();
 
   // ---------------- tata letak dunia (px kanvas) ----------------
-  const capBottom = box.y + 110;
-  const top0 = box.y + 138;
+  // pita caption mengikuti teks layar (bisa diubah user; kosong = tanpa teks → modal naik memakai ruangnya)
+  const cap = captionFit(text, box.w, portrait);
+  const capBottom = cap.lines.length ? box.y + cap.h + 7 : box.y - 12;
+  const top0 = capBottom + 28;
   const avail = box.y + box.h - 6 - top0;
   const S = Math.min(2.1, Math.max(1.6, avail / MH_NEED));
   const MH = Math.min(MH_MAX, Math.round(avail / S));
@@ -102,7 +142,7 @@ export function TrainAiShot() {
   const modalC = wp(MW / 2, MH / 2);
 
   // area layar yang dipakai: di bawah caption s/d bawah kotak aman (12% bawah kotak dihindari untuk teks penting)
-  const uTop = capBottom + 12;
+  const uTop = Math.max(box.y, capBottom + 12);
   const uBot = box.y + box.h * 0.88;
   const boxBot = box.y + box.h - 4;
   const midU = (uTop + uBot) / 2;
@@ -158,6 +198,8 @@ export function TrainAiShot() {
   const subOp = fadeAt(Y_SUB, 40);
   const barsOp = fadeAt(Y_BARS, 34);
   const footOp = clamp01(1 - (sy(mTop + (MH - 13) * S) - (box.y + box.h)) / 40);
+  // CSS blur di dalam modal (DOF, blur gerak halaman): render browser tidak menskalakan radius blur dengan transform induk → kalikan skala total di sana
+  const bk = useRemotionEnvironment().isClientSideRendering ? S * cam.z : 1;
 
   // ---------------- status wizard ----------------
   const qEnter = [0, HIT[0] + ADV, HIT[1] + ADV];
@@ -227,7 +269,8 @@ export function TrainAiShot() {
               top: mTop,
               width: MW,
               height: MH,
-              transform: `perspective(2600px) translateX(${((1 - ent) * 120).toFixed(2)}px) rotateY(${(-tilt).toFixed(3)}deg) scale(${S})`,
+              // ayunan masuk murni 2D (scaleX = cos sudut + sedikit skew): rotateY 3D di bawah blur transisi whip tidak tergambar di render browser
+              transform: `translateX(${((1 - ent) * 120).toFixed(2)}px) scale(${S}) scaleX(${Math.cos((tilt * Math.PI) / 180).toFixed(4)}) skewY(${(-tilt * 0.1).toFixed(3)}deg)`,
               transformOrigin: "0 0",
               opacity: Math.min(1, ent * 1.8),
             }}
@@ -246,17 +289,18 @@ export function TrainAiShot() {
               barsOp={barsOp}
               footOp={footOp}
               dim={Math.max(focus, heroFocus)}
+              bk={bk}
             >
               {T_QUIZ.map((q, i) => (
-                <Page key={q.qi} f={f} fps={fps} enter={qEnter[i]} exit={i < 2 ? qEnter[i + 1] - 0.02 : resEnter - 0.02}>
+                <Page key={q.qi} f={f} fps={fps} bk={bk} enter={qEnter[i]} exit={i < 2 ? qEnter[i + 1] - 0.02 : resEnter - 0.02}>
                   <QuizCard f={f} fps={fps} qi={q.qi} pick={q.pick} hit={HIT[i]} enter={qEnter[i]} />
                 </Page>
               ))}
-              <Page f={f} fps={fps} enter={resEnter} exit={roleEnter - 0.02}>
+              <Page f={f} fps={fps} bk={bk} enter={resEnter} exit={roleEnter - 0.02}>
                 <ResultBody f={f} fps={fps} enter={resEnter} at={RES} hopAt={CONF} descAt={3.45} />
               </Page>
-              <Page f={f} fps={fps} enter={roleEnter}>
-                <RoleBody f={f} fps={fps} enter={roleEnter} hit={ROLE} focus={focus} />
+              <Page f={f} fps={fps} bk={bk} enter={roleEnter}>
+                <RoleBody f={f} fps={fps} enter={roleEnter} hit={ROLE} focus={focus} bk={bk} />
               </Page>
             </TrainModal>
             {/* ketuk "Lanjut →" di luar modal (riak tidak terpotong), di sisi kanan tombol supaya label terbaca */}
@@ -268,9 +312,9 @@ export function TrainAiShot() {
       <Sweep at={RES} len={0.7} alpha={0.16} />
       <Flash at={RES} len={0.2} color={T_GROUP.color} max={0.13} />
       <Flash at={CONF} len={0.16} max={0.06} />
-      <TopScrim y={capBottom} bg={brand.bg} />
-      <Confetti f={f} fps={fps} at={CONF - 1 / fps} cannons={cannons} />
-      <Caption lines={text} at={0.12} emphasis={["versimu"]} />
+      {cap.lines.length > 0 && <TopScrim y={capBottom} bg={brand.bg} />}
+      <Confetti f={f} fps={fps} at={CONF - 1 / fps} cannons={cannons} W={W} H={H} />
+      {cap.lines.length > 0 && <Caption lines={cap.lines} at={CAP_AT} size={cap.fs} emphasis={["versimu"]} />}
     </AbsoluteFill>
   );
 }

@@ -4,6 +4,8 @@
  * Bagian adegan intro teaser (Hook / Reveal / Outro): logo Konten.com hasil jiplak vektor dari public/konten-logo.png,
  * efek cahaya (bloom, sinar, anamorphic flare, gelombang kejut, percikan, bara, bokeh) dan teks kinetik per kata.
  * Semua deterministik dari frame (random(seed) remotion), tanpa radial-gradient CSS / blend-mode / backdrop-filter.
+ * Kompatibel @remotion/web-renderer: filter/opacity hanya di elemen yang punya ukuran (wrapper 0×0 dilewati renderer),
+ * dan filter logo digabung di satu elemen (filter anak menggantikan filter induk di renderer web).
  */
 import type { CSSProperties, ReactNode } from "react";
 import { AbsoluteFill, random } from "remotion";
@@ -12,6 +14,13 @@ import { clamp01, EASE, rgba } from "../../theme";
 import { prog, springAt } from "../kit";
 
 export const ORANGE = "#f97316";
+
+/**
+ * blur yang juga benar di @remotion/web-renderer. Renderer web memasang filter `blur()` per elemen anak, SETELAH clip anak itu
+ * (border-radius / clip-path / overflow) → tepi anak tetap tajam. `drop-shadow` transparan (tak terlihat) memaksa renderer
+ * meng-precompose seluruh subtree dulu lalu mem-blur hasilnya, sama seperti CSS di Chrome (still/render CLI).
+ */
+export const softBlur = (px: number) => `blur(${px.toFixed(1)}px) drop-shadow(0 0 0 transparent)`;
 export const LOGO_BG = "#f54900";
 export const RED = "#ef4444";
 
@@ -25,21 +34,23 @@ const LOWER = "M98.5 127.5H146L202 187L201.5 190.5H157.5Z";
 
 /**
  * Logo Konten.com tajam di ukuran besar. `split` (0..1) = batang chevron masih terpisah (masuk dari kanan atas/bawah),
- * `shine` (0..1) = kilau miring lewat di dalam kotak, `glow` = cahaya oranye di sekeliling.
+ * `shine` (0..1) = kilau miring lewat di dalam kotak, `glow` = cahaya oranye di sekeliling,
+ * `blur` (px) = motion blur — digabung ke filter yang sama dengan glow (jangan pasang filter terpisah di induknya).
  */
-export function KontenMark({ w, split = 0, shine = -1, glow = 0.6, style }: { w: number; split?: number; shine?: number; glow?: number; style?: CSSProperties }) {
+export function KontenMark({ w, split = 0, shine = -1, glow = 0.6, blur = 0, style }: { w: number; split?: number; shine?: number; glow?: number; blur?: number; style?: CSSProperties }) {
   const clip = useSvgId("kmclip");
   const grad = useSvgId("kmgrad");
   const band = useSvgId("kmband");
   const h = w / MARK_AR;
   const sx = split * 70;
   const bx = -140 + clamp01(shine) * 520;
+  const fl = [blur > 0.05 ? `blur(${blur.toFixed(1)}px)` : "", glow > 0 ? `drop-shadow(0 ${(w * 0.05).toFixed(1)}px ${(w * 0.12).toFixed(1)}px ${rgba(LOGO_BG, 0.55 * glow)})` : ""].filter(Boolean).join(" ");
   return (
     <svg
       width={w}
       height={h}
       viewBox="0 13 256 230"
-      style={{ display: "block", overflow: "visible", filter: glow > 0 ? `drop-shadow(0 ${(w * 0.05).toFixed(1)}px ${(w * 0.12).toFixed(1)}px ${rgba(LOGO_BG, 0.55 * glow)})` : undefined, ...style }}
+      style={{ display: "block", overflow: "visible", filter: fl || undefined, ...style }}
       aria-hidden
     >
       <defs>
@@ -91,11 +102,16 @@ export function Bloom({ x, y, r, color, opacity, sy = 1 }: { x: number; y: numbe
   );
 }
 
-/** sinar cahaya (god rays) memancar dari (x, y), berputar pelan */
+/**
+ * sinar cahaya (god rays) memancar dari (x, y), berputar pelan. Blur dipasang di wrapper berukuran (sedikit lebih besar dari kanvas,
+ * overflow hidden supaya lapisan precompose web tidak raksasa) — bukan wrapper 0×0 (dilewati web-renderer) dan bukan di tiap sinar
+ * (clipPath sinar ikut memotong hasil blur). `softBlur` memastikan blur kena ke hasil gabungan di render web.
+ */
+const RAY_PAD = 160;
 export function Rays({ x, y, n = 12, len = 1500, rot = 0, opacity = 0.2, color = "#ffb27a", seed = "rays" }: { x: number; y: number; n?: number; len?: number; rot?: number; opacity?: number; color?: string; seed?: string }) {
   if (opacity <= 0.005) return null;
   return (
-    <div style={{ position: "absolute", left: x, top: y, width: 0, height: 0, pointerEvents: "none", filter: "blur(6px)" }}>
+    <div style={{ position: "absolute", left: -RAY_PAD, top: -RAY_PAD, right: -RAY_PAD, bottom: -RAY_PAD, overflow: "hidden", pointerEvents: "none", filter: softBlur(6) }}>
       {Array.from({ length: n }, (_, i) => {
         const a = (i / n) * 360 + rot + (random(`${seed}a${i}`) - 0.5) * 18;
         const th = 26 + random(`${seed}w${i}`) * 70;
@@ -105,8 +121,8 @@ export function Rays({ x, y, n = 12, len = 1500, rot = 0, opacity = 0.2, color =
             key={i}
             style={{
               position: "absolute",
-              left: 0,
-              top: -th / 2,
+              left: x + RAY_PAD,
+              top: y + RAY_PAD - th / 2,
               width: len,
               height: th,
               transformOrigin: "0 50%",
@@ -208,7 +224,7 @@ export function Bokeh({ f, fps, W, H, n = 6, seed = "bok", color = ORANGE, opaci
   if (opacity <= 0.01) return null;
   const t = f / fps;
   return (
-    <AbsoluteFill style={{ pointerEvents: "none", filter: "blur(22px)" }}>
+    <AbsoluteFill style={{ pointerEvents: "none", overflow: "hidden", filter: softBlur(22) }}>
       {Array.from({ length: n }, (_, i) => {
         const r = 50 + random(`${seed}r${i}`) * 90;
         const x = random(`${seed}x${i}`) * W + Math.sin(t * 0.6 + i) * 40;
@@ -307,7 +323,7 @@ export function Words({
         color,
         opacity: 1 - leave,
         transform: `translateY(${(leave * outY).toFixed(1)}px)`,
-        filter: leave > 0 ? `blur(${(leave * 8).toFixed(1)}px)` : undefined,
+        filter: leave > 0 ? softBlur(leave * 8) : undefined,
         pointerEvents: "none",
       }}
     >

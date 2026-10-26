@@ -17,7 +17,7 @@
  * Angka pasar HANYA dari lib/studio/teaserNews.ts (IHSG -11,57% ke 5.185,10, 16 Okt 2026, terdalam sejak 1998; MSCI usul Standalone Market).
  */
 import { useMemo, type CSSProperties, type ReactNode } from "react";
-import { AbsoluteFill, Easing } from "remotion";
+import { AbsoluteFill, Easing, useRemotionEnvironment } from "remotion";
 import { Shine, TextShine, blurCss } from "../../fx";
 import { Caption, EASE, Flash, Sweep, camAtTime, clamp01, rgba, useShot, type CamKey, Cam } from "../kit";
 import {
@@ -35,6 +35,7 @@ import {
   HERO as HERO_NAME,
   ORANGE,
   ProcessLine,
+  Ring,
   SourceBadges,
   ThinkingLive,
   UserBubble,
@@ -82,7 +83,7 @@ const STEPS: ThinkStep[] = [
   { k: "write", at: 6.6 },
 ];
 const STEPS_DONE = 6.95;
-/** jadwal caption (detik adegan) — lihat catatan di bawah komponen Caption */
+/** jadwal caption (detik adegan) — alasannya di catatan dekat <Caption> di akhir AiShot */
 const CAP_ASK_OUT = 3.6;
 const CAP_THINK_AT = 3.95;
 const CAP_THINK_OUT = 6.6;
@@ -318,7 +319,9 @@ export function AiShot() {
   const capBottomPx = box.y + capH - 14;
   const panelTopPx = H / 2 + cam.y + cam.z * (panelY - H / 2);
   const cap1Vis = clamp01(Math.min((s - 0.3) / 0.2, (1.85 - s) / 0.3));
-  const scrimOp = cap1Vis * clamp01((capBottomPx + 30 - panelTopPx) / 90);
+  // caption "AI yang mikir dulu" kedua (3,95–6,9): kamera membidik kotak berpikir, kepala panel naik ke balik caption → scrim yang sama
+  const capThinkVis = clamp01(Math.min((s - (CAP_THINK_AT - 0.05)) / 0.2, (CAP_THINK_OUT + 0.35 - s) / 0.3));
+  const scrimOp = Math.max(cap1Vis, capThinkVis) * clamp01((capBottomPx + 30 - panelTopPx) / 90);
 
   // ---------------- fokus (DOF): blok selain fokus diburamkan (px CSS, ikut dibesarkan panel) ----------------
   const rack = gr(s, 4.5, 0.35) * (1 - gr(s, 7.05, 0.3));
@@ -336,6 +339,11 @@ export function AiShot() {
   // cincin cahaya memuncak di 0,12 dtk (panel sudah tampil) lalu meredup
   const ring = (s < 0.12 ? s / 0.12 : Math.max(0, 1 - (s - 0.12) / 0.85)) * 0.9 + 0.12 * Math.exp(-Math.max(0, s - T.tap) * 5) * (s >= T.tap ? 1 : 0);
   const k = 0.9 + 0.1 * intro;
+  // render browser (@remotion/web-renderer): blur filter dihitung dalam px kanvas, tidak ikut scale kamera & panel →
+  // radius dikali skala totalnya supaya DOF/blur gerak sama dengan render CLI
+  const web = useRemotionEnvironment().isClientSideRendering;
+  const bkCam = web ? cam.z : 1;
+  const bk = web ? cam.z * S * k : 1;
 
   // ---------------- composer ----------------
   const typed = clamp01((s - T.type) / 0.95);
@@ -407,7 +415,7 @@ export function AiShot() {
   const areaH = CHART_H - HEAD_H - 27 - 27 - 2;
 
   const block = (key: string, y: number, h: number, blur: number, node: ReactNode, x = 0, w = CW, clip = true) => (
-    <div key={key} style={{ position: "absolute", left: PAD + x, top: y, width: w, height: h, overflow: clip ? "hidden" : "visible", filter: blurCss(blur), opacity: 1 - Math.min(0.55, blur * 0.2) }}>
+    <div key={key} style={{ position: "absolute", left: PAD + x, top: y, width: w, height: h, overflow: clip ? "hidden" : "visible", filter: blurCss(blur * bk), opacity: 1 - Math.min(0.55, blur * 0.2) }}>
       {node}
     </div>
   );
@@ -416,13 +424,18 @@ export function AiShot() {
   // kartu chart IHSG (muka chart / punggung koin oranye saat berputar)
   const coinCard = (
     <div style={{ position: "relative", height: CHART_H }}>
-      {/* perspektif DI DALAM transform (bukan properti CSS perspective di induk) → web-renderer juga menggambar flip 3D */}
+      {/* perspektif DI DALAM transform (bukan properti CSS perspective di induk) → web-renderer juga menggambar flip 3D.
+          Hanya selama berputar: matriks 3D lewat jalur WebGL web-renderer (digambar di resolusi lokal lalu di-warp → sedikit lembut),
+          jadi setelah mendarat (9,0) transform kembali 2D supaya chart tajam. Blur tidak dikali bk: lapisan 3D ikut di-warp skala. */}
       <div
         style={{
           position: "absolute",
           inset: 0,
           opacity: coinOp,
-          transform: `perspective(900px) translateY(${coinY.toFixed(1)}px) scale(${coinSc.toFixed(4)}) rotateY(${coinDeg.toFixed(2)}deg)`,
+          transform:
+            coinDeg !== 0
+              ? `perspective(900px) translateY(${coinY.toFixed(1)}px) scale(${coinSc.toFixed(4)}) rotateY(${coinDeg.toFixed(2)}deg)`
+              : `translateY(${coinY.toFixed(1)}px) scale(${coinSc.toFixed(4)})`,
           transformOrigin: "50% 50%",
           filter: blurCss(coinBlur),
         }}
@@ -437,7 +450,7 @@ export function AiShot() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              boxShadow: "0 20px 40px -18px rgba(0,0,0,0.9)",
+              boxShadow: "0 12px 22px rgba(0,0,0,0.5)",
               transform: "scaleX(-1)",
             }}
           >
@@ -457,7 +470,7 @@ export function AiShot() {
               border: "1px solid #27272a",
               background: "#111113",
               overflow: "hidden",
-              boxShadow: s < T.coin ? "0 20px 40px -18px rgba(0,0,0,0.9)" : undefined,
+              boxShadow: s < T.coin ? "0 12px 22px rgba(0,0,0,0.5)" : undefined,
             }}
           >
             <ChartHead
@@ -504,7 +517,6 @@ export function AiShot() {
                         lineHeight: 1,
                         letterSpacing: "-0.02em",
                         color: "#f87171",
-                        fontVariantNumeric: "tabular-nums",
                         textShadow: `0 0 ${(6 + slamHit * 22).toFixed(1)}px rgba(239,68,68,${(0.35 + 0.55 * slamHit).toFixed(2)})`,
                       }}
                     >
@@ -532,14 +544,15 @@ export function AiShot() {
   const scrollWin = (s > 8.5 && s < 9.0) || (s > 9.85 && s < 10.3) ? 1 : 0;
   const scrollBlur = scrollWin * Math.min(2, Math.max(0, scrollV - 5) * 0.09);
   const thread = (
-    <div style={{ position: "absolute", left: 0, right: 0, top: 0, transform: `translateY(${(-scroll).toFixed(2)}px)`, filter: blurCss(scrollBlur) }}>
+    // tinggi eksplisit: pembungkus setinggi 0 tidak menerapkan filter ke anak di web-renderer
+    <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: Math.max(VH, L.total) + 40, transform: `translateY(${(-scroll).toFixed(2)}px)`, filter: blurCss(scrollBlur * bk) }}>
       {L.userH > 0.5 &&
         block(
           "u",
           L.userY,
           L.userH + 30,
           blurOld,
-          <div style={{ transform: `translateY(${flyY.toFixed(1)}px)`, filter: blurCss(flyBlur) }}>
+          <div style={{ transform: `translateY(${flyY.toFixed(1)}px)`, filter: blurCss(flyBlur * bk) }}>
             <UserBubble text={QUESTION} p={userP} />
           </div>,
           0,
@@ -567,16 +580,9 @@ export function AiShot() {
                     <AnsweredCard title={ASK_TITLE} pairs={[[ASK_Q.replace(/\?$/, ""), OPTS[PICK].label]]} />
                   </div>
                 )}
+                {/* cincin ketuk = Ring ber-border (box-shadow spread tidak tergambar di web-renderer) */}
                 {s >= T.tap - 0.05 && s < T.tap + 0.7 && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      borderRadius: 16,
-                      pointerEvents: "none",
-                      boxShadow: `0 0 0 ${(3 * Math.exp(-(s - T.tap) * 4)).toFixed(2)}px ${rgba(ORANGE, 0.6 * Math.exp(-(s - T.tap) * 4))}`,
-                    }}
-                  />
+                  <Ring w={3 * Math.exp(-Math.max(0, s - T.tap) * 4)} r={16} edge={0} color={rgba(ORANGE, 0.6 * Math.exp(-Math.max(0, s - T.tap) * 4))} />
                 )}
               </div>
             </AssistantRow>
@@ -659,7 +665,7 @@ export function AiShot() {
               L.row2Y + L.chartBY,
               L.chartBH,
               0,
-              <div style={{ position: "relative", height: CHART_H, transform: `translateX(${bX.toFixed(1)}px)`, filter: blurCss(Math.min(3, Math.abs(bV) * 0.12)) }}>
+              <div style={{ position: "relative", height: CHART_H, transform: `translateX(${bX.toFixed(1)}px)`, filter: blurCss(Math.min(3, Math.abs(bV) * 0.12) * bk) }}>
                 <div style={{ position: "absolute", inset: 0, borderRadius: 12, border: "1px solid #27272a", background: "#111113", overflow: "hidden" }}>
                   <ChartHead
                     title="BTC/USDT · 4H"
@@ -766,7 +772,7 @@ export function AiShot() {
 
       {/* panel AI + kamera */}
       <Cam keys={keys} blur={false}>
-        <AbsoluteFill style={{ filter: blurCss(camBlur) }}>
+        <AbsoluteFill style={{ filter: blurCss(camBlur * bkCam) }}>
           <div
             style={{
               position: "absolute",
@@ -781,10 +787,10 @@ export function AiShot() {
               overflow: "hidden",
               background: "#0c0c0f",
               border: `1px solid ${rgba(ring > 0.05 ? ORANGE : "#27272a", ring > 0.05 ? 0.3 + ring * 0.6 : 1)}`,
-              boxShadow: `0 40px 110px -30px rgba(0,0,0,0.95), 0 0 ${(70 * ring).toFixed(1)}px ${rgba(ORANGE, 0.5 * ring)}`,
+              boxShadow: `0 30px 60px rgba(0,0,0,0.6)${ring > 0.01 ? `, 0 0 ${(70 * ring).toFixed(1)}px ${rgba(ORANGE, 0.5 * ring)}` : ""}`,
             }}
           >
-            <div style={{ filter: blurCss(blurChrome) }}>
+            <div style={{ filter: blurCss(blurChrome * bk) }}>
               <AiHeader f={f} />
             </div>
             <div style={{ position: "absolute", left: 20, right: 20, top: 0, height: 1, background: "linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.22), rgba(255,255,255,0))" }} />
@@ -801,7 +807,7 @@ export function AiShot() {
                     alignItems: "center",
                     opacity: (1 - welcomeOut) * (1 - welcomeDof * 0.4),
                     transform: `translateY(${(-welcomeOut * 40).toFixed(1)}px) scale(${(1 - welcomeOut * 0.05).toFixed(4)})`,
-                    filter: blurCss(welcomeOut * 3 + welcomeDof * 1.3),
+                    filter: blurCss((welcomeOut * 3 + welcomeDof * 1.3) * bk),
                   }}
                 >
                   <div style={{ width: "100%" }}>
@@ -814,7 +820,7 @@ export function AiShot() {
               <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 14, background: "linear-gradient(0deg, #0c0c0f, rgba(12,12,15,0))" }} />
             </div>
             {s < T.coin && coinOp > 0 && <div style={{ position: "absolute", left: PAD + colX, top: threadTop + L.row2Y + L.chartAY - scroll, width: COLW, height: CHART_H }}>{coinCard}</div>}
-            <div style={{ position: "absolute", left: PAD, right: PAD, bottom: 12, filter: blurCss(blurChrome), opacity: 1 - Math.min(0.5, blurChrome * 0.24) }}>
+            <div style={{ position: "absolute", left: PAD, right: PAD, bottom: 12, filter: blurCss(blurChrome * bk), opacity: 1 - Math.min(0.5, blurChrome * 0.24) }}>
               <Composer f={f} draft={draft} focus={focusComposer} press={press} busy={busy} glow={twinkle} fit={0.84} back={sendBack} />
             </div>
           </div>

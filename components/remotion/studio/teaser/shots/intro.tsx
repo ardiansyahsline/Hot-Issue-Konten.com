@@ -4,8 +4,12 @@
  * Adegan intro teaser CS Tracker:
  * 1. HookShot (3,0 dtk) — montase masalah SEBELUM CS Tracker: sheet "Video Review WA" berantakan, topik kembar (SimilarTopics "Mirip"),
  *    data kececer, notifikasi chat menumpuk. Potong di ketukan ui-snap 0,6 / 1,8 / 2,4, glitch di 0,0, braam gelap di 1,2.
- * 2. RevealShot (2,4 dtk) — riser berakhir + braam/impact di 0,0: logo Konten.com slam + gelombang kejut + sinar, "CS Tracker".
- * 3. OutroShot (4,2 dtk) — whoosh-debris 0,0 → logo mendarat di 0,6 (boom + braam), tagline, tim, CTA, potong bersih ke hitam di 4,2.
+ * 2. RevealShot (1,8 dtk) — riser memuncak + impact-chord di 0,0: logo Konten.com slam + gelombang kejut + sinar; braam-epik-1 di 0,3
+ *    = ombak cahaya (halo, sinar, flare, kilau logo); "CS Tracker" di 0,6; "Konten.com" di 1,2; semua terbaca sebelum whip 0,3 dtk ke Dashboard.
+ * 3. OutroShot (4,2 dtk) — whoosh-debris 0,0 → logo mendarat di 0,6 (boom + braam), tagline, tim, CTA; kartu akhir (2,4+) tetap memuat
+ *    tagline kecil di bawah lockup, lalu potong bersih ke hitam di 4,2.
+ * Kompatibel @remotion/web-renderer (jalur Download MP4): tanpa box-shadow spread/inset (border/outline), tanpa z-index (urutan DOM),
+ * filter/opacity hanya di elemen berukuran.
  * Frame 0 adegan yang masuk dengan transisi zoom (Reveal) belum terlihat, dan frame 1 baru ±65% — jadi frame pukulan Reveal
  * (global 90–91) digambar di ekor Hook dengan panggung Reveal yang SAMA (RevealStage), supaya logo sudah tajam tepat di pukulan.
  */
@@ -16,7 +20,7 @@ import { FONT, Icon, Z } from "../../screens/ui";
 import { clamp01, EASE, rgba } from "../../theme";
 import { Cam, Flash, prog, springAt, Sweep, Trail, useShot, type CamKey } from "../kit";
 import { HotChip, InitialAvatar, NOTIF_H, NotifCard, Sheet, SheetRow, SimilarItem, SimilarPanel, StatusChip, WaitTag } from "./intro-hook";
-import { Bloom, Bokeh, Burst, Cover, Embers, Flare, KontenMark, MARK_AR, ORANGE, Rays, RED, shake, Shock, Words } from "./intro-parts";
+import { Bloom, Bokeh, Burst, Cover, Embers, Flare, KontenMark, MARK_AR, ORANGE, Rays, RED, shake, Shock, softBlur, Words } from "./intro-parts";
 
 const LIN = (x: number) => x;
 const decay = (s: number, at: number, k = 6) => (s < at ? 0 : Math.exp(-(s - at) * k));
@@ -170,7 +174,7 @@ function CutSimilar() {
   const w = Math.min(box.w, 880);
   return (
     <>
-      <div style={{ position: "absolute", inset: 0, filter: "blur(12px)", opacity: 0.45, transform: "scale(1.15) rotate(-4deg)" }}>
+      <div style={{ position: "absolute", inset: 0, filter: softBlur(12), opacity: 0.45, transform: "scale(1.15) rotate(-4deg)" }}>
         <div style={{ position: "absolute", left: -380, top: 380 }}>
           <Sheet rows={14} />
         </div>
@@ -249,7 +253,7 @@ function CutChaos({ layer }: { layer: "back" | "front" }) {
         const sc = 0.82 * fr.d;
         const blur = 2.5 + (0.95 - fr.d) * 9;
         return (
-          <div key={fr.i} style={{ position: "absolute", left: x, top: y, transform: `translate(-50%, -50%) scale(${sc.toFixed(3)}) rotate(${(fr.r + fr.dr * t).toFixed(2)}deg)`, filter: `blur(${blur.toFixed(1)}px)`, opacity: 0.75 }}>
+          <div key={fr.i} style={{ position: "absolute", left: x, top: y, transform: `translate(-50%, -50%) scale(${sc.toFixed(3)}) rotate(${(fr.r + fr.dr * t).toFixed(2)}deg)`, filter: softBlur(blur), opacity: 0.75 }}>
             <FragBody kind={fr.kind} i={fr.i} />
           </div>
         );
@@ -269,7 +273,7 @@ function PileBadge() {
   const fl = Math.max(1, heat(n));
   return (
     <div style={{ position: "absolute", left: cx, top: cy, transform: `translate(-50%, -50%) scale(${(1.4 - 0.4 * p).toFixed(3)})` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "20px 40px 20px 30px", borderRadius: 999, background: "#150909", color: "#f87171", fontFamily: FONT, fontSize: 62, fontWeight: 800, boxShadow: `inset 0 0 0 3px ${rgba(RED, 0.6)}, 0 0 0 12px ${rgba(RED, 0.12)}, 0 0 90px ${rgba(RED, 0.55)}, 0 30px 80px -10px rgba(0,0,0,0.9)`, whiteSpace: "nowrap", letterSpacing: -1, textShadow: `0 0 30px ${rgba(RED, 0.6)}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "17px 37px 17px 27px", borderRadius: 999, background: "#150909", color: "#f87171", fontFamily: FONT, fontSize: 62, fontWeight: 800, border: `3px solid ${rgba(RED, 0.6)}`, outline: `12px solid ${rgba(RED, 0.12)}`, boxShadow: `0 0 90px ${rgba(RED, 0.55)}, 0 30px 80px -10px rgba(0,0,0,0.9)`, whiteSpace: "nowrap", letterSpacing: -1, textShadow: `0 0 30px ${rgba(RED, 0.6)}` }}>
         <span style={{ display: "inline-flex", gap: 2 }}>
           {Array.from({ length: fl }, (_, j) => (
             <Icon key={j} name="flame" size={58} color="#f87171" />
@@ -304,7 +308,7 @@ function NotifStack({ chaos, top }: { chaos: number; top: number }) {
         const dx = chaos * (random(`nx${i}`) - 0.5) * 90;
         const fade = clamp01((1560 - y) / 260);
         return (
-          <div key={i} style={{ position: "absolute", left: cx - w / 2 + dx, top: y, transform: `scale(${(0.9 + 0.1 * p).toFixed(4)}) rotate(${rot.toFixed(2)}deg)`, opacity: clamp01(p * 2.5) * fade, zIndex: i }}>
+          <div key={i} style={{ position: "absolute", left: cx - w / 2 + dx, top: y, transform: `scale(${(0.9 + 0.1 * p).toFixed(4)}) rotate(${rot.toFixed(2)}deg)`, opacity: clamp01(p * 2.5) * fade }}>
             <NotifCard i={i} w={w} time={i === NT.length - 1 || i === 6 ? "baru saja" : `${Math.max(1, 5 - (i % 5))} mnt`} />
           </div>
         );
@@ -332,8 +336,8 @@ function CutChat({ phase }: { phase: 0 | 1 }) {
     <Cam keys={phase ? keysE : keysD}>
       <NotifStack chaos={chaos} top={box.y + (phase ? 390 : 330)} />
       {phase === 1 && (
-        <div style={{ position: "absolute", left: box.x + box.w - 250, top: box.y + 380, transform: `scale(${badge.toFixed(3)}) rotate(${(8 - 8 * badge).toFixed(2)}deg)`, zIndex: 50 }}>
-          <div style={{ width: 170, height: 170, borderRadius: 999, background: RED, color: "#fff", fontFamily: FONT, fontSize: 64, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 0 12px ${rgba(RED, 0.2)}, 0 30px 70px -10px ${rgba(RED, 0.8)}`, letterSpacing: -2 }}>
+        <div style={{ position: "absolute", left: box.x + box.w - 250, top: box.y + 380, transform: `scale(${badge.toFixed(3)}) rotate(${(8 - 8 * badge).toFixed(2)}deg)` }}>
+          <div style={{ width: 170, height: 170, borderRadius: 999, background: RED, color: "#fff", fontFamily: FONT, fontSize: 64, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", outline: `12px solid ${rgba(RED, 0.2)}`, boxShadow: `0 30px 70px -10px ${rgba(RED, 0.8)}`, letterSpacing: -2 }}>
             99+
           </div>
         </div>
@@ -367,6 +371,8 @@ function RevealStage({ rf, counter = 1, children }: { rf: number; counter?: numb
   const hit = decay(s, 0, 4.2);
   const core = rf < 0 ? 0 : Math.exp(-rf / 2.4);
   const beatK = decay(s, 0.6, 7) + decay(s, 1.2, 7) + decay(s, 1.8, 7);
+  // braam-epik-1 di 0,3: ombak cahaya (naik cepat, surut pelan), bukan pukulan kedua
+  const wave = s < 0.3 ? 0 : (1 - Math.exp(-(s - 0.3) * 14)) * Math.exp(-(s - 0.3) * 2.4);
   const sh = shake(rf, fps, 0, 22, 9, "rv");
   const kick = 1 + 0.03 * beatK;
   return (
@@ -374,19 +380,19 @@ function RevealStage({ rf, counter = 1, children }: { rf: number; counter?: numb
       <Cover color="#070708" opacity={1} />
       <AbsoluteFill style={{ transform: `translate(${sh.x.toFixed(1)}px, ${sh.y.toFixed(1)}px) rotate(${sh.r.toFixed(3)}deg) scale(${kick.toFixed(4)})` }}>
         {/* latar gelap dengan halo oranye di belakang logo (gelap → oranye) */}
-        <Bloom x={cx} y={cy + 120} r={1250} color="#c2410c" opacity={0.34 + 0.22 * hit + 0.05 * beatK} sy={1.1} />
-        <Bloom x={cx} y={cy} r={760} color={ORANGE} opacity={0.3 + 0.32 * hit + 0.08 * beatK} />
+        <Bloom x={cx} y={cy + 120} r={1250} color="#c2410c" opacity={0.34 + 0.22 * hit + 0.05 * beatK + 0.14 * wave} sy={1.1} />
+        <Bloom x={cx} y={cy} r={760} color={ORANGE} opacity={0.3 + 0.32 * hit + 0.08 * beatK + 0.12 * wave} />
         <Bloom x={cx} y={cy} r={560} color="#fff1e4" opacity={0.85 * core} />
-        <Rays x={cx} y={cy} n={14} len={1500} rot={s * 7} opacity={0.12 + 0.3 * hit + 0.04 * beatK} />
+        <Rays x={cx} y={cy} n={14} len={1500} rot={s * 7} opacity={0.12 + 0.3 * hit + 0.04 * beatK + 0.12 * wave} />
         <Embers f={rf} fps={fps} W={W} H={H} n={34} seed="rvE" opacity={clamp01(s * 3)} />
         <Shock f={rf} fps={fps} at={0} x={cx} y={cy} r0={LW * 0.55} r1={1100} len={0.7} W={W} H={H} />
         <Shock f={rf} fps={fps} at={0.1} x={cx} y={cy} r0={LW * 0.5} r1={760} len={0.6} width={6} W={W} H={H} />
         <Burst f={rf} fps={fps} at={0} x={cx} y={cy} n={48} d0={LW * 0.45} d1={1000} len={0.9} seed="rvB" W={W} H={H} />
-        <Flare x={cx} y={cy} k={0.85 * hit + 0.18 * decay(s, 1.2, 5)} W={W} />
+        <Flare x={cx} y={cy} k={0.85 * hit + 0.3 * wave + 0.14 * decay(s, 1.2, 5)} W={W} />
         {/* logo (dilindungi dari zoom transisi supaya sudah mendarat 1× di frame +2) */}
         <AbsoluteFill style={{ transform: counter !== 1 ? `scale(${counter.toFixed(4)})` : undefined }}>
-          <div style={{ position: "absolute", left: cx - LW / 2, top: cy - LH / 2, width: LW, height: LH, transform: `scale(${sc.toFixed(4)})`, filter: vel > 0.01 ? `blur(${Math.min(3, vel * 14).toFixed(1)}px)` : undefined }}>
-            <KontenMark w={LW} split={split} shine={prog(rf, fps, 0.5, 1.05, EASE.inOut)} glow={0.7 + 0.5 * hit} />
+          <div style={{ position: "absolute", left: cx - LW / 2, top: cy - LH / 2, width: LW, height: LH, transform: `scale(${sc.toFixed(4)})` }}>
+            <KontenMark w={LW} split={split} shine={prog(rf, fps, 0.32, 0.82, EASE.inOut)} glow={0.7 + 0.5 * hit + 0.3 * wave} blur={vel > 0.01 ? Math.min(3, vel * 14) : 0} />
           </div>
         </AbsoluteFill>
         {children}
@@ -400,9 +406,11 @@ export function RevealShot() {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h * 0.4;
   const LH = REVEAL_LW / MARK_AR;
+  // push-in pelan sepanjang 1,8 dtk, lanjut sedikit selama whip keluar (adegan ini masih tampil di bawah Dashboard 0,3 dtk)
   const keys: CamKey[] = [
     { t: 0, z: 1.0 },
-    { t: 2.4, z: 1.12, ease: EASE.soft },
+    { t: 1.8, z: 1.1, ease: EASE.soft },
+    { t: 2.1, z: 1.12, ease: LIN },
   ];
   // penangkal zoom transisi masuk (zoom: skala 1,3 − 0,3·EASE.out(f/12)), hanya untuk logo
   const counter = f < 12 ? 1 / (1.3 - 0.3 * EASE.out(clamp01(f / 12))) : 1;
@@ -414,7 +422,7 @@ export function RevealShot() {
         <RevealStage rf={f} counter={counter}>
           {/* wordmark */}
           <div style={{ position: "absolute", left: box.x, top: wordTop, width: box.w, display: "flex", justifyContent: "center" }}>
-            <TextShine p={prog(f, fps, 1.2, 1.85)} glow="rgba(255,190,140,.9)">
+            <TextShine p={prog(f, fps, 0.95, 1.5)} glow="rgba(255,190,140,.9)">
               <div style={{ display: "flex", fontFamily: display, fontWeight: 800, fontSize: fs, lineHeight: 1.05, letterSpacing: "-0.04em", color: "#fafafa", whiteSpace: "pre" }}>
                 {Array.from(WORD).map((ch, i) => {
                   const p = springAt(f, fps, 0.6 + i * 0.026, { damping: 13, stiffness: 200, mass: 0.6 });
@@ -432,7 +440,7 @@ export function RevealShot() {
           <Bokeh f={f} fps={fps} W={W} H={H} n={5} seed="rvK" opacity={0.1 + 0.08 * decay(f / fps, 0, 4.2)} />
         </RevealStage>
       </Cam>
-      <Sweep at={0.45} len={0.75} alpha={0.16} />
+      <Sweep at={0.3} len={0.6} alpha={0.16} />
     </AbsoluteFill>
   );
 }
@@ -520,7 +528,8 @@ export function OutroShot() {
   const LH = LW / MARK_AR;
   const WM_TOP = LH / 2 + 34; // jarak pusat logo → atas wordmark (koordinat kunci)
 
-  const debris = useMemo<Deb[]>(
+  // diurutkan menurut kedalaman z (jauh → dekat): urutan DOM = urutan gambar di CLI maupun web-renderer (z-index diabaikan di web)
+  const debris = useMemo<(Deb & { i: number })[]>(
     () =>
       Array.from({ length: 16 }, (_, i) => {
         const a = (i / 16) * Math.PI * 2 + (random(`da${i}`) - 0.5) * 0.3;
@@ -534,8 +543,9 @@ export function OutroShot() {
           spin: (random(`ds${i}`) - 0.5) * 220,
           pop: random(`dp${i}`) * 0.08,
           z: 0.9 + random(`dz${i}`) * 0.6,
+          i,
         };
-      }),
+      }).sort((p, q) => p.z - q.z),
     [cx, LY, W, H],
   );
 
@@ -562,9 +572,10 @@ export function OutroShot() {
   const fin = springAt(f, fps, FIN, { damping: 17, stiffness: 150, mass: 0.8 });
   const gy = LY + (TOPY - LY) * lift + (FINY - TOPY) * fin;
   const gk = 1 - 0.4 * lift + 0.4 * fin;
-  // tim & CTA
-  const teamY = box.y + 690 - 87 * fin;
-  const ctaTop = box.y + 753;
+  // kartu akhir: lockup → tagline kecil → tim → CTA
+  const tagTop = box.y + 578;
+  const teamY = box.y + 690 - 18 * fin;
+  const ctaTop = box.y + 822;
   const cta = springAt(f, fps, FIN + 0.04, { damping: 12, stiffness: 190, mass: 0.7 });
   const press = s < 3.0 ? 1 : s < 3.07 ? 1 - 0.06 * ((s - 3.0) / 0.07) : 0.94 + 0.06 * springAt(f, fps, 3.07, { damping: 10, stiffness: 260 });
   const end = f >= END * fps ? 1 : prog(f, fps, END - 0.14, END, EASE.in);
@@ -580,7 +591,8 @@ export function OutroShot() {
           {landed && <Embers f={f} fps={fps} W={W} H={H} n={30} seed="oE" opacity={clamp01((s - HIT) * 3)} rise={0.8} />}
           {/* serpihan UI asli tersedot ke titik mendarat (whoosh-debris 0,0 → 0,6), jejak gerak + blur sebanding laju */}
           {!landed &&
-            debris.map((d, i) => {
+            debris.map((d) => {
+              const i = d.i;
               const a = debPos(d, s, cx, LY);
               const b = debPos(d, s - 1 / fps, cx, LY);
               if (a.p >= 0.97) return null;
@@ -590,7 +602,7 @@ export function OutroShot() {
               const pop = springAt(f, fps, d.pop, { damping: 12, stiffness: 260, mass: 0.5 });
               const bl = Math.min(6, Math.max(0, v - 8) * 0.07) + Math.max(0, d.z - 1.32) * 9;
               return (
-                <div key={i} style={{ position: "absolute", left: a.x, top: a.y, opacity: clamp01(pop * 2) * (1 - a.p * 0.5), filter: bl > 0.4 ? `blur(${bl.toFixed(1)}px)` : undefined, zIndex: Math.round(d.z * 10) }}>
+                <div key={i} style={{ position: "absolute", left: a.x, top: a.y, opacity: clamp01(pop * 2) * (1 - a.p * 0.5), filter: bl > 0.4 ? softBlur(bl) : undefined }}>
                   <div style={{ transform: `translate(-50%, -50%) scale(${(d.z * (0.55 + 0.45 * pop) * (1 - a.p * 0.65)).toFixed(3)}) rotate(${(d.spin * a.p).toFixed(1)}deg)` }}>
                     <Trail dx={vx} dy={vy} n={3}>
                       <DebBody kind={d.kind} i={i} />
@@ -605,10 +617,11 @@ export function OutroShot() {
           <Flare x={cx} y={gy} k={landed ? 0.9 * hit + 0.25 * decay(s, 3.6, 5) : 0} W={W} />
           {landed && <Bloom x={cx} y={gy} r={330} color="#fff1e4" opacity={0.8 * core} />}
           {/* kunci: logo + wordmark seperti header app (CS Tracker / Konten.com) */}
-          <div style={{ position: "absolute", left: cx, top: gy, width: 0, height: 0, transform: `scale(${gk.toFixed(4)})`, zIndex: 50 }}>
+          {/* wrapper 0×0 hanya membawa transform (opacity/filter dipasang di anak yang berukuran) */}
+          <div style={{ position: "absolute", left: cx, top: gy, width: 0, height: 0, transform: `scale(${gk.toFixed(4)})` }}>
             {fly > 0 && (
-              <div style={{ position: "absolute", left: -LW / 2, top: -LH / 2, width: LW, height: LH, transform: `scale(${sc.toFixed(4)})`, opacity: clamp01((s - 0.34) / 0.1), filter: vel > 0.004 ? `blur(${Math.min(9, vel * 45).toFixed(1)}px)` : undefined }}>
-                <KontenMark w={LW} shine={glint} glow={0.8 + 0.6 * hit} />
+              <div style={{ position: "absolute", left: -LW / 2, top: -LH / 2, width: LW, height: LH, transform: `scale(${sc.toFixed(4)})`, opacity: clamp01((s - 0.34) / 0.1) }}>
+                <KontenMark w={LW} shine={glint} glow={0.8 + 0.6 * hit} blur={vel > 0.004 ? Math.min(9, vel * 45) : 0} />
               </div>
             )}
             <Words f={f} fps={fps} text="CS Tracker" at={HIT + 0.06} cx={0} top={WM_TOP} w={1000} size={112} font={display} stagger={0.05} tracking={-0.04} />
@@ -617,10 +630,14 @@ export function OutroShot() {
           {/* tagline (hero) — keluar cepat saat kartu akhir masuk */}
           <Words f={f} fps={fps} text="Kerja lebih cepat" at={LIFT + 0.06} out={FIN} outLen={0.15} outY={0} cx={cx} top={box.y + 422} w={box.w} size={100} font={display} stagger={0.07} />
           <Words f={f} fps={fps} text="Bareng-bareng" at={1.8} out={FIN + 0.02} outLen={0.15} outY={0} cx={cx} top={box.y + 534} w={box.w} size={100} font={display} color={ORANGE} />
+          {/* kartu akhir: tagline tetap ada (kecil, di bawah lockup) sampai potong hitam → cue "Logo + tagline + CTA" utuh */}
+          <Words f={f} fps={fps} text="Kerja lebih cepat · Bareng-bareng" at={FIN + 0.16} cx={cx} top={tagTop} w={box.w} size={46} weight={700} tracking={-0.02} font={display} color={Z[200]} emph={["Bareng-bareng"]} emphColor={ORANGE} stagger={0.035} />
           <Team f={f} fps={fps} at={1.98} cx={cx} top={teamY} labelOut={FIN} />
           {/* CTA (.btn-primary) */}
           <div style={{ position: "absolute", left: cx - 400, top: ctaTop, width: 800, display: "flex", justifyContent: "center", opacity: clamp01(cta * 1.6), transform: `translateY(${((1 - cta) * 60).toFixed(1)}px) scale(${((0.7 + 0.3 * cta) * press).toFixed(4)})` }}>
-            <div style={{ position: "relative", overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 20, height: 118, padding: "0 60px", borderRadius: 32, background: "linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%)", color: "#fff", fontFamily: display, fontSize: 52, fontWeight: 800, letterSpacing: "-0.02em", whiteSpace: "nowrap", boxShadow: `0 22px 50px -14px ${rgba("#ea580c", 0.85)}, 0 0 ${(40 + 60 * decay(s, 3.0, 3)).toFixed(0)}px ${rgba(ORANGE, 0.35 + 0.3 * decay(s, 3.0, 3))}, inset 0 2px 0 rgba(255,255,255,0.28)` }}>
+            <div style={{ position: "relative", overflow: "hidden", display: "inline-flex", alignItems: "center", gap: 20, height: 118, padding: "0 60px", borderRadius: 32, background: "linear-gradient(180deg, #fb8a3c 0%, #ea580c 100%)", color: "#fff", fontFamily: display, fontSize: 52, fontWeight: 800, letterSpacing: "-0.02em", whiteSpace: "nowrap", boxShadow: `0 22px 50px -14px ${rgba("#ea580c", 0.85)}, 0 0 ${(40 + 60 * decay(s, 3.0, 3)).toFixed(0)}px ${rgba(ORANGE, 0.35 + 0.3 * decay(s, 3.0, 3))}` }}>
+              {/* kilap tepi atas (pengganti box-shadow inset; dipotong radius oleh overflow hidden) */}
+              <span style={{ position: "absolute", left: 0, top: 0, right: 0, height: 2, background: "rgba(255,255,255,0.28)", pointerEvents: "none" }} />
               Buka sekarang
               <svg width={46} height={46} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M5 12h14M13 6l6 6-6 6" />
