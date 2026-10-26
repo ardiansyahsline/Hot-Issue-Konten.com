@@ -185,7 +185,7 @@ export function SimilarItem({ i, k = 2.2, style }: { i: number; k?: number; styl
           {Array.from({ length: Math.max(1, heat(it.n)) }, (_, j) => (
             <Icon key={j} name="flame" size={12 * k} color={hot ? "#f87171" : Z[500]} />
           ))}
-          {it.n} laporan
+          {`${it.n} laporan`}
         </span>
       </div>
       <div style={{ marginTop: 6 * k, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 * k }}>

@@ -631,7 +631,7 @@ export function OutroShot() {
           <Words f={f} fps={fps} text="Kerja lebih cepat" at={LIFT + 0.06} out={FIN} outLen={0.15} outY={0} cx={cx} top={box.y + 422} w={box.w} size={100} font={display} stagger={0.07} />
           <Words f={f} fps={fps} text="Bareng-bareng" at={1.8} out={FIN + 0.02} outLen={0.15} outY={0} cx={cx} top={box.y + 534} w={box.w} size={100} font={display} color={ORANGE} />
           {/* kartu akhir: tagline tetap ada (kecil, di bawah lockup) sampai potong hitam → cue "Logo + tagline + CTA" utuh */}
-          <Words f={f} fps={fps} text="Kerja lebih cepat · Bareng-bareng" at={FIN + 0.16} cx={cx} top={tagTop} w={box.w} size={46} weight={700} tracking={-0.02} font={display} color={Z[200]} emph={["Bareng-bareng"]} emphColor={ORANGE} stagger={0.035} />
+          <Words f={f} fps={fps} text="Kerja lebih cepat · Bareng-bareng" at={FIN + 0.04} cx={cx} top={tagTop} w={box.w} size={46} weight={700} tracking={-0.02} font={display} color={Z[200]} emph={["Bareng-bareng"]} emphColor={ORANGE} stagger={0.035} />
           <Team f={f} fps={fps} at={1.98} cx={cx} top={teamY} labelOut={FIN} />
           {/* CTA (.btn-primary) */}
           <div style={{ position: "absolute", left: cx - 400, top: ctaTop, width: 800, display: "flex", justifyContent: "center", opacity: clamp01(cta * 1.6), transform: `translateY(${((1 - cta) * 60).toFixed(1)}px) scale(${((0.7 + 0.3 * cta) * press).toFixed(4)})` }}>
