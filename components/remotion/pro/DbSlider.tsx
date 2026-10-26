@@ -22,6 +22,11 @@ export function dbWord(db: number): string {
 const SEND_MS = 90;
 /** dua ketukan dalam jeda ini = kembali ke 0 dB */
 const DOUBLE_TAP_MS = 320;
+/** sesudah ketuk 2x, nilai dari ketukan itu diabaikan selama ini */
+const HOLD_MS = 450;
+/** ketukan = jari bergeser < TAP_MOVE_PX; ketukan kedua harus < TAP_NEAR_PX dari ketukan pertama */
+const TAP_MOVE_PX = 12;
+const TAP_NEAR_PX = 40;
 
 /**
  * Slider volume dB (bawaan -24..+6, langkah 0,5): angka dB + kata awam (Pelan / Normal / Keras), ketuk 2x / klik 2x = 0 dB,
@@ -55,8 +60,24 @@ export default function DbSlider({
 }) {
   const listId = useId();
   const [draft, setDraft] = useState<number | null>(null);
-  /** `block` = sentuhan kedua (ketuk 2x) sudah mengembalikan ke 0 → geseran sentuhan itu diabaikan sampai jari diangkat */
-  const live = useRef<{ last: number; sent: number | null; want: number | null; timer: ReturnType<typeof setTimeout> | null; tap: number; block: boolean }>({ last: 0, sent: null, want: null, timer: null, tap: 0, block: false });
+  /**
+   * `out` = nilai terakhir yang dikirim ke induk (bisa belum sampai di `value`);
+   * `tap` / `tapX` = kapan & di mana ketukan (sentuh tanpa geser) terakhir selesai; `downX` = titik sentuh sekarang;
+   * `block` = sentuhan kedua (ketuk 2x) sudah mengembalikan ke 0 → geseran sentuhan itu diabaikan sampai jari diangkat;
+   * `hold` = sampai kapan perubahan dari ketukan itu tetap diabaikan (browser HP bisa mengirim nilai ketukan sesudah jari diangkat)
+   */
+  const live = useRef<{
+    last: number;
+    sent: number | null;
+    out: number | null;
+    want: number | null;
+    timer: ReturnType<typeof setTimeout> | null;
+    tap: number;
+    tapX: number;
+    downX: number;
+    block: boolean;
+    hold: number;
+  }>({ last: 0, sent: null, out: null, want: null, timer: null, tap: 0, tapX: 0, downX: 0, block: false, hold: 0 });
   const cb = useRef(onChange);
   cb.current = onChange;
   const clampV = (v: number) => Math.min(max, Math.max(min, v));
@@ -71,12 +92,13 @@ export default function DbSlider({
     // sama dengan yang terakhir dikirim (atau, di awal geseran, dengan nilai sekarang) → tidak dikirim lagi
     if (v === (L.sent ?? value)) return;
     L.sent = v;
+    L.out = v;
     cb.current(v);
   };
   /** digeser: kirim paling cepat tiap SEND_MS, nilai terakhir selalu ikut terkirim */
   const move = (v: number) => {
     const L = live.current;
-    if (L.block) return;
+    if (L.block || Date.now() < L.hold) return;
     setDraft(v);
     const wait = SEND_MS - (Date.now() - L.last);
     if (wait <= 0) return send(v);
@@ -101,25 +123,45 @@ export default function DbSlider({
     L.want = null;
     L.sent = null;
     setDraft(null);
-    if (value !== 0) cb.current(0);
+    // nilai yang baru dikirim (mis. ketukan pertama) bisa belum sampai di `value` → tetap kirim 0
+    if (value !== 0 || (L.out !== null && L.out !== 0)) {
+      L.out = 0;
+      cb.current(0);
+    }
   };
   useEffect(() => () => {
     if (live.current.timer) clearTimeout(live.current.timer);
   }, []);
 
+  /**
+   * ketuk 2x (sentuh): sentuhan baru dimulai < DOUBLE_TAP_MS sesudah ketukan sebelumnya SELESAI, di dekat titik yang sama.
+   * Diukur dari jari diangkat (bukan dari sentuhan pertama) supaya tetap terbaca walau HP lambat memproses ketukan pertama.
+   */
   const onDown = (e: PointerEvent<HTMLInputElement>) => {
     if (e.pointerType !== "touch") return;
     const L = live.current;
     const now = Date.now();
-    if (now - L.tap < DOUBLE_TAP_MS) {
+    L.downX = e.clientX;
+    if (now - L.tap < DOUBLE_TAP_MS && Math.abs(e.clientX - L.tapX) < TAP_NEAR_PX) {
       L.tap = 0;
       e.preventDefault();
       reset();
-      // sentuhan ini juga menggeser jempol slider ke titik ketukan → diabaikan sampai jari diangkat
+      // sentuhan ini juga menggeser jempol slider ke titik ketukan → diabaikan sampai jari diangkat (+ sebentar sesudahnya)
       L.block = true;
+      L.hold = now + HOLD_MS;
       return;
     }
-    L.tap = now;
+    L.tap = 0;
+  };
+  const onUp = (e: PointerEvent<HTMLInputElement>) => {
+    const L = live.current;
+    if (e.pointerType === "touch") {
+      // ketukan = jari diangkat tanpa digeser (bukan ketukan kedua yang baru saja mengembalikan ke 0)
+      const tapped = !L.block && Math.abs(e.clientX - L.downX) < TAP_MOVE_PX;
+      L.tap = tapped ? Date.now() : 0;
+      L.tapX = e.clientX;
+    }
+    done();
   };
 
   const name = `Volume ${label}`;
@@ -145,7 +187,7 @@ export default function DbSlider({
           style={{ touchAction: "pan-y" }}
           onChange={(e) => move(clampV(Number(e.target.value)))}
           onPointerDown={onDown}
-          onPointerUp={done}
+          onPointerUp={onUp}
           onPointerCancel={done}
           onKeyUp={done}
           onBlur={done}

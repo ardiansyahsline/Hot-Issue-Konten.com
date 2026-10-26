@@ -22,6 +22,7 @@ import {
   isLoudSfx,
   isOwnPresetLogo,
   logoFitsBrand,
+  musicGridPhase,
   musicOffsetOf,
   normalizeTimeline,
   sceneStartSecs,
@@ -286,7 +287,9 @@ function beatGridOf(m: Timeline["music"]): { beat: number; first: number } | nul
     .filter((g) => g > 0.05)
     .sort((x, y) => x - y);
   if (gaps.length) return { beat: gaps[Math.floor(gaps.length / 2)], first: b[0] };
-  return m.bpm ? { beat: 60 / m.bpm, first: off > 0 ? (60 / m.bpm - (off % (60 / m.bpm))) % (60 / m.bpm) : 0 } : null;
+  // grid BPM: data lama (offset tanpa dur) = offset sebagai fase ketukan pertama, seperti dulu (sama dengan musicFileBeats)
+  if (!m.bpm) return null;
+  return { beat: 60 / m.bpm, first: Number(m.dur) > 0 ? musicGridPhase(m.bpm, off) : Math.max(0, Number(m.offset) || 0) };
 }
 
 /** katalog TETAP: SFX bawaan, layout + props, layar mockup, transisi, level musik, rasio */
@@ -403,7 +406,8 @@ export function compactTimeline(tl: Timeline): string {
   // sutradara (catatan gayanya dikirim terpisah) & volume campuran diatur user, bukan bagian rencana AI
   delete rest.director;
   delete rest.mix;
-  const { beats, ...music } = tl.music;
+  // panjang file musik (dur) = data file, bukan rencana → tidak dikirim (dipertahankan mergeRevision)
+  const { beats, dur: _songDur, ...music } = tl.music;
   const grid = beatGridOf(tl.music);
   return JSON.stringify(
     prune({
@@ -631,6 +635,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       offset: has(m, "offset") ? out.music.offset : prev.music.offset,
       gain: has(m, "gain") ? out.music.gain : prev.music.gain,
       lufs: has(m, "lufs") ? out.music.lufs : prev.music.lufs,
+      // panjang lagu (ditulis editor bersama offset) selalu dari versi lama: tanpa ini offset lagu pilihan user diabaikan (musicOffsetOf)
+      ...(prev.music.dur ? { dur: prev.music.dur } : {}),
     };
   }
   for (const k of ["grain", "vignette", "muteVo"] as const) if (!has(o, k)) out[k] = prev[k];

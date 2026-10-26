@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { planAudio, voGuardDb } from "@/components/remotion/studio/audio";
 import { extraSfxOf, reloadStudioCatalog, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
 import {
@@ -106,7 +107,7 @@ function beatsOnly(a: Timeline, b: Timeline): boolean {
 }
 
 /** ketukan musik (detik) — sama dengan yang dipakai komposisi untuk menempel potongan */
-export function musicBeats(tl: Timeline, until: number): number[] {
+export function musicBeats(tl: Pick<Timeline, "music">, until: number): number[] {
   const m = tl.music;
   if (!m || m.src === "none") return [];
   if (m.src === "bed") return beatGrid(BED_BPM, 0, until);
@@ -328,8 +329,11 @@ export default function TimelineEditor(p: {
   const fileMusic = isMusicFile(tl.music?.src);
   const mDur = useMusicDur(tl.music?.src, tl.music?.dur);
   const offNow = musicOffsetOf(tl.music);
-  const beatTl = useMemo(() => (musicDraft !== null && mDur ? { ...tl, music: { ...tl.music, offset: musicDraft, dur: mDur } } : tl), [tl, musicDraft, mDur]);
-  const beats = useMemo(() => musicBeats(beatTl, Math.max(total, totalFrames(tl) / fps) + 2), [beatTl, tl, total, fps]);
+  // ketukan hanya bergantung pada musik & durasi (bukan seluruh timeline) → geser slider volume tidak menghitung / menggambar ulang ketukan
+  const beatMusic = useMemo(() => (musicDraft !== null && mDur ? { ...tl.music, offset: musicDraft, dur: mDur } : tl.music), [tl.music, musicDraft, mDur]);
+  const tlTotal = useMemo(() => totalFrames({ scenes: tl.scenes, fps }) / fps, [tl.scenes, fps]);
+  const beatUntil = Math.max(total, tlTotal) + 2;
+  const beats = useMemo(() => musicBeats({ music: beatMusic }, beatUntil), [beatMusic, beatUntil]);
   // zoom 1 = seluruh video pas di layar (sisa 24 px di kanan untuk pegangan blok terakhir)
   const pps = Math.max(MIN_PPS, (width - 24) / Math.max(1, total)) * ZOOMS[zoom];
   const inner = Math.max(width, Math.ceil(total * pps) + 24);
@@ -639,6 +643,17 @@ export default function TimelineEditor(p: {
 
   // ---------------- 🎚️ volume (mixer) ----------------
   const musicVol = musicVolDb(tl);
+  // VO dinaikkan → cek pengaman puncak (dihitung dari timeline tertunda supaya slider tetap ringan): VO yang sudah hampir puncak
+  // tidak bisa lebih keras, yang terjadi musik & SFX ikut turun saat VO bicara → diberi keterangan
+  const tlLazy = useDeferredValue(tl);
+  const voUp = tlLazy.scenes.some((s) => s.vo?.text && voDbOf(tlLazy, s) > 0);
+  const guardPlan = useMemo(() => {
+    if (!voUp || tlLazy.voice?.mode === "none" || tlLazy.muteVo || !tlLazy.vo?.lines.length) return null;
+    const f = tlLazy.fps || 30;
+    return planAudio(tlLazy, "all", extra, f, Math.max(1, totalFrames({ scenes: tlLazy.scenes, fps: f }) + Math.round(TAIL_SEC * f)));
+  }, [voUp, tlLazy, extra]);
+  const guardAll = guardPlan ? voGuardDb(guardPlan) : 0;
+  const guardNote = (db: number) => `🛡️ VO sudah hampir paling keras — pengaman puncak menahannya ${fmtDb(db)} supaya tidak pecah; musik & SFX ikut turun saat VO bicara (VO tetap lebih menonjol).`;
   const laneDb: Record<MixKey, number> = { musicDb: musicVol, voDb: dbOf(tl.mix?.voDb), sfxDb: dbOf(tl.mix?.sfxDb) };
   const setMix = (k: MixKey, db: number) => {
     const t = tlRef.current;
@@ -751,6 +766,15 @@ export default function TimelineEditor(p: {
   for (let t = 0; t <= total + 1e-6; t += step) ticks.push(t);
   const beatStep = beats.length > 1 ? beats[1] - beats[0] : 0;
   const showBeats = beats.length > 1 && beatStep * pps >= 5;
+  // tanda ketukan (penggaris & jalur musik): elemen yang sama dipakai ulang selama ketukan / zoom tidak berubah
+  const beatMarks = useMemo(() => {
+    if (!showBeats) return null;
+    const vis = beats.filter((b) => b <= total + 0.01);
+    return {
+      ruler: vis.map((b, k) => <span key={`b${k}`} className="absolute bottom-0 h-1.5 w-px bg-orange-500/50" style={{ left: b * pps }} />),
+      lane: vis.map((b, k) => <span key={`m${k}`} className="pointer-events-none absolute top-0 bottom-0 w-px bg-current opacity-30" style={{ left: b * pps }} data-music-beat />),
+    };
+  }, [showBeats, beats, total, pps]);
   const beatInfo = tl.music?.src === "none" ? null : tl.music?.src === "bed" ? `Trailer bed · ${BED_BPM} BPM` : tl.music?.beats?.length ? "Ketukan musik terdeteksi" : tl.music?.bpm ? `${Math.round(tl.music.bpm)} BPM` : null;
   const videoEnd = total + Math.round(TAIL_SEC * fps) / fps;
 
@@ -820,6 +844,11 @@ export default function TimelineEditor(p: {
           testId="vo-line"
           note={dbOf(tl.mix?.voDb) || dbOf(s.gain?.voDb) ? `Kalimat ini · total VO adegan ${fmtDb(voDbOf(tl, s))} (ikut 🎚️ VO${dbOf(s.gain?.voDb) ? " & volume adegan" : ""})` : "Volume kalimat ini saja · suara tidak dibuat ulang"}
         />
+        {guardPlan && voDbOf(tl, s) > 0 && voGuardDb(guardPlan, s.id) <= -1 && (
+          <p className="text-[11px] leading-snug text-amber-300" data-vo-guard>
+            {guardNote(voGuardDb(guardPlan, s.id))}
+          </p>
+        )}
         {hit ? (
           <p className="text-[11.5px] text-red-400" data-vo-bar-clash>
             ⛔ Menabrak VO {hit.scene === i ? `${scenes[hit.next]?.name} sesudahnya` : `${scenes[hit.scene]?.name} sebelumnya`} — geser mulainya, pilih kecepatan lebih cepat, atau 🪄 Susun otomatis.
@@ -997,6 +1026,7 @@ export default function TimelineEditor(p: {
           </button>
         </div>
         <DbSlider icon={vo ? "🎙️" : "🔊"} label={vo ? "VO" : "SFX"} value={laneDb[lane]} onChange={(db) => setMix(lane, db)} testId={`lane-${lane}`} />
+        {vo && laneDb.voDb > 0 && guardAll <= -1 && <p className="text-[11px] leading-snug text-amber-300">{guardNote(guardAll)}</p>}
         <p className="text-[11px] text-zinc-500">{vo ? "Per kalimat: klik blok VO-nya." : "Per SFX: klik titiknya."} Per adegan: klik blok adegan.</p>
       </div>
     );
@@ -1120,6 +1150,11 @@ export default function TimelineEditor(p: {
             <DbSlider icon="🎙️" label="VO" value={laneDb.voDb} onChange={(db) => setMix("voDb", db)} testId="voDb" />
             <DbSlider icon="🔊" label="SFX" value={laneDb.sfxDb} onChange={(db) => setMix("sfxDb", db)} testId="sfxDb" />
           </div>
+          {laneDb.voDb > 0 && guardAll <= -1 && (
+            <p className="pb-1 text-[11px] leading-snug text-amber-300" data-vo-guard>
+              {guardNote(guardAll)}
+            </p>
+          )}
         </div>
       )}
 
@@ -1146,10 +1181,7 @@ export default function TimelineEditor(p: {
               onPointerUp={() => (scrub.current = false)}
               onPointerCancel={() => (scrub.current = false)}
             >
-              {showBeats &&
-                beats
-                  .filter((b) => b <= total + 0.01)
-                  .map((b, k) => <span key={`b${k}`} className="absolute bottom-0 h-1.5 w-px bg-orange-500/50" style={{ left: b * pps }} />)}
+              {beatMarks?.ruler}
               {ticks.map((t) => (
                 <span key={t} className="absolute top-0 h-full border-l border-zinc-700/70 pl-1 text-[10px] leading-[20px] text-zinc-500" style={{ left: t * pps }}>
                   {clockLabel(t)}
@@ -1348,10 +1380,7 @@ export default function TimelineEditor(p: {
                   style={{ left: 0, width: Math.max(8, total * pps), touchAction: pick?.kind === "music" && fileMusic ? "none" : "pan-x" }}
                   data-music-block
                 >
-                  {showBeats &&
-                    beats
-                      .filter((b) => b <= total + 0.01)
-                      .map((b, k) => <span key={`m${k}`} className="pointer-events-none absolute top-0 bottom-0 w-px bg-current opacity-30" style={{ left: b * pps }} data-music-beat />)}
+                  {beatMarks?.lane}
                   <span className={`pointer-events-none relative block truncate pl-[84px] pr-2 ${musicDraft !== null ? "font-bold text-orange-400" : ""}`}>
                     {musicName}
                     {fileMusic && (musicOff > 0 || musicDraft !== null) ? ` · dari ${songClock(musicOff)}` : ""}

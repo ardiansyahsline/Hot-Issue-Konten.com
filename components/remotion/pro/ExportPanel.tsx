@@ -21,7 +21,7 @@ import {
 } from "@/lib/studio/client";
 import { storyboardHtml } from "@/lib/studio/exportDoc";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { subtitleCues, toSrt, voClashes, voCutoffs, type Timeline } from "@/lib/studio/timeline";
+import { subtitleCues, toSrt, voClashes, voCutoffs, voGainOn, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf, storageSrc } from "@/lib/studio/urls";
 
 // Remotion gratis untuk perorangan / tim ≤ 3 orang. Perusahaan > 3 orang: isi key lisensi di env Vercel.
@@ -262,7 +262,8 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
   // ---------------- file lain ----------------
   const cues = subtitleCues(tl);
   const downloadVo = () => {
-    const full = voOn ? tl.vo?.full : null;
+    // VO lengkap dari laptop dipakai apa adanya, kecuali volume VO diatur di mixer (file itu belum memuatnya) → dirender dengan volume yang sama
+    const full = voOn && !voGainOn(tl) ? tl.vo?.full : null;
     if (full) {
       const ext = fileExt(storagePathOf(full) ?? "") || "mp3";
       void downloadStudioUrl(full, `${slug}${voSuffix(vs, "mp3", "vo")}.${ext}`);

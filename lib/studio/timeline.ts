@@ -729,6 +729,10 @@ export function usesMixer(tl: Pick<Timeline, "mix" | "scenes">): boolean {
   if (MIX_KEYS.some((k) => dbOf(tl.mix?.[k]) !== 0)) return true;
   return tl.scenes.some((s) => dbOf(s.vo?.gainDb) !== 0 || MIX_KEYS.some((k) => dbOf(s.gain?.[k]) !== 0));
 }
+/** true kalau ada volume VO ≠ 0 (campuran / adegan / kalimat). VO lengkap (.mp3 dari laptop) tidak memuatnya → unduh VO dirender ulang */
+export function voGainOn(tl: Pick<Timeline, "mix" | "scenes">): boolean {
+  return dbOf(tl.mix?.voDb) !== 0 || tl.scenes.some((s) => dbOf(s.gain?.voDb) !== 0 || dbOf(s.vo?.gainDb) !== 0);
+}
 /** dB total VO adegan: campuran + adegan + kalimat (bisa lewat +6; puncaknya dijaga limiter audio) */
 export const voDbOf = (tl: Pick<Timeline, "mix">, sc: Pick<Scene, "gain" | "vo">): number => dbOf(tl.mix?.voDb) + dbOf(sc.gain?.voDb) + dbOf(sc.vo?.gainDb);
 /** dB total SFX adegan: campuran + adegan (di luar gain per SFX `cue.gain`) */
@@ -758,7 +762,10 @@ export function withMixDb<T extends Pick<Timeline, "mix" | "music">>(tl: T, k: M
   if (k === "musicDb" && tl.music.gain) out.music = { ...tl.music, gain: 0 };
   return out;
 }
-/** timeline dengan volume adegan `id` satu jalur diganti. Volume VO berubah → VO lengkap (.mp3 dari laptop) dilepas (tidak sama lagi) */
+/**
+ * timeline dengan volume adegan `id` satu jalur diganti. VO lengkap (.mp3 dari laptop) tetap disimpan: selama volume VO diatur
+ * (voGainOn), unduh VO dirender ulang dengan volume mixer; kembali 0 dB → file laptop dipakai lagi
+ */
 export function withSceneDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, k: MixKey, db: number): T {
   let hit = false;
   const scenes = tl.scenes.map((s) => {
@@ -769,10 +776,9 @@ export function withSceneDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id
     const { gain: _old, ...rest } = s;
     return gain ? { ...rest, gain } : rest;
   });
-  if (!hit) return tl;
-  return { ...tl, scenes, ...(k === "voDb" && tl.vo?.full ? { vo: { ...tl.vo, full: null } } : {}) };
+  return hit ? { ...tl, scenes } : tl;
 }
-/** timeline dengan volume kalimat VO adegan `id` diganti (teks naskah tidak disentuh). VO lengkap (.mp3) dilepas */
+/** timeline dengan volume kalimat VO adegan `id` diganti (teks naskah tidak disentuh; VO lengkap .mp3 tetap, lihat withSceneDb) */
 export function withVoDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, db: number): T {
   const d = mixDb(db) ?? 0;
   let hit = false;
@@ -782,8 +788,7 @@ export function withVoDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: s
     const { gainDb: _old, ...vo } = s.vo;
     return { ...s, vo: d ? { ...vo, gainDb: d } : vo };
   });
-  if (!hit) return tl;
-  return { ...tl, scenes, ...(tl.vo?.full ? { vo: { ...tl.vo, full: null } } : {}) };
+  return hit ? { ...tl, scenes } : tl;
 }
 /** offset terbesar untuk lagu sepanjang `dur` detik: sisa minimal 0,5 dtk (Remotion tidak bisa mengulang potongan kosong) */
 export const maxMusicOffset = (dur: number | undefined): number => (dur && dur > 0 ? Math.max(0, Math.min(120, Math.floor((dur - 0.5) * 10) / 10)) : 120);
@@ -799,15 +804,21 @@ export function musicOffsetOf(m: Pick<Music, "src" | "offset" | "dur"> | undefin
 }
 /**
  * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) dikurangi offset, atau grid dari
- * BPM (ketukan pertama lagu dianggap di detik 0 lagu). Offset 0 → persis sama dengan sebelum ada offset.
+ * BPM (ketukan pertama lagu dianggap di detik 0 lagu). Tanpa `dur` (data lama) → persis sama dengan sebelum ada offset lagu.
  */
 export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset" | "dur">, until: number, minBeats = 1): number[] {
   const off = musicOffsetOf(m);
   if (m.beats && m.beats.length >= Math.max(1, minBeats)) return off > 0 ? m.beats.map((b) => Math.round((b - off) * 1000) / 1000).filter((b) => b >= 0) : m.beats;
   if (!m.bpm) return [];
-  const step = 60 / m.bpm;
-  return beatGrid(m.bpm, off > 0 ? (step - (off % step)) % step : 0, until);
+  // data lama (offset tanpa dur, mis. tulisan AI): offset = fase ketukan pertama grid BPM seperti dulu, lagu tetap diputar dari awal
+  if (!(Number(m.dur) > 0)) return beatGrid(m.bpm, Math.max(0, Number(m.offset) || 0), until);
+  return beatGrid(m.bpm, musicGridPhase(m.bpm, off), until);
 }
+/** ketukan pertama grid BPM di waktu video kalau lagu mulai dari detik ke-`off` (ketukan pertama lagu dianggap di detik 0 lagu) */
+export const musicGridPhase = (bpm: number, off: number): number => {
+  const step = 60 / bpm;
+  return off > 0 ? Math.round(((step - (off % step)) % step) * 1000) / 1000 : 0;
+};
 
 /** VO cadangan tanpa penyimpanan server (service role kosong) dikirim sebagai data URL mp3/wav — dibatasi ±1,5 MB per baris */
 const MAX_DATA_VO = 2_000_000;
