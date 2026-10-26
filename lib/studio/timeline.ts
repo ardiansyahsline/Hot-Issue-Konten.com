@@ -693,6 +693,9 @@ export const toSrt = (cues: { s: number; e: number; text: string }[]) =>
     .map(({ c }, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`)
     .join("\n");
 
+/** detik akhir video = total adegan + ekor hening TAIL_SEC (sama dengan durationInFrames komposisi StudioVideo); audio dipotong di sini */
+export const videoEndSec = (tl: Pick<Timeline, "scenes" | "fps">): number => (totalFrames(tl) + Math.round(TAIL_SEC * tl.fps)) / tl.fps;
+
 /**
  * Jendela ucapan VO tiap adegan (detik): dari mulai VO adegan itu sampai mulai VO adegan sesudahnya yang punya teks VO
  * (kalau tidak ada: akhir video = total adegan + ekor hening), dikurangi jeda aman VO_GAP. `null` = adegan tanpa teks VO.
@@ -700,7 +703,7 @@ export const toSrt = (cues: { s: number; e: number; text: string }[]) =>
  */
 export function voWindows(tl: Pick<Timeline, "scenes" | "fps">, voAt: (s: Scene) => number = (s) => voStartOf(s)): (number | null)[] {
   const starts = sceneStartSecs(tl);
-  const end = totalFrames(tl) / tl.fps + TAIL_SEC;
+  const end = videoEndSec(tl);
   const at = tl.scenes.map((s, i) => (s.vo?.text ? starts[i] + voAt(s) : null));
   return at.map((a, i) => {
     if (a === null) return null;
@@ -742,4 +745,22 @@ export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene:
     if (hit) out.push({ scene: a.i, next: hit.i, sec: Math.min(a.e, hit.e) - hit.s });
   }
   return out;
+}
+
+/**
+ * VO yang ucapannya (voSpeechEnd) belum selesai saat video habis (total adegan + ekor hening 0,5 dtk) — planAudio memotong klip
+ * di akhir video, jadi ujung kalimatnya hilang. Biasanya VO adegan terakhir (mis. Outro teaser yang durasinya dikunci) yang tetap
+ * kepanjangan walau sudah dipercepat maks 30%. Aturan baris yang diputar sama dengan voClashes / planAudio. `sec` = detik ucapan
+ * yang terpotong. Dipakai VoPanel & ExportPanel (peringatan merah).
+ */
+export function voCutoffs(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene: number; sec: number }[] {
+  const starts = sceneStartSecs(tl);
+  const end = videoEndSec(tl);
+  return tl.scenes.flatMap((sc, i) => {
+    const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
+    if (!l?.src || !sc.vo?.text) return [];
+    const s = starts[i] + voStartOf(sc, l);
+    const cut = s + voSpeechEnd(l) - Math.max(s, end); // mulai sesudah video habis = seluruh ucapan hilang (planAudio melewatinya)
+    return cut > 1e-3 ? [{ scene: i, sec: Math.round(cut * 1000) / 1000 }] : [];
+  });
 }

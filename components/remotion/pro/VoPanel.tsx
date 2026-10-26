@@ -25,6 +25,7 @@ import {
   speedupPct,
   VO_AT,
   voClashes,
+  voCutoffs,
   voSpeechEnd,
   voStartOf,
   voWindows,
@@ -128,14 +129,35 @@ export const teaserVoFit = (s: Scene, l: VoLine): "lewat" | "mepet" | "muat" => 
 export type VoClash = { id: string; label: string };
 export const voClashList = (tl: Timeline): VoClash[] =>
   voClashes(tl).map((c) => ({ id: tl.scenes[c.scene].id, label: `${tl.scenes[c.scene].name} → ${tl.scenes[c.next].name} (${fmt(Math.max(0.01, c.sec))} dtk)` }));
-/** saran untuk VO yang menabrak: sudah dipercepat (mentok) / suara premium (tidak bisa dipercepat) / VO lama (generate ulang) */
-export function clashTip(tl: Timeline, ids: string[]): string {
+/** VO yang ucapannya belum selesai saat video habis (voCutoffs): id adegan + label "Outro (0,5 dtk)" = detik ucapan yang terpotong */
+export const voCutList = (tl: Timeline): VoClash[] =>
+  voCutoffs(tl).map((c) => ({ id: tl.scenes[c.scene].id, label: `${tl.scenes[c.scene].name} (${fmt(Math.max(0.01, c.sec))} dtk)` }));
+/**
+ * kalimat peringatan VO adegan teaser yang lebih panjang dari adegannya tapi tidak menabrak VO lain & tidak terpotong:
+ * `next` = ujung suaranya nyambung ke awal adegan berikutnya, `tail` = adegan terakhir, ujung suaranya masuk ekor hening akhir video
+ */
+export const overText = (next: string[], tail: string[]): string =>
+  [
+    next.length
+      ? `⚠️ VO lebih panjang dari adegan: ${names(next)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi ujung suaranya nyambung ke awal adegan berikutnya — tidak menabrak VO lain.`
+      : "",
+    tail.length
+      ? `⚠️ VO adegan terakhir lebih panjang dari adegannya: ${names(tail)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi ujung suaranya masuk ke ekor hening di akhir video — tidak terpotong.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+/**
+ * saran untuk VO yang menabrak / terpotong di akhir video: sudah dipercepat (mentok) / suara premium (tidak bisa dipercepat) /
+ * adegan biasa / VO lama (generate ulang)
+ */
+export function clashTip(tl: Timeline, ids: string[], what: "menabrak" | "terpotong" = "menabrak"): string {
   const lines = (tl.vo?.lines ?? []).filter((l) => ids.includes(l.sceneId));
   if (lines.some((l) => (l.speed ?? 0) > 0))
     return `Suaranya sudah dipercepat otomatis (maks ${MAX_SPEEDUP}%) tapi masih belum muat — pendekkan teks VO adegan itu, atau coba suara lain.`;
   if (tl.vo?.engine === "elevenlabs") return "Suara premium tidak bisa dipercepat otomatis — pendekkan teks VO adegan itu lalu generate ulang.";
   if (!tl.scenes.some((s) => ids.includes(s.id) && isTeaserScene(s))) return "Pendekkan teks VO adegan itu atau tambah durasi adegannya, lalu generate ulang.";
-  return `Klik "Generate ulang VO": VO adegan teaser dipercepat otomatis (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik. Kalau masih menabrak, pendekkan teks VO adegan itu.`;
+  return `Klik "Generate ulang VO": VO adegan teaser dipercepat otomatis (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik. Kalau masih ${what}, pendekkan teks VO adegan itu.`;
 }
 
 /**
@@ -143,9 +165,10 @@ export function clashTip(tl: Timeline, ids: string[]): string {
  * 20 dtk/adegan & 180 dtk total.
  * Adegan premium teaser (layout "teaser") TIDAK pernah diperpanjang: batasnya di grid ketukan 0,6 dtk (beat sync semua
  * adegan sesudahnya), jadi cukup dicatat: `over` (suara keluar dari adegan, ambang sama dengan TimelineEditor), `tight` (muat tapi
- * jeda ke akhir adegan < 0,25 dtk), dan `clash` (masih bunyi saat VO adegan berikutnya mulai → dua suara bersamaan).
+ * jeda ke akhir adegan < 0,25 dtk), `clash` (masih bunyi saat VO adegan berikutnya mulai → dua suara bersamaan), dan `cut`
+ * (ucapan belum selesai saat video habis → ujung kalimat terpotong, mis. Outro teaser yang tetap kepanjangan walau dipercepat 30%).
  */
-export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[] } {
+export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[] } {
   const fps = tl.fps || 30;
   let total = tl.scenes.reduce((a, s) => a + s.dur, 0);
   const grown: string[] = [];
@@ -175,7 +198,7 @@ export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[
   });
   // adegan bergeser -> VO lengkap (.mp3) dari worker tidak sinkron lagi
   const out: Timeline = { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo };
-  return { tl: out, grown, tooLong, over, tight, clash: voClashList(out) };
+  return { tl: out, grown, tooLong, over, tight, clash: voClashList(out), cut: voCutList(out) };
 }
 
 /**
@@ -209,20 +232,32 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const busy = run.s === "start" || run.s === "tts" || run.s === "job";
   // adegan teaser yang VO-nya lewat / mepet batas adegan (tidak diperpanjang — durasi dikunci di ketukan) & VO yang menabrak
   // VO adegan berikutnya -> peringatan tetap terlihat
-  const { overNow, tightNow, clashNow, clashHint, fast } = useMemo(() => {
+  // VO yang terpotong di akhir video -> peringatan merah tersendiri
+  const { overNow, tightNow, clashNow, clashHint, cutNow, cutHint, fast } = useMemo(() => {
     const clashNow = voClashList(tl);
-    const overNow: string[] = [];
+    const cutNow = voCutList(tl);
+    const overNext: string[] = [];
+    const overTail: string[] = [];
     const tightNow: string[] = [];
-    for (const s of tl.scenes) {
+    tl.scenes.forEach((s, i) => {
       const l = tl.vo?.lines.find((x) => x.sceneId === s.id);
-      if (!l?.src || !s.vo?.text || !isTeaserScene(s)) continue;
+      if (!l?.src || !s.vo?.text || !isTeaserScene(s)) return;
       const f = teaserVoFit(s, l);
       const p = voPast(s, l);
-      if (f === "lewat" && clashNow.some((c) => c.id === s.id)) continue; // sudah masuk peringatan "menabrak"
-      if (f === "lewat") overNow.push(p > 5e-3 ? `${s.name} (+${fmt(p)} dtk)` : `${s.name} (pas di ujung)`);
+      // sudah masuk peringatan "menabrak" / "terpotong"
+      if (f === "lewat" && (clashNow.some((c) => c.id === s.id) || cutNow.some((c) => c.id === s.id))) return;
+      if (f === "lewat") (i === tl.scenes.length - 1 ? overTail : overNext).push(p > 5e-3 ? `${s.name} (+${fmt(p)} dtk)` : `${s.name} (pas di ujung)`);
       else if (f === "mepet") tightNow.push(`${s.name} (sisa ${fmt(Math.max(0, -p))} dtk)`);
-    }
-    return { overNow, tightNow, clashNow: clashNow.map((c) => c.label), clashHint: clashNow.length ? clashTip(tl, clashNow.map((c) => c.id)) : "", fast: speedInfo(tl) };
+    });
+    return {
+      overNow: overText(overNext, overTail),
+      tightNow,
+      clashNow: clashNow.map((c) => c.label),
+      clashHint: clashNow.length ? clashTip(tl, clashNow.map((c) => c.id)) : "",
+      cutNow: cutNow.map((c) => c.label),
+      cutHint: cutNow.length ? clashTip(tl, cutNow.map((c) => c.id), "terpotong") : "",
+      fast: speedInfo(tl),
+    };
   }, [tl]);
   // offset mulai VO per adegan (mis. teaser: waktu target naskah) -> sebutkan contoh yang paling jauh
   const lateVo = voScenes.reduce<Scene | null>((a, s) => (s.vo?.at !== undefined && s.vo.at > (a?.vo?.at ?? VO_AT) + 1e-3 ? s : a), null);
@@ -255,8 +290,14 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     if (r.tooLong.length) msgs.push(`VO adegan ${names(r.tooLong)} masih kepanjangan — pendekkan naskahnya.`);
     if (r.clash.length)
       msgs.push(`⛔ VO menabrak VO adegan berikutnya: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). ${clashTip(r.tl, r.clash.map((c) => c.id))}`);
-    const overOnly = r.tl.scenes.filter((s) => r.over.includes(s.name) && !r.clash.some((c) => c.id === s.id)).map((s) => s.name);
-    if (overOnly.length) msgs.push(`⚠️ VO lebih panjang dari adegan ${names(overOnly)}. Durasi adegan teaser dikunci di ketukan musik (tidak diperpanjang), jadi ujung suaranya nyambung ke awal adegan berikutnya (tidak menabrak VO lain).`);
+    if (r.cut.length)
+      msgs.push(`⛔ Ujung VO terpotong di akhir video: ${names(r.cut.map((c) => c.label))} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. ${clashTip(r.tl, r.cut.map((c) => c.id), "terpotong")}`);
+    const last = r.tl.scenes.length - 1;
+    const overOnly = r.tl.scenes
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => r.over.includes(s.name) && !r.clash.some((c) => c.id === s.id) && !r.cut.some((c) => c.id === s.id));
+    const overMsg = overText(overOnly.filter((x) => x.i !== last).map((x) => x.s.name), overOnly.filter((x) => x.i === last).map((x) => x.s.name));
+    if (overMsg) msgs.push(overMsg);
     if (r.tight.length) msgs.push(`VO adegan ${names(r.tight)} mepet di ujung adegan (jeda < 0,25 dtk sebelum pindah adegan) — masih muat, tapi napasnya pendek.`);
     const miss = r.tl.scenes.filter((s) => s.vo?.text && !vo.lines.some((l) => l.sceneId === s.id)).length;
     if (miss) msgs.push(`${miss} adegan belum ada suaranya — klik "Generate ulang VO".`);
@@ -636,9 +677,14 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
               ⛔ VO menabrak VO adegan berikutnya: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
             </div>
           )}
-          {overNow.length > 0 && (
+          {cutNow.length > 0 && (
+            <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-cut role="alert">
+              ⛔ Ujung VO terpotong di akhir video: {names(cutNow)} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. {cutHint}
+            </div>
+          )}
+          {overNow && (
             <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-over>
-              ⚠️ VO lebih panjang dari adegan: {names(overNow)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi ujung suaranya nyambung ke awal adegan berikutnya — tidak menabrak VO lain.
+              {overNow}
             </div>
           )}
           {tightNow.length > 0 && (
