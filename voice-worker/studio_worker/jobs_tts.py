@@ -96,6 +96,10 @@ def norm_settings(raw: dict | None, default_takes: int = DEFAULT_TAKES) -> dict:
     }
 
 
+# batas teks ucapan akhir per kalimat (sama dengan SPELL_MAX di lib/studio/pronounce.ts)
+SPELL_MAX = 4000
+
+
 def parse_lines(raw) -> list[dict]:
     out, seen = [], set()
     for i, x in enumerate(raw if isinstance(raw, list) else []):
@@ -108,7 +112,12 @@ def parse_lines(raw) -> list[dict]:
         while lid in seen:
             lid += "x"
         seen.add(lid)
-        spell = T.clean_text(str(x.get("spell") or ""))[:1200] or None
+        # teks ucapan akhir (angka sudah jadi kata + kamus ejaan, dibentuk browser) bisa beberapa kali lebih panjang dari teks:
+        # batasnya sama dengan SPELL_MAX di lib/studio/pronounce.ts — lewat batas → gagal dengan pesan jelas (bukan dipotong diam-diam,
+        # yang membuat akhir kalimat tidak terucap tapi VO tetap dianggap cocok dengan naskah)
+        spell = T.clean_text(str(x.get("spell") or "")) or None
+        if spell and len(spell) > SPELL_MAX:
+            raise JobError(f"Teks ucapan kalimat {i + 1} kepanjangan setelah angka & kamus ejaan dieja ({len(spell)} dari maks {SPELL_MAX} huruf). Pecah kalimatnya atau persingkat ejaan di Kamus.")
         st = x.get("start")
         start = _num(st, -1, 0, 3600) if st is not None else -1
         # `max` (opsional) = jendela ucapan maksimal (detik) untuk adegan teaser; kosong / ≤ 0 = tidak dibatasi (job lama)

@@ -53,7 +53,8 @@ const cache = new Map<string, Float32Array>();
 export function sfxEnv(id: string): Float32Array | null {
   const hit = cache.get(id);
   if (hit) return hit;
-  const b64 = RAW[id];
+  // id dari data proyek: hanya kunci tabel ini (bukan bawaan objek seperti "constructor")
+  const b64 = Object.prototype.hasOwnProperty.call(RAW, id) ? RAW[id] : undefined;
   if (!b64) return null;
   const bin = typeof atob === "function" ? atob(b64) : Buffer.from(b64, "base64").toString("binary");
   const out = new Float32Array(bin.length);

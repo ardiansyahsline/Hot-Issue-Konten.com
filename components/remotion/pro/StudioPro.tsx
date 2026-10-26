@@ -9,6 +9,7 @@ import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { teaserTimelineRaw } from "@/lib/studio/teaser";
 import { keepTeaserVisual, retimesTeaser, snapAroundTeaser } from "@/lib/studio/teaserLock";
+import { keepUserEdits } from "@/lib/studio/planMerge";
 import type { SkillTarget } from "@/lib/studio/skill";
 import { FORMATS, MAX_TOTAL, clampToScenes, defaultTimeline, normDirector, sceneStartSecs, sceneStarts, totalSec, voStartOf, type Director, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
@@ -134,6 +135,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
    */
   const intentRef = useRef(0);
   const tlRef = useRef<Timeline | null>(null);
+  /** timeline yang dikirim bersama pesan terakhir (salinan) — pembanding editan user selama jawaban mengalir (onPlan) */
+  const sentRef = useRef<{ id: string | null; tl: Timeline | null } | null>(null);
   const listRef = useRef(projects);
   listRef.current = projects;
   const setPid = useCallback((id: string | null) => {
@@ -445,10 +448,17 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const onPlan = useCallback(
     (raw: unknown) => {
       const prev = tlRef.current;
+      // rencana dibuat server dari timeline saat pesan dikirim: semua yang diubah user selama jawaban mengalir (mixer, offset
+      // musik, posisi / kecepatan / cek ucapan VO, kamus, gaya bicara, durasi, dll.) dipasang lagi di atas rencana (planMerge.ts)
+      const sent = sentRef.current;
+      const planned = tidyTimeline(raw, catRef.current);
+      const kept = prev && sent?.tl && (sent.id === null || sent.id === idRef.current) ? keepUserEdits(sent.tl, prev, planned) : planned;
+      // ada editan yang dipasang lagi → dirapikan sekali lagi (batas durasi total, urutan kolom sama dengan rencana biasa)
+      const merged = kept === planned ? planned : tidyTimeline(kept, catRef.current);
       // adegan premium teaser dikunci juga di sini (server sudah menguncinya di mergeRevision; ini jaring untuk VO panjang
       // yang memanjangkan adegan di laptop), dan tempel ke ketukan tidak menggeser durasinya
-      const tl: Timeline = { ...snapPlan(prev, keepTeaserVisual(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current)))) };
-      // sutradara & volume milik user: yang diganti selama jawaban mengalir tidak dikembalikan oleh rencana dari server
+      const tl: Timeline = { ...snapPlan(prev, keepTeaserVisual(prev, keepDataVo(prev, merged))) };
+      // sutradara & volume campuran milik user: tidak pernah dikembalikan oleh rencana dari server
       // (nama terbaru karakter buatan dari server tetap dipakai kalau sutradaranya sama)
       let dir = prev ? prev.director : draftRef.current;
       if (dir && tl.director?.hero === dir.hero && tl.director.name) dir = { ...dir, name: tl.director.name };
@@ -469,7 +479,11 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     },
     [change],
   );
-  const getTimeline = useCallback(() => withoutDataVo(tlRef.current), []);
+  const getTimeline = useCallback(() => {
+    const tl = tlRef.current;
+    sentRef.current = { id: idRef.current, tl: tl ? (JSON.parse(JSON.stringify(tl)) as Timeline) : null };
+    return withoutDataVo(tl);
+  }, []);
 
   // ---------- sutradara & skill ----------
   const director = timeline ? (timeline.director ?? null) : draftDir;

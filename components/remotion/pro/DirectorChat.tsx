@@ -12,7 +12,7 @@ import { reloadStudioCatalog, uploadStudioFile } from "@/lib/studio/client";
 import type { Director, Timeline } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { createClient } from "@/lib/supabase/client";
-import DirectorPicker, { DEFAULT_DIRECTOR, activeDirector, useMyChars } from "./DirectorPicker";
+import DirectorPicker, { DEFAULT_DIRECTOR, activeDirector, charUnavailable, useMyChars } from "./DirectorPicker";
 import { MAX_UPLOAD } from "./fields";
 import { dbErrorText } from "./planUtils";
 
@@ -236,7 +236,10 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           const nm = typeof f.name === "string" && f.name ? f.name.slice(0, 40) : "";
           if (nm) patch((x) => ({ ...x, persona: nm }));
           const want = cb.current.director?.hero ?? HERO;
-          setDirNote(typeof f.note === "string" && f.note ? { hero: want, note: f.note.slice(0, 160) } : null);
+          const note = typeof f.note === "string" && f.note ? f.note.slice(0, 160) : "";
+          setDirNote(note ? { hero: want, note } : null);
+          // server memakai Harley karena karakter pilihan tidak bisa dibaca → semua tampilan ikut Harley, daftar disegarkan
+          if (note) charUnavailable(want);
         } else if (f.t === "meta") {
           patch((x) => ({ ...x, persona: typeof f.persona === "string" && f.persona ? f.persona : x.persona, model: typeof f.model === "string" ? f.model : x.model }));
         } else if (f.t === "ask") {

@@ -43,14 +43,14 @@ export function heardFromResult(row: unknown): string | undefined {
 // ---------------------------------------------------------------------------------------------
 // kunci bunyi & potongan kata
 // ---------------------------------------------------------------------------------------------
-/** ragam lisan yang sering ditulis berbeda oleh ASR — disamakan */
-const SAME: Record<string, string> = {
+/** ragam lisan yang sering ditulis berbeda oleh ASR — disamakan (Map: kata "constructor" dll. bukan kunci bawaan objek) */
+const SAME: ReadonlyMap<string, string> = new Map(Object.entries({
   nggak: "gak", enggak: "gak", ngga: "gak", engga: "gak", ga: "gak", gak: "gak", gk: "gak", nggk: "gak",
   saja: "aja", aja: "aja", sudah: "udah", udah: "udah", dah: "udah", kalau: "kalo", kalo: "kalo", begitu: "gitu", gitu: "gitu",
   memang: "emang", emang: "emang", tetapi: "tapi", tapi: "tapi", bgt: "banget", banget: "banget", gimana: "gimana", bagaimana: "gimana",
   // "hot issue" biasa ditulis ASR "hot isu" / "isyu"; "ei ai" (AI) kadang "eh ai"
   issue: "isu", isyu: "isu", isu: "isu", issu: "isu", eh: "e",
-};
+}));
 /** huruf kembar disatukan ("ppt" → "pt"), juga sesudah kunci beberapa kata digabung ("p"+"p"+"t") */
 const squash = (s: string) => s.replace(/(.)\1+/g, "$1");
 /** kunci bunyi satu kata / frasa (lihat keterangan modul) */
@@ -60,7 +60,8 @@ export function soundKey(s: string): string {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
-  if (SAME[t]) return SAME[t];
+  const same = SAME.get(t);
+  if (same) return same;
   t = t
     .replace(/([uo])w(?=[aeiou])/g, "$1")
     .replace(/iy(?=[aeiou])/g, "i")
@@ -274,10 +275,10 @@ export function syllables(word: string): string[] {
 }
 
 /** nama huruf cara Indonesia (untuk singkatan: OJK → o je ka) */
-const LETTER: Record<string, string> = {
+const LETTER: ReadonlyMap<string, string> = new Map(Object.entries({
   a: "a", b: "be", c: "se", d: "de", e: "e", f: "ef", g: "ge", h: "ha", i: "i", j: "je", k: "ka", l: "el", m: "em",
   n: "en", o: "o", p: "pe", q: "ki", r: "er", s: "es", t: "te", u: "u", v: "ve", w: "we", x: "eks", y: "ye", z: "zet",
-};
+}));
 const isAcronym = (w: string) => {
   const l = w.replace(/[^\p{L}]/gu, "");
   return l.length >= 2 && l.length <= 6 && l === l.toUpperCase() && l !== l.toLowerCase();
@@ -299,7 +300,7 @@ export function spellSuggestions(word: string, lexicon?: readonly LexEntry[] | n
     if (t && t !== lower && t !== cur && !out.includes(t)) out.push(t);
   };
   if (/\d/.test(w)) add(numbersToWords(w));
-  if (isAcronym(w)) add([...w.replace(/[^\p{L}]/gu, "").toLowerCase()].map((c) => LETTER[c] ?? c).join(" "));
+  if (isAcronym(w)) add([...w.replace(/[^\p{L}]/gu, "").toLowerCase()].map((c) => LETTER.get(c) ?? c).join(" "));
   const g = glideWord(lower);
   if (g !== lower) add(g);
   const base = cur !== lower ? cur : lower;
@@ -309,4 +310,137 @@ export function spellSuggestions(word: string, lexicon?: readonly LexEntry[] | n
   if (cur !== lower) add(cur.split(/\s+/).map((x) => syllables(x).join(" ") || x).join(" "));
   if (!out.length) add(lower.split(/[-\s]+/).map((x) => syllables(x).join(" ") || x).join(" "));
   return out.slice(0, 3);
+}
+
+// ---------------------------------------------------------------------------------------------
+// kamus dari luar (impor skill): entri yang mengganti kata dengan kata lain
+// ---------------------------------------------------------------------------------------------
+/** nama huruf cara Inggris (singkatan asing: GPU → ji pi yu, AI → ei ai) */
+const LETTER_EN: ReadonlyMap<string, string> = new Map(Object.entries({
+  a: "ei", b: "bi", c: "si", d: "di", e: "i", f: "ef", g: "ji", h: "eic", i: "ai", j: "jei", k: "kei", l: "el", m: "em",
+  n: "en", o: "o", p: "pi", q: "kiu", r: "ar", s: "es", t: "ti", u: "yu", v: "vi", w: "dabelyu", x: "eks", y: "wai", z: "zet",
+}));
+/** jarak edit penuh (lev di atas dibatasi untuk pencocokan kata) */
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0];
+    d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const t = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = t;
+    }
+  }
+  return d[b.length];
+}
+const isSubsequence = (short: string, long: string) => {
+  let i = 0;
+  for (const ch of long) if (ch === short[i]) i++;
+  return i === short.length;
+};
+
+/**
+ * kata umum bahasa Indonesia (sering dipakai + kata yang artinya mudah dibalik: naik/turun, untung/rugi, halal/haram …). Entri kamus
+ * yang mengubah BUNYI kata ini (bukan sekadar ragam lisan) hampir pasti mengganti artinya.
+ */
+const COMMON: ReadonlySet<string> = new Set(
+  (
+    "yang dan atau di ke dari ini itu dengan untuk tidak tak ada adalah akan pada juga saya kamu kami kita mereka dia ia anda aku " +
+    "bisa sudah belum masih harus boleh jangan mau ingin perlu sangat lebih paling kurang banyak sedikit semua setiap beberapa " +
+    "satu dua tiga empat lima enam tujuh delapan sembilan sepuluh puluh belas ratus ribu juta miliar triliun nol " +
+    "ya iya bukan benar salah betul baik buruk bagus jelek besar kecil tinggi rendah naik turun atas bawah depan belakang kiri kanan " +
+    "dalam luar baru lama cepat lambat mudah sulit susah murah mahal untung rugi laba aman bahaya berbahaya selamat celaka " +
+    "senang sedih suka benci marah takut berani halal haram wajib dilarang larang gratis bayar beli jual harga saham uang emas " +
+    "pasar modal utang hutang pinjam bunga pajak hemat boros kaya miskin menang kalah hidup mati sehat sakit panas dingin " +
+    "terang gelap siang malam pagi sore hari bulan tahun sekarang nanti kemarin besok selalu pernah sering jarang hanya cuma " +
+    "lagi sedang dapat punya buat bikin kerja pakai lihat dengar tahu coba mulai selesai berhenti lanjut tunggu datang pergi " +
+    "pulang masuk keluar buka tutup ambil kasih beri terima kirim minta tolong tanya jawab bilang baca tulis hitung pilih cari " +
+    "tambah kurang hapus simpan ubah ganti tetap sama beda lain orang anak teman rumah kantor jalan berita kabar resmi palsu " +
+    "asli nyata fakta bohong jujur percaya terbukti positif negatif setuju tolak terima lulus gagal berhasil sukses rusak " +
+    "penuh kosong habis sisa mulai awal akhir pertama terakhir semua tanpa harus pasti mungkin jarang setuju aktif mati nyala " +
+    // istilah pasar (Inggris) yang artinya mudah dibalik
+    "bullish bearish buy sell long short profit loss cuan boncos hold up down"
+  ).split(" "),
+);
+
+export type LexRisk = { kind: "common" | "word" | "acronym"; text: string };
+
+/** kode mata uang yang biasa dibaca nama uangnya (bukan per huruf) */
+const CURRENCY: ReadonlyMap<string, readonly string[]> = new Map(
+  Object.entries({ idr: ["rupiah"], rp: ["rupiah"], usd: ["dolar", "dolar amerika"], sgd: ["dolar singapura"], eur: ["euro"], jpy: ["yen"], cny: ["yuan"], gbp: ["pound", "poundsterling"] }),
+);
+
+/**
+ * bacaan kasar kata Inggris cara Indonesia ("share" → "syer", "caption" → "kepsyen", "download" → "daunlod", "email" → "imel")
+ * — hanya untuk menilai apakah ejaan kamus masih "cara baca" kata itu, bukan untuk diucapkan
+ */
+function enReading(w: string): string {
+  return w
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .replace(/^e(?=m[aeiou])/, "i")
+    .replace(/[st]ion/g, "syen")
+    .replace(/sh/g, "sy")
+    .replace(/ch/g, "c")
+    .replace(/th/g, "t")
+    .replace(/ph/g, "f")
+    .replace(/qu/g, "kw")
+    .replace(/are$/, "er")
+    .replace(/(?:ee|ea|ie)/g, "i")
+    .replace(/oo/g, "u")
+    .replace(/o[uw]/g, "au")
+    .replace(/oa/g, "o")
+    .replace(/a[iy]/g, "e")
+    .replace(/a(?=[^aeiou]e$)/, "e")
+    .replace(/c(?=[eiy])/g, "s")
+    .replace(/([a-z][^aeiou])e$/, "$1")
+    .replace(/y$/, "i");
+}
+
+/**
+ * Entri kamus yang MENGGANTI kata dengan kata lain (bukan sekadar cara baca): bunyi ejaan jauh dari bunyi tulisannya, mis.
+ * "naik" → "anjlok", "aman" → "berbahaya", "BBCA" → "be be er i". Dipakai pratinjau impor skill (file dari luar, tidak dipercaya):
+ * subtitle tetap tulisan aslinya tapi suara VO mengucapkan kata lain, dan pengecek ucapan menganggap ejaan kamus itu benar.
+ * Bukan risiko: cara baca istilah asing ("download" → "daunlod", "share" → "syer"), singkatan dieja per huruf cara Indonesia /
+ * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu") atau kepanjangannya ("OJK" → "otoritas jasa keuangan"), kode uang
+ * ("IDR" → "rupiah"), singkatan tanpa huruf hidup ("dll" → "dan lain lain", "yg" → "yang"), angka jadi kata ("MP3" → "em pe tiga").
+ * `known` = ejaan lain yang sudah dipercaya untuk tulisan yang sama (mis. kamus bawaan Studio) — ejaan yang mirip itu aman.
+ * null = aman.
+ */
+export function lexiconRisk(from: string, to: string, known?: string | null): LexRisk | null {
+  const words = from.split(/[\s-]+/).filter(Boolean);
+  const target = soundKey(to);
+  if (!words.length || !target) return null;
+  const acro = (w: string) => isAcronym(w) || (/^[\p{L}\d]+$/u.test(w) && !/[aeiouy]/i.test(w.replace(/\d/g, "")) && /\p{L}/u.test(w));
+  const hasAcro = words.some(acro);
+  const one = words.length === 1 ? words[0] : "";
+  const toWords = to.toLowerCase().split(/[\s-]+/).filter(Boolean);
+  // kata umum: bunyinya berubah sedikit pun (selain ragam lisan nggak = gak) → kata lain ("halal" → "haram", "naik" → "anjlok")
+  if (one && COMMON.has(one.toLowerCase()) && soundKey(one) !== target && soundKey(enReading(one)) !== target)
+    return { kind: "common", text: `Kata umum “${from}” diucapkan “${to}” — artinya bisa berubah. Subtitle tetap “${from}”.` };
+  // kode uang dibaca nama uangnya; singkatan dibaca kepanjangannya (huruf depan tiap kata = huruf singkatannya)
+  if (one && (CURRENCY.get(one.toLowerCase()) ?? []).includes(toWords.join(" "))) return null;
+  if (one && isAcronym(one) && toWords.length === one.length && toWords.every((x, i) => x[0] === one[i].toLowerCase())) return null;
+  // bacaan yang wajar untuk tulisan ini: apa adanya, cara baca Inggris, singkatan per huruf (Indonesia / Inggris), angka jadi kata
+  const reading = (letters: ReadonlyMap<string, string> | null, en = false) =>
+    soundKey(
+      words
+        .map((w) => {
+          const n = /\d/.test(w) ? numbersToWords(w.replace(/(\d)/g, " $1 ")) : w;
+          if (letters && acro(w)) return [...n].map((c) => (/[a-z]/i.test(c) ? letters.get(c.toLowerCase()) ?? c : c)).join(" ");
+          return en && !acro(w) && !/\d/.test(w) ? enReading(w) : n;
+        })
+        .join(" "),
+    );
+  const cands = [reading(null), reading(null, true), ...(hasAcro ? [reading(LETTER), reading(LETTER_EN)] : [])].filter(Boolean);
+  const ratio = Math.min(...cands.map((c) => editDistance(c, target) / Math.max(c.length, target.length)));
+  const knownKey = known ? soundKey(known) : "";
+  const nearKnown = !!knownKey && editDistance(knownKey, target) / Math.max(knownKey.length, target.length) <= 0.34;
+  // singkatan tanpa huruf hidup ("dll", "yg", "tdk"): huruf-hurufnya muncul berurutan di ejaannya, huruf pertama sama
+  const abbrev = !!one && !isAcronym(one) && acro(one) && target[0] === soundKey(one)[0] && isSubsequence(soundKey(one), target);
+  if (nearKnown || abbrev || ratio <= (hasAcro ? 0.34 : 0.5)) return null;
+  return hasAcro && one
+    ? { kind: "acronym", text: `Singkatan “${from}” diucapkan “${to}” — bunyinya beda dari hurufnya. Subtitle tetap “${from}”.` }
+    : { kind: "word", text: `“${from}” diucapkan “${to}” — bunyinya jauh dari tulisannya, bisa jadi kata lain. Subtitle tetap “${from}”.` };
 }

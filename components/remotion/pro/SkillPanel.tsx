@@ -16,6 +16,7 @@ import {
   sectionSummary,
   skillFileName,
   skillPreview,
+  type LexChange,
   type SkillLibraryRow,
   type SkillSection,
   type SkillTarget,
@@ -174,9 +175,9 @@ export default function SkillPanel({
               voices={voices}
               loaded={loaded}
               onLoaded={setLoaded}
-              onApply={(parts) => {
+              onApply={(parts, lexicon) => {
                 if (!loaded) return;
-                onApply(applySkill(target, loaded.skill, parts, { voices }));
+                onApply(applySkill(target, loaded.skill, parts, { voices, lexicon }));
                 setFlash({ ok: true, text: `✓ Skill “${loaded.skill.name}” diterapkan (${parts.length} bagian).` });
               }}
               onFlash={setFlash}
@@ -305,7 +306,7 @@ function SaveTab({ target, dirName, lib, onSaved, onFlash }: { target: SkillTarg
                     <span className="block text-[13px] font-semibold text-zinc-200">
                       {SECTION_ICON[k]} {SECTION_LABEL[k]}
                     </span>
-                    <span className="block break-words text-[11.5px] text-zinc-500">{ok ? sum : k === "notes" ? "Belum ada catatan (isi di tab Catatan)" : "Belum ada — butuh rencana video dulu"}</span>
+                    <span className="block break-words text-[11.5px] text-zinc-500">{ok ? sum : emptyText(k, !!target.voice)}</span>
                   </span>
                 </label>
               </li>
@@ -337,6 +338,68 @@ function SaveTab({ target, dirName, lib, onSaved, onFlash }: { target: SkillTarg
   );
 }
 
+/** keterangan bagian yang belum bisa disimpan: "butuh rencana" hanya kalau memang belum ada rencana */
+function emptyText(k: SkillSection, hasPlan: boolean): string {
+  if (k === "notes") return "Belum ada catatan (isi di tab Catatan)";
+  if (!hasPlan) return "Belum ada — butuh rencana video dulu";
+  if (k === "lexicon") return "Kamus masih kosong — tambah kata di 📖 Kamus ejaan (panel Suara VO)";
+  if (k === "mix") return "Masih volume bawaan — atur di 🎚️ Volume (timeline)";
+  return "Belum ada isinya";
+}
+
+/** daftar SEMUA perubahan kamus dari skill (dari → ke), centang per entri; entri yang mengganti kata jadi kata lain ditandai */
+function LexList({
+  entries,
+  picked,
+  onPick,
+  onAll,
+}: {
+  entries: readonly LexChange[];
+  picked: readonly string[];
+  onPick: (key: string, v: boolean) => void;
+  onAll: (v: boolean) => void;
+}) {
+  const all = entries.every((e) => picked.includes(e.key));
+  return (
+    <div className="mb-1 ml-8 mr-1 mt-0.5 rounded-lg border border-zinc-800">
+      <div className="flex items-center gap-2 border-b border-zinc-800 px-2.5 py-1 text-[11px] text-zinc-500">
+        <span className="min-w-0 flex-1">
+          {picked.length}/{entries.length} kata dipakai · subtitle tidak berubah
+        </span>
+        <button type="button" className="min-h-[32px] shrink-0 rounded-md px-2 font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200" onClick={() => onAll(!all)}>
+          {all ? "Kosongkan" : "Centang semua"}
+        </button>
+      </div>
+      <ul className="max-h-60 overflow-y-auto p-1" aria-label="Perubahan kamus ejaan">
+        {entries.map((e) => (
+          <li key={e.key}>
+            <label className={`flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 hover:bg-zinc-800/60 ${e.risk ? "bg-amber-500/5" : ""}`}>
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-orange-500"
+                checked={picked.includes(e.key)}
+                onChange={(ev) => onPick(e.key, ev.target.checked)}
+                aria-label={`${e.from} jadi ${e.to}`}
+              />
+              <span className="min-w-0 flex-1 leading-snug">
+                <span className="block break-words text-[12.5px] text-zinc-200">
+                  <b className="font-semibold">{e.from}</b> → {e.to}
+                </span>
+                {e.old !== undefined && (
+                  <span className="block break-words text-[11px] text-zinc-500">
+                    {e.builtin ? "ganti ejaan bawaan" : "ganti ejaanmu"} “{e.old}”
+                  </span>
+                )}
+                {e.risk && <span className="block break-words text-[11px] font-semibold text-amber-400">⚠️ {e.risk.text}</span>}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // 📥 Impor skill: pilih file → pratinjau → centang → Terapkan
 // ---------------------------------------------------------------------------------------------
@@ -352,18 +415,22 @@ function ImportTab({
   voices: { id: string; name: string }[] | undefined;
   loaded: Loaded | null;
   onLoaded: (l: Loaded | null) => void;
-  onApply: (parts: SkillSection[]) => void;
+  /** `lexicon` = kunci entri kamus yang dicentang */
+  onApply: (parts: SkillSection[], lexicon: string[]) => void;
   onFlash: (f: Flash) => void;
 }) {
   const file = useRef<HTMLInputElement>(null);
   const preview = useMemo(() => (loaded ? skillPreview(target, loaded.skill, { voices }) : []), [loaded, target, voices]);
+  const lexEntries = useMemo(() => preview.find((p) => p.key === "lexicon")?.entries ?? [], [preview]);
   const [parts, setParts] = useState<SkillSection[]>([]);
-  // skill baru dimuat -> semua bagian yang bisa diterapkan dicentang
+  const [lexPick, setLexPick] = useState<string[]>([]);
+  // skill baru dimuat -> semua bagian yang bisa diterapkan dicentang; entri kamus yang mengganti kata jadi kata lain TIDAK
   const key = loaded ? `${loaded.from}|${loaded.skill.name}|${loaded.skill.created_at}` : "";
   const [lastKey, setLastKey] = useState("");
   if (key !== lastKey) {
     setLastKey(key);
     setParts(preview.filter((p) => p.ok).map((p) => p.key));
+    setLexPick(lexEntries.filter((e) => !e.risk).map((e) => e.key));
   }
   const pick = async (f: File | undefined) => {
     if (!f) return;
@@ -377,7 +444,11 @@ function ImportTab({
       onFlash({ ok: false, text: "File tidak bisa dibaca." });
     }
   };
-  const chosen = parts.filter((k) => preview.some((p) => p.key === k && p.ok));
+  const lexChosen = lexPick.filter((k) => lexEntries.some((e) => e.key === k));
+  // kamus dengan daftar perubahan: ikut diterapkan kalau ada entri yang dicentang (bagiannya mengikuti centang entri)
+  const chosen = preview
+    .filter((p) => p.ok && (p.key === "lexicon" && lexEntries.length ? lexChosen.length > 0 : parts.includes(p.key)))
+    .map((p) => p.key);
   return (
     <div className="space-y-3">
       <input ref={file} type="file" accept=".json,application/json" className="hidden" tabIndex={-1} onChange={(e) => void pick(e.target.files?.[0]).finally(() => (e.target.value = ""))} />
@@ -405,28 +476,45 @@ function ImportTab({
                     type="checkbox"
                     className="mt-0.5 h-4 w-4 shrink-0 accent-orange-500"
                     disabled={!p.ok}
-                    checked={p.ok && parts.includes(p.key)}
-                    onChange={(e) => setParts((s) => (e.target.checked ? [...s, p.key] : s.filter((x) => x !== p.key)))}
+                    checked={p.ok && (p.key === "lexicon" && lexEntries.length ? lexChosen.length > 0 : parts.includes(p.key))}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      // kamus: centang bagian = semua entri yang aman; entri bertanda ⚠️ dicentang satu per satu di daftarnya
+                      // (kalau semuanya bertanda ⚠️, centang bagian = semua — peringatannya tampil tepat di bawah)
+                      if (p.key === "lexicon" && lexEntries.length) {
+                        const safe = lexEntries.filter((x) => !x.risk);
+                        return setLexPick(v ? (safe.length ? safe : lexEntries).map((x) => x.key) : []);
+                      }
+                      setParts((s) => (v ? [...s.filter((x) => x !== p.key), p.key] : s.filter((x) => x !== p.key)));
+                    }}
                   />
                   <span className="min-w-0 flex-1 leading-tight">
                     <span className="block text-[13px] font-semibold text-zinc-200">
                       {SECTION_ICON[p.key]} {SECTION_LABEL[p.key]}
                     </span>
                     {p.lines.map((l, i) => (
-                      <span key={i} className="block break-words text-[11.5px] text-zinc-500">
+                      <span key={i} className={`block break-words text-[11.5px] ${l.startsWith("⚠️") ? "text-amber-400" : "text-zinc-500"}`}>
                         {l}
                       </span>
                     ))}
                   </span>
                 </label>
+                {p.key === "lexicon" && p.ok && p.entries && p.entries.length > 0 && (
+                  <LexList
+                    entries={p.entries}
+                    picked={lexChosen}
+                    onPick={(k, v) => setLexPick((s) => (v ? [...s.filter((x) => x !== k), k] : s.filter((x) => x !== k)))}
+                    onAll={(v) => setLexPick(v ? p.entries!.map((e) => e.key) : [])}
+                  />
+                )}
               </li>
             ))}
           </ul>
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <button type="button" className="btn-primary px-3.5 py-1.5 text-[13px]" disabled={!chosen.length} onClick={() => onApply(chosen)}>
+            <button type="button" className="btn-primary px-3.5 py-1.5 text-[13px]" disabled={!chosen.length} onClick={() => onApply(chosen, lexChosen)}>
               Terapkan {chosen.length ? `(${chosen.length})` : ""}
             </button>
-            <button type="button" className="text-[12px] font-semibold text-zinc-500 hover:text-zinc-300" onClick={() => onLoaded(null)}>
+            <button type="button" className="btn-ghost px-3.5 py-1.5 text-[13px]" onClick={() => onLoaded(null)}>
               Batal
             </button>
           </div>
@@ -514,10 +602,10 @@ function LibraryTab({ lib, onReload, onUse, onFlash }: { lib: Lib; onReload: () 
           {askDel === r.id && (
             <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-red-500/10 px-2.5 py-1.5 text-[12px] text-red-300">
               Hapus “{r.name}” dari Library tim?
-              <button type="button" className="font-semibold text-red-400 underline" disabled={busy === r.id} onClick={() => void del(r)}>
+              <button type="button" className="min-h-[32px] rounded-lg px-2.5 py-1.5 font-semibold text-red-400 underline hover:bg-red-500/10" disabled={busy === r.id} onClick={() => void del(r)}>
                 {busy === r.id ? "Menghapus…" : "Ya, hapus"}
               </button>
-              <button type="button" className="font-semibold text-zinc-400" onClick={() => setAskDel(null)}>
+              <button type="button" className="min-h-[32px] rounded-lg px-2.5 py-1.5 font-semibold text-zinc-400 hover:bg-zinc-800" onClick={() => setAskDel(null)}>
                 Batal
               </button>
             </div>

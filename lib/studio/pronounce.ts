@@ -18,6 +18,13 @@ export type LexEntry = { from: string; to: string };
 export const MAX_LEXICON = 60;
 export const LEX_FROM_MAX = 40;
 export const LEX_TO_MAX = 80;
+/**
+ * batas teks ucapan akhir (`spell` yang dikirim ke /api/studio/tts & job bank suara). Angka jadi kata bisa memanjangkan VO
+ * maksimal (400 huruf) sampai ±3.300 huruf (deret "7.777.777.777.777"), jadi 4.000 cukup untuk semua angka + kamus bawaan;
+ * yang lewat hanya kamus proyek yang mengeja kata pendek jadi sangat panjang → ditolak dengan pesan jelas (tidak dipotong diam-diam).
+ * Sama dengan SPELL_MAX di voice-worker/studio_worker/jobs_tts.py.
+ */
+export const SPELL_MAX = 4000;
 
 /** kamus bawaan: istilah asing / singkatan yang sering salah dibaca mesin suara Indonesia → cara baca orang Indonesia */
 export const DEFAULT_LEXICON: readonly LexEntry[] = [
@@ -119,7 +126,7 @@ export const DEFAULT_LEXICON: readonly LexEntry[] = [
  * Ejaan teaser CS Tracker versi lama (pakai tanda hubung) → versi baru tanpa strip. Dipakai normalizeTimeline supaya proyek
  * teaser yang tersimpan sebelum perbaikan ikut memakai ejaan baru (hanya kalau kalimatnya persis sama dengan versi lama).
  */
-const LEGACY_TEASER_SPELL: Record<string, string> = {
+const LEGACY_TEASER_SPELL: ReadonlyMap<string, string> = new Map(Object.entries({
   "Hot isyu numpuk… chat tim berantakan…": "Hot isyu numpuk… cet tim berantakan…",
   "Kenalin. Si-es Treker.": "Kenalin. Si es treker.",
   "Semua hot isyu langsung ke-renking otomatis. Yang paling panas, paling atas.": "Semua hot isyu langsung kerengking otomatis. Yang paling panas, paling atas.",
@@ -130,8 +137,9 @@ const LEGACY_TEASER_SPELL: Record<string, string> = {
   "Mau E-ai yang ngerti gaya kamu? Latih versimu sendiri.": "Mau ei ai yang ngerti gaya kamu? Latih versimu sendiri.",
   "Plus musik, laporan, sampai pe-pe-te.": "Plus musik, laporan, sampai pepete.",
   "Si-es Treker. Kerja lebih cepat… bareng-bareng.": "Si es treker. Kerja lebih cepat… bareng bareng.",
-};
-export const upgradeTeaserSpell = (spell: string): string => LEGACY_TEASER_SPELL[spell] ?? spell;
+}));
+/** Map (bukan objek biasa): ejaan "constructor" / "__proto__" / "toString" dari data proyek / AI tetap teks apa adanya */
+export const upgradeTeaserSpell = (spell: string): string => LEGACY_TEASER_SPELL.get(spell) ?? spell;
 
 // ---------------------------------------------------------------------------------------------
 // util

@@ -205,7 +205,11 @@ const ROLE: Record<string, string> = {
   Zilong: "Fighter", Alucard: "Fighter", Chou: "Fighter", Balmond: "Fighter", Sun: "Fighter", Alpha: "Fighter", Hilda: "Fighter", Freya: "Fighter", Martis: "Fighter", Kaja: "Fighter", "Yu Zhong": "Fighter",
   Estes: "Support", Rafaela: "Support", Angela: "Support",
 };
-export const heroRole = (hero: string) => ROLE[hero.replace(/ \d+$/, "")] ?? "";
+/** nama dari data user / karakter buatan ("constructor", "toString", …) bukan kunci bawaan objek */
+export const heroRole = (hero: string) => {
+  const k = hero.replace(/ \d+$/, "");
+  return Object.prototype.hasOwnProperty.call(ROLE, k) ? ROLE[k] : "";
+};
 
 /** warna avatar tiap hero (huruf depan) */
 export function heroColor(hero: string) {
