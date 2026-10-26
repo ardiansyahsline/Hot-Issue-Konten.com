@@ -4,6 +4,7 @@
  * supaya pukulannya jatuh tepat di ketukan (latar panjang: ambience/trailer-pulse/glitch-error = 0). `peak` = detik paling keras (riser: puncak sebelum reveal).
  * File audionya TIDAK di public/: disajikan lewat /api/studio/asset (wajib login + akses Studio).
  * Lisensi: Sonniss GDC 2026 Game Audio Bundle (royalty-free, tanpa atribusi, jangan dibagikan ulang sebagai file mentah).
+ * trailer-groove-perkusi = turunan trailer-pulse-sedang (hanya pukulan sub/bass < 150 Hz; nada ±340-450 Hz & sapuan "alarm" dibuang), loop pas 32 ketukan.
  */
 export type SfxMeta = { id: string; file: string; cat: string; tags: string[]; dur: number; lufs: number; tp: number; hit: number; peak: number; use: string; src?: string };
 
@@ -30,9 +31,10 @@ export const SFX_BUILTIN: SfxMeta[] = [
   { id: "riser-blastoff", file: "riser-blastoff.mp3", cat: "riser", tags: ["riser", "naik", "tegang", "launch"], dur: 8.78, lufs: -19.8, tp: -6.6, hit: 7.14, peak: 7.14, use: "Membangun ketegangan sebelum reveal/drop (taruh berakhir tepat di reveal)" },
   { id: "sukses-happy", file: "sukses-happy.mp3", cat: "ui", tags: ["sukses", "ceria", "game"], dur: 0.91, lufs: -17.0, tp: -4.5, hit: 0.14, peak: 0.02, use: "Selesai/berhasil, Train AI selesai" },
   { id: "swoosh-readout", file: "swoosh-readout.mp3", cat: "whoosh", tags: ["ui", "readout", "data"], dur: 2.33, lufs: -21.8, tp: -2.2, hit: 0.96, peak: 1.08, use: "Panel/angka/dashboard muncul" },
-  { id: "trailer-pulse-lambat", file: "trailer-pulse-lambat.mp3", cat: "trailer-pulse", tags: ["pulse", "trailer", "ritmis", "musik"], dur: 30.02, lufs: -9.2, tp: -0.4, hit: 0, peak: 12.24, use: "Lapisan ritme trailer (bisa jadi musik cadangan)" },
+  { id: "trailer-groove-perkusi", file: "trailer-groove-perkusi.mp3", cat: "trailer-pulse", tags: ["groove", "perkusi", "trailer", "musik", "tanpa-nada", "sub"], dur: 19.2, lufs: -21.5, tp: -1.6, hit: 0, peak: 0.1, use: "Groove trailer tanpa nada (musik cadangan)" },
+  { id: "trailer-pulse-lambat", file: "trailer-pulse-lambat.mp3", cat: "trailer-pulse", tags: ["pulse", "trailer", "ritmis", "musik"], dur: 30.02, lufs: -9.2, tp: -0.4, hit: 0, peak: 12.24, use: "Ritme trailer bernada sirene/alarm (pilih manual saja, jangan jadi latar panjang)" },
   { id: "trailer-pulse-panjang", file: "trailer-pulse-panjang.mp3", cat: "trailer-pulse", tags: ["pulse", "trailer", "sustain", "musik"], dur: 30.02, lufs: -12.0, tp: -0.9, hit: 0, peak: 0.02, use: "Lapisan sustain trailer (musik cadangan)" },
-  { id: "trailer-pulse-sedang", file: "trailer-pulse-sedang.mp3", cat: "trailer-pulse", tags: ["pulse", "trailer", "ritmis", "musik"], dur: 30.02, lufs: -11.0, tp: -1.1, hit: 0, peak: 5.12, use: "Lapisan ritme trailer energik (musik cadangan)" },
+  { id: "trailer-pulse-sedang", file: "trailer-pulse-sedang.mp3", cat: "trailer-pulse", tags: ["pulse", "trailer", "ritmis", "musik"], dur: 30.02, lufs: -11.0, tp: -1.1, hit: 0, peak: 5.12, use: "Ritme trailer bernada alarm berulang (pilih manual saja; musik cadangan pakai trailer-groove-perkusi)" },
   { id: "transisi-shaker-snap", file: "transisi-shaker-snap.mp3", cat: "transisi", tags: ["snap", "cepat", "perkusi"], dur: 1.49, lufs: -18.8, tp: -2.5, hit: 0.49, peak: 0.51, use: "Potongan cepat di montage, ikut ketukan" },
   { id: "transisi-snap-spin", file: "transisi-snap-spin.mp3", cat: "transisi", tags: ["snap", "spin", "energik"], dur: 3.24, lufs: -17.2, tp: -0.4, hit: 1.27, peak: 1.34, use: "Pergantian adegan energik, montage" },
   { id: "ui-accept-boing", file: "ui-accept-boing.mp3", cat: "ui", tags: ["ui", "accept", "lucu"], dur: 1.01, lufs: -16.6, tp: -3.8, hit: 0.06, peak: 0.3, use: "Momen fun / reaksi emoji" },
