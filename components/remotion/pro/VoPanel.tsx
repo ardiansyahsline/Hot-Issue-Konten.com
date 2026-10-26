@@ -19,6 +19,7 @@ import {
 } from "@/lib/studio/client";
 import { MAX_DUR, MAX_TOTAL, sceneStartSecs, VO_AT, voClashes, voStartOf, type EdgeVoice, type Scene, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
+import { teaserVoAt } from "@/lib/studio/teaserLock";
 import { isTeaserScene } from "./teaserLock";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
@@ -53,6 +54,8 @@ const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | nul
   !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
 
 /** detik VO adegan `s` melewati batas aman adegan (mulai + panjang suara + 0,25 dtk − durasi); ≤ 0 = muat */
+/** mulai VO adegan untuk VO BARU: offset adegan; proyek teaser lama (tersimpan sebelum ada vo.at) memakai detik naskah shot-nya */
+const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
 const voOverflow = (s: Scene, l: VoLine) => voStartOf(s, l) + l.dur + TAIL - s.dur;
 /** toleransi ujung adegan untuk "lewat batas" — sama dengan blok VO merah di TimelineEditor (at + dur + 0,05 > dur adegan) */
 const EDGE = 0.05;
@@ -201,7 +204,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
     const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
     // mulai VO = offset adegan (scene.vo.at) / bawaan — sama dengan `start` yang dikirim ke laptop (VO lengkap .mp3)
-    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: voStartOf(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words) }));
+    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words) }));
     if (!lines.length) {
       setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
       return;
@@ -210,7 +213,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const fullOk =
       !!sent &&
       ok.length === sent.size &&
-      ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + voStartOf(t.scenes[at.get(l.scene_id)!]))) < 2e-3);
+      ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + sceneVoAt(t.scenes[at.get(l.scene_id)!]))) < 2e-3);
     const name = voicesRef.current.find((x) => x.id === j.voice_id)?.name ?? t.voice.voiceName ?? "Bank suara";
     finish(t, {
       jobId: j.id,
@@ -278,7 +281,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         const s = items[k++];
         try {
           const r = await requestTts({ text: s.vo!.text, spell: s.vo!.spell || undefined, engine, voice: edgeVoice }, ctrl.signal);
-          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: voStartOf(s), words: r.words });
+          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words });
           results.push(r);
         } catch (e) {
           if (ctrl.signal.aborted) return;
@@ -316,7 +319,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const t: Timeline = { ...t0, voice: { ...t0.voice, mode: "bank", voiceId: voice.id, voiceName: voice.name, exaggeration: exg, cfg } };
     const starts = sceneStartSecs(t);
     const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) =>
-      s.vo?.text ? [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + voStartOf(s)) * 1000) / 1000 }] : [],
+      s.vo?.text ? [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000 }] : [],
     );
     if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
     onChange(t);
