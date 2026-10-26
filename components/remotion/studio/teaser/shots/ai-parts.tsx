@@ -801,7 +801,7 @@ export function makeCandles(n: number, seed: number, drift: (i: number) => numbe
 }
 
 const TFS_ALL = ["1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W"];
-/** tinggi kepala chart (2 baris: judul / "Rencana dari ⚔️ Harley · data …") */
+/** tinggi kepala chart (2 baris: judul / "Rencana dari ⚔️ Harley · ilustrasi") */
 export const HEAD_H = 52;
 
 /** kepala + bar timeframe TradePlanChart */

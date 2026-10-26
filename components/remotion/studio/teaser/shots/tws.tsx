@@ -272,6 +272,8 @@ export function TwsShot() {
   const composerK = UC * (1 - composerOut * 0.12);
   const pos = carousel(s);
   const act = s >= FLIP2 ? 2 : s >= FLIP1 ? 1 : 0;
+  // carousel sudah reda (amplop ayunan 0,035·e^(-9t) < 0,005): syarat waktu monoton supaya render browser tidak bolak-balik 2D↔3D per frame
+  const settled = s <= FLIP1 - 0.2 || (s >= FLIP1 + 0.22 && s <= FLIP2 - 0.2) || s >= FLIP2 + 0.22;
   // DOF saat angka slam: kartu di belakang buram & redup, fokus kembali saat angka terbang ke slotnya
   const slamDof = s < DROP ? 1 : 1 - prog(f, fps, FLY_A - 0.1, FLY_B - 0.1, EASE.inOut);
   // kartu terbuka penuh saat kamera turun
@@ -344,7 +346,7 @@ export function TwsShot() {
                             // di-precompose 3D (precompose = digambar di ukuran CSS kecil lalu diperbesar → teks slide lembek). Selisih
                             // rotateY ≤ 0,13° / perspektif < 0,4 px: tidak terlihat.
                             transform:
-                              web && Math.abs(d) < 0.005
+                              web && settled && Math.abs(d) < 0.005
                                 ? `translateX(${(d * (SLIDE_W + GAP_SLIDE) * PS).toFixed(2)}px) scale(${(1 - Math.abs(d) * 0.08).toFixed(4)})`
                                 : `perspective(900px) translateX(${(d * (SLIDE_W + GAP_SLIDE) * PS).toFixed(2)}px) rotateY(${rot.toFixed(2)}deg) scale(${(1 - Math.min(1, Math.abs(d)) * 0.08).toFixed(4)})`,
                             transformOrigin: d > 0 ? "0% 50%" : "100% 50%",

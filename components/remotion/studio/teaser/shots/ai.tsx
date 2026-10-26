@@ -79,7 +79,7 @@ const STEPS: ThinkStep[] = [
   { k: "understand", at: 4.8 },
   { k: "search", at: 5.25, q: "IHSG MSCI", n: 8 },
   { k: "price", at: 5.7, sym: "IHSG", src: "EODHD" },
-  { k: "price", at: 6.15, sym: "BTC", src: "CoinGecko" },
+  { k: "price", at: 6.15, sym: "BTC" }, // tanpa sumber: chart BTC di adegan ini ilustrasi
   { k: "write", at: 6.6 },
 ];
 const STEPS_DONE = 6.95;
