@@ -58,7 +58,7 @@ const EXAMPLE = {
       id: "s1",
       name: "Hook",
       dur: 3,
-      vo: { text: "Hot issue numpuk… chat tim berantakan…", spell: "Hot isyu numpuk… chat tim berantakan…" },
+      vo: { text: "Hot issue numpuk… chat tim berantakan…", spell: "Hot isyu numpuk… cet tim berantakan…" },
       text: ["Hot issue numpuk…", "Chat tim berantakan…"],
       visual: "Potongan cepat: daftar issue menumpuk, bubble chat tumpang tindih, kartu data berserakan. Kamera push pelan, sedikit getar.",
       layout: { kind: "kinetic", style: "punch", emphasis: ["numpuk", "berantakan"] },
@@ -80,7 +80,7 @@ const EXAMPLE = {
       id: "s2",
       name: "Reveal",
       dur: 2,
-      vo: { text: "Kenalin. CS Tracker.", spell: "Kenalin. Si-es Treker." },
+      vo: { text: "Kenalin. CS Tracker.", spell: "Kenalin. Si es treker." },
       text: ["Kenalin: CS Tracker"],
       visual: "Layar gelap sesaat (anticipation), logo CS Tracker muncul dengan overshoot kecil + light sweep, partikel oranye tipis.",
       layout: { kind: "logo", title: "CS Tracker", tagline: "Kerja lebih cepat, bareng-bareng" },
@@ -102,7 +102,7 @@ const EXAMPLE = {
       dur: 5,
       vo: {
         text: "Semua hot issue langsung ke-ranking otomatis. Yang paling panas, paling atas.",
-        spell: "Semua hot isyu langsung ke-renking otomatis. Yang paling panas, paling atas.",
+        spell: "Semua hot isyu langsung kerengking otomatis. Yang paling panas, paling atas.",
       },
       text: ["Hot issue ke-ranking otomatis", "Paling panas, paling atas"],
       visual: "Mockup HP melayang dengan tilt 3D halus: layar Hot Issue, badge HOT naik ke posisi #1, angka laporan berjalan.",
@@ -184,7 +184,7 @@ export const DIRECTOR_RULES = [
   "- transition = cara MASUK ke adegan itu; adegan pertama \"cut\". Variasikan tapi tetap satu bahasa visual (energik: slide + whip + zoom; premium: fade + mask; berita: cut + slide; teknologi: glitch secukupnya).",
   `- sfx.at = detik dari awal adegan saat "pukulan" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks ${MAX_SFX_PER_SCENE} SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.`,
   "- music.src: \"bed\" = trailer bed bebas hak cipta (bawaan kalau tidak ada musik), \"none\" = tanpa musik, atau src dari MUSIK TERSEDIA / lampiran audio user. JANGAN pakai lagu berhak cipta (lagu artis, sound viral) — kalau diminta, jelaskan singkat & tawarkan trailer bed atau upload musik bebas hak cipta.",
-  "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca. Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"Si-es Treker\", \"AI\" → \"E-ai\", \"review\" → \"riviu\", \"real-time\" → \"ril-taim\", \"download\" → \"daun-lod\", \"PPT\" → \"pe-pe-te\", \"ranking\" → \"renking\". Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
+  "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca — tulis seperti diucapkan orang Indonesia, TANPA tanda hubung/strip (strip dibaca aneh / jadi jeda). Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"si es treker\", \"AI\" → \"ei ai\", \"review\" → \"riviu\", \"real-time\" → \"ril taim\", \"download\" → \"daunlod\", \"PPT\" → \"pepete\", \"ranking\" → \"rengking\". Website juga punya kamus ejaan bawaan untuk istilah umum (PPT, AI, CS, download, review, TikTok, IHSG, dll.) dan membaca angka sebagai kata, jadi spell cukup untuk kata lain yang tidak umum. Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
   "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). exaggeration 0.25–1 (makin tinggi makin ekspresif), cfg 0.1–1 (makin rendah makin santai).",
   "- subtitles true kalau ada VO (false kalau teks layarnya sudah sama persis dengan VO).",
   "- bg.media, layout.src, brand.logo hanya boleh src dari LAMPIRAN USER (alamat /api/studio/…). Jangan menulis URL luar.",
@@ -604,6 +604,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       cfg: has(v, "cfg") ? out.voice.cfg : prev.voice.cfg,
     };
   }
+  // kamus ejaan proyek (diisi user di panel Suara VO) tidak boleh hilang gara-gara AI menulis ulang objek voice tanpa kamus
+  if (!has(o.voice, "lexicon")) out.voice = { ...out.voice, lexicon: prev.voice.lexicon?.length ? prev.voice.lexicon : undefined };
   // musik: hasil deteksi ketukan & level tetap kalau file musiknya sama
   if (!has(o, "music")) out.music = prev.music;
   else if (out.music.src === prev.music.src) {

@@ -338,6 +338,13 @@ export function useVoices(): { voices: StudioVoice[]; reload: () => void; loaded
   return { voices, reload, loaded, error };
 }
 
+/** suara bank yang siap, sekali baca tanpa realtime (tombol "🔊 Dengar" per adegan). Gagal → Error berpesan awam */
+export async function fetchReadyVoices(): Promise<StudioVoice[]> {
+  const { data, error } = await studioDb().from("studio_voices").select(VOICE_COLS).eq("status", "siap").order("created_at", { ascending: true });
+  if (error) throw new Error(friendlyStudioError(error));
+  return ((data ?? []) as StudioVoice[]).slice().sort((a, b) => Number(!a.seed_key) - Number(!b.seed_key));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Upload ke bucket "studio"
 // ---------------------------------------------------------------------------------------------

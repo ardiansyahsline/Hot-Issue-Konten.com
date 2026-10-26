@@ -39,6 +39,7 @@ import {
 } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { teaserVoAt } from "@/lib/studio/teaserLock";
+import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
 import { isTeaserScene } from "./teaserLock";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
@@ -49,11 +50,11 @@ const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis
  * adegan minimal selesai 0,25 dtk setelah VO
  */
 const TAIL = 0.25;
-const DEF_EXG = 0.65;
-const DEF_CFG = 0.35;
-const DEFAULT_VOICE = "Alif - Energik";
+export const DEF_EXG = 0.65;
+export const DEF_CFG = 0.35;
+export const DEFAULT_VOICE = "Alif - Energik";
 const NO_SCRIPT = "Belum ada naskah VO di adegan. Minta Harley tuliskan naskahnya dulu.";
-const STALE = 'Naskah VO berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
+const STALE = 'Naskah VO atau kamus ejaan berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
 
 type Run =
   | { s: "idle" }
@@ -64,16 +65,18 @@ type Run =
 
 const fmt = (n: number) => String(Number(n.toFixed(2))).replace(".", ",");
 const names = (l: string[]) => (l.length <= 2 ? l.join(" & ") : `${l.slice(0, -1).join(", ")} & ${l[l.length - 1]}`);
-const cleanWords = (w: unknown): Word[] =>
+export const cleanWords = (w: unknown): Word[] =>
   (Array.isArray(w) ? w : [])
     .filter((x): x is Word => !!x && typeof x === "object" && typeof (x as Word).w === "string")
     .map((x) => ({ w: x.w, s: Number(x.s) || 0, e: Number(x.e) || 0 }));
-/** naskah VO adegan masih sama dengan yang dikirim ke mesin suara (teks & ejaan) */
-const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined) =>
-  !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
+/**
+ * naskah VO adegan masih sama dengan yang dikirim ke mesin suara: teks subtitle & teks ucapan AKHIR (ejaan adegan + kamus ejaan
+ * proyek + angka jadi kata, voSpeech) — ubah kamus selama suara dibuat → suaranya tidak dipakai (STALE)
+ */
+const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined, lex: LexEntry[] | undefined) => sameSpeech(voSpeech(s?.vo, lex), sent);
 
 /** mulai VO adegan untuk VO BARU: offset adegan; proyek teaser lama (tersimpan sebelum ada vo.at) memakai detik naskah shot-nya */
-const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
+export const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
 /**
  * detik VO adegan `s` melewati batas aman adegan (mulai + panjang UCAPAN + 0,25 dtk − durasi); ≤ 0 = muat.
  * Ucapan = voSpeechEnd (kata terakhir + 0,12 dtk): hening di ujung file tidak dihitung.
@@ -259,6 +262,15 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       fast: speedInfo(tl),
     };
   }, [tl]);
+  // VO yang dibuat dari naskah / ejaan lama: kunci teks ucapan saat dibuat (VoLine.say) beda dengan naskah + kamus ejaan sekarang
+  const oldSay = useMemo(
+    () =>
+      (tl.vo?.lines ?? []).flatMap((l) => {
+        const s = tl.scenes.find((x) => x.id === l.sceneId);
+        return l.say && s?.vo?.text && l.say !== voSayKey(s.vo, tl.voice.lexicon) ? [s.name] : [];
+      }),
+    [tl],
+  );
   // offset mulai VO per adegan (mis. teaser: waktu target naskah) -> sebutkan contoh yang paling jauh
   const lateVo = voScenes.reduce<Scene | null>((a, s) => (s.vo?.at !== undefined && s.vo.at > (a?.vo?.at ?? VO_AT) + 1e-3 ? s : a), null);
 
@@ -312,11 +324,15 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     // naskah yang dikirim: adegan yang naskahnya berubah / dihapus selama job jalan tidak ditempeli suara lama
     const sent = Array.isArray(j.lines) && j.lines.length ? new Map(j.lines.map((l) => [l.scene_id, l])) : null;
     const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
-    const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
+    const lex = t.voice.lexicon;
+    const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id), lex));
     // mulai VO = offset adegan (scene.vo.at) / bawaan — sama dengan `start` yang dikirim ke laptop (VO lengkap .mp3)
     const lines: VoLine[] = ok.map((l) => {
       const speed = Math.round(Number(l.speed) || 0);
-      return { sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}) };
+      const sc = t.scenes[at.get(l.scene_id)!];
+      // `say` hanya kalau naskah yang dikirim diketahui (job lama tanpa `lines` → tidak tahu teks ucapannya)
+      const say = sent ? voSayKey(sc.vo, lex) : "";
+      return { sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(sc), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}), ...(say ? { say } : {}) };
     });
     if (!lines.length) {
       setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
@@ -379,6 +395,9 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const items = t0.scenes.filter((s) => s.vo?.text);
     if (!items.length) return setRun({ s: "error", msg: NO_SCRIPT });
     const edgeVoice: EdgeVoice = t0.voice.edgeVoice ?? "id-ID-ArdiNeural";
+    // teks ucapan akhir per adegan (ejaan adegan + kamus ejaan + angka jadi kata); subtitle tetap vo.text
+    const lex0 = t0.voice.lexicon;
+    const sent = new Map(items.map((s) => [s.id, voSpeech(s.vo, lex0)!]));
     // adegan teaser (durasi dikunci di ketukan): jendela ucapan sampai VO adegan berikutnya mulai − 0,1 dtk
     const wins = teaserWindows(t0);
     const ctrl = new AbortController();
@@ -395,7 +414,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       while (k < items.length && !ctrl.signal.aborted) {
         const s = items[k++];
         try {
-          const req = { text: s.vo!.text, spell: s.vo!.spell || undefined, voice: edgeVoice };
+          const p = sent.get(s.id)!;
+          const req = { text: p.text, spell: p.spell ?? undefined, voice: edgeVoice };
           const first = await requestTts({ ...req, engine }, ctrl.signal);
           // Edge: ucapan lebih panjang dari jendela adegan teaser → minta ulang lebih cepat (rate "+N%", maks 30%).
           // Premium (ElevenLabs) tidak punya pengatur tempo → tidak dipercepat. Gagal minta ulang → pakai versi terakhir yang ada.
@@ -412,7 +432,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
                   }
                 });
           if (ctrl.signal.aborted) return;
-          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}) });
+          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}), say: voSayKey(s.vo, lex0) });
           results.push(r);
         } catch (e) {
           if (ctrl.signal.aborted) return;
@@ -427,9 +447,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     if (ctrl.signal.aborted) return setRun({ s: "idle" });
     if (!out.length) return setRun({ s: "error", msg: lastErr || "Gagal bikin suara. Coba lagi." });
     const t = tlRef.current;
-    // naskah adegan diubah selama suara dibuat -> suara lamanya tidak dipakai
-    const sent = new Map(items.map((s) => [s.id, s.vo!]));
-    const fresh = out.filter((l) => sameVo(t.scenes.find((s) => s.id === l.sceneId), sent.get(l.sceneId)));
+    // naskah adegan / kamus ejaan diubah selama suara dibuat -> suara lamanya tidak dipakai
+    const fresh = out.filter((l) => sameVo(t.scenes.find((s) => s.id === l.sceneId), sent.get(l.sceneId), t.voice.lexicon));
     if (!fresh.length) return setRun({ s: "error", msg: STALE });
     const order = new Map(t.scenes.map((s, i) => [s.id, i]));
     fresh.sort((a, b) => (order.get(a.sceneId) ?? 0) - (order.get(b.sceneId) ?? 0));
@@ -451,10 +470,12 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const starts = sceneStartSecs(t);
     // adegan teaser: `max` = jendela ucapan (detik) → laptop mempercepat suara yang lebih panjang (atempo, maks 1,3×, nada tetap)
     const wins = teaserWindows(t);
+    // `spell` = teks ucapan akhir (ejaan adegan + kamus ejaan + angka jadi kata) → laptop lama pun langsung memakai ejaan baru
     const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) => {
-      if (!s.vo?.text) return [];
+      const p = voSpeech(s.vo, t.voice.lexicon);
+      if (!p) return [];
       const max = wins.get(s.id);
-      return [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000, ...(max !== undefined ? { max } : {}) }];
+      return [{ id: s.id, scene_id: s.id, text: p.text, spell: p.spell, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000, ...(max !== undefined ? { max } : {}) }];
     });
     if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
     onChange(t);
@@ -654,6 +675,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         {opt("none", "🔇 Tanpa VO", "Musik + SFX + teks saja (subtitle ikut mati)")}
       </div>
 
+      {mode !== "none" && <LexiconEditor value={v.lexicon} disabled={busy} onChange={(lexicon) => setVoice({ lexicon: lexicon.length ? lexicon : undefined })} />}
+
       {/* VO yang sudah ada */}
       {tl.vo?.lines.length && mode !== "none" ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2.5 text-xs">
@@ -685,6 +708,11 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
           {overNow && (
             <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-over>
               {overNow}
+            </div>
+          )}
+          {oldSay.length > 0 && !busy && (
+            <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-oldsay>
+              📖 Naskah / ejaan {names(oldSay)} berubah sejak VO dibuat — suaranya masih versi lama. Klik &quot;Generate ulang VO&quot; supaya ikut berubah.
             </div>
           )}
           {tightNow.length > 0 && (
@@ -763,5 +791,118 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       )}
       {note && !busy && <p className="text-[11px] leading-relaxed text-zinc-400">{note}</p>}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 📖 Kamus ejaan proyek (timeline.voice.lexicon)
+// ---------------------------------------------------------------------------------------------
+type LexRow = { id: number; from: string; to: string };
+let lexSeq = 0;
+const lexRows = (v: LexEntry[] | undefined): LexRow[] => (v ?? []).map((e) => ({ id: ++lexSeq, ...e }));
+const lexKey = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
+
+/**
+ * Kamus ejaan milik proyek: kata yang sering salah dibaca → cara bacanya. Baris diketik lokal, disimpan ke timeline saat keluar
+ * kolom / Enter (baris yang belum lengkap tetap tampil tapi belum dipakai). Kamus bawaan bisa diganti dengan menulis kata yang sama.
+ */
+function LexiconEditor({ value, onChange, disabled }: { value: LexEntry[] | undefined; onChange: (v: LexEntry[]) => void; disabled?: boolean }) {
+  const key = JSON.stringify(value ?? []);
+  const [rows, setRows] = useState<LexRow[]>(() => lexRows(value));
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  // kamus dari luar berubah (undo, proyek lain, revisi) -> ikut; baris yang belum lengkap tetap dipertahankan
+  useEffect(() => {
+    setRows((r) => (JSON.stringify(normLexicon(r)) === key ? r : [...lexRows(JSON.parse(key) as LexEntry[]), ...r.filter((x) => !x.from.trim() || !x.to.trim())]));
+  }, [key]);
+  const commit = (next: LexRow[] = rowsRef.current) => {
+    setRows(next);
+    const clean = normLexicon(next);
+    if (JSON.stringify(clean) !== key) onChange(clean);
+  };
+  const edit = (id: number, p: Partial<LexRow>) => setRows((r) => r.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  const used = normLexicon(rows).length;
+  const firstOf = new Map<string, number>();
+  for (const r of rows) if (r.from.trim() && !firstOf.has(lexKey(r.from.trim()))) firstOf.set(lexKey(r.from.trim()), r.id);
+  const inp = "input min-w-0 py-1.5 text-[12.5px]";
+  return (
+    <details className="group rounded-xl border border-zinc-800 px-3 py-2" data-lexicon>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span>
+          📖 Kamus ejaan{used ? <span className="ml-1 text-xs font-normal text-zinc-500">({used} kata)</span> : null}
+        </span>
+        <span aria-hidden className="text-[11px] text-zinc-500 transition group-open:rotate-90">
+          ▶
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Kata yang sering salah dibaca mesin suara → tulis cara bacanya. Dipakai otomatis di semua adegan (subtitle tetap tulisan asli). Ejaan khusus di kartu adegan tetap
+          menang. Habis diubah, klik &quot;Generate ulang VO&quot;.
+        </p>
+        {rows.map((r) => {
+          const dup = !!r.from.trim() && firstOf.get(lexKey(r.from.trim())) !== r.id;
+          return (
+            <div key={r.id} className="space-y-0.5" data-lex-row>
+              <div className="flex items-center gap-1.5">
+                <input
+                  className={`${inp} flex-[2]`}
+                  value={r.from}
+                  maxLength={LEX_FROM_MAX}
+                  placeholder="mis. PPT"
+                  aria-label="Kata yang ditulis"
+                  disabled={disabled}
+                  onChange={(e) => edit(r.id, { from: e.target.value })}
+                  onBlur={() => commit()}
+                  onKeyDown={(e) => e.key === "Enter" && commit()}
+                />
+                <span aria-hidden className="flex-none text-zinc-500">
+                  →
+                </span>
+                <input
+                  className={`${inp} flex-[3]`}
+                  value={r.to}
+                  maxLength={LEX_TO_MAX}
+                  placeholder="mis. pepete"
+                  aria-label={`Cara baca ${r.from || "kata"}`}
+                  disabled={disabled}
+                  onChange={(e) => edit(r.id, { to: e.target.value })}
+                  onBlur={() => commit()}
+                  onKeyDown={(e) => e.key === "Enter" && commit()}
+                />
+                <button
+                  type="button"
+                  className="h-8 w-8 flex-none rounded-lg text-[13px] text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                  aria-label={`Hapus ${r.from || "baris"} dari kamus`}
+                  disabled={disabled}
+                  onClick={() => commit(rows.filter((x) => x.id !== r.id))}
+                >
+                  ✕
+                </button>
+              </div>
+              {dup && <p className="text-[10.5px] text-amber-400">Kata ini sudah ada di atas — yang dipakai baris pertama.</p>}
+            </div>
+          );
+        })}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            className="text-[12px] font-semibold text-orange-400 hover:text-orange-300 disabled:opacity-50"
+            disabled={disabled || rows.length >= MAX_LEXICON}
+            onClick={() => setRows((r) => [...r, { id: ++lexSeq, from: "", to: "" }])}
+          >
+            ＋ Tambah kata
+          </button>
+          <span className="text-[10.5px] text-zinc-500">Contoh: PPT → pepete · CS → si es · real-time → ril taim</span>
+        </div>
+        <details className="text-[11px] text-zinc-500">
+          <summary className="cursor-pointer font-semibold hover:text-zinc-300">Ejaan bawaan ({DEFAULT_LEXICON.length})</summary>
+          <p className="mt-1 leading-relaxed" data-lex-default>
+            {DEFAULT_LEXICON.map((e) => `${e.from} → ${e.to}`).join(" · ")}
+          </p>
+          <p className="mt-1">Mau dibaca lain? Tulis kata yang sama di kamus di atas (mis. chat → chat supaya tidak jadi &quot;cet&quot;).</p>
+        </details>
+      </div>
+    </details>
   );
 }

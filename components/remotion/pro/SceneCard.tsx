@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
@@ -25,6 +26,7 @@ import {
   type Scene,
   type ScreenKind,
   type Side,
+  type Timeline,
   type TransitionKind,
   voStartOf,
 } from "@/lib/studio/timeline";
@@ -32,6 +34,9 @@ import { sfxSrc, storagePathOf } from "@/lib/studio/urls";
 import FreesoundPanel from "./FreesoundPanel";
 import { Field, Num, Seg, Toggle, Txt, UploadBtn } from "./fields";
 import { BG_LABEL, CAMERA_LABEL, DIR_LABEL, LAYOUT_LABEL, MUSIC_LABEL, SCREEN_LABEL, TRANSITION_LABEL, commaList, fmtSec, parseNum, wordCount } from "./planUtils";
+
+/** 🔊 Dengar per adegan (dimuat saat kartu dibuka; berbagi modul dengan panel Suara VO) */
+const VoListen = dynamic(() => import("./VoListen"), { ssr: false, loading: () => null });
 
 export type SfxItem = SfxMeta & { src?: string };
 export type ScenePatch = Partial<Scene> | ((s: Scene) => Partial<Scene>);
@@ -125,6 +130,8 @@ export default function SceneCard({
   onMove,
   onDup,
   onDel,
+  timeline,
+  onTimeline,
 }: {
   scene: Scene;
   index: number;
@@ -137,6 +144,10 @@ export default function SceneCard({
   onMove: (id: string, d: -1 | 1) => void;
   onDup: (id: string) => void;
   onDel: (id: string) => void;
+  /** timeline lengkap (suara, kamus ejaan, jendela VO teaser) untuk tombol 🔊 Dengar; kosong = tombol tidak tampil */
+  timeline?: Timeline;
+  /** ubah timeline lengkap (tombol "Pakai ini" memasang contoh suara ke VO proyek) */
+  onTimeline?: (fn: (t: Timeline) => Timeline) => unknown;
 }) {
   const [askDel, setAskDel] = useState(false);
   const [draftLines, setDraftLines] = useState<string[] | null>(null);
@@ -271,7 +282,7 @@ export default function SceneCard({
             >
               {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? (x.vo ? { ...x.vo, text: v } : { text: v }) : null }))} />}
             </Field>
-            <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin salah baca, mis. “Si-es Treker”, “E-ai”. Subtitle tetap pakai teks asli.">
+            <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin masih salah baca. Tulis seperti diucapkan, tanpa strip: mis. “si es treker”, “ei ai”. Istilah umum (PPT, AI, download…) sudah dieja otomatis lewat 📖 Kamus ejaan. Subtitle tetap pakai teks asli.">
               {(id) => (
                 <Txt
                   id={id}
@@ -285,6 +296,7 @@ export default function SceneCard({
               )}
             </Field>
           </div>
+          {timeline && s.vo?.text && <VoListen scene={s} timeline={timeline} onTimeline={onTimeline} />}
 
           {textLocked ? (
             <Field label="🔤 Teks di layar" hint="Dikunci: teks layar adegan ini digambar langsung di animasi premium (ganti pesannya lewat Teks VO).">

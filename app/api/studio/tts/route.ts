@@ -18,6 +18,11 @@ export const maxDuration = 60;
  */
 
 const MAX = 600;
+/**
+ * teks ucapan (`spell`) dibentuk browser dari ejaan adegan + kamus ejaan + angka jadi kata (lib/studio/pronounce.ts), jadi bisa
+ * lebih panjang dari teks subtitle (mis. "IHSG 16.800" → "i ha es ge enam belas ribu delapan ratus")
+ */
+const MAX_SPELL = 1200;
 const FAIL = "Suara cadangan lagi nggak bisa dihubungi. Coba lagi sebentar atau pakai mesin suara laptop.";
 const LABEL = { edge: "VO sementara · cadangan (layanan tidak resmi)", elevenlabs: "Premium" } as const;
 
@@ -93,7 +98,7 @@ export async function POST(req: Request) {
   const text = tidy(b?.text);
   const spell = tidy(b?.spell);
   if (!text) return json({ error: "Teks VO masih kosong." }, 400);
-  if (text.length > MAX || spell.length > MAX) return json({ error: `Teks kepanjangan (maks ${MAX} huruf). Pecah jadi beberapa kalimat.` }, 400);
+  if (text.length > MAX || spell.length > MAX_SPELL) return json({ error: `Teks kepanjangan (maks ${MAX} huruf). Pecah jadi beberapa kalimat.` }, 400);
 
   const voice = isEdgeVoice(b.voice) ? b.voice : "id-ID-ArdiNeural";
   const rate = cleanRate(b.rate);

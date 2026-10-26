@@ -335,6 +335,8 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
             onMove={move}
             onDup={dup}
             onDel={del}
+            timeline={tl}
+            onTimeline={update}
           />
         ))}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
