@@ -200,12 +200,15 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
   const bot = wy(UI.y.end);
   const T0 = box.y + 232;
   const T1 = box.y + box.h * 0.95;
-  const zEnd = Math.max(0.8, Math.min(1.32, (T1 - T0) / (bot - top)));
+  // lebar UI × zoom akhir × dorongan ×1,12 tetap di dalam kotak aman (progress & tombol tidak masuk margin/rel kanan TikTok)
+  const zFit = box.w / (UI_W * k * 1.12);
+  const zEnd = Math.max(0.8, Math.min(1.32, zFit, (T1 - T0) / (bot - top)));
+  const cxBox = box.x + box.w / 2;
   const midW = (top + bot) / 2;
   const midS = (T0 + T1) / 2;
-  const fin = camOn(wx(UI_W / 2), midW, zEnd, W / 2, midS, W, H);
+  const fin = camOn(wx(UI_W / 2), midW, zEnd, cxBox, midS, W, H);
   // dorongan akhir kecil (×1,06) berpusat di tombol / progress: tombol diam di layar, sekitarnya membesar
-  const btnS = { x: W / 2 + (btn.x - wx(UI_W / 2)) * zEnd, y: midS + (btn.y - midW) * zEnd };
+  const btnS = { x: cxBox + (btn.x - wx(UI_W / 2)) * zEnd, y: midS + (btn.y - midW) * zEnd };
   // dorongan akhir pelan (×1,12) berpusat di tombol / progress — linear, tetap bergerak sampai tertutup mask Outro
   const push = camOn(btn.x, btn.y, zEnd * 1.12, btnS.x - 14, btnS.y - 8, W, H);
   const tapAt = A + BEAT * 2; // 4,2 dtk tepat di ketukan (frame 126 adegan)
@@ -227,7 +230,7 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
   const barSheen = clamp01((s - (A + BEAT * 3)) / 0.4);
   const ripple = clamp01((s - tapAt) / 0.32);
   // jari: turun ke tombol (0,25 dtk), tekan tepat di ketukan, lalu terangkat menjauh sebelum progress muncul (tidak menutupi teks)
-  const finger = s >= tapAt - 0.25 && s < tapAt + 0.2;
+  const finger = s >= tapAt - 0.25 && s < tapAt + 0.12;
   const fIn = clamp01((tapAt - s) / 0.25) + clamp01((s - tapAt - 0.06) / 0.14) * 0.8;
   return (
     <AbsoluteFill>
@@ -240,7 +243,7 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
           <div style={{ position: "absolute", left: tap.x - 50, top: tap.y - 50, width: 100, height: 100, borderRadius: 999, border: `4px solid ${rgba("#ffffff", 0.85 * (1 - ripple) * (1 - ripple))}`, transform: `scale(${(0.4 + ripple * 0.8).toFixed(3)})` }} />
         )}
         {finger && (
-          <div style={{ position: "absolute", left: tap.x - 26 + 34 * fIn, top: tap.y - 26 + 52 * fIn, width: 52, height: 52, borderRadius: 999, background: "rgba(255,255,255,0.9)", boxShadow: "0 10px 30px rgba(0,0,0,0.45)", opacity: clamp01((s - (tapAt - 0.25)) / 0.1) * clamp01((tapAt + 0.2 - s) / 0.12), transform: `scale(${s > tapAt - 0.03 && s < tapAt + 0.1 ? 0.84 : 1})` }} />
+          <div style={{ position: "absolute", left: tap.x - 26 + 34 * fIn, top: tap.y - 26 + 52 * fIn, width: 52, height: 52, borderRadius: 999, background: "rgba(255,255,255,0.9)", boxShadow: "0 10px 30px rgba(0,0,0,0.45)", opacity: clamp01((s - (tapAt - 0.25)) / 0.1) * clamp01((tapAt + 0.12 - s) / 0.08), transform: `scale(${s > tapAt - 0.03 && s < tapAt + 0.1 ? 0.84 : 1})` }} />
         )}
       </Cam>
       {/* teks layar di atas (latar digelapkan supaya UI yang lewat di bawahnya tidak mengganggu) */}
