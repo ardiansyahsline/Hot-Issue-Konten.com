@@ -9,6 +9,7 @@ import {
   MUSIC_LEVEL_DB,
   sceneStartSecs,
   totalFrames,
+  voSpeechEnd,
   voStartOf,
   type BgKind,
   type Camera,
@@ -192,7 +193,7 @@ function cueSheet(tl: Timeline, starts: number[], end: number, extra: SfxMeta[])
         t: t0 + voStartOf(sc, line),
         kind: "VO",
         what: `“${words.slice(0, 7).join(" ")}${words.length > 7 ? "…" : ""}”`,
-        note: `${line ? `${num(line.dur, 1)} dtk` : "belum dibuat"} · musik turun saat VO bicara`,
+        note: `${line ? `${num(voSpeechEnd(line), 1)} dtk${line.speed ? ` (dipercepat ${line.speed}%)` : ""}` : "belum dibuat"} · musik turun saat VO bicara`,
       });
     }
     for (const c of sc.sfx) {
@@ -255,7 +256,8 @@ export function storyboardHtml(tl: Timeline, extra: SfxMeta[] = []): string {
         .map(({ s, i }) => {
           const line = tl.vo?.lines.find((l) => l.sceneId === s.id);
           const t0 = starts[i] + voStartOf(s, line);
-          const t1 = line ? t0 + line.dur : starts[i] + s.dur;
+          // akhir ucapan asli (hening di ujung file tidak dihitung)
+          const t1 = line ? t0 + voSpeechEnd(line) : starts[i] + s.dur;
           const spell = s.vo?.spell && s.vo.spell !== s.vo.text ? esc(s.vo.spell) : `<span class="muted">sama</span>`;
           return `<tr><td class="nowrap">${i + 1}. ${esc(s.name)}</td><td class="nowrap mono">${clock(t0)}–${clock(t1)}</td><td>${esc(s.vo?.text)}</td><td>${spell}</td></tr>`;
         })

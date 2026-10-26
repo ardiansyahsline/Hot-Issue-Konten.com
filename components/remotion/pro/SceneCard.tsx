@@ -10,6 +10,7 @@ import {
   PLAN_LAYOUTS,
   MAX_DUR,
   MAX_LINES,
+  MAX_SPEEDUP,
   MAX_WORDS_PER_LINE,
   MIN_DUR,
   SCREENS,
@@ -250,10 +251,15 @@ export default function SceneCard({
             <Field
               label="🎙️ Teks VO (tampil di subtitle)"
               hint={
-                s.vo && voSec > voRoom ? (
+                s.vo && voSec > voRoom && teaser && voSec <= voRoom * (1 + MAX_SPEEDUP / 100) ? (
+                  // adegan teaser: suara yang sedikit kepanjangan dipercepat otomatis (maks 30%) saat VO dibuat
+                  <span className="text-sky-400" data-vo-long data-vo-fastable>
+                    {`VO ±${fmtSec(voSec)} — sedikit lebih panjang dari ruang ±${fmtSec(voRoom, 2)} (VO mulai di ${fmtSec(voAt, 2)}). Saat suara dibuat, otomatis dipercepat (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik.`}
+                  </span>
+                ) : s.vo && voSec > voRoom ? (
                   <span className="text-amber-400" data-vo-long>
                     {teaser
-                      ? `VO ±${fmtSec(voSec)} — tidak muat: VO mulai di ${fmtSec(voAt, 2)}, ruangnya ±${fmtSec(voRoom, 2)} sampai adegan habis. Durasi dikunci di ketukan musik, jadi pendekkan teks VO.`
+                      ? `VO ±${fmtSec(voSec)} — tidak muat: VO mulai di ${fmtSec(voAt, 2)}, ruangnya ±${fmtSec(voRoom, 2)} sampai adegan habis (kemungkinan belum muat walau dipercepat otomatis maks ${MAX_SPEEDUP}%). Durasi dikunci di ketukan musik, jadi pendekkan teks VO.`
                       : `VO ±${fmtSec(voSec)} — lebih panjang dari ruang adegan (±${fmtSec(voRoom, 2)} sesudah VO mulai di ${fmtSec(voAt, 2)}). Pendekkan teks atau tambah durasi.`}
                   </span>
                 ) : s.vo ? (

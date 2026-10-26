@@ -77,6 +77,9 @@ class Supa:
                     headers={**self.h, **(headers or {})},
                     timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
                 )
+            except (httpx.InvalidURL, httpx.UnsupportedProtocol, UnicodeError, ValueError) as e:
+                # alamat SUPABASE_URL salah format (mis. berisi kunci, bukan alamat) → percuma diulang
+                raise SupaError(f"SUPABASE_URL di file .env salah format ({type(e).__name__}). Isi persis seperti: SUPABASE_URL=https://xxxxxxxx.supabase.co") from e
             except httpx.TransportError as e:  # jaringan putus / DNS / timeout
                 last = e
             else:

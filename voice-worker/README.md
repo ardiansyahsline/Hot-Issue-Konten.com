@@ -5,7 +5,7 @@ Program kecil yang jalan terus di **laptop Windows** dan mengerjakan pekerjaan b
 
 | Pekerjaan | Hasilnya |
 |---|---|
-| **Suara VO** (bank suara) | Naskah dibacakan dengan suara dari bank suara (mis. *Alif - Energik*). Tiap kalimat dibuat 2 versi lalu dipilih yang paling jelas. Hasil: file suara per adegan + VO lengkap (.mp3) + subtitle (.srt). |
+| **Suara VO** (bank suara) | Naskah dibacakan dengan suara dari bank suara (mis. *Alif - Energik*). Tiap kalimat dibuat 2 versi lalu dipilih yang paling jelas. Hasil: file suara per adegan + VO lengkap (.mp3) + subtitle (.srt). Di adegan teaser (durasi dikunci di ketukan musik), kalimat yang kepanjangan otomatis dipercepat maksimal 30% tanpa mengubah nada suara. |
 | **Bersihkan rekaman** | Rekaman bank suara dibersihkan dari bising, dipotong otomatis 8–10 detik terbaik, volume disamakan, diberi nilai kualitas + saran. |
 | **Ketukan musik** | BPM & ketukan musik dideteksi supaya potongan video jatuh pas di ketukan. |
 | **Render MP4** | Video dirender di laptop (alternatif gratis selain render di browser), volume akhir -14 LUFS. |

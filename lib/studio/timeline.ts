@@ -161,8 +161,11 @@ export type Voice = { mode: VoiceMode; voiceId?: string | null; voiceName?: stri
 export type Music = { src: string; name?: string; bpm?: number | null; beats?: number[] | null; offset?: number; gain?: number; lufs?: number | null };
 
 export type Word = { w: string; s: number; e: number };
-/** VO hasil generate per adegan. `src` URL yang bisa diputar. `at` = detik mulai dihitung dari awal adegan. */
-export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[] };
+/**
+ * VO hasil generate per adegan. `src` URL yang bisa diputar. `at` = detik mulai dihitung dari awal adegan. `dur` = panjang file
+ * (bisa membawa hening di ujung). `speed` = persen suara dipercepat otomatis supaya pas di jendela adegan teaser (1–30, kosong = tidak).
+ */
+export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[]; speed?: number };
 
 /** detik mulai VO bawaan dari awal adegan (adegan tanpa `vo.at`) */
 export const VO_AT = 0.15;
@@ -171,6 +174,25 @@ export const VO_AT = 0.15;
  * lalu offset adegan (`scene.vo.at`), lalu bawaan 0,15 dtk. Timeline lama tanpa keduanya tetap 0,15.
  */
 export const voStartOf = (sc: Pick<Scene, "vo"> | null | undefined, line?: Pick<VoLine, "at"> | null): number => line?.at ?? sc?.vo?.at ?? VO_AT;
+/** ekor napas sesudah kata terakhir yang masih dihitung bagian ucapan (detik) */
+export const VO_SPEECH_PAD = 0.12;
+/**
+ * Panjang ucapan asli baris VO (detik dari awal baris): akhir kata terakhir + 0,12 dtk kalau ada timestamp kata, selain itu `dur`
+ * (tidak pernah lebih dari `dur`). File mp3 Edge-TTS membawa hening ±0,5–1 dtk di ujung — hening itu tidak terdengar, jadi boleh
+ * menimpa VO berikutnya / adegan berikutnya. Semua deteksi tabrakan & kelebihan memakai angka ini; audio tetap diputar utuh (`dur`).
+ */
+export function voSpeechEnd(line: Pick<VoLine, "dur" | "words">): number {
+  const d = Math.max(0, Number(line.dur) || 0);
+  let last = 0;
+  for (const w of line.words ?? []) last = Math.max(last, Number(w?.e) || 0);
+  return last > 0 ? Math.min(d, last + VO_SPEECH_PAD) : d;
+}
+/** jeda aman antara akhir ucapan VO dan mulainya VO adegan sesudahnya (detik) */
+export const VO_GAP = 0.1;
+/** percepatan otomatis maksimal (persen) untuk VO adegan teaser yang durasinya dikunci di ketukan musik */
+export const MAX_SPEEDUP = 30;
+/** ekor hening di akhir video (detik) — komposisi StudioVideo = total adegan + ekor ini */
+export const TAIL_SEC = 0.5;
 export type VoTrack = { jobId?: string | null; engine: "chatterbox" | "pocket" | "edge" | "elevenlabs"; temp: boolean; label?: string; lines: VoLine[]; full?: string | null };
 
 export type Timeline = {
@@ -536,7 +558,9 @@ function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
         .filter((w) => w.w)
         .slice(0, 400);
       const sid = str(x.sceneId, 40);
-      const line: VoLine | null = src && sceneAt.has(sid) ? { sceneId: sid, src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR), words } : null;
+      const speed = Math.round(num(x.speed, 0, 0, 100));
+      const line: VoLine | null =
+        src && sceneAt.has(sid) ? { sceneId: sid, src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR), words, ...(speed > 0 ? { speed } : {}) } : null;
       return line;
     })
     .filter((l): l is VoLine => !!l);
@@ -669,8 +693,39 @@ export const toSrt = (cues: { s: number; e: number; text: string }[]) =>
     .map(({ c }, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`)
     .join("\n");
 
+/** detik akhir video = total adegan + ekor hening TAIL_SEC (sama dengan durationInFrames komposisi StudioVideo); audio dipotong di sini */
+export const videoEndSec = (tl: Pick<Timeline, "scenes" | "fps">): number => (totalFrames(tl) + Math.round(TAIL_SEC * tl.fps)) / tl.fps;
+
 /**
- * VO adegan yang masih bunyi saat VO adegan sesudahnya mulai (dua suara bersamaan) — terjadi kalau VO lebih panjang dari
+ * Jendela ucapan VO tiap adegan (detik): dari mulai VO adegan itu sampai mulai VO adegan sesudahnya yang punya teks VO
+ * (kalau tidak ada: akhir video = total adegan + ekor hening), dikurangi jeda aman VO_GAP. `null` = adegan tanpa teks VO.
+ * `voAt(scene)` = detik mulai VO dari awal adegan (bawaan voStartOf; VoPanel memakai offset naskah untuk VO baru).
+ */
+export function voWindows(tl: Pick<Timeline, "scenes" | "fps">, voAt: (s: Scene) => number = (s) => voStartOf(s)): (number | null)[] {
+  const starts = sceneStartSecs(tl);
+  const end = videoEndSec(tl);
+  const at = tl.scenes.map((s, i) => (s.vo?.text ? starts[i] + voAt(s) : null));
+  return at.map((a, i) => {
+    if (a === null) return null;
+    const next = at.slice(i + 1).find((x): x is number => x !== null) ?? end;
+    return Math.max(0, Math.round((next - a - VO_GAP) * 1000) / 1000);
+  });
+}
+
+/**
+ * Persen percepatan Edge-TTS (`rate: "+N%"`) supaya ucapan `speech` detik — diukur pada percepatan `cur` persen — muat di `win` detik:
+ * N = ceil(((1 + cur/100) · speech/win − 1) · 100) + 3 (cadangan 3% karena tempo Edge tidak persis sebanding), maks MAX_SPEEDUP.
+ * 0 = sudah muat (tidak perlu dipercepat). Hasil selalu > `cur` kecuali sudah mentok di MAX_SPEEDUP.
+ */
+export function speedupPct(speech: number, win: number, cur = 0): number {
+  if (!(speech > win + 1e-3)) return 0;
+  if (!(win > 0)) return MAX_SPEEDUP;
+  const n = Math.ceil(((1 + cur / 100) * (speech / win) - 1) * 100 - 1e-9) + 3;
+  return Math.min(MAX_SPEEDUP, Math.max(cur + 1, n));
+}
+
+/**
+ * VO adegan yang ucapannya (voSpeechEnd) masih bunyi saat VO adegan sesudahnya mulai (dua suara bersamaan) — terjadi kalau VO lebih panjang dari
  * adegannya dan adegan itu tidak diperpanjang (adegan premium teaser dikunci di ketukan). Aturan baris yang diputar sama dengan
  * planAudio (baris punya src & adegannya masih punya teks VO). `sec` = lama tumpang tindih (detik), `next` = adegan yang VO-nya
  * pertama kali tertabrak. Dipakai VoPanel (peringatan) & ExportPanel; pemanggil yang mengecek VO dimatikan / tidak.
@@ -681,7 +736,8 @@ export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene:
     const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
     if (!l?.src || !sc.vo?.text) return [];
     const s = starts[i] + voStartOf(sc, l);
-    return [{ i, s, e: s + (l.dur || 0) }];
+    // ucapan asli (bukan panjang file): hening di ujung mp3 boleh menimpa VO berikutnya
+    return [{ i, s, e: s + voSpeechEnd(l) }];
   });
   const out: { scene: number; next: number; sec: number }[] = [];
   for (const a of spans) {
@@ -689,4 +745,22 @@ export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene:
     if (hit) out.push({ scene: a.i, next: hit.i, sec: Math.min(a.e, hit.e) - hit.s });
   }
   return out;
+}
+
+/**
+ * VO yang ucapannya (voSpeechEnd) belum selesai saat video habis (total adegan + ekor hening 0,5 dtk) — planAudio memotong klip
+ * di akhir video, jadi ujung kalimatnya hilang. Biasanya VO adegan terakhir (mis. Outro teaser yang durasinya dikunci) yang tetap
+ * kepanjangan walau sudah dipercepat maks 30%. Aturan baris yang diputar sama dengan voClashes / planAudio. `sec` = detik ucapan
+ * yang terpotong. Dipakai VoPanel & ExportPanel (peringatan merah).
+ */
+export function voCutoffs(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene: number; sec: number }[] {
+  const starts = sceneStartSecs(tl);
+  const end = videoEndSec(tl);
+  return tl.scenes.flatMap((sc, i) => {
+    const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
+    if (!l?.src || !sc.vo?.text) return [];
+    const s = starts[i] + voStartOf(sc, l);
+    const cut = s + voSpeechEnd(l) - Math.max(s, end); // mulai sesudah video habis = seluruh ucapan hilang (planAudio melewatinya)
+    return cut > 1e-3 ? [{ scene: i, sec: Math.round(cut * 1000) / 1000 }] : [];
+  });
 }

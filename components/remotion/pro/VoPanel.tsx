@@ -17,7 +17,26 @@ import {
   type VoiceJob,
   type VoiceJobLine,
 } from "@/lib/studio/client";
-import { MAX_DUR, MAX_TOTAL, sceneStartSecs, VO_AT, voClashes, voStartOf, type EdgeVoice, type Scene, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
+import {
+  MAX_DUR,
+  MAX_SPEEDUP,
+  MAX_TOTAL,
+  sceneStartSecs,
+  speedupPct,
+  VO_AT,
+  voClashes,
+  voCutoffs,
+  voSpeechEnd,
+  voStartOf,
+  voWindows,
+  type EdgeVoice,
+  type Scene,
+  type Timeline,
+  type VoiceMode,
+  type VoLine,
+  type VoTrack,
+  type Word,
+} from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { teaserVoAt } from "@/lib/studio/teaserLock";
 import { isTeaserScene } from "./teaserLock";
@@ -53,31 +72,103 @@ const cleanWords = (w: unknown): Word[] =>
 const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined) =>
   !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
 
-/** detik VO adegan `s` melewati batas aman adegan (mulai + panjang suara + 0,25 dtk − durasi); ≤ 0 = muat */
 /** mulai VO adegan untuk VO BARU: offset adegan; proyek teaser lama (tersimpan sebelum ada vo.at) memakai detik naskah shot-nya */
 const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
-const voOverflow = (s: Scene, l: VoLine) => voStartOf(s, l) + l.dur + TAIL - s.dur;
-/** toleransi ujung adegan untuk "lewat batas" — sama dengan blok VO merah di TimelineEditor (at + dur + 0,05 > dur adegan) */
+/**
+ * detik VO adegan `s` melewati batas aman adegan (mulai + panjang UCAPAN + 0,25 dtk − durasi); ≤ 0 = muat.
+ * Ucapan = voSpeechEnd (kata terakhir + 0,12 dtk): hening di ujung file tidak dihitung.
+ */
+const voOverflow = (s: Scene, l: VoLine) => voStartOf(s, l) + voSpeechEnd(l) + TAIL - s.dur;
+/** toleransi ujung adegan untuk "lewat batas" — sama dengan blok VO merah di TimelineEditor (at + ucapan + 0,05 > dur adegan) */
 const EDGE = 0.05;
-/** detik suara VO selesai sesudah adegan habis (negatif = selesai sebelum adegan habis) */
-const voPast = (s: Scene, l: VoLine) => voStartOf(s, l) + l.dur - s.dur;
+/** detik ucapan VO selesai sesudah adegan habis (negatif = selesai sebelum adegan habis) */
+const voPast = (s: Scene, l: VoLine) => voStartOf(s, l) + voSpeechEnd(l) - s.dur;
+/** jendela ucapan VO baru per adegan teaser (id adegan → detik): sampai VO adegan berikutnya mulai − 0,1 dtk (voWindows) */
+export const teaserWindows = (t: Timeline): Map<string, number> => {
+  const w = voWindows(t, sceneVoAt);
+  return new Map(t.scenes.flatMap((s, i) => (isTeaserScene(s) && w[i] !== null ? [[s.id, w[i] as number] as const] : [])));
+};
+/**
+ * Minta ulang suara Edge lebih cepat sampai ucapannya (voSpeechEnd) muat di `win` detik: rate "+N%" dari speedupPct
+ * (N = ceil((ucapan/jendela − 1)·100) + 3, maks 30%), paling banyak 3× minta ulang. `again(rate)` null = gagal → pakai versi terakhir.
+ * Di 30% masih belum muat → versi 30% dipakai (peringatan tetap muncul dari voClashes / teaserVoFit).
+ */
+export async function speedUpToFit<R extends Pick<VoLine, "dur" | "words">>(first: R, win: number, again: (rate: string) => Promise<R | null>): Promise<{ r: R; speed: number }> {
+  let r = first;
+  let speed = 0;
+  for (let k = 0; k < 3 && speed < MAX_SPEEDUP; k++) {
+    const pct = speedupPct(voSpeechEnd(r), win, speed);
+    if (pct <= speed) break;
+    const r2 = await again(`+${pct}%`);
+    if (!r2) break;
+    r = r2;
+    speed = pct;
+  }
+  return { r, speed };
+}
+
+/** ringkasan VO yang dipercepat otomatis: "3 kalimat dipercepat ±12–25%" + adegan yang sudah mentok 30% tapi masih belum muat */
+export function speedInfo(t: Timeline): { text: string | null; maxed: string[] } {
+  const lines = (t.vo?.lines ?? []).filter((l) => (l.speed ?? 0) > 0 && t.scenes.some((s) => s.id === l.sceneId && s.vo?.text));
+  if (!lines.length) return { text: null, maxed: [] };
+  const pcts = lines.map((l) => l.speed as number);
+  const lo = Math.min(...pcts);
+  const hi = Math.max(...pcts);
+  const w = teaserWindows(t);
+  const maxed = lines
+    .filter((l) => (l.speed ?? 0) >= MAX_SPEEDUP && voSpeechEnd(l) > (w.get(l.sceneId) ?? Infinity) + 1e-3)
+    .map((l) => t.scenes.find((s) => s.id === l.sceneId)?.name ?? "");
+  return { text: `${lines.length} kalimat dipercepat ±${lo === hi ? lo : `${lo}–${hi}`}% supaya pas ketukan musik`, maxed: maxed.filter(Boolean) };
+}
 /** adegan teaser: "lewat" = suara keluar dari adegan (ambang TimelineEditor), "mepet" = muat tapi jeda < 0,25 dtk, "muat" */
 export const teaserVoFit = (s: Scene, l: VoLine): "lewat" | "mepet" | "muat" => {
   const p = voPast(s, l);
   return p + EDGE > 1e-6 ? "lewat" : p + TAIL > 1e-3 ? "mepet" : "muat";
 };
-/** VO yang masih bunyi saat VO adegan berikutnya mulai: id adegan pemilik + label "Reveal → Dashboard (0,9 dtk)" */
+/** VO yang ucapannya masih bunyi saat VO adegan berikutnya mulai: id adegan pemilik + label "Reveal → Dashboard (0,9 dtk)" */
 export type VoClash = { id: string; label: string };
 export const voClashList = (tl: Timeline): VoClash[] =>
   voClashes(tl).map((c) => ({ id: tl.scenes[c.scene].id, label: `${tl.scenes[c.scene].name} → ${tl.scenes[c.next].name} (${fmt(Math.max(0.01, c.sec))} dtk)` }));
+/** VO yang ucapannya belum selesai saat video habis (voCutoffs): id adegan + label "Outro (0,5 dtk)" = detik ucapan yang terpotong */
+export const voCutList = (tl: Timeline): VoClash[] =>
+  voCutoffs(tl).map((c) => ({ id: tl.scenes[c.scene].id, label: `${tl.scenes[c.scene].name} (${fmt(Math.max(0.01, c.sec))} dtk)` }));
+/**
+ * kalimat peringatan VO adegan teaser yang lebih panjang dari adegannya tapi tidak menabrak VO lain & tidak terpotong:
+ * `next` = ujung suaranya nyambung ke awal adegan berikutnya, `tail` = adegan terakhir, ujung suaranya masuk ekor hening akhir video
+ */
+export const overText = (next: string[], tail: string[]): string =>
+  [
+    next.length
+      ? `⚠️ VO lebih panjang dari adegan: ${names(next)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi ujung suaranya nyambung ke awal adegan berikutnya — tidak menabrak VO lain.`
+      : "",
+    tail.length
+      ? `⚠️ VO adegan terakhir lebih panjang dari adegannya: ${names(tail)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi ujung suaranya masuk ke ekor hening di akhir video — tidak terpotong.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+/**
+ * saran untuk VO yang menabrak / terpotong di akhir video: sudah dipercepat (mentok) / suara premium (tidak bisa dipercepat) /
+ * adegan biasa / VO lama (generate ulang)
+ */
+export function clashTip(tl: Timeline, ids: string[], what: "menabrak" | "terpotong" = "menabrak"): string {
+  const lines = (tl.vo?.lines ?? []).filter((l) => ids.includes(l.sceneId));
+  if (lines.some((l) => (l.speed ?? 0) > 0))
+    return `Suaranya sudah dipercepat otomatis (maks ${MAX_SPEEDUP}%) tapi masih belum muat — pendekkan teks VO adegan itu, atau coba suara lain.`;
+  if (tl.vo?.engine === "elevenlabs") return "Suara premium tidak bisa dipercepat otomatis — pendekkan teks VO adegan itu lalu generate ulang.";
+  if (!tl.scenes.some((s) => ids.includes(s.id) && isTeaserScene(s))) return "Pendekkan teks VO adegan itu atau tambah durasi adegannya, lalu generate ulang.";
+  return `Klik "Generate ulang VO": VO adegan teaser dipercepat otomatis (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik. Kalau masih ${what}, pendekkan teks VO adegan itu.`;
+}
 
 /**
- * perpanjang adegan yang VO-nya lebih panjang (at + dur + 0,25), tetap dalam batas 20 dtk/adegan & 180 dtk total.
+ * perpanjang adegan yang ucapan VO-nya lebih panjang (at + ucapan asli + 0,25 — hening di ujung file tidak dihitung), tetap dalam batas
+ * 20 dtk/adegan & 180 dtk total.
  * Adegan premium teaser (layout "teaser") TIDAK pernah diperpanjang: batasnya di grid ketukan 0,6 dtk (beat sync semua
  * adegan sesudahnya), jadi cukup dicatat: `over` (suara keluar dari adegan, ambang sama dengan TimelineEditor), `tight` (muat tapi
- * jeda ke akhir adegan < 0,25 dtk), dan `clash` (masih bunyi saat VO adegan berikutnya mulai → dua suara bersamaan).
+ * jeda ke akhir adegan < 0,25 dtk), `clash` (masih bunyi saat VO adegan berikutnya mulai → dua suara bersamaan), dan `cut`
+ * (ucapan belum selesai saat video habis → ujung kalimat terpotong, mis. Outro teaser yang tetap kepanjangan walau dipercepat 30%).
  */
-export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[] } {
+export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[] } {
   const fps = tl.fps || 30;
   let total = tl.scenes.reduce((a, s) => a + s.dur, 0);
   const grown: string[] = [];
@@ -107,7 +198,7 @@ export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[
   });
   // adegan bergeser -> VO lengkap (.mp3) dari worker tidak sinkron lagi
   const out: Timeline = { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo };
-  return { tl: out, grown, tooLong, over, tight, clash: voClashList(out) };
+  return { tl: out, grown, tooLong, over, tight, clash: voClashList(out), cut: voCutList(out) };
 }
 
 /**
@@ -141,20 +232,32 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const busy = run.s === "start" || run.s === "tts" || run.s === "job";
   // adegan teaser yang VO-nya lewat / mepet batas adegan (tidak diperpanjang — durasi dikunci di ketukan) & VO yang menabrak
   // VO adegan berikutnya -> peringatan tetap terlihat
-  const { overNow, tightNow, clashNow } = useMemo(() => {
+  // VO yang terpotong di akhir video -> peringatan merah tersendiri
+  const { overNow, tightNow, clashNow, clashHint, cutNow, cutHint, fast } = useMemo(() => {
     const clashNow = voClashList(tl);
-    const overNow: string[] = [];
+    const cutNow = voCutList(tl);
+    const overNext: string[] = [];
+    const overTail: string[] = [];
     const tightNow: string[] = [];
-    for (const s of tl.scenes) {
+    tl.scenes.forEach((s, i) => {
       const l = tl.vo?.lines.find((x) => x.sceneId === s.id);
-      if (!l?.src || !s.vo?.text || !isTeaserScene(s)) continue;
+      if (!l?.src || !s.vo?.text || !isTeaserScene(s)) return;
       const f = teaserVoFit(s, l);
       const p = voPast(s, l);
-      if (f === "lewat" && clashNow.some((c) => c.id === s.id)) continue; // sudah masuk peringatan "menabrak"
-      if (f === "lewat") overNow.push(p > 5e-3 ? `${s.name} (+${fmt(p)} dtk)` : `${s.name} (pas di ujung)`);
+      // sudah masuk peringatan "menabrak" / "terpotong"
+      if (f === "lewat" && (clashNow.some((c) => c.id === s.id) || cutNow.some((c) => c.id === s.id))) return;
+      if (f === "lewat") (i === tl.scenes.length - 1 ? overTail : overNext).push(p > 5e-3 ? `${s.name} (+${fmt(p)} dtk)` : `${s.name} (pas di ujung)`);
       else if (f === "mepet") tightNow.push(`${s.name} (sisa ${fmt(Math.max(0, -p))} dtk)`);
-    }
-    return { overNow, tightNow, clashNow: clashNow.map((c) => c.label) };
+    });
+    return {
+      overNow: overText(overNext, overTail),
+      tightNow,
+      clashNow: clashNow.map((c) => c.label),
+      clashHint: clashNow.length ? clashTip(tl, clashNow.map((c) => c.id)) : "",
+      cutNow: cutNow.map((c) => c.label),
+      cutHint: cutNow.length ? clashTip(tl, cutNow.map((c) => c.id), "terpotong") : "",
+      fast: speedInfo(tl),
+    };
   }, [tl]);
   // offset mulai VO per adegan (mis. teaser: waktu target naskah) -> sebutkan contoh yang paling jauh
   const lateVo = voScenes.reduce<Scene | null>((a, s) => (s.vo?.at !== undefined && s.vo.at > (a?.vo?.at ?? VO_AT) + 1e-3 ? s : a), null);
@@ -185,9 +288,16 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const msgs = extra.filter(Boolean);
     if (r.grown.length) msgs.push(`Adegan ${names(r.grown)} diperpanjang otomatis supaya VO-nya muat.`);
     if (r.tooLong.length) msgs.push(`VO adegan ${names(r.tooLong)} masih kepanjangan — pendekkan naskahnya.`);
-    if (r.clash.length) msgs.push(`⛔ VO menabrak VO adegan berikutnya: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan. Durasi adegan teaser dikunci di ketukan musik, jadi pendekkan teks VO adegan itu lalu generate ulang.`);
-    const overOnly = r.tl.scenes.filter((s) => r.over.includes(s.name) && !r.clash.some((c) => c.id === s.id)).map((s) => s.name);
-    if (overOnly.length) msgs.push(`⚠️ VO lebih panjang dari adegan ${names(overOnly)}. Durasi adegan teaser dikunci di ketukan musik (tidak diperpanjang), jadi suaranya nyambung ke adegan berikutnya (tidak menabrak VO lain) — pendekkan teks VO kalau mengganggu.`);
+    if (r.clash.length)
+      msgs.push(`⛔ VO menabrak VO adegan berikutnya: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). ${clashTip(r.tl, r.clash.map((c) => c.id))}`);
+    if (r.cut.length)
+      msgs.push(`⛔ Ujung VO terpotong di akhir video: ${names(r.cut.map((c) => c.label))} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. ${clashTip(r.tl, r.cut.map((c) => c.id), "terpotong")}`);
+    const last = r.tl.scenes.length - 1;
+    const overOnly = r.tl.scenes
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => r.over.includes(s.name) && !r.clash.some((c) => c.id === s.id) && !r.cut.some((c) => c.id === s.id));
+    const overMsg = overText(overOnly.filter((x) => x.i !== last).map((x) => x.s.name), overOnly.filter((x) => x.i === last).map((x) => x.s.name));
+    if (overMsg) msgs.push(overMsg);
     if (r.tight.length) msgs.push(`VO adegan ${names(r.tight)} mepet di ujung adegan (jeda < 0,25 dtk sebelum pindah adegan) — masih muat, tapi napasnya pendek.`);
     const miss = r.tl.scenes.filter((s) => s.vo?.text && !vo.lines.some((l) => l.sceneId === s.id)).length;
     if (miss) msgs.push(`${miss} adegan belum ada suaranya — klik "Generate ulang VO".`);
@@ -204,7 +314,10 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
     const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
     // mulai VO = offset adegan (scene.vo.at) / bawaan — sama dengan `start` yang dikirim ke laptop (VO lengkap .mp3)
-    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words) }));
+    const lines: VoLine[] = ok.map((l) => {
+      const speed = Math.round(Number(l.speed) || 0);
+      return { sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}) };
+    });
     if (!lines.length) {
       setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
       return;
@@ -266,6 +379,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const items = t0.scenes.filter((s) => s.vo?.text);
     if (!items.length) return setRun({ s: "error", msg: NO_SCRIPT });
     const edgeVoice: EdgeVoice = t0.voice.edgeVoice ?? "id-ID-ArdiNeural";
+    // adegan teaser (durasi dikunci di ketukan): jendela ucapan sampai VO adegan berikutnya mulai − 0,1 dtk
+    const wins = teaserWindows(t0);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setNote(null);
@@ -280,8 +395,24 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       while (k < items.length && !ctrl.signal.aborted) {
         const s = items[k++];
         try {
-          const r = await requestTts({ text: s.vo!.text, spell: s.vo!.spell || undefined, engine, voice: edgeVoice }, ctrl.signal);
-          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words });
+          const req = { text: s.vo!.text, spell: s.vo!.spell || undefined, voice: edgeVoice };
+          const first = await requestTts({ ...req, engine }, ctrl.signal);
+          // Edge: ucapan lebih panjang dari jendela adegan teaser → minta ulang lebih cepat (rate "+N%", maks 30%).
+          // Premium (ElevenLabs) tidak punya pengatur tempo → tidak dipercepat. Gagal minta ulang → pakai versi terakhir yang ada.
+          const win = first.engine === "edge" ? wins.get(s.id) : undefined;
+          const { r, speed } =
+            win === undefined
+              ? { r: first, speed: 0 }
+              : await speedUpToFit(first, win, async (rate) => {
+                  try {
+                    const r2 = await requestTts({ ...req, engine: "edge", rate }, ctrl.signal);
+                    return r2.engine === "edge" ? r2 : null;
+                  } catch {
+                    return null;
+                  }
+                });
+          if (ctrl.signal.aborted) return;
+          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}) });
           results.push(r);
         } catch (e) {
           if (ctrl.signal.aborted) return;
@@ -318,9 +449,13 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const t0 = tlRef.current;
     const t: Timeline = { ...t0, voice: { ...t0.voice, mode: "bank", voiceId: voice.id, voiceName: voice.name, exaggeration: exg, cfg } };
     const starts = sceneStartSecs(t);
-    const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) =>
-      s.vo?.text ? [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000 }] : [],
-    );
+    // adegan teaser: `max` = jendela ucapan (detik) → laptop mempercepat suara yang lebih panjang (atempo, maks 1,3×, nada tetap)
+    const wins = teaserWindows(t);
+    const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) => {
+      if (!s.vo?.text) return [];
+      const max = wins.get(s.id);
+      return [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000, ...(max !== undefined ? { max } : {}) }];
+    });
     if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
     onChange(t);
     setNote(null);
@@ -532,14 +667,24 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
             {tl.vo.lines.length}/{voScenes.length || tl.vo.lines.length} adegan bersuara
           </div>
           {tl.vo.engine === "pocket" && <div className="mt-0.5 text-zinc-500">Kredit suara: {POCKET_CREDIT}</div>}
-          {clashNow.length > 0 && (
-            <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-clash role="alert">
-              ⛔ VO menabrak VO adegan berikutnya: {names(clashNow)} — dua suara bunyi bersamaan. Pendekkan teks VO adegan itu lalu generate ulang (durasi adegan teaser dikunci di ketukan musik).
+          {fast.text && (
+            <div className="mt-1.5 rounded-lg bg-sky-500/10 px-2.5 py-2 text-sky-300" data-vo-fast>
+              ⏩ {fast.text}.{fast.maxed.length > 0 && ` ${names(fast.maxed)} sudah dipercepat maksimal ${MAX_SPEEDUP}% tapi masih agak panjang.`}
             </div>
           )}
-          {overNow.length > 0 && (
+          {clashNow.length > 0 && (
+            <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-clash role="alert">
+              ⛔ VO menabrak VO adegan berikutnya: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
+            </div>
+          )}
+          {cutNow.length > 0 && (
+            <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-cut role="alert">
+              ⛔ Ujung VO terpotong di akhir video: {names(cutNow)} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. {cutHint}
+            </div>
+          )}
+          {overNow && (
             <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-over>
-              ⚠️ VO lebih panjang dari adegan: {names(overNow)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik), jadi suaranya nyambung ke adegan berikutnya — pendekkan teks VO.
+              {overNow}
             </div>
           )}
           {tightNow.length > 0 && (

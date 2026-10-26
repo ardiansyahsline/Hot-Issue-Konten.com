@@ -235,6 +235,10 @@ def main() -> int:
     if missing:
         log.error("Isi dulu %s di file voice-worker\\.env (contoh: .env.example). Worker berhenti.", ", ".join(missing))
         return 2
+    bad = config.url_problem(CFG.supabase_url)
+    if bad:
+        log.error("%s Buka: notepad .env — lalu jalankan lagi. Worker berhenti.", bad)
+        return 2
     lock = single_instance(CFG.data / "worker.lock")
     if lock is None:
         log.error("Worker sudah jalan di laptop ini (cek jendela lain / Task Scheduler). Yang ini berhenti.")
