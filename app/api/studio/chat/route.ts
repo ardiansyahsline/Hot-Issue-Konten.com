@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
       loadMusic(supabase, user.id),
       listCatalog(),
       loadHealth(supabase),
-      resolveDirector(wantDirector, charLoader(supabase), content),
+      resolveDirector(wantDirector, charLoader(supabase, user.id), content),
     ]);
     setVisionCatalog(catalog.vision);
     dirName = director.name;
@@ -398,6 +398,9 @@ export async function POST(req: NextRequest) {
       // (nama karakter buatan user ikut nama terbarunya; pilihan yang tidak bisa dipakai tetap disimpan apa adanya)
       if (wantDirector) tl.director = director.custom ? { ...wantDirector, name: director.name } : wantDirector;
       else delete tl.director;
+      // volume campuran juga milik user (rencana pertama: mergeRevision meloloskan hasil AI apa adanya)
+      if (current?.mix) tl.mix = current.mix;
+      else delete tl.mix;
       const patch: Record<string, unknown> = { timeline: tl };
       const title = tl.title && tl.title !== NEW_TITLE ? tl.title.slice(0, 120) : "";
       if (project.title === NEW_TITLE && title) patch.title = title;
@@ -698,16 +701,16 @@ function sfxRows(data: unknown): SfxMeta[] {
 }
 
 /**
- * karakter buatan user + otaknya, dibaca dengan client Supabase milik user (RLS: hanya karakter miliknya sendiri).
- * Tabel belum ada / error / bukan miliknya -> char null (route memakai Harley).
+ * karakter buatan user + otaknya, dibaca dengan client Supabase milik user (RLS: hanya karakter miliknya sendiri) dan
+ * disaring user_id-nya juga (lapis kedua). Tabel belum ada / error / bukan miliknya -> char null (route memakai Harley).
  */
-function charLoader(db: Db): CharLoader {
+function charLoader(db: Db, uid: string): CharLoader {
   return async (id) => {
     if (!UUID.test(id)) return { char: null, memory: [] };
     try {
       const [c, m] = await Promise.all([
-        db.from("ai_characters").select("id, name, mbti, profile").eq("id", id).maybeSingle(),
-        db.from("ai_character_memory").select("id, character_id, kind, title, content, created_at").eq("character_id", id).order("created_at", { ascending: false }).limit(200),
+        db.from("ai_characters").select("id, name, mbti, profile").eq("id", id).eq("user_id", uid).maybeSingle(),
+        db.from("ai_character_memory").select("id, character_id, kind, title, content, created_at").eq("character_id", id).eq("user_id", uid).order("created_at", { ascending: false }).limit(200),
       ]);
       const row = !c.error && c.data ? (c.data as Omit<CustomChar, "avatar">) : null;
       const char: CustomChar | null = row ? { ...row, avatar: { kind: "chibi", hair: 1, skin: "#f5c9a8", hc: "#3b2a1e", prop: "orb" } } : null;

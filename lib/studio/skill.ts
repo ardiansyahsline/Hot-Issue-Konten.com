@@ -291,6 +291,25 @@ const db = (n: number | undefined) => (n === undefined ? "–" : `${n > 0 ? "+" 
 /** label sutradara untuk ringkasan (nama karakter / hero) */
 export const directorText = (d: { hero: string; name?: string } | undefined) => (d ? d.name || (d.hero.startsWith("char:") ? "Karakter buatan" : d.hero) : "Harley");
 
+/** ringkasan singkat isi satu bagian proyek (untuk daftar centang "Simpan sebagai skill"); kosong = bagian tidak ada isinya */
+export function sectionSummary(src: SkillTarget, key: SkillSection, dirName?: string): string {
+  const v = src.voice;
+  if (key === "lexicon") return v?.lexicon?.length ? `${v.lexicon.length} kata` : "";
+  if (key === "voice") {
+    if (!v) return "";
+    const who = v.mode === "bank" ? v.voiceName || "bawaan" : v.mode === "edge" ? EDGE_LABEL[v.edgeVoice ?? "id-ID-ArdiNeural"] : "";
+    const knobs = [v.exaggeration !== undefined ? `ekspresi ${num(v.exaggeration)}` : "", v.cfg !== undefined ? `tempo ${num(v.cfg)}` : "", v.preset ? `preset ${v.preset}` : ""].filter(Boolean);
+    return [VOICE_MODE_LABEL[v.mode], who, ...knobs].filter(Boolean).join(" · ");
+  }
+  if (key === "mix") {
+    const m = src.mix;
+    if (!m || !Object.keys(m).length) return "";
+    return [m.musicDb !== undefined ? `Musik ${db(m.musicDb)}` : "", m.voDb !== undefined ? `VO ${db(m.voDb)}` : "", m.sfxDb !== undefined ? `SFX ${db(m.sfxDb)}` : ""].filter(Boolean).join(" · ");
+  }
+  if (key === "director") return dirName || directorText(src.director);
+  return src.director?.notes?.length ? `${src.director.notes.length} catatan` : "";
+}
+
 /**
  * Pratinjau perubahan per bagian sebelum diterapkan (kalimat awam singkat). `ok` = bagian bisa diterapkan ke proyek ini.
  */
@@ -339,11 +358,21 @@ export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: Appl
   }
   if (sec.director) {
     const same = (target.director?.hero ?? "Harley") === sec.director.hero;
-    out.push({ key: "director", ok: true, lines: [same ? `Tetap ${directorText(sec.director)}.` : `${directorText(target.director)} → ${directorText(sec.director)}`] });
+    const lines = [same ? `Tetap ${directorText(sec.director)}.` : `${directorText(target.director)} → ${directorText(sec.director)}`];
+    if (!same && sec.director.hero.startsWith("char:")) lines.push("Karakter buatan hanya bisa dipakai pemiliknya — selain itu tetap Harley.");
+    out.push({ key: "director", ok: true, lines });
   }
   if (sec.notes) {
-    const { added } = mergeNotes(target.director?.notes, sec.notes);
-    out.push({ key: "notes", ok: true, lines: [added ? `${added} catatan baru ditambahkan.` : "Semua catatan sudah ada."] });
+    const cur = normNotes(target.director?.notes ?? []);
+    const have = new Set(cur.map((n) => n.toLowerCase()));
+    // isi catatan ditampilkan sebelum diterapkan (skill orang lain bisa membawa catatan bernada perintah)
+    const extra = normNotes(sec.notes).filter((n) => !have.has(n.toLowerCase()));
+    const lines = [extra.length ? `${extra.length} catatan baru ditambahkan:` : "Semua catatan sudah ada."];
+    for (const n of extra.slice(0, 5)) lines.push(`• ${n.length > 80 ? `${n.slice(0, 80).trimEnd()}…` : n}`);
+    if (extra.length > 5) lines.push(`…dan ${extra.length - 5} lagi.`);
+    const drop = cur.length + extra.length - DIRECTOR_NOTES_MAX;
+    if (drop > 0) lines.push(`${drop} catatan lama dibuang (maks ${DIRECTOR_NOTES_MAX}).`);
+    out.push({ key: "notes", ok: true, lines });
   }
   return out;
 }

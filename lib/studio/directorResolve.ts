@@ -2,7 +2,7 @@
  * Sutradara yang dipakai route chat Studio (SERVER — mengimpor prompt karakter hasil training yang besar; jangan diimpor dari browser).
  *
  * Pilihan user (timeline.director / body.director) diperiksa dulu:
- *  - hero bawaan yang dikenal (HERO_NAMES di lib/aiPersona.ts) → personaPrompt(hero)
+ *  - hero bawaan yang dikenal (HERO_NAMES di lib/aiPersona.ts) → personaPrompt(hero, { builtinOnly: true })
  *  - karakter buatan user "char:<uuid>" yang BISA DIBACA user ini (loader memakai client Supabase milik user → RLS) →
  *    charPrompt(c) + otak karakter (brainText, maks ±6.000 huruf)
  *  - selain itu (karakter dihapus / bukan miliknya / nama asing / error) → diam-diam Harley + catatan singkat untuk UI
@@ -49,7 +49,8 @@ const builtin = (hero: string, notes: string[], fallback: string | null): Resolv
   hero,
   name: hero,
   custom: false,
-  persona: personaPrompt(hero),
+  // builtinOnly: registry karakter buatan di server bisa berisi karakter user lain bernama sama → jangan dipakai
+  persona: personaPrompt(hero, { builtinOnly: true }),
   extra: notesBlock(notes),
   fallback,
 });
