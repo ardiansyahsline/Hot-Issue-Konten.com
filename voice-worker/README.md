@@ -5,8 +5,8 @@ Program kecil yang jalan terus di **laptop Windows** dan mengerjakan pekerjaan b
 
 | Pekerjaan | Hasilnya |
 |---|---|
-| **Suara VO** (bank suara) | Naskah dibacakan dengan suara dari bank suara (mis. *Alif - Energik*). Tiap kalimat dibuat 2 versi lalu dipilih yang paling jelas. Hasil: file suara per adegan + VO lengkap (.mp3) + subtitle (.srt). Di adegan teaser (durasi dikunci di ketukan musik), kalimat yang kepanjangan otomatis dipercepat maksimal 30% tanpa mengubah nada suara. |
-| **Bersihkan rekaman** | Rekaman bank suara dibersihkan dari bising, dipotong otomatis 8–10 detik terbaik, volume disamakan, diberi nilai kualitas + saran. |
+| **Suara VO** (bank suara) | Naskah dibacakan dengan suara dari bank suara (mis. *Alif - Energik*). Tiap baris dibaca **satu tarikan** (intonasi utuh, tidak dipotong per kalimat), dibuat beberapa versi (bawaan 3 bila website tidak menentukan) lalu dipilih yang paling jelas **dan** paling natural (nada naik-turun, tidak datar). Jeda diisi suara ruangan asli, bukan hening mati. Hasil: file suara per adegan + VO lengkap (.mp3) + subtitle (.srt). Di adegan teaser (durasi dikunci di ketukan musik), kalimat yang kepanjangan dibuat ulang dengan tempo bicara lebih cepat dulu; sisanya baru dipercepat (maks 30%) tanpa mengubah nada. |
+| **Bersihkan rekaman** | Rekaman bank suara dibersihkan dari bising (makin bersih rekamannya, makin ringan pembersihannya), dipotong otomatis ±10 detik yang **paling hidup** (nada naik-turun), volume disamakan, diberi nilai kualitas + saran. |
 | **Ketukan musik** | BPM & ketukan musik dideteksi supaya potongan video jatuh pas di ketukan. |
 | **Render MP4** | Video dirender di laptop (alternatif gratis selain render di browser), volume akhir -14 LUFS. |
 
@@ -164,11 +164,13 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | VRAM ingin dilepas saat menganggur | Isi `IDLE_UNLOAD_MIN=30` (model dilepas setelah 30 menit tanpa tugas, dimuat lagi saat ada tugas). |
 | Render gagal | Pastikan Node.js 20 terpasang lalu `install.ps1` lagi. Render pertama mengunduh Chrome khusus render (±100 MB). Kalau unduhan itu diblokir jaringan, unduh *chrome-headless-shell* (Chrome for Testing) sendiri lalu isi path-nya di `REMOTION_BROWSER` (`.env`). |
 | Upload video gagal (file besar) | Paket gratis Supabase membatasi ukuran file (±50 MB). Render video lebih pendek atau naikkan batas di Supabase. |
+| `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada. Biasanya karena unduhan pertama (±410 MB dari GitHub) gagal / tanpa internet. Coba lagi dengan menyalakan ulang worker, atau matikan dengan `NATURAL_MOS=0`. |
 | `Worker sudah jalan` | Sudah ada worker lain (mis. dari nyala otomatis). Cukup satu. |
 
 **Tes tanpa GPU / model** (memastikan pemasangan benar):
 ```powershell
 .venv\Scripts\python selftest.py
+.venv\Scripts\python selftest_natural.py
 ```
 
 ---
@@ -181,15 +183,26 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `jalankan.bat` / `pasang-otomatis.ps1` | Menjalankan manual / otomatis lewat Task Scheduler |
 | `install.ps1`, `requirements.txt`, `requirements-gpu.txt` | Pemasang (urutan paket penting — pakai `install.ps1`) |
 | `cek_gpu.py` | Cek GPU + tes suara |
-| `selftest.py` | Tes mandiri tanpa GPU/model |
+| `selftest.py`, `selftest_natural.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo) |
 | `tambah_sfx.py`, `freesound_cc0.py` | Tambah SFX |
-| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
+| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
 | `bank-suara/` | Rekaman referensi suara Alif (jangan diubah) |
 | `data/` | Dibuat otomatis: log, cache suara, model, file sementara (tidak masuk Git) |
 
 ## Pengaturan `.env` lain
-Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per kalimat, 1–4),
-`WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`.
+Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris bila website tidak menentukan,
+1–4, bawaan 3; `.env` lama berisi `TAKES=2` → ganti ke 3 supaya lebih natural, atau 1–2 kalau laptop lambat), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
+berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`.
+
+---
+
+## Supaya suara tidak kedengeran AI
+Panduan lengkap: [`docs/suara-natural.md`](../docs/suara-natural.md). Ringkasnya:
+- **Rekaman referensi menentukan gaya bicara.** Chatterbox meniru cara bicara di rekaman, termasuk datarnya. Rekam 10–20 detik
+  dengan gaya yang SAMA dengan videonya (ngobrol / semangat), nada naik-turun, di ruangan sepi, mulut ±15–20 cm dari mic.
+- Worker memilih potongan rekaman yang paling hidup, membaca tiap baris satu tarikan, membuat beberapa versi (bawaan 3), lalu memilih yang paling jelas
+  dan paling natural (**skor kealamian**: nada tidak datar + perkiraan MOS 1–5 dari UTMOS).
+- Skor kealamian bisa dimatikan: isi `NATURAL_MOS=0` di `.env` lalu jalankan ulang worker. Suara tetap dibuat, dipilih dari kejelasan + nada.
 
 ---
 

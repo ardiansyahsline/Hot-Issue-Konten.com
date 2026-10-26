@@ -148,6 +148,13 @@ class Engines:
                 except Exception:
                     pass
                 log.info("Mesin %s dilepas dari memori.", n)
+            if name is None:  # lepas semua (menganggur) → penilai kealamian UTMOS ikut dilepas, dimuat lagi saat dibutuhkan
+                try:
+                    from .. import natural
+
+                    natural.unload()
+                except Exception:
+                    pass
             gc.collect()
             try:
                 import torch
