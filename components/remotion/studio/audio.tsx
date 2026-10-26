@@ -12,23 +12,62 @@
  * - Musik berhenti tepat di ketukan terakhir (ekor pendek) lalu hening ±0,3–0,5 dtk sebelum video habis.
  * - Limiter dihitung di muka: selubung puncak tiap SFX per frame (lib/studio/sfxEnv) dijumlah bersama musik & VO;
  *   kalau melewati -1,5 dBFS, musik & SFX diturunkan sebentar (VO tidak) — renderer browser tidak punya limiter.
+ * - Mixer (tl.mix, scene.gain, scene.vo.gainDb — lihat usesMixer): rencana tanpa mixer dihitung dulu (persis cara lama), lalu
+ *   volume dikalikan SESUDAH limiter: musik (file & trailer bed) ikut campuran + adegan, VO per kalimat, SFX per adegan — jadi
+ *   menurunkan musik saat VO bicara tetap terdengar turun (limiter tidak menaikkannya lagi). Pengaman puncak bus terakhir: kalau
+ *   yang dinaikkan membuat perkiraan puncak lewat -2 dBFS — atau di bagian yang tanpa mixer pun sudah sekeras itu (limiter lama
+ *   hanya bisa menurunkan musik & SFX maks -12 dB) ada jalur yang dinaikkan — SEMUA jalur (VO juga) diturunkan bersama sebentar
+ *   (busGuard). Jadi mixer tidak membuat puncak lebih tinggi dari tanpa mixer, dan mengubah sedikit satu jalur tidak menurunkan VO
+ *   di bagian lain.
+ *   VO yang sudah dekat puncak tidak bisa lebih keras: yang lain ikut turun (keterangan di editor, voGuardDb).
+ *   Mixer tidak dipakai → hasilnya persis sama dengan sebelum ada mixer.
+ * - Offset musik (tl.music.offset, detik lagu yang dilewati) = trimBefore file musik; ketukan ikut digeser (musicFileBeats).
  */
 import { Audio } from "@remotion/media";
 import { useMemo } from "react";
 import { Sequence, useVideoConfig } from "remotion";
 import { SFX_BUILTIN, sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, dbToGain, DUCK_DB, isLoudSfx, MUSIC_LEVEL_DB, sceneStarts, secToFrames, sfxGain, TARGET_LUFS, totalFrames, voStartOf, type MusicLevel, type Timeline, type VoTrack } from "@/lib/studio/timeline";
+import {
+  beatGrid,
+  dbOf,
+  dbToGain,
+  DUCK_DB,
+  isLoudSfx,
+  musicFileBeats,
+  musicOffsetOf,
+  MUSIC_LEVEL_DB,
+  sceneStarts,
+  secToFrames,
+  sfxDbOf,
+  sfxGain,
+  TARGET_LUFS,
+  totalFrames,
+  usesMixer,
+  voDbOf,
+  voStartOf,
+  type MusicLevel,
+  type Timeline,
+  type VoTrack,
+} from "@/lib/studio/timeline";
 import { SFX_ENV_FPS, sfxEnv } from "@/lib/studio/sfxEnv";
 import { sfxSrc } from "@/lib/studio/urls";
 import { clamp, clamp01, useSrc } from "./theme";
 
 export type AudioMode = "all" | "vo" | "novo";
 
-type Clip = { key: string; src: string; from: number; trim: number; dur: number; vol: number; gate: boolean; name: string };
-/** loopFrames = panjang potongan yang diulang (kosong = seluruh file) */
-type Loop = { key: string; src: string; vol: Float32Array; end: number; name: string; loopFrames?: number };
-/** `gate` = selubung akhir per frame (1 → 0 setelah ketukan terakhir), `stop` = frame semua musik & SFX berhenti */
-export type AudioPlan = { clips: Clip[]; loops: Loop[]; gate: Float32Array; stop: number };
+/**
+ * `bus: "vo"` = klip VO (volumenya ikut `AudioPlan.vo` kalau ada). `tag` = catatan untuk mixer & perkiraan puncak (tidak dipakai
+ * pemutar): adegan pemilik klip, id SFX, frame pukulan, aksen trailer bed (ikut volume musik).
+ */
+type Clip = { key: string; src: string; from: number; trim: number; dur: number; vol: number; gate: boolean; name: string; bus?: "vo"; tag?: ClipTag };
+type ClipTag = { scene?: string; sfx?: string; hit?: number; bed?: boolean };
+/** loopFrames = panjang potongan yang diulang (kosong = seluruh file); trim = frame awal file yang dilewati (offset musik) */
+type Loop = { key: string; src: string; vol: Float32Array; end: number; name: string; loopFrames?: number; trim?: number };
+/**
+ * `gate` = selubung akhir per frame (1 → 0 setelah ketukan terakhir), `stop` = frame semua musik & SFX berhenti.
+ * `vo` = pengali volume VO per frame dari pengaman puncak bus (hanya kalau mixer dipakai; kosong = VO tetap).
+ */
+export type AudioPlan = { clips: Clip[]; loops: Loop[]; gate: Float32Array; stop: number; vo?: Float32Array };
 
 /** perkiraan loudness asli VO per mesin (LUFS) — worker bank suara sudah menormalkan ke -16 */
 const VO_LUFS: Record<VoTrack["engine"], number> = { chatterbox: -16, pocket: -16, edge: -18, elevenlabs: -17 };
@@ -42,6 +81,8 @@ const CEIL = dbToGain(-1);
 const TRACK_PEAK = dbToGain(-1);
 /** batas limiter (sisakan ruang untuk encoder AAC/MP3 & puncak antar-sampel) */
 const LIM_CEIL = dbToGain(-1.2);
+/** plafon bagian yang dinaikkan mixer (cadangan 0,8 dB di bawah LIM_CEIL, lihat busGuard) */
+const MIX_CEIL = dbToGain(-2);
 /** penurunan maksimal limiter */
 const LIM_FLOOR = dbToGain(-12);
 /** penyesuaian akhir musik & SFX supaya mix mendekati -14 LUFS (VO tetap); puncaknya tetap dijaga limiter di bawah */
@@ -83,6 +124,43 @@ function smooth(a: Float32Array, r: number): Float32Array {
 
 const at = (a: Float32Array, f: number) => (a.length ? a[Math.max(0, Math.min(a.length - 1, Math.floor(f)))] : 1);
 
+/** gain limiter per frame dari gain mentah: lihat-depan 2 frame (turun sebelum pukulan), lepas pelan ±0,3 dtk. Selalu ≤ gain mentah */
+function follow(raw: Float32Array, fps: number): Float32Array {
+  const N = raw.length;
+  const out = new Float32Array(N);
+  const relStep = 1 / Math.max(1, Math.round(0.3 * fps));
+  let g = 1;
+  for (let f = 0; f < N; f++) {
+    let want = raw[f];
+    for (let k = 1; k <= 2 && f + k < N; k++) want = Math.min(want, raw[f + k]);
+    g = want < g ? want : Math.min(want, g + relStep * (1 - g) + relStep * 0.02);
+    out[f] = g;
+  }
+  return out;
+}
+
+/**
+ * pengaman puncak bus (mixer): gain per frame untuk SEMUA jalur (lihat-depan & lepas pelan seperti limiter).
+ * `base` = perkiraan puncak timeline yang sama TANPA mixer, `gmax` = kenaikan volume terbesar (× terhadap tanpa mixer) di antara
+ * jalur yang bunyi di frame itu.
+ * - Frame yang tanpa mixer di bawah MIX_CEIL: boleh naik sampai MIX_CEIL (perkiraan).
+ * - Frame yang tanpa mixer sudah di atasnya ("panas"): tidak ada jalur yang boleh lebih keras dari tanpa mixer (semua dibagi
+ *   `gmax`) — yang dinaikkan tetap menonjol karena yang lain ikut turun. Tidak bergantung ketepatan perkiraan selubung puncak
+ *   (terukur bisa meleset ±0,5 dB dari true peak di render CLI), jadi puncak tidak lebih tinggi dari tanpa mixer.
+ * Mengubah sedikit satu jalur → efeknya juga sedikit (tidak ada lompatan); menurunkan saja → pengaman diam.
+ */
+function busGuard(peak: Float32Array, fps: number, base: Float32Array | null, gmax?: Float32Array): Float32Array {
+  const raw = new Float32Array(peak.length);
+  for (let f = 0; f < peak.length; f++) {
+    const b = base ? (base[f] ?? 0) : 0;
+    if (base && b >= MIX_CEIL) {
+      const g = gmax?.[f] ?? 1;
+      raw[f] = Math.min(1, g > 1 ? 1 / g : 1, peak[f] > b ? b / peak[f] : 1);
+    } else raw[f] = peak[f] > MIX_CEIL ? MIX_CEIL / peak[f] : 1;
+  }
+  return follow(raw, fps);
+}
+
 /**
  * Akhir musik: ketukan terakhir dekat akhir isi video tetap terdengar penuh, lalu meluruh (cosinus)
  * sampai ±0,4 dtk sebelum video habis (minimal hening 0,3 dtk). Tanpa ketukan: fade 0,35 dtk di akhir isi.
@@ -117,12 +195,121 @@ export function musicBeats(tl: Timeline, untilSec: number): number[] {
   const src = tl.music?.src ?? "bed";
   if (src === "none") return [];
   if (src === "bed") return beatGrid(BED_BPM, 0, untilSec);
-  if (tl.music?.beats?.length) return tl.music.beats;
-  return tl.music?.bpm ? beatGrid(tl.music.bpm, tl.music.offset ?? 0, untilSec) : [];
+  // file musik: ketukan lagu digeser offset (lagu mulai dari detik ke-offset)
+  return tl.music ? musicFileBeats(tl.music, untilSec, 1) : [];
 }
 
-/** susun semua klip audio + kurva volume per frame (dipanggil sekali per perubahan timeline) */
+/**
+ * susun semua klip audio + kurva volume per frame (dipanggil sekali per perubahan timeline).
+ * Mixer tidak dipakai → persis cara hitung lama (planCore). Dipakai → rencana tanpa mixer dihitung dulu, lalu volume mixer
+ * dikalikan SESUDAH limiter (applyMixer): menurunkan musik / SFX benar-benar terdengar turun walau limiter sedang bekerja
+ * (kalau dikalikan sebelum limiter, limiter menaikkannya lagi), dan yang dinaikkan dijaga pengaman puncak bus.
+ */
 export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: number, N: number): AudioPlan {
+  if (!usesMixer(tl)) return planCore(tl, mode, extra, fps, N).plan;
+  return applyMixer(tl, planCore(withoutMixer(tl), mode, extra, fps, N), extra, fps, N);
+}
+
+/** timeline yang sama tanpa volume mixer (campuran, adegan, kalimat) — rencana dasar mixer */
+function withoutMixer(tl: Timeline): Timeline {
+  const scenes = tl.scenes.map((s) => {
+    const { gain: _g, ...rest } = s;
+    if (!rest.vo || rest.vo.gainDb === undefined) return rest;
+    const { gainDb: _v, ...vo } = rest.vo;
+    return { ...rest, vo };
+  });
+  const { mix: _m, ...out } = tl;
+  return { ...out, scenes };
+}
+
+/** perkiraan puncak gabungan per frame dari rencana jadi: VO (`voPk`) + musik & SFX (p-norm selubung puncak, sama dengan limiter) */
+function estimatePeak(p: AudioPlan, extra: SfxMeta[], fps: number, N: number, voPk: Float32Array): Float32Array {
+  const rest = new Float64Array(N);
+  const add = (env: Float32Array | null, tpLin: number, vol: (f: number) => number, from: number, len: number, offset: number, loop: boolean, loopLen?: number) => {
+    const cycle = env ? Math.max(1, Math.min(env.length, loopLen ?? env.length)) : 1;
+    for (let k = 0; k < len; k++) {
+      const f = from + k;
+      if (f >= N) break;
+      const idx = offset + k;
+      const pk = env ? (loop ? env[idx % cycle] : env[idx] ?? 0) : tpLin;
+      const a = pk * vol(f);
+      if (a > 0) rest[f] += Math.pow(a, PNORM);
+    }
+  };
+  for (const c of p.clips) {
+    if (c.bus === "vo") continue;
+    const meta = c.tag?.sfx ? sfxById(c.tag.sfx, extra) : undefined;
+    add(meta ? sfxEnv(meta.id) : null, meta ? dbToGain(meta.tp) : TRACK_PEAK, (f) => c.vol * (c.gate ? at(p.gate, f) : 1), c.from, c.dur, c.trim, false);
+  }
+  for (const l of p.loops) {
+    const id = l.key.startsWith("bed-") ? l.key.slice(4) : "";
+    const env = id ? sfxEnv(id) : null;
+    add(env, TRACK_PEAK, (f) => l.vol[f], 0, Math.min(N, l.end), 0, true, l.loopFrames ? Math.round((l.loopFrames * SFX_ENV_FPS) / fps) : undefined);
+  }
+  const out = new Float32Array(N);
+  for (let f = 0; f < N; f++) out[f] = voPk[f] + Math.pow(rest[f], 1 / PNORM);
+  return out;
+}
+
+/**
+ * Volume mixer di atas rencana tanpa mixer: musik (file & trailer bed: loop + aksen) × campuran + adegan (dihaluskan ±0,15 dtk),
+ * SFX × campuran + adegan pemiliknya (di luar `cue.gain`, sudah di rencana dasar), VO × campuran + adegan + kalimat.
+ * Lalu pengaman puncak bus (busGuard): bagian yang jadi lebih keras dari plafon / dari tanpa mixer diturunkan bersama.
+ */
+function applyMixer(tl: Timeline, base: { plan: AudioPlan; voPk: Float32Array }, extra: SfxMeta[], fps: number, N: number): AudioPlan {
+  const b = base.plan;
+  const scenes = tl.scenes;
+  const byId = new Map(scenes.map((s) => [s.id, s] as const));
+  const starts = sceneStarts({ scenes, fps });
+  const content = totalFrames({ scenes, fps });
+  const sceneAt = new Int16Array(N);
+  scenes.forEach((s, i) => sceneAt.fill(i, Math.min(N, starts[i]), Math.min(N, starts[i] + secToFrames(s.dur, fps))));
+  if (content < N) sceneAt.fill(scenes.length - 1, content, N);
+  const md = dbOf(tl.mix?.musicDb);
+  const mRaw = new Float32Array(N);
+  for (let f = 0; f < N; f++) mRaw[f] = md + dbOf(scenes[sceneAt[f]]?.gain?.musicDb);
+  const mDb = smooth(mRaw, Math.round(0.15 * fps));
+  const mG = (f: number) => dbToGain(at(mDb, f));
+
+  const clips = b.clips.map((c) => {
+    if (c.bus === "vo") {
+      const sc = c.tag?.scene ? byId.get(c.tag.scene) : undefined;
+      return sc ? { ...c, vol: c.vol * dbToGain(voDbOf(tl, sc)) } : c;
+    }
+    if (c.tag?.bed) return { ...c, vol: c.vol * mG(c.tag.hit ?? c.from) };
+    const sc = c.tag?.scene ? byId.get(c.tag.scene) : undefined;
+    return sc ? { ...c, vol: c.vol * dbToGain(sfxDbOf(tl, sc)) } : c;
+  });
+  const loops = b.loops.map((l) => ({ ...l, vol: l.vol.map((v, f) => v * mG(f)) }));
+  const gate = b.gate.slice();
+  const voPk = new Float32Array(N);
+  for (const c of clips) {
+    if (c.bus !== "vo") continue;
+    for (let f = c.from; f < Math.min(N, c.from + c.dur); f++) voPk[f] = Math.max(voPk[f], VO_PEAK * c.vol);
+  }
+  // kenaikan volume terbesar per frame di antara jalur yang bunyi (× terhadap tanpa mixer)
+  const gmax = new Float32Array(N);
+  clips.forEach((c, i) => {
+    const v0 = b.clips[i].vol;
+    if (!(v0 > 0)) return;
+    const g = c.vol / v0;
+    for (let f = c.from; f < Math.min(N, c.from + c.dur); f++) if (g > gmax[f]) gmax[f] = g;
+  });
+  b.loops.forEach((l) => {
+    for (let f = 0; f < Math.min(N, l.end); f++) if (l.vol[f] > 0 && mG(f) > gmax[f]) gmax[f] = mG(f);
+  });
+  const plan: AudioPlan = { clips, loops, gate, stop: b.stop };
+  const bus = busGuard(estimatePeak(plan, extra, fps, N, voPk), fps, estimatePeak(b, extra, fps, N, base.voPk), gmax);
+  for (let f = 0; f < gate.length; f++) gate[f] *= bus[f];
+  for (const l of loops) for (let f = 0; f < N; f++) l.vol[f] *= bus[f];
+  return { ...plan, vo: bus };
+}
+
+/**
+ * Rencana audio TANPA mixer (cara hitung lama, persis): klip, kurva volume per frame, limiter yang dihitung di muka. `voPk` =
+ * perkiraan puncak VO per frame yang dipakai limiter (patokan pengaman bus mixer).
+ */
+function planCore(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: number, N: number): { plan: AudioPlan; voPk: Float32Array } {
   const scenes = tl.scenes;
   const starts = sceneStarts({ scenes, fps });
   const durs = scenes.map((s) => secToFrames(s.dur, fps));
@@ -144,11 +331,14 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       const from = starts[i] + Math.round(voStartOf(scenes[i], line) * fps);
       if (from >= N) continue;
       const dur = Math.max(1, Math.min(N - from, Math.ceil((line.dur || 1) * fps) + 2));
-      clips.push({ key: `vo-${line.sceneId}`, src: line.src, from, trim: 0, dur, vol: g, gate: false, name: `VO · ${scenes[i].name}` });
+      clips.push({ key: `vo-${line.sceneId}`, src: line.src, from, trim: 0, dur, vol: g, gate: false, name: `VO · ${scenes[i].name}`, bus: "vo", tag: { scene: line.sceneId } });
       for (let f = from; f < from + dur; f++) speak[f] = 1;
     }
   }
-  if (mode === "vo") return { clips, loops, gate: new Float32Array(0), stop: N };
+  const voPk = new Float32Array(N);
+  const vg = useVo && tl.vo ? voGain(tl.vo.engine) : 0;
+  for (let f = 0; f < N; f++) voPk[f] = speak[f] ? VO_PEAK * vg : 0;
+  if (mode === "vo") return { plan: { clips, loops, gate: new Float32Array(0), stop: N }, voPk };
 
   // ---------- ducking: selubung 0..1 (attack ±0,12 dtk dengan lihat-depan, release ±0,35 dtk) ----------
   const att = Math.max(1, Math.round(0.12 * fps));
@@ -184,7 +374,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
   // ---------- SFX ----------
   type Ev = { clip: Clip; t: number; loud: boolean; id: string; cat: string; pk: number; tp: number };
   /** klip SFX yang pukulannya (`hit`) jatuh tepat di detik `hitSec` */
-  const mkEv = (key: string, m: SfxMeta, s: string, hitSec: number, vol: number, name: string): Ev | null => {
+  const mkEv = (key: string, m: SfxMeta, s: string, hitSec: number, vol: number, name: string, tag: ClipTag): Ev | null => {
     let from = Math.round((hitSec - m.hit) * fps);
     let trim = 0;
     if (from < 0) {
@@ -194,7 +384,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
     const dur = Math.min(Math.ceil(m.dur * fps) - trim, stop - from);
     if (dur <= 0 || from >= stop) return null;
     const pkIn = Math.round(m.peak * fps);
-    return { clip: { key, src: s, from, trim, dur, vol, gate: true, name }, t: hitSec, loud: isLoudSfx(m), id: m.id, cat: m.cat, pk: from + Math.max(0, pkIn - trim), tp: dbToGain(m.tp) };
+    return { clip: { key, src: s, from, trim, dur, vol, gate: true, name, tag: { ...tag, sfx: m.id, hit: toF(hitSec) } }, t: hitSec, loud: isLoudSfx(m), id: m.id, cat: m.cat, pk: from + Math.max(0, pkIn - trim), tp: dbToGain(m.tp) };
   };
 
   const userEv: Ev[] = [];
@@ -207,7 +397,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       const hit = starts[i] / fps + (cue.at ?? 0);
       // VO selalu paling jelas: SFX keras yang jatuh saat VO bicara turun 3 dB
       const vol = sfxGain(m, cue.gain ?? 0) * (isLoudSfx(m) && duck[toF(hit)] > 0.5 ? dbToGain(-3) : 1);
-      const ev = mkEv(`sfx-${sc.id}-${k}-${m.id}`, m, s, hit, vol, `SFX · ${m.id}`);
+      const ev = mkEv(`sfx-${sc.id}-${k}-${m.id}`, m, s, hit, vol, `SFX · ${m.id}`, { scene: sc.id });
       if (ev) userEv.push(ev);
     });
   });
@@ -223,7 +413,9 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       vol[f] = dbToGain(baseDb + lvl[f] + DUCK_DB * duck[f]) * fadeIn(f) * gate[f];
       musicPeak[f] = vol[f] * TRACK_PEAK;
     }
-    loops.push({ key: "music", src, vol, end: stop, name: `Musik · ${tl.music.name ?? "latar"}` });
+    // offset musik: lagu mulai dari detik ke-offset (trimBefore)
+    const trim = Math.round(musicOffsetOf(tl.music) * fps);
+    loops.push({ key: "music", src, vol, end: stop, name: `Musik · ${tl.music.name ?? "latar"}`, ...(trim > 0 ? { trim } : {}) });
   } else if (src === "bed") {
     trailerBed();
   }
@@ -264,7 +456,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       // jangan dobel dengan SFX pilihan user (id sama ±1 dtk atau kategori sama ±0,5 dtk)
       if (userEv.some((e) => (e.id === id && Math.abs(e.t - hitSec) < 1) || (e.cat === m.cat && Math.abs(e.t - hitSec) < 0.5))) return;
       const vol = sfxGain(m, extraDb) * dbToGain(DUCK_DB * 0.5 * duck[toF(hitSec)]);
-      const ev = mkEv(`bed-${id}-${toF(hitSec)}`, m, s, hitSec, vol, `Musik cadangan · ${id}`);
+      const ev = mkEv(`bed-${id}-${toF(hitSec)}`, m, s, hitSec, vol, `Musik cadangan · ${id}`, { bed: true });
       if (ev) bedEv.push(ev);
     };
     const startSec = (i: number) => starts[i] / fps;
@@ -305,9 +497,6 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
 
   // ---------- limiter dihitung di muka ----------
   const rest = new Float64Array(N); // Σ puncak^p musik + SFX
-  const voPk = new Float32Array(N);
-  const vg = useVo && tl.vo ? voGain(tl.vo.engine) : 0;
-  for (let f = 0; f < N; f++) voPk[f] = speak[f] ? VO_PEAK * vg : 0;
   const addEnv = (env: Float32Array | null, tpLin: number, vol: (f: number) => number, from: number, len: number, offset: number, loop: boolean, loopLen?: number) => {
     const cycle = env ? Math.max(1, Math.min(env.length, loopLen ?? env.length)) : 1;
     for (let k = 0; k < len; k++) {
@@ -336,19 +525,26 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
     raw[f] = r <= 0 ? 1 : clamp((LIM_CEIL - voPk[f]) / r, LIM_FLOOR, 1);
   }
   // lihat-depan 2 frame (turun sebelum pukulan), lepas pelan ±0,3 dtk
-  const lim = new Float32Array(N);
-  const relStep = 1 / Math.max(1, Math.round(0.3 * fps));
-  let g = 1;
-  for (let f = 0; f < N; f++) {
-    let want = raw[f];
-    for (let k = 1; k <= 2 && f + k < N; k++) want = Math.min(want, raw[f + k]);
-    g = want < g ? want : Math.min(want, g + relStep * (1 - g) + relStep * 0.02);
-    lim[f] = g;
-  }
+  const lim = follow(raw, fps);
   for (let f = 0; f < N; f++) gate[f] *= lim[f];
   for (const l of loops) for (let f = 0; f < N; f++) l.vol[f] *= lim[f];
   clips.push(...sfxClips);
-  return { clips, loops, gate, stop };
+  return { plan: { clips, loops, gate, stop }, voPk };
+}
+
+/**
+ * Seberapa keras pengaman puncak bus menahan VO (dB ≤ 0) — untuk keterangan di mixer: VO yang sudah hampir puncak tidak bisa
+ * lebih keras lagi, yang terjadi musik & SFX ikut turun saat VO itu bicara. `sceneId` kosong = seluruh VO. 0 = tidak ditahan.
+ */
+export function voGuardDb(plan: AudioPlan, sceneId?: string): number {
+  const g = plan.vo;
+  if (!g?.length) return 0;
+  let m = 1;
+  for (const c of plan.clips) {
+    if (c.bus !== "vo" || (sceneId && c.tag?.scene !== sceneId)) continue;
+    for (let f = c.from; f < Math.min(g.length, c.from + c.dur); f++) m = Math.min(m, g[f]);
+  }
+  return m < 1 ? Math.round(20 * Math.log10(Math.max(1e-6, m)) * 10) / 10 : 0;
 }
 
 /** semua suara video (VO, SFX, musik) */
@@ -361,7 +557,7 @@ export function StudioAudio({ tl, audio = "all", sfxExtra }: { tl: Timeline; aud
     <>
       {plan.loops.map((l) => (
         <Sequence key={l.key} from={0} durationInFrames={Math.max(1, l.end)} layout="none" name={l.name}>
-          <Audio src={res(l.src)} loop durationInFrames={l.loopFrames} loopVolumeCurveBehavior="extend" volume={(f) => at(l.vol, f)} name={l.name} />
+          <Audio src={res(l.src)} loop durationInFrames={l.loopFrames} trimBefore={l.trim} loopVolumeCurveBehavior="extend" volume={(f) => at(l.vol, f)} name={l.name} />
         </Sequence>
       ))}
       {plan.clips.map((c) => (
@@ -371,7 +567,7 @@ export function StudioAudio({ tl, audio = "all", sfxExtra }: { tl: Timeline; aud
           from={c.from}
           durationInFrames={c.dur}
           trimBefore={c.trim > 0 ? c.trim : undefined}
-          volume={c.gate ? (f) => c.vol * at(plan.gate, c.from + f) : c.vol}
+          volume={c.gate ? (f) => c.vol * at(plan.gate, c.from + f) : c.bus === "vo" && plan.vo ? (f) => c.vol * at(plan.vo!, c.from + f) : c.vol}
           premountFor={pre}
           name={c.name}
         />

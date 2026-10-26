@@ -22,10 +22,13 @@ import {
   isLoudSfx,
   isOwnPresetLogo,
   logoFitsBrand,
+  musicGridPhase,
+  musicOffsetOf,
   normalizeTimeline,
   sceneStartSecs,
   type LayoutKind,
   type MusicLevel,
+  type Scene,
   type ScreenKind,
   type Timeline,
   type TransitionKind,
@@ -276,14 +279,18 @@ const BED_BEAT = 60 / BED_BPM;
 function beatGridOf(m: Timeline["music"]): { beat: number; first: number } | null {
   if (m.src === "none") return null;
   if (m.src === "bed") return { beat: BED_BEAT, first: 0 };
-  const b = [...(m.beats ?? [])].sort((x, y) => x - y);
+  // ketukan lagu di waktu video (lagu mulai dari detik ke-offset) — sama dengan musicBeats di komposisi
+  const off = musicOffsetOf(m);
+  const b = (m.beats ?? []).map((x) => x - off).filter((x) => x >= 0).sort((x, y) => x - y);
   const gaps = b
     .slice(1)
     .map((x, i) => x - b[i])
     .filter((g) => g > 0.05)
     .sort((x, y) => x - y);
   if (gaps.length) return { beat: gaps[Math.floor(gaps.length / 2)], first: b[0] };
-  return m.bpm ? { beat: 60 / m.bpm, first: m.offset ?? 0 } : null;
+  // grid BPM: data lama (offset tanpa dur) = offset sebagai fase ketukan pertama, seperti dulu (sama dengan musicFileBeats)
+  if (!m.bpm) return null;
+  return { beat: 60 / m.bpm, first: Number(m.dur) > 0 ? musicGridPhase(m.bpm, off) : Math.max(0, Number(m.offset) || 0) };
 }
 
 /** katalog TETAP: SFX bawaan, layout + props, layar mockup, transisi, level musik, rasio */
@@ -400,7 +407,8 @@ export function compactTimeline(tl: Timeline): string {
   // sutradara (catatan gayanya dikirim terpisah) & volume campuran diatur user, bukan bagian rencana AI
   delete rest.director;
   delete rest.mix;
-  const { beats, ...music } = tl.music;
+  // panjang file musik (dur) = data file, bukan rencana → tidak dikirim (dipertahankan mergeRevision)
+  const { beats, dur: _songDur, ...music } = tl.music;
   const grid = beatGridOf(tl.music);
   return JSON.stringify(
     prune({
@@ -410,7 +418,13 @@ export function compactTimeline(tl: Timeline): string {
         ...(beats?.length ? { beatsDetected: beats.length } : {}),
         ...(grid ? { beatSec: Math.round(grid.beat * 1000) / 1000, firstBeatSec: Math.round(grid.first * 1000) / 1000 } : {}),
       },
-      scenes: tl.scenes.map((s) => ({ ...s, sfx: s.sfx.map((c) => ({ id: c.id, at: c.at, ...(c.gain !== undefined ? { gain: c.gain } : {}), ...(c.on ? {} : { on: false }) })) })),
+      // volume adegan & volume kalimat VO (mixer) diatur user, bukan bagian rencana AI
+      scenes: tl.scenes.map((s) => ({
+        ...s,
+        gain: undefined,
+        vo: s.vo ? { ...s.vo, gainDb: undefined } : s.vo,
+        sfx: s.sfx.map((c) => ({ id: c.id, at: c.at, ...(c.gain !== undefined ? { gain: c.gain } : {}), ...(c.on ? {} : { on: false }) })),
+      })),
     })
   );
 }
@@ -629,6 +643,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       offset: has(m, "offset") ? out.music.offset : prev.music.offset,
       gain: has(m, "gain") ? out.music.gain : prev.music.gain,
       lufs: has(m, "lufs") ? out.music.lufs : prev.music.lufs,
+      // panjang lagu (ditulis editor bersama offset) selalu dari versi lama: tanpa ini offset lagu pilihan user diabaikan (musicOffsetOf)
+      ...(prev.music.dur ? { dur: prev.music.dur } : {}),
     };
   }
   for (const k of ["grain", "vignette", "muteVo"] as const) if (!has(o, k)) out[k] = prev[k];
@@ -642,7 +658,7 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   const prevById = new Map(prev.scenes.map((s) => [s.id, s]));
   out.scenes = next.scenes.map((s, i) => {
     const old = prevById.get(s.id);
-    if (!old) return s;
+    if (!old) return keepUserGain(s, undefined);
     const rs = (rawScenes[i] && typeof rawScenes[i] === "object" ? rawScenes[i] : {}) as Record<string, unknown>;
     let scene = s;
     if (old.layout.src && !s.layout.src && s.layout.kind === old.layout.kind && !has(rs.layout, "src")) scene = { ...scene, layout: { ...scene.layout, src: old.layout.src } };
@@ -658,11 +674,29 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       if (at !== undefined || tempo !== undefined)
         scene = { ...scene, vo: { ...scene.vo, ...(at !== undefined ? { at: Math.min(at, scene.dur) } : {}), ...(tempo !== undefined ? { tempo } : {}) } };
     }
-    return scene;
+    return keepUserGain(scene, old);
   });
   // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
   out.scenes = keepTeaserVisual(prev, out).scenes;
   out.vo = keepVo(prev, out);
+  return out;
+}
+
+/**
+ * volume adegan (`gain`) & volume kalimat VO (`vo.gainDb`) diatur user di mixer timeline, bukan AI: selalu dari adegan lama dengan
+ * id yang sama (adegan baru: tanpa volume khusus)
+ */
+function keepUserGain(s: Scene, old: Scene | undefined): Scene {
+  let out = s;
+  if (out.gain !== old?.gain) {
+    const { gain: _ai, ...rest } = out;
+    out = old?.gain ? { ...rest, gain: old.gain } : rest;
+  }
+  const g = old?.vo?.gainDb;
+  if (out.vo && out.vo.gainDb !== g) {
+    const { gainDb: _ai, ...vo } = out.vo;
+    out = { ...out, vo: g !== undefined ? { ...vo, gainDb: g } : vo };
+  }
   return out;
 }
 

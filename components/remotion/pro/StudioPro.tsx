@@ -669,6 +669,11 @@ const PreviewPane = memo(function PreviewPane({
   }, [has, playerRef]);
 
   const seek = useCallback((f: number) => playerRef.current?.seekTo(f), [playerRef]);
+  // musik baru dipilih dari "＋ Musik" di timeline → preview langsung diputar (Player tidak dimuat ulang, props baru diikuti)
+  const play = useCallback(() => {
+    const p = playerRef.current;
+    if (p && !p.isPlaying()) p.play();
+  }, [playerRef]);
   const ratio = timeline ? FORMATS[timeline.ratio] : FORMATS["9:16"];
 
   return (
@@ -730,7 +735,7 @@ const PreviewPane = memo(function PreviewPane({
         </div>
         {safe && timeline && <p className="mt-2 text-[11px] text-zinc-500">Kotak garis = area aman. Teks penting jangan keluar kotak (ketutup tombol & caption {timeline.ratio === "9:16" ? "TikTok/Reels" : "platform"}).</p>}
       </section>
-      {timeline && <TimelineEditor timeline={timeline} onChange={onChange} selected={selected} onSelect={onSelect} frame={frame} onSeek={seek} beatHint={beatHint} docKey={projectId} />}
+      {timeline && <TimelineEditor timeline={timeline} onChange={onChange} selected={selected} onSelect={onSelect} frame={frame} onSeek={seek} onPlay={play} beatHint={beatHint} docKey={projectId} />}
     </>
   );
 });
