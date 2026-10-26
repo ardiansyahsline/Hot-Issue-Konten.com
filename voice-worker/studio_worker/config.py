@@ -5,6 +5,7 @@ Dipanggil PALING AWAL (sebelum numpy/torch di-import) supaya batas thread CPU & 
 from __future__ import annotations
 
 import os
+import re
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,33 @@ REPO = ROOT.parent  # root repo website
 
 def _env(name: str, d: str = "") -> str:
     return (os.environ.get(name) or d).strip()
+
+
+_INVISIBLE = "\ufeff\u200b\u200c\u200d\u2060\u00a0"
+
+
+def clean_supabase_url(raw: str) -> str:
+    """rapikan SUPABASE_URL yang ditempel manual: buang spasi/kutip/karakter tak terlihat, format link markdown
+    `[teks](url)` / `<url>`, lalu tambah https:// kalau lupa. Kosong tetap kosong (dilaporkan oleh missing())."""
+    s = "".join(ch for ch in (raw or "") if ch not in _INVISIBLE).strip().strip("'\"").strip()
+    m = re.search(r"\]\((https?://[^)\s]+)\)", s)  # [https://x.supabase.co](https://x.supabase.co)
+    if m:
+        s = m.group(1)
+    s = s.strip("<>[]() ").rstrip("/")
+    if s and not re.match(r"^https?://", s, re.I):
+        s = "https://" + s.lstrip("/")
+    return s
+
+
+def url_problem(url: str) -> str | None:
+    """None kalau SUPABASE_URL terlihat benar; selain itu pesan bahasa awam untuk ditampilkan saat start"""
+    if not url:
+        return None
+    if not re.match(r"^https?://[A-Za-z0-9.-]+(:\d+)?(/.*)?$", url):
+        return f"SUPABASE_URL tidak valid ({url[:60]!r}). Isi persis seperti: SUPABASE_URL=https://xxxxxxxx.supabase.co"
+    if url.lower().startswith("https://eyj") or url.lower().startswith("https://sb_"):
+        return "SUPABASE_URL berisi kunci, bukan alamat. Sepertinya baris SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY tertukar."
+    return None
 
 
 def _int(name: str, d: int, lo: int, hi: int) -> int:
@@ -126,8 +154,8 @@ def load(env_file: Path | None = None) -> Config:
     order = [e for e in order if e in ("chatterbox", "pocket")] or ["chatterbox", "pocket"]
 
     cfg = Config(
-        supabase_url=(_env("SUPABASE_URL") or _env("NEXT_PUBLIC_SUPABASE_URL")).rstrip("/"),
-        service_key=_env("SUPABASE_SERVICE_ROLE_KEY"),
+        supabase_url=clean_supabase_url(_env("SUPABASE_URL") or _env("NEXT_PUBLIC_SUPABASE_URL")),
+        service_key="".join(ch for ch in _env("SUPABASE_SERVICE_ROLE_KEY") if ch not in _INVISIBLE).strip().strip("'\"").strip(),
         worker_id=_env("WORKER_ID") or f"laptop-{socket.gethostname().lower()}"[:60],
         repo=Path(_env("REPO_DIR") or REPO).expanduser().resolve(),
         data=data,
