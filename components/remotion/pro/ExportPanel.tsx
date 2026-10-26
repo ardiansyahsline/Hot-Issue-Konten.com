@@ -21,7 +21,7 @@ import {
 } from "@/lib/studio/client";
 import { storyboardHtml } from "@/lib/studio/exportDoc";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { subtitleCues, toSrt, voClashes, type Timeline } from "@/lib/studio/timeline";
+import { subtitleCues, toSrt, voClashes, voCutoffs, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf, storageSrc } from "@/lib/studio/urls";
 
 // Remotion gratis untuk perorangan / tim ≤ 3 orang. Perusahaan > 3 orang: isi key lisensi di env Vercel.
@@ -60,6 +60,8 @@ function voState(t: Timeline) {
     want: want.length,
     partial: has && played.length < want.length,
     clash: has ? voClashes(t) : [],
+    /** VO yang ujung ucapannya terpotong karena video sudah habis (mis. Outro teaser yang tetap kepanjangan) */
+    cut: has ? voCutoffs(t) : [],
   };
 }
 type VoState = ReturnType<typeof voState>;
@@ -392,6 +394,12 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
           <p className="rounded-lg bg-red-500/10 px-2.5 py-2 text-[11px] text-red-300" data-vo-clash role="alert">
             ⛔ VO menabrak VO adegan berikutnya:{" "}
             {vs.clash.map((c) => `${tl.scenes[c.scene]?.name} → ${tl.scenes[c.next]?.name} (${fmt(Math.max(0.1, c.sec))} dtk)`).join(", ")} — dua suara bunyi bersamaan di video. Pendekkan teks VO adegan itu, lalu generate ulang VO sebelum download.
+          </p>
+        )}
+        {variant === "vo" && hasVo && vs.cut.length > 0 && (
+          <p className="rounded-lg bg-red-500/10 px-2.5 py-2 text-[11px] text-red-300" data-vo-cut role="alert">
+            ⛔ Ujung VO terpotong di akhir video: {vs.cut.map((c) => `${tl.scenes[c.scene]?.name} (${fmt(Math.max(0.1, c.sec))} dtk)`).join(", ")} — videonya habis sebelum
+            kalimatnya selesai. Pendekkan teks VO adegan itu, lalu generate ulang VO sebelum download.
           </p>
         )}
         {variant === "vo" && vs.partial && (

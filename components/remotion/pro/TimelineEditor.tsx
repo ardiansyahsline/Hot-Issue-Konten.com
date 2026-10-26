@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { extraSfxOf, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, totalFrames, totalSec, voSpeechEnd, voStartOf, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, totalFrames, totalSec, TAIL_SEC, voSpeechEnd, voStartOf, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { beatReport, isTeaserScene, snapAroundTeaser, type BeatReport } from "@/lib/studio/teaserLock";
 
 /** warna titik SFX per kategori (palet yang otomatis ikut mode terang) */
@@ -392,10 +392,12 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                 // blok = bagian yang terdengar (ucapan asli); hening di ujung file tidak digambar & tidak dihitung "lewat"
                 const speech = voSpeechEnd(l);
                 const over = at + speech + 0.05 > scenes[i].dur;
+                // video habis di total adegan + ekor hening -> ucapan sesudahnya terpotong (sama dengan voCutoffs)
+                const cut = starts[i] + at + speech - (total + Math.round(TAIL_SEC * fps) / fps);
                 return (
                   <div
                     key={l.sceneId}
-                    title={`VO ${scenes[i].name} · ucapan ${fmt(speech, 2)} dtk${l.dur - speech > 0.05 ? ` (file ${fmt(l.dur, 2)} dtk, ujungnya hening)` : ""}${l.speed ? ` · dipercepat ${l.speed}%` : ""}${over ? " — lebih panjang dari adegan" : ""}`}
+                    title={`VO ${scenes[i].name} · ucapan ${fmt(speech, 2)} dtk${l.dur - speech > 0.05 ? ` (file ${fmt(l.dur, 2)} dtk, ujungnya hening)` : ""}${l.speed ? ` · dipercepat ${l.speed}%` : ""}${cut > 1e-3 ? ` — ujungnya terpotong di akhir video (${fmt(cut, 2)} dtk)` : over ? " — lebih panjang dari adegan" : ""}`}
                     className={`absolute top-1 bottom-1 overflow-hidden rounded border px-1 text-[9px] leading-[12px] ${
                       over ? "border-red-500/70 bg-red-500/20 text-red-300" : tl.vo?.temp ? "border-amber-400/60 bg-amber-400/20 text-amber-300" : "border-emerald-400/60 bg-emerald-400/20 text-emerald-300"
                     }`}
