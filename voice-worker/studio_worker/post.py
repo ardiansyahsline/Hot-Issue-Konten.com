@@ -12,7 +12,9 @@ VO_TP = -1.5
 SR = 48000
 
 # urutan: high-pass 80 Hz → presence kecil (+2 dB di 3,5 kHz) → de-esser → kompresor ringan (-18 dB, 2,5:1)
-# → hening > 0,55 dtk dipendekkan jadi 0,35 dtk (jeda alami antar kalimat tetap ada)
+# → silenceremove hanya untuk hening yang benar-benar kepanjangan. stop_duration 0,75: jeda alami (≤ 0,7 dtk, termasuk sesudah "…")
+#   TIDAK disentuh di semua versi ffmpeg. Catatan versi: ffmpeg < 6.1 memendekkan hening > 0,75 dtk jadi 0,35 dtk; ffmpeg ≥ 6.1
+#   (silenceremove baru) membiarkan hening ≤ ±0,9 dtk dan memendekkan yang lebih panjang ke ±0,9 dtk
 CHAIN = ",".join(
     [
         "highpass=f=80",
@@ -20,7 +22,7 @@ CHAIN = ",".join(
         "deesser=i=0.4:m=0.5:f=0.5",
         "acompressor=threshold=0.125:ratio=2.5:attack=8:release=140:makeup=1.4",
         "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.06"
-        ":stop_periods=-1:stop_duration=0.55:stop_threshold=-50dB:stop_silence=0.35",
+        ":stop_periods=-1:stop_duration=0.75:stop_threshold=-50dB:stop_silence=0.35",
     ]
 )
 

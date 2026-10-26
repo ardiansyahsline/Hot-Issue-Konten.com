@@ -174,12 +174,25 @@ def load_model(cfg, device: str = "cuda"):
 
 
 def sampling_kwargs(fn) -> dict:
-    """min_p / repetition_penalty yang didukung signature generate() (parameter bernama; **kwargs saja tidak dianggap mendukung)"""
+    """
+    min_p / repetition_penalty yang didukung signature generate() (parameter bernama; **kwargs saja tidak dianggap mendukung).
+    Kalau bawaan repetition_penalty di generate() versi/fork terpasang LEBIH KETAT dari 1,2 (mis. 2,0 di sebagian versi
+    multilingual yang gampang mengulang kata), nilainya tidak diturunkan — dibiarkan bawaan model.
+    """
     try:
         params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return {}
-    return {k: v for k, v in SAMPLING.items() if k in params and params[k].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
+    out = {}
+    for k, v in SAMPLING.items():
+        p = params.get(k)
+        if p is None or p.kind not in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+            continue
+        d = p.default
+        if k == "repetition_penalty" and isinstance(d, (int, float)) and not isinstance(d, bool) and float(d) > v:
+            continue
+        out[k] = v
+    return out
 
 
 def check_gpu() -> tuple[str, float]:
