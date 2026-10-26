@@ -424,11 +424,12 @@ export function ChoiceCard({ t, title, q, opts, pick, tapAt, inAt, tapF }: { t: 
                 borderRadius: 12,
                 padding: "6px 8px",
                 background: on ? rgba(ORANGE, 0.12) : undefined,
-                boxShadow: on ? `inset 0 0 0 1px ${rgba(ORANGE, 0.35)}` : undefined,
                 opacity: ea,
                 transform: `translateX(${((1 - ea) * 18).toFixed(1)}px) scale(${sc.toFixed(3)})`,
               }}
             >
+              {/* cincin terpilih = div ber-border (box-shadow inset tidak tergambar di web-renderer) */}
+              {on && <div style={{ position: "absolute", inset: 0, borderRadius: 12, border: `1px solid ${rgba(ORANGE, 0.35)}`, boxSizing: "border-box", pointerEvents: "none" }} />}
               <span
                 style={{
                   marginTop: 1,

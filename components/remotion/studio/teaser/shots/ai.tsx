@@ -8,6 +8,7 @@
  *  1,8  (ketukan)          kirim: gelembung terbang dari composer ke atas, kamera ikut naik → sorot hero 1,96–2,6 (chip "Kamu dibantu oleh…")
  *  2,1                     ChoiceCard "Mau fokus ke mana?" + caption "Bahkan nanya balik"
  *  3,0  ui-accept-glassy   pilihan "Dua-duanya" DIKETUK (jari + cincin + kilat + sapuan) → AnsweredCard 3,3
+ *  3,6                     caption "Bahkan nanya balik" keluar setelah AnsweredCard; 3,95 caption "AI yang mikir dulu" tampil lagi (sampai 6,6)
  *  4,8  ui-readout-panjang langkah berpikir ThinkingSteps bergulir (4,8 / 5,25 / 5,7 / 6,15 / 6,6), rack focus ke kotak proses
  *  7,2  ui-plucks-happy    AnalysisCard navy: pill BEARISH meletup + kartu berdenyut + kilau; metrik menyala di ketukan 7,8
  *  9,0  koin-flip          kartu chart IHSG dilempar seperti koin (rotateY 3D + busur) dan mendarat; candle terakhir + angka besar 9,6
@@ -81,6 +82,10 @@ const STEPS: ThinkStep[] = [
   { k: "write", at: 6.6 },
 ];
 const STEPS_DONE = 6.95;
+/** jadwal caption (detik adegan) — lihat catatan di bawah komponen Caption */
+const CAP_ASK_OUT = 3.6;
+const CAP_THINK_AT = 3.95;
+const CAP_THINK_OUT = 6.6;
 
 // ------------------------------------------------------------------ ukuran panel (px CSS website) ------------------------------------------------------------------
 const PW = 360;
@@ -410,13 +415,14 @@ export function AiShot() {
 
   // kartu chart IHSG (muka chart / punggung koin oranye saat berputar)
   const coinCard = (
-    <div style={{ position: "relative", height: CHART_H, perspective: 900 }}>
+    <div style={{ position: "relative", height: CHART_H }}>
+      {/* perspektif DI DALAM transform (bukan properti CSS perspective di induk) → web-renderer juga menggambar flip 3D */}
       <div
         style={{
           position: "absolute",
           inset: 0,
           opacity: coinOp,
-          transform: `translateY(${coinY.toFixed(1)}px) scale(${coinSc.toFixed(4)}) rotateY(${coinDeg.toFixed(2)}deg)`,
+          transform: `perspective(900px) translateY(${coinY.toFixed(1)}px) scale(${coinSc.toFixed(4)}) rotateY(${coinDeg.toFixed(2)}deg)`,
           transformOrigin: "50% 50%",
           filter: blurCss(coinBlur),
         }}
@@ -431,10 +437,12 @@ export function AiShot() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              boxShadow: "inset 0 0 0 3px rgba(255,255,255,0.25), 0 20px 40px -18px rgba(0,0,0,0.9)",
+              boxShadow: "0 20px 40px -18px rgba(0,0,0,0.9)",
               transform: "scaleX(-1)",
             }}
           >
+            {/* cincin dalam = div ber-border (box-shadow inset tidak tergambar di web-renderer) */}
+            <div style={{ position: "absolute", inset: 0, borderRadius: 12, border: "3px solid rgba(255,255,255,0.25)", boxSizing: "border-box", pointerEvents: "none" }} />
             <svg width="96" height="96" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 3v18h18" />
               <path d="M7 15l4-4 3 3 5-6" />
@@ -458,7 +466,7 @@ export function AiShot() {
               stock
               right={
                 <span style={{ color: "#71717a", whiteSpace: "nowrap" }}>
-                  Rencana dari <Emo>⚔️</Emo> {HERO_NAME} · data EODHD
+                  Rencana dari <Emo>⚔️</Emo> {HERO_NAME} · ilustrasi
                 </span>
               }
             />
@@ -658,7 +666,7 @@ export function AiShot() {
                     tf="4H"
                     right={
                       <span style={{ color: "#71717a", whiteSpace: "nowrap" }}>
-                        Rencana dari <Emo>⚔️</Emo> {HERO_NAME} · data CoinGecko
+                        Rencana dari <Emo>⚔️</Emo> {HERO_NAME} · ilustrasi
                       </span>
                     }
                   />
@@ -850,8 +858,13 @@ export function AiShot() {
       <Flash at={T.coin} len={0.22} max={0.14} color="#ffd8b5" />
       <Flash at={T.slam} len={0.2} max={0.08} color="#fecaca" />
 
+      {/* caption mengikuti visual, dijaga tidak bertabrakan makna dengan VO #6 (mulai 0,2: "Tanya AI soal hot issue, saham, sampai kripto.
+          Dia mikir dulu… bahkan nanya balik, biar jawabannya pas." — perkiraan "mikir dulu" ±3,4–4,9, "nanya balik" ±5,0–6,3):
+          "Bahkan nanya balik" bertahan sampai pertanyaan AI dijawab (AnsweredCard 3,3 → keluar 3,6),
+          "AI yang mikir dulu" tampil lagi saat kotak berpikir muncul (3,95) dan bertahan selama langkah berpikir (4,8–6,6). */}
       <Caption lines={["AI yang mikir dulu"]} at={0.35} out={1.5} emphasis={["mikir"]} size={86} />
-      <Caption lines={["Bahkan nanya balik"]} at={2.05} out={4.18} emphasis={["nanya", "balik"]} size={86} />
+      <Caption lines={["Bahkan nanya balik"]} at={2.05} out={CAP_ASK_OUT} emphasis={["nanya", "balik"]} size={86} />
+      <Caption lines={["AI yang mikir dulu"]} at={CAP_THINK_AT} out={CAP_THINK_OUT} emphasis={["mikir"]} size={86} />
     </AbsoluteFill>
   );
 }
