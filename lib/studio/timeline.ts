@@ -33,6 +33,15 @@ export const BRANDS: Record<"konten" | "tws", Brand> = {
   konten: { id: "konten", name: "Konten.com", primary: "#f97316", accent: "#fb8a3c", bg: "#09090b", text: "#fafafa", font: "jakarta", logo: PRESET_LOGOS.konten },
   tws: { id: "tws", name: "TWS", primary: "#2f5ff0", accent: "#3a6bff", bg: "#000000", text: "#ffffff", font: "interTight", logo: PRESET_LOGOS.tws },
 };
+/** logo bawaan milik brand ini (brand "Lainnya" / custom tidak punya) */
+export const presetLogoOf = (id: BrandId): string | null => (id === "custom" ? null : PRESET_LOGOS[id]);
+/**
+ * logo sah untuk brand ini: logo upload user, atau logo bawaan MILIK brand itu sendiri.
+ * Logo bawaan brand lain (mis. logo Konten.com di brand TWS / custom) tidak sah — dibuang normalizeTimeline.
+ */
+export const logoFitsBrand = (logo: unknown, id: BrandId): boolean => !isPresetLogo(logo) || logo === presetLogoOf(id);
+/** true kalau logo brand = logo bawaan milik brand itu sendiri (tidak bisa dilepas: kosong = otomatis logo bawaan lagi) */
+export const isOwnPresetLogo = (brand: Pick<Brand, "id" | "logo">): boolean => !!brand.logo && brand.logo === presetLogoOf(brand.id);
 
 export type TransitionKind = "cut" | "fade" | "slide" | "zoom" | "mask" | "whip" | "glitch";
 export const TRANSITIONS: TransitionKind[] = ["cut", "fade", "slide", "zoom", "mask", "whip", "glitch"];
@@ -44,8 +53,14 @@ export type Transition = { kind: TransitionKind; dir?: Dir; dur?: number };
 export type ScreenKind = "dashboard" | "hotIssue" | "videoReview" | "chat" | "ai" | "design" | "trainAi" | "studio" | "music" | "report" | "website" | "media";
 export const SCREENS: ScreenKind[] = ["dashboard", "hotIssue", "videoReview", "chat", "ai", "design", "trainAi", "studio", "music", "report", "website", "media"];
 
-export type LayoutKind = "kinetic" | "title" | "lowerThird" | "counter" | "chart" | "phone" | "laptop" | "logo" | "split" | "features" | "cta" | "media" | "quote";
-export const LAYOUTS: LayoutKind[] = ["kinetic", "title", "lowerThird", "counter", "chart", "phone", "laptop", "logo", "split", "features", "cta", "media", "quote"];
+export type LayoutKind = "kinetic" | "title" | "lowerThird" | "counter" | "chart" | "phone" | "laptop" | "logo" | "split" | "features" | "cta" | "media" | "quote" | "teaser";
+export const LAYOUTS: LayoutKind[] = ["kinetic", "title", "lowerThird", "counter", "chart", "phone", "laptop", "logo", "split", "features", "cta", "media", "quote", "teaser"];
+/** tata letak yang boleh dipakai AI Sutradara & editor biasa ("teaser" = adegan premium buatan tangan, khusus teaser resmi) */
+export const PLAN_LAYOUTS: LayoutKind[] = LAYOUTS.filter((k) => k !== "teaser");
+
+/** adegan premium teaser CS Tracker (components/remotion/studio/teaser) — urutan sesuai cue sheet assets/audio/teaser/cue-sheet.md */
+export type TeaserShot = "hook" | "reveal" | "dashboard" | "videoReview" | "chat" | "ai" | "tws" | "trainAi" | "musicReport" | "montage" | "outro";
+export const TEASER_SHOTS: TeaserShot[] = ["hook", "reveal", "dashboard", "videoReview", "chat", "ai", "tws", "trainAi", "musicReport", "montage", "outro"];
 
 export type Card = { icon?: string; title: string; desc?: string };
 export type Side = { title: string; items?: string[]; tone?: "bad" | "good" | "neutral" };
@@ -65,6 +80,7 @@ export type ChartData = { kind: "line" | "bar" | "area"; values: number[]; label
  * - cta: ajakan penutup + tombol
  * - media: klip / gambar upload user (cover, ken burns)
  * - quote: kutipan besar
+ * - teaser: adegan premium teaser resmi CS Tracker (`shot`), UI dibuat ulang dari komponen website + kamera virtual
  */
 export type Layout = {
   kind: LayoutKind;
@@ -94,6 +110,7 @@ export type Layout = {
   fit?: "cover" | "contain";
   kenburns?: boolean;
   by?: string;
+  shot?: TeaserShot;
 };
 
 export type BgKind = "gradient" | "particles" | "solid" | "grid" | "media";
@@ -112,8 +129,12 @@ export type Scene = {
   name: string;
   /** durasi detik (0,5–20) */
   dur: number;
-  /** voice over adegan ini. `spell` = ejaan khusus untuk mesin suara (subtitle tetap pakai `text`) */
-  vo: { text: string; spell?: string } | null;
+  /**
+   * voice over adegan ini. `spell` = ejaan khusus untuk mesin suara (subtitle tetap pakai `text`).
+   * `at` = detik mulai VO dihitung dari awal adegan (opsional, 0..dur; kosong = VO_AT bawaan 0,15 dtk) — mis. teaser
+   * memakai waktu target naskah per adegan. Dipakai saat VO dibuat (VoLine.at) & sebagai cadangan subtitle/audio.
+   */
+  vo: { text: string; spell?: string; at?: number } | null;
   /** teks di layar, maks ±6–7 kata per baris */
   text: string[];
   /** catatan storyboard (apa yang terlihat) */
@@ -142,6 +163,14 @@ export type Music = { src: string; name?: string; bpm?: number | null; beats?: n
 export type Word = { w: string; s: number; e: number };
 /** VO hasil generate per adegan. `src` URL yang bisa diputar. `at` = detik mulai dihitung dari awal adegan. */
 export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[] };
+
+/** detik mulai VO bawaan dari awal adegan (adegan tanpa `vo.at`) */
+export const VO_AT = 0.15;
+/**
+ * detik mulai VO dari awal adegan: posisi baris VO hasil generate (`line.at`, yang dipakai saat suara & VO lengkap dibuat),
+ * lalu offset adegan (`scene.vo.at`), lalu bawaan 0,15 dtk. Timeline lama tanpa keduanya tetap 0,15.
+ */
+export const voStartOf = (sc: Pick<Scene, "vo"> | null | undefined, line?: Pick<VoLine, "at"> | null): number => line?.at ?? sc?.vo?.at ?? VO_AT;
 export type VoTrack = { jobId?: string | null; engine: "chatterbox" | "pocket" | "edge" | "elevenlabs"; temp: boolean; label?: string; lines: VoLine[]; full?: string | null };
 
 export type Timeline = {
@@ -362,6 +391,7 @@ function normLayout(v: unknown, text: string[]): Layout {
     fit: oneOf(o.fit, ["cover", "contain"] as const, "cover"),
     kenburns: o.kenburns === undefined ? true : !!o.kenburns,
     by: str(o.by, 60) || undefined,
+    shot: kind === "teaser" ? oneOf(o.shot, TEASER_SHOTS, "hook") : undefined,
   };
 }
 
@@ -374,6 +404,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const b = (o.brand && typeof o.brand === "object" ? o.brand : {}) as Record<string, unknown>;
   const brandId = oneOf(b.id, ["konten", "tws", "custom"] as const, "konten");
   const base = brandId === "custom" ? BRANDS.konten : BRANDS[brandId];
+  // logo bawaan hanya sah untuk brand pemiliknya (AI sering menyalin objek brand lama saat ganti brand, logo ikut terbawa)
+  const upLogo = safeMediaSrc(b.logo);
   const brand: Brand = {
     id: brandId,
     name: str(b.name, 40) || (brandId === "custom" ? "Brand" : base.name),
@@ -382,8 +414,9 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     bg: color(b.bg, base.bg),
     text: color(b.text, base.text),
     font: oneOf(b.font, ["jakarta", "inter", "interTight"] as const, base.font),
-    // tanpa logo upload: brand preset pakai logo bawaannya (brand "Lainnya" tetap tanpa logo → huruf pertama nama)
-    logo: safeMediaSrc(b.logo) ?? (brandId === "custom" ? null : (base.logo ?? null)),
+    // tanpa logo upload: brand preset pakai logo bawaannya (brand "Lainnya" tetap tanpa logo → huruf pertama nama).
+    // Logo bawaan brand lain diganti logo bawaan brand ini sendiri (custom: tanpa logo).
+    logo: (upLogo && logoFitsBrand(upLogo, brandId) ? upLogo : null) ?? presetLogoOf(brandId),
   };
   const catalog = new Map([...SFX_BUILTIN, ...(opts.extraSfx ?? [])].map((s) => [s.id, s]));
   const seen = new Set<string>();
@@ -401,9 +434,13 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     const text = splitScreenText(strs(s.text, 8, 160));
     const voRaw = (s.vo && typeof s.vo === "object" ? s.vo : typeof s.vo === "string" ? { text: s.vo } : null) as Record<string, unknown> | null;
     const voText = voRaw ? str(voRaw.text, 400) : "";
+    // offset mulai VO (opsional): angka 0..dur, kosong / bukan angka = bawaan (field tidak disimpan)
+    const voAtRaw = voRaw?.at;
+    const voAt = voAtRaw === undefined || voAtRaw === null || voAtRaw === "" ? NaN : num(voAtRaw, NaN, 0, dur);
+    const vo: Scene["vo"] = voText ? { text: voText, spell: str(voRaw?.spell, 400) || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}) } : null;
     const tr = (s.transition && typeof s.transition === "object" ? s.transition : { kind: s.transition }) as Record<string, unknown>;
     const bg = (s.bg && typeof s.bg === "object" ? s.bg : {}) as Record<string, unknown>;
-    // SFX: hanya dari katalog, maks 6 per adegan, urut waktu, maks 2 SFX keras berdekatan
+    // SFX: hanya dari katalog, maks 8 per adegan, urut waktu, maks 2 SFX keras berdekatan
     const cues = arr(s.sfx)
       .map((c) => {
         const x = (c && typeof c === "object" ? c : { id: c }) as Record<string, unknown>;
@@ -411,7 +448,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       })
       .filter((c) => catalog.has(c.id))
       .sort((a, b2) => a.at - b2.at)
-      .slice(0, 6);
+      .slice(0, 8);
     const loudKept: number[] = [];
     const sfx = cues.filter((c) => {
       if (!isLoudSfx(catalog.get(c.id))) return true;
@@ -424,7 +461,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       id,
       name: str(s.name, 40) || `Adegan ${scenes.length + 1}`,
       dur,
-      vo: voText ? { text: voText, spell: str(voRaw?.spell, 400) || undefined } : null,
+      vo,
       text,
       visual: str(s.visual, 400),
       layout: normLayout(s.layout, text),
@@ -441,7 +478,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const v = (o.voice && typeof o.voice === "object" ? o.voice : {}) as Record<string, unknown>;
   const m = (o.music && typeof o.music === "object" ? o.music : {}) as Record<string, unknown>;
   const mSrc = str(m.src, 600);
-  const vo = normVo(o.vo, new Set(scenes.map((s) => s.id)));
+  // baris VO tanpa `at` (data lama) mulai di offset adegannya (vo.at) atau bawaan 0,15
+  const vo = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
   return {
     v: 1,
     title: str(o.title, 80) || "Video baru",
@@ -483,7 +521,7 @@ const MAX_DATA_VO = 2_000_000;
 const safeVoSrc = (v: unknown): string | null =>
   typeof v === "string" && /^data:audio\/(mpeg|mp3|wav|x-wav);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length <= MAX_DATA_VO ? v : safeMediaSrc(v);
 
-function normVo(v: unknown, sceneIds: Set<string>): VoTrack | null {
+function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
   const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
   if (!o) return null;
   const lines = arr(o.lines)
@@ -497,7 +535,8 @@ function normVo(v: unknown, sceneIds: Set<string>): VoTrack | null {
         })
         .filter((w) => w.w)
         .slice(0, 400);
-      const line: VoLine | null = src && sceneIds.has(str(x.sceneId, 40)) ? { sceneId: str(x.sceneId, 40), src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, 0.15, 0, MAX_DUR), words } : null;
+      const sid = str(x.sceneId, 40);
+      const line: VoLine | null = src && sceneAt.has(sid) ? { sceneId: sid, src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR), words } : null;
       return line;
     })
     .filter((l): l is VoLine => !!l);
@@ -597,13 +636,14 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
   tl.scenes.forEach((sc, i) => {
     if (!sc.vo?.text || tl.muteVo) return;
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
-    const t0 = starts[i] + (line?.at ?? 0.15);
+    const t0 = starts[i] + voStartOf(sc, line);
     const textWords = sc.vo.text.split(/\s+/).filter(Boolean);
     // timestamp per kata dari mesin suara memakai ejaan mesin -> teks subtitle tetap kata asli (alignWords)
     const ws = line?.words?.length
       ? alignWords(line.words, textWords).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e }))
       : (() => {
-          const dur = line?.dur ?? Math.min(sc.dur - 0.2, Math.max(0.6, textWords.length * 0.34));
+          // perkiraan (VO belum dibuat): selesai paling lambat 0,2 dtk sebelum adegan habis, dihitung dari offset adegan kalau ada
+          const dur = line?.dur ?? Math.min(Math.max(0.1, sc.dur - (sc.vo.at ?? 0) - 0.2), Math.max(0.6, textWords.length * 0.34));
           return textWords.map((w, k) => ({ w, s: t0 + (k * dur) / textWords.length, e: t0 + ((k + 1) * dur) / textWords.length }));
         })();
     // kelompokkan maks 6 kata / potongan, putus di tanda baca
@@ -621,4 +661,32 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
   return cues;
 }
 
-export const toSrt = (cues: { s: number; e: number; text: string }[]) => cues.map((c, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`).join("\n");
+/** SRT diurutkan menurut waktu (VO adegan yang lewat batas bisa mulai setelah VO adegan berikutnya); urutan adegan dipakai kalau waktunya sama */
+export const toSrt = (cues: { s: number; e: number; text: string }[]) =>
+  cues
+    .map((c, k) => ({ c, k }))
+    .sort((a, b) => a.c.s - b.c.s || a.k - b.k)
+    .map(({ c }, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`)
+    .join("\n");
+
+/**
+ * VO adegan yang masih bunyi saat VO adegan sesudahnya mulai (dua suara bersamaan) — terjadi kalau VO lebih panjang dari
+ * adegannya dan adegan itu tidak diperpanjang (adegan premium teaser dikunci di ketukan). Aturan baris yang diputar sama dengan
+ * planAudio (baris punya src & adegannya masih punya teks VO). `sec` = lama tumpang tindih (detik), `next` = adegan yang VO-nya
+ * pertama kali tertabrak. Dipakai VoPanel (peringatan) & ExportPanel; pemanggil yang mengecek VO dimatikan / tidak.
+ */
+export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene: number; next: number; sec: number }[] {
+  const starts = sceneStartSecs(tl);
+  const spans = tl.scenes.flatMap((sc, i) => {
+    const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
+    if (!l?.src || !sc.vo?.text) return [];
+    const s = starts[i] + voStartOf(sc, l);
+    return [{ i, s, e: s + (l.dur || 0) }];
+  });
+  const out: { scene: number; next: number; sec: number }[] = [];
+  for (const a of spans) {
+    const hit = spans.filter((b) => b.i > a.i && a.e > b.s + 1e-3).sort((x, y) => x.s - y.s)[0];
+    if (hit) out.push({ scene: a.i, next: hit.i, sec: Math.min(a.e, hit.e) - hit.s });
+  }
+  return out;
+}

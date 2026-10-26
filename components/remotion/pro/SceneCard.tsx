@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
+import { FONTS } from "@/components/remotion/studio/theme";
+import { captionLineWidth, captionMaxChars, isTeaserBeatCue, roughWordWidth, teaserCaptionFit, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
-  LAYOUTS,
+  PLAN_LAYOUTS,
   MAX_DUR,
   MAX_LINES,
   MAX_WORDS_PER_LINE,
@@ -23,6 +25,7 @@ import {
   type ScreenKind,
   type Side,
   type TransitionKind,
+  voStartOf,
 } from "@/lib/studio/timeline";
 import { sfxSrc, storagePathOf } from "@/lib/studio/urls";
 import FreesoundPanel from "./FreesoundPanel";
@@ -34,7 +37,64 @@ export type ScenePatch = Partial<Scene> | ((s: Scene) => Partial<Scene>);
 
 /** perkiraan lama bicara (detik) dari jumlah kata */
 const speakSec = (text: string) => wordCount(text) * 0.34;
-const MAX_SFX = 6;
+/** jeda minimal sesudah VO sampai adegan habis (sama dengan VoPanel) */
+const VO_TAIL = 0.25;
+
+/**
+ * Pengukur lebar kata Caption teaser: canvas measureText dengan font Caption sungguhan (kit.tsx: fontFamily display brand
+ * Konten = Plus Jakarta Sans Variable, tebal 800) begitu font-nya termuat — sama dengan lebar di DOM. Sebelum termuat / tanpa
+ * canvas: perkiraan kasar roughWordWidth (cadangan).
+ */
+const CAPTION_FONT = FONTS.jakarta;
+const CAPTION_FAMILY = '"Plus Jakarta Sans Variable"';
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+let fontReady = false;
+let fontWait: Promise<void> | null = null;
+function captionFontReady(): boolean {
+  if (fontReady) return true;
+  try {
+    // check() = wajah latin font Caption sudah termuat (@fontsource mendaftarkannya, jadi false sampai file-nya terunduh)
+    fontReady = typeof document !== "undefined" && !!document.fonts && document.fonts.check(`800 78px ${CAPTION_FAMILY}`);
+  } catch {
+    fontReady = false;
+  }
+  return fontReady;
+}
+function useCaptionMeasure(size: number | null): (word: string) => number {
+  const [ready, setReady] = useState(captionFontReady);
+  useEffect(() => {
+    if (ready || size === null || typeof document === "undefined" || !document.fonts) return;
+    let live = true;
+    fontWait ??= document.fonts
+      .load(`800 ${size}px ${CAPTION_FAMILY}`)
+      .then(() => document.fonts.ready)
+      .then(() => undefined)
+      .catch(() => undefined);
+    void fontWait.then(() => live && setReady(captionFontReady()));
+    return () => {
+      live = false;
+    };
+  }, [ready, size]);
+  return useMemo(() => {
+    const rough = roughWordWidth(size ?? 78);
+    if (!ready || size === null) return rough;
+    if (measureCtx === undefined) {
+      try {
+        measureCtx = document.createElement("canvas").getContext("2d");
+      } catch {
+        measureCtx = null;
+      }
+    }
+    const ctx = measureCtx;
+    if (!ctx) return rough;
+    const font = `800 ${size}px ${CAPTION_FONT}`;
+    return (w: string) => {
+      ctx.font = font;
+      return ctx.measureText(w).width;
+    };
+  }, [ready, size]);
+}
+const MAX_SFX = 8; // sama dengan batas normalizeTimeline (lib/studio/timeline.ts)
 
 // satu SFX diputar dalam satu waktu (tombol ▶ di daftar SFX)
 let playing: HTMLAudioElement | null = null;
@@ -87,7 +147,19 @@ export default function SceneCard({
   const shown = draftLines ?? s.text;
   const long = shown.map((l, i) => ({ i, n: wordCount(l) })).filter((x) => x.n > MAX_WORDS_PER_LINE);
   const voSec = s.vo ? speakSec(s.vo.text) : 0;
+  // ruang VO = dari detik mulai VO (vo.at / bawaan 0,15) sampai 0,25 dtk sebelum adegan habis
+  const voAt = voStartOf(s);
+  const voRoom = Math.max(0, s.dur - voAt - VO_TAIL);
   const peek = s.text[0] || s.vo?.text || s.layout.title || s.visual;
+  // adegan premium teaser (buatan tangan): VO, SFX, transisi & musik boleh diubah; visual (jenis tampilan, latar, kamera,
+  // durasi) dikunci. Teks layar hanya bisa diubah di shot yang memang membacanya (chat, trainAi, montage — lihat teaserLock)
+  const textLines = teaserTextLines(s);
+  const teaser = textLines !== null;
+  const textLocked = textLines === 0;
+  // teaser selalu 9:16; baris yang lebih lebar dari kotak aman turun ke baris berikut dan menabrak UI animasi
+  const fit = teaser && !textLocked ? teaserCaptionFit(s, "9:16") : null;
+  const measure = useCaptionMeasure(fit?.size ?? null);
+  const tooWide = fit ? shown.slice(0, fit.lines).map((l, i) => ({ i, w: captionLineWidth(l, fit.size, measure) })).filter((x) => x.w > fit.maxW) : [];
   const headId = `scene-${s.id}`;
 
   return (
@@ -141,21 +213,35 @@ export default function SceneCard({
 
       {open && (
         <div id={`${headId}-body`} className="space-y-3.5 border-t border-zinc-800/70 px-2.5 pb-3 pt-3 sm:px-3">
+          {teaser && (
+            <p role="note" data-teaser-note className="rounded-xl border border-orange-500/30 bg-orange-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-orange-200">
+              {textLocked
+                ? "🎞️ Adegan premium buatan tangan: visual, durasi & teks layar tetap (bagian dari animasi); VO, SFX, transisi dan musik boleh diubah."
+                : "🎞️ Adegan premium buatan tangan: visual & durasi tetap; teks layar, VO, SFX, transisi dan musik boleh diubah."}{" "}
+              Detik SFX bawaan dikunci karena sinkron dengan gerakan.
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Nama adegan">{(id) => <Txt id={id} value={s.name} maxLength={40} onCommit={(v) => patch({ name: v })} />}</Field>
-            <Field label="Durasi" hint={`${MIN_DUR}–${MAX_DUR} detik`}>
-              {(id) => (
-                <div className="flex items-center gap-1.5">
-                  <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
-                    −
-                  </button>
-                  <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} commitOnBlur className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
-                  <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Tambah 0,1 detik" onClick={() => dur(s.dur + 0.1)}>
-                    +
-                  </button>
-                  <span className="text-[12px] text-zinc-500">dtk</span>
-                </div>
-              )}
+            <Field label="Durasi" hint={teaser ? "Dikunci di ketukan musik (adegan premium)" : `${MIN_DUR}–${MAX_DUR} detik`}>
+              {(id) =>
+                teaser ? (
+                  <div id={id} className="flex h-9 items-center text-[13px] tabular-nums text-zinc-300">
+                    {fmtSec(s.dur, 2)}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
+                      −
+                    </button>
+                    <Num id={id} value={s.dur} min={MIN_DUR} max={MAX_DUR} commitOnBlur className="w-20 text-center" onCommit={(v) => v !== undefined && patch({ dur: v })} />
+                    <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Tambah 0,1 detik" onClick={() => dur(s.dur + 0.1)}>
+                      +
+                    </button>
+                    <span className="text-[12px] text-zinc-500">dtk</span>
+                  </div>
+                )
+              }
             </Field>
           </div>
 
@@ -164,9 +250,11 @@ export default function SceneCard({
             <Field
               label="🎙️ Teks VO (tampil di subtitle)"
               hint={
-                s.vo && voSec > s.dur - 0.2 ? (
-                  <span className="text-amber-400">
-                    VO ±{fmtSec(voSec)} — lebih panjang dari adegan. Pendekkan teks atau tambah durasi.
+                s.vo && voSec > voRoom ? (
+                  <span className="text-amber-400" data-vo-long>
+                    {teaser
+                      ? `VO ±${fmtSec(voSec)} — tidak muat: VO mulai di ${fmtSec(voAt, 2)}, ruangnya ±${fmtSec(voRoom, 2)} sampai adegan habis. Durasi dikunci di ketukan musik, jadi pendekkan teks VO.`
+                      : `VO ±${fmtSec(voSec)} — lebih panjang dari ruang adegan (±${fmtSec(voRoom, 2)} sesudah VO mulai di ${fmtSec(voAt, 2)}). Pendekkan teks atau tambah durasi.`}
                   </span>
                 ) : s.vo ? (
                   `±${wordCount(s.vo.text)} kata · ±${fmtSec(voSec)}`
@@ -175,7 +263,7 @@ export default function SceneCard({
                 )
               }
             >
-              {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? { text: v, spell: x.vo?.spell } : null }))} />}
+              {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? (x.vo ? { ...x.vo, text: v } : { text: v }) : null }))} />}
             </Field>
             <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin salah baca, mis. “Si-es Treker”, “E-ai”. Subtitle tetap pakai teks asli.">
               {(id) => (
@@ -186,16 +274,34 @@ export default function SceneCard({
                   maxLength={400}
                   placeholder={s.vo ? "Sama dengan teks VO" : "Isi teks VO dulu"}
                   disabled={!s.vo}
-                  onCommit={(v) => patch((x) => (x.vo ? { vo: { text: x.vo.text, spell: v || undefined } } : {}))}
+                  onCommit={(v) => patch((x) => (x.vo ? { vo: { ...x.vo, spell: v || undefined } } : {}))}
                 />
               )}
             </Field>
           </div>
 
+          {textLocked ? (
+            <Field label="🔤 Teks di layar" hint="Dikunci: teks layar adegan ini digambar langsung di animasi premium (ganti pesannya lewat Teks VO).">
+              {(id) => (
+                <div id={id} data-teaser-text-locked className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-3 py-2 text-[13px] text-zinc-400">
+                  🔒 {s.text.length ? s.text.join(" · ") : "Teks bawaan animasi"}
+                </div>
+              )}
+            </Field>
+          ) : (
           <Field
             label="🔤 Teks di layar (satu baris per baris)"
             hint={
-              long.length || shown.length > MAX_LINES ? (
+              fit && tooWide.length ? (
+                <span className="text-amber-400">
+                  {tooWide.map((x) => `Baris ${x.i + 1}`).join(" · ")} kepanjangan — bisa turun baris & menabrak animasi. Maks ±{captionMaxChars(fit)} huruf per baris.
+                </span>
+              ) : teaser && !long.length && shown.length <= MAX_LINES ? (
+                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks ±${fit ? captionMaxChars(fit) : 20} huruf per baris supaya muat satu baris. ${
+                  // chat & montage: `text[0] ?? teks bawaan`; trainAi: `lines={text}` → kosong = tanpa teks layar
+                  s.layout.shot === "trainAi" ? "Kosongkan = tanpa teks layar." : "Kosongkan untuk teks bawaan animasi."
+                }`
+              ) : long.length || shown.length > MAX_LINES ? (
                 <span className="text-amber-400">
                   {long.map((x) => `Baris ${x.i + 1}: ${x.n} kata`).join(" · ")}
                   {long.length ? " — maks " + MAX_WORDS_PER_LINE + " kata per baris, nanti dipecah otomatis." : ""}
@@ -218,39 +324,48 @@ export default function SceneCard({
               />
             )}
           </Field>
+          )}
 
-          <Field label="🎨 Catatan visual / storyboard" hint="Apa yang terlihat di layar.">
-            {(id) => <Txt id={id} multiline value={s.visual} maxLength={400} onCommit={(v) => patch({ visual: v })} />}
-          </Field>
-
-          {/* tampilan */}
-          <div className="space-y-3 rounded-xl border border-zinc-800/80 p-2.5 sm:p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Jenis tampilan">
-                {(id) => (
-                  <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
-                    {LAYOUTS.map((k) => (
-                      <option key={k} value={k}>
-                        {LAYOUT_LABEL[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-              <Field label="Latar">
-                {(id) => (
-                  <select id={id} className={sel} value={s.bg.kind} onChange={(e) => patch((x) => ({ bg: { ...x.bg, kind: e.target.value as BgKind } }))}>
-                    {(["gradient", "particles", "solid", "grid", ...(s.bg.kind === "media" ? (["media"] as const) : [])] as BgKind[]).map((k) => (
-                      <option key={k} value={k}>
-                        {BG_LABEL[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
+          {teaser ? (
+            <div className="rounded-xl border border-zinc-800/80 px-3 py-2 text-[12px] text-zinc-400">
+              <span className="font-semibold text-zinc-300">🎨 Visual:</span> {s.visual || LAYOUT_LABEL.teaser}
             </div>
-            <LayoutFields l={s.layout} set={setLayout} />
-          </div>
+          ) : (
+            <Field label="🎨 Catatan visual / storyboard" hint="Apa yang terlihat di layar.">
+              {(id) => <Txt id={id} multiline value={s.visual} maxLength={400} onCommit={(v) => patch({ visual: v })} />}
+            </Field>
+          )}
+
+          {/* tampilan (adegan premium teaser: dikunci) */}
+          {!teaser && (
+            <div className="space-y-3 rounded-xl border border-zinc-800/80 p-2.5 sm:p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Jenis tampilan">
+                  {(id) => (
+                    <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
+                      {PLAN_LAYOUTS.map((k) => (
+                        <option key={k} value={k}>
+                          {LAYOUT_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+                <Field label="Latar">
+                  {(id) => (
+                    <select id={id} className={sel} value={s.bg.kind} onChange={(e) => patch((x) => ({ bg: { ...x.bg, kind: e.target.value as BgKind } }))}>
+                      {(["gradient", "particles", "solid", "grid", ...(s.bg.kind === "media" ? (["media"] as const) : [])] as BgKind[]).map((k) => (
+                        <option key={k} value={k}>
+                          {BG_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+              </div>
+              <LayoutFields l={s.layout} set={setLayout} />
+            </div>
+          )}
 
           {/* gerak */}
           <div className="grid gap-3 sm:grid-cols-3">
@@ -287,17 +402,19 @@ export default function SceneCard({
             ) : (
               <div className="hidden sm:block" />
             )}
-            <Field label="Gerak kamera">
-              {(id) => (
-                <select id={id} className={sel} value={s.camera} onChange={(e) => patch({ camera: e.target.value as Camera })}>
-                  {(Object.keys(CAMERA_LABEL) as Camera[]).map((k) => (
-                    <option key={k} value={k}>
-                      {CAMERA_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
+            {!teaser && (
+              <Field label="Gerak kamera">
+                {(id) => (
+                  <select id={id} className={sel} value={s.camera} onChange={(e) => patch({ camera: e.target.value as Camera })}>
+                    {(Object.keys(CAMERA_LABEL) as Camera[]).map((k) => (
+                      <option key={k} value={k}>
+                        {CAMERA_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            )}
             <Field label="Level musik">
               {(id) => (
                 <select id={id} className={sel} value={s.music} onChange={(e) => patch({ music: e.target.value as MusicLevel })}>
@@ -316,7 +433,7 @@ export default function SceneCard({
             </div>
           </div>
 
-          <SfxEditor scene={s} sfxList={sfxList} patch={patch} />
+          <SfxEditor scene={s} sfxList={sfxList} patch={patch} lockAt={teaser ? (c) => isTeaserBeatCue(s, c) : undefined} />
         </div>
       )}
     </div>
@@ -338,8 +455,11 @@ function IconBtn({ label, onClick, disabled, children }: { label: string; onClic
   );
 }
 
-/** daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog / Freesound CC0 */
-function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxItem[]; patch: (p: ScenePatch) => void }) {
+/**
+ * daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog / Freesound CC0.
+ * `lockAt` = cue yang detiknya dikunci (SFX bawaan adegan premium teaser, sinkron dengan gerakan animasinya).
+ */
+function SfxEditor({ scene: s, sfxList, patch, lockAt }: { scene: Scene; sfxList: SfxItem[]; patch: (p: ScenePatch) => void; lockAt?: (c: Scene["sfx"][number]) => boolean }) {
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState("");
   const [fsOpen, setFsOpen] = useState(false);
@@ -384,11 +504,17 @@ function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxIte
                 <span className="block truncate text-[12.5px] font-semibold text-zinc-200">{c.id}</span>
                 {m?.use && <span className="block truncate text-[11px] text-zinc-500">{m.use}</span>}
               </span>
-              <span className="flex items-center gap-1 text-[11.5px] text-zinc-500">
-                di
-                <Num value={c.at} min={0} max={s.dur} commitOnBlur label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
-                dtk
-              </span>
+              {lockAt?.(c) ? (
+                <span className="flex items-center gap-1 text-[11.5px] tabular-nums text-zinc-500" title="Detik ini sinkron dengan gerakan animasi premium (dikunci)" aria-label={`Detik pukulan SFX ${c.id}: ${fmtSec(c.at, 2)}, dikunci`}>
+                  di 🔒 {fmtSec(c.at, 2)}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[11.5px] text-zinc-500">
+                  di
+                  <Num value={c.at} min={0} max={s.dur} commitOnBlur label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
+                  dtk
+                </span>
+              )}
               {m && (
                 <button type="button" aria-label={`Dengar ${c.id}`} title="Dengar" className="rounded-md px-1.5 py-1 text-[12px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" onClick={() => listen(srcOf(m))}>
                   ▶

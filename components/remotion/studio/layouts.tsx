@@ -12,6 +12,8 @@ import { MediaFill } from "./backgrounds";
 import { Laptop, LAPTOP, laptopFit, Phone, PHONE, phoneFit } from "./devices";
 import { Glow, Scrim, Shine, splitShadow, TextShine, useSplit, useSvgId } from "./fx";
 import { AppScreen } from "./screens";
+import { TeaserL } from "./teaser";
+import { useImgFallback } from "./safeImg";
 import { emphasisMatcher, KineticText } from "./text";
 import { autoLines, clamp, clamp01, DOWN, EASE, ease, fitSize, fmtNum, ink, mix, pulse, rgba, textEm, UP, useScene, useSrc, useStudio, type Box } from "./theme";
 
@@ -447,6 +449,8 @@ function LogoL() {
   const { scene, box, enter, f, T } = useT();
   const { brand, display, portrait } = useStudio();
   const res = useSrc();
+  // logo gagal dimuat (404 dll.) → ubin inisial brand (tanpa onError, <Img> membatalkan render)
+  const [logo, onLogoError] = useImgFallback(brand.logo ? res(brand.logo) : null);
   const split = useSplit();
   const L = scene.layout;
   const name = L.title ?? brand.name;
@@ -480,8 +484,8 @@ function LogoL() {
             inset: 0,
             borderRadius: G * 0.28,
             overflow: "hidden",
-            background: brand.logo ? "transparent" : `linear-gradient(140deg, ${mix(brand.primary, "#ffffff", 0.12)} 0%, ${brand.primary} 45%, ${mix(brand.primary, "#000000", 0.25)} 100%)`,
-            boxShadow: brand.logo ? undefined : `0 ${G * 0.12}px ${G * 0.4}px -${G * 0.1}px ${rgba(brand.primary, 0.8)}, inset 0 2px 0 rgba(255,255,255,.35)`,
+            background: logo ? "transparent" : `linear-gradient(140deg, ${mix(brand.primary, "#ffffff", 0.12)} 0%, ${brand.primary} 45%, ${mix(brand.primary, "#000000", 0.25)} 100%)`,
+            boxShadow: logo ? undefined : `0 ${G * 0.12}px ${G * 0.4}px -${G * 0.1}px ${rgba(brand.primary, 0.8)}, inset 0 2px 0 rgba(255,255,255,.35)`,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -489,8 +493,8 @@ function LogoL() {
             opacity: clamp01(gp * 2),
           }}
         >
-          {brand.logo ? (
-            <Img src={res(brand.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+          {logo ? (
+            <Img src={logo} onError={onLogoError} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
           ) : (
             <span style={{ fontFamily: display, fontWeight: 800, fontSize: G * 0.56, color: ink(brand.primary), lineHeight: 1 }}>{Array.from(name.trim())[0]?.toUpperCase() ?? "K"}</span>
           )}
@@ -707,6 +711,8 @@ function CtaL() {
   const { scene, box, enter, f, T, dur } = useT();
   const { brand, display, portrait, beat } = useStudio();
   const res = useSrc();
+  // logo gagal dimuat → titik warna brand (tanpa onError, <Img> membatalkan render)
+  const [logo, onLogoError] = useImgFallback(brand.logo ? res(brand.logo) : null);
   const L = scene.layout;
   const title = L.title ?? scene.text[0] ?? "Coba sekarang";
   const button = L.button ?? "Mulai sekarang";
@@ -725,7 +731,7 @@ function CtaL() {
   return (
     <Area box={box} gap={36}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, opacity: enter(0, 12), fontFamily: display, fontWeight: 800, fontSize: 34, color: rgba(brand.text, 0.85) }}>
-        {brand.logo ? <Img src={res(brand.logo)} style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 16 }} /> : <span style={{ width: 22, height: 22, borderRadius: 7, background: brand.primary, boxShadow: `0 0 20px ${brand.primary}` }} />}
+        {logo ? <Img src={logo} onError={onLogoError} style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 16 }} /> : <span style={{ width: 22, height: 22, borderRadius: 7, background: brand.primary, boxShadow: `0 0 20px ${brand.primary}` }} />}
         {brand.name}
       </div>
       <KineticText lines={lines} emphasis={L.emphasis} style={L.style ?? "punch"} w={box.w} h={box.h * 0.4} max={portrait ? 140 : 130} start={T(2)} />
@@ -856,6 +862,8 @@ export function SceneLayout() {
       return <MediaL />;
     case "quote":
       return <QuoteL />;
+    case "teaser":
+      return <TeaserL />;
     default:
       return <KineticL />;
   }

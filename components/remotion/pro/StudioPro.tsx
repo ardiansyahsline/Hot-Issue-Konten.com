@@ -7,7 +7,9 @@ import { StudioVideo, studioMeta } from "@/components/remotion/studio/StudioVide
 import { musicBeats } from "@/components/remotion/studio/audio";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, snapScenesToBeats, totalSec, type Timeline } from "@/lib/studio/timeline";
+import { teaserTimelineRaw } from "@/lib/studio/teaser";
+import { keepTeaserVisual, retimesTeaser, snapAroundTeaser } from "@/lib/studio/teaserLock";
+import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
@@ -70,13 +72,13 @@ function dropStaleFullVo(prev: Timeline | null, next: Timeline): Timeline {
 /**
  * rencana baru dari Harley -> batas adegan ditempel ke ketukan musik (sama seperti tombol "Tempel ke ketukan"), hanya kalau
  * ada ketukan, belum ada VO (VO yang sudah dibuat bisa terpotong), durasi adegan memang diubah AI (revisi teks saja tidak
- * menggeser durasi yang diatur user), dan total tetap ≤ MAX_TOTAL.
+ * menggeser durasi yang diatur user), dan total tetap ≤ MAX_TOTAL. Adegan premium teaser tidak digeser (snapAroundTeaser).
  */
 function snapPlan(prev: Timeline | null, tl: Timeline): Timeline {
   if (tl.vo?.lines.length) return tl;
   const timed = !prev || tl.scenes.length !== prev.scenes.length || tl.scenes.some((s, i) => s.id !== prev.scenes[i].id || Math.abs(s.dur - prev.scenes[i].dur) > 1e-6);
   if (!timed) return tl;
-  const next = snapScenesToBeats(tl, musicBeats(tl, totalSec(tl) + 1));
+  const next = snapAroundTeaser(tl, musicBeats(tl, totalSec(tl) + 1));
   return totalSec(next) <= MAX_TOTAL + 1e-6 ? next : tl;
 }
 
@@ -100,6 +102,12 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const playerRef = useRef<PlayerRef>(null);
 
   const idRef = useRef<string | null>(null);
+  /**
+   * nomor aksi buka/buat proyek terakhir dari USER (pilih proyek, proyek baru, contoh, Buka Teaser). Buka otomatis saat halaman
+   * dimuat tidak menaikkannya dan dilewati kalau user sudah memilih sesuatu; insert teaser/contoh yang selesai belakangan tidak
+   * merebut layar kalau sesudahnya user sudah memilih proyek lain.
+   */
+  const intentRef = useRef(0);
   const tlRef = useRef<Timeline | null>(null);
   const listRef = useRef(projects);
   listRef.current = projects;
@@ -210,6 +218,23 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     [queueSave],
   );
 
+  /**
+   * perubahan dari editor rencana & timeline: visual + durasi adegan premium teaser dikunci (VO panjang tetap lewat `change`).
+   * Tempel ke ketukan versi lama (🥁 di kartu rencana: snapScenesToBeats) ikut menggeser adegan teaser → diulang dengan
+   * snapAroundTeaser dari durasi semula, supaya adegan biasa sesudah adegan teaser benar-benar jatuh di ketukan.
+   */
+  const changeEdit = useCallback(
+    (next: Timeline) => {
+      const prev = tlRef.current;
+      if (prev && retimesTeaser(prev, next)) {
+        const base = { ...next, scenes: prev.scenes };
+        return change(snapAroundTeaser(base, musicBeats(base, totalSec(base) + 1)));
+      }
+      change(keepTeaserVisual(prev, next));
+    },
+    [change],
+  );
+
   // musik upload / katalog tanpa ketukan -> dideteksi di laptop, hasilnya masuk lewat change
   const beatHint = useBeats(timeline, projectId, tlRef, change);
 
@@ -257,12 +282,15 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         return;
       }
       const list = (data ?? []) as ProjectRow[];
-      setProjects(list);
-      listRef.current = list;
+      // proyek yang dibuat selama daftar dimuat (mis. Buka Teaser) tetap ada di daftar
+      const merged = [...listRef.current.filter((p) => !list.some((r) => r.id === p.id)), ...list];
+      setProjects((ps) => [...ps.filter((p) => !list.some((r) => r.id === p.id)), ...list]);
+      listRef.current = merged;
       const last = store.get(LAST_KEY);
       const pick = list.find((p) => p.id === last)?.id ?? list[0]?.id;
-      // open() langsung mengisi projectId sebelum menunggu DB -> chat tidak sempat tampil sebagai "proyek baru"
-      if (pick) void open(pick);
+      // open() langsung mengisi projectId sebelum menunggu DB -> chat tidak sempat tampil sebagai "proyek baru".
+      // User sudah memilih/membuat proyek selama daftar dimuat -> pilihannya tidak ditimpa buka otomatis
+      if (pick && intentRef.current === 0 && idRef.current === null) void open(pick);
       setLoading(false);
     })().catch(() => {
       if (!dead) {
@@ -276,6 +304,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   }, [sb, open]);
 
   const fresh = useCallback(() => {
+    intentRef.current++;
     flushAll();
     setBarErr(null);
     setPid(null);
@@ -288,20 +317,54 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   }, [flushAll, setPid]);
 
   const example = useCallback(async () => {
+    const my = ++intentRef.current;
     setCreating(true);
     const tl = tidyTimeline(defaultTimeline(), catRef.current);
     const { data, error } = await sb.from("studio_projects").insert({ title: "Contoh video", timeline: tl }).select("id, title, updated_at").single();
     setCreating(false);
     if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuat proyek. Coba lagi."));
     const row = data as ProjectRow;
+    setProjects((ps) => [row, ...ps.filter((p) => p.id !== row.id)]);
+    // sementara insert berjalan user sudah membuka proyek lain -> proyek contoh cukup masuk daftar
+    if (intentRef.current !== my) return;
     flushAll();
-    setProjects((ps) => [row, ...ps]);
     setPid(row.id);
     setTitle(row.title);
     tlRef.current = tl;
     setTimeline(tl);
     setSelected(null);
     setSave("saved");
+    // open() yang masih menunggu DB keluar di cek id basi tanpa mematikan `opening` -> dimatikan di sini
+    setOpening(false);
+  }, [sb, flushAll, setPid]);
+
+  /** 🎞️ Teaser CS Tracker: proyek baru dari timeline teaser bawaan (11 adegan premium) lewat jalur simpan proyek yang sama */
+  const openTeaser = useCallback(async () => {
+    const my = ++intentRef.current;
+    setCreating(true);
+    const raw = teaserTimelineRaw();
+    const tl = tidyTimeline(raw, catRef.current);
+    const name = typeof raw.title === "string" && raw.title ? raw.title : "Teaser CS Tracker";
+    const { data, error } = await sb.from("studio_projects").insert({ title: name, timeline: tl }).select("id, title, updated_at").single();
+    setCreating(false);
+    if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuka teaser. Coba lagi."));
+    const row = data as ProjectRow;
+    setProjects((ps) => [row, ...ps.filter((p) => p.id !== row.id)]);
+    // sementara insert berjalan user sudah membuka proyek lain / proyek baru -> pilihan terakhir user yang menang, teaser cukup
+    // masuk daftar (buka otomatis saat halaman dimuat tidak dihitung: teaser tetap dibuka)
+    if (intentRef.current !== my) return;
+    flushAll();
+    setPid(row.id);
+    setTitle(row.title);
+    setBarErr(null);
+    tlRef.current = tl;
+    setTimeline(tl);
+    setSelected(null);
+    setSave("saved");
+    // open() yang masih menunggu DB (buka otomatis / pilih proyek lain saat insert berjalan) keluar di cek id basi tanpa
+    // mematikan `opening` -> dimatikan di sini supaya kartu rencana & preview tidak tertahan skeleton
+    setOpening(false);
+    playerRef.current?.seekTo(0);
   }, [sb, flushAll, setPid]);
 
   const rename = useCallback(
@@ -345,7 +408,9 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const onPlan = useCallback(
     (raw: unknown) => {
       const prev = tlRef.current;
-      const tl = snapPlan(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current)));
+      // adegan premium teaser dikunci juga di sini (server sudah menguncinya di mergeRevision; ini jaring untuk VO panjang
+      // yang memanjangkan adegan di laptop), dan tempel ke ketukan tidak menggeser durasinya
+      const tl = snapPlan(prev, keepTeaserVisual(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current))));
       change(tl);
       setSelected(null);
       playerRef.current?.seekTo(0);
@@ -386,11 +451,16 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         save={save}
         loading={loading || opening}
         error={barErr}
-        onPick={(id) => void open(id)}
+        onPick={(id) => {
+          intentRef.current++;
+          void open(id);
+        }}
         onNew={fresh}
         onRename={(t) => void rename(t)}
         onDelete={() => void remove()}
         onRetrySave={retrySave}
+        onTeaser={() => void openTeaser()}
+        teaserBusy={creating}
       />
 
       {/* HP: chat → preview → rencana → suara & export. Layar lebar: kiri chat + rencana, kanan sticky */}
@@ -415,7 +485,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
             {opening ? (
               <div className="card h-64 animate-pulse" />
             ) : timeline ? (
-              <PlanCard timeline={timeline} onChange={change} catalog={catalog} selected={selected} onSelect={selectScene} beatHint={beatHint} />
+              <PlanCard timeline={timeline} onChange={changeEdit} catalog={catalog} selected={selected} onSelect={selectScene} beatHint={beatHint} />
             ) : (
               <div className="rounded-2xl border border-dashed border-zinc-800 p-5 text-center text-[13px] text-zinc-500">📋 Rencana video (naskah, adegan, musik & SFX) muncul di sini setelah ngobrol sama Harley.</div>
             )}
@@ -424,7 +494,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
         <div className="contents lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100dvh-6rem)] lg:min-w-0 lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pb-1">
           <div className="order-2 min-w-0 space-y-4">
-            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={change} opening={opening} beatHint={beatHint} />
+            <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={changeEdit} opening={opening} beatHint={beatHint} />
           </div>
           {timeline && (
             <div className="order-4 min-w-0 space-y-4">

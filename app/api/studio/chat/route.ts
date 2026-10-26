@@ -17,6 +17,7 @@ import {
   needsHeavy,
   parseDirector,
   visibleProse,
+  withStudioFence,
   type DirectorAttachment,
   type DirectorMusic,
   type DirectorVoice,
@@ -402,7 +403,9 @@ export async function POST(req: NextRequest) {
       });
     else if (cut && !planSent && !parsed.choice) emit({ t: "error", message: "Jawabannya terpotong. Coba kirim lagi ya." });
     else if (!planSent && !parsed.choice && !parsed.prose) emit({ t: "error", message: `${DIRECTOR_HERO} belum sempat menjawab. Coba kirim lagi ya.` });
-    await saveAssistant(full, usedModel);
+    // rencana yang dipakai selalu disimpan di pagar ```studio (apa pun pagar yang ditulis AI: ```timeline / ```json / tanpa pagar)
+    // → hitungan kuota mesin berat (heavyQuotaOk) mencakup semua rencana yang benar-benar diterapkan
+    await saveAssistant(planSent ? withStudioFence(full) : full, usedModel);
     step("check", "done");
   }
 
@@ -708,13 +711,15 @@ async function loadMusic(db: Db, uid: string): Promise<DirectorMusic[]> {
 }
 
 /**
- * Batas pemakaian mesin berat untuk Studio per user per hari (WIB). Env AI_STUDIO_HEAVY_DAILY_LIMIT,
- * kalau kosong ikut AI_HEAVY_DAILY_LIMIT (default 15). Pemilik AI tidak dibatasi. Yang dihitung hanya jawaban berisi rencana
- * (blok ```studio) — obrolan & kartu pertanyaan tidak.
+ * Batas pemakaian mesin berat untuk Studio per user per hari (WIB). Env AI_STUDIO_HEAVY_DAILY_LIMIT;
+ * kalau kosong / tidak diisi ikut AI_HEAVY_DAILY_LIMIT (batas tab ✨ AI), kalau itu juga kosong bawaan 15.
+ * 0 = hanya pemilik AI; bukan angka / negatif = tanpa batas. Pemilik AI tidak dibatasi.
+ * Yang dihitung: jawaban mesin berat berisi blok ```studio. Setiap rencana yang diterapkan disimpan dalam blok itu
+ * (withStudioFence), apa pun pagar yang ditulis AI (```timeline / ```json / tanpa pagar). Obrolan & kartu pertanyaan tidak dihitung.
  */
 async function heavyQuotaOk(db: Db, uid: string, owner: boolean) {
   if (owner) return true;
-  // kosong / tidak diisi = bawaan 15; 0 = hanya pemilik AI
+  // kosong = ikut AI_HEAVY_DAILY_LIMIT; kalau itu juga kosong = bawaan 15. 0 = hanya pemilik AI
   const limit = Number(process.env.AI_STUDIO_HEAVY_DAILY_LIMIT?.trim() || process.env.AI_HEAVY_DAILY_LIMIT?.trim() || 15);
   if (!Number.isFinite(limit) || limit <= 0) return limit !== 0;
   const wib = new Date(Date.now() + 7 * 3600_000);

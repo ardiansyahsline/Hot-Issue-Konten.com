@@ -10,7 +10,7 @@ import { splitChoice, type Choice } from "@/lib/choiceCard";
 import { SFX_BUILTIN, type SfxMeta } from "./sfxMeta";
 import {
   FORMATS,
-  LAYOUTS,
+  PLAN_LAYOUTS,
   MAX_DUR,
   MAX_SCENES,
   MAX_TOTAL,
@@ -20,6 +20,8 @@ import {
   SCREENS,
   TRANSITIONS,
   isLoudSfx,
+  isOwnPresetLogo,
+  logoFitsBrand,
   normalizeTimeline,
   sceneStartSecs,
   type LayoutKind,
@@ -29,8 +31,11 @@ import {
   type TransitionKind,
   type VoTrack,
 } from "./timeline";
+import { keepTeaserVisual } from "./teaserLock";
 
 export const DIRECTOR_HERO = "Harley";
+/** sama dengan batas normalizeTimeline (lib/studio/timeline.ts, `.slice(0, 8)`) & MAX_SFX di SceneCard */
+const MAX_SFX_PER_SCENE = 8;
 
 // ---------------------------------------------------------------------------------------------
 // Contoh rencana nyata: 3 adegan pertama teaser CS Tracker (assets/audio/teaser/cue-sheet.md + naskah-vo.md)
@@ -129,7 +134,7 @@ export const DIRECTOR_RULES = [
   "2. SATU PESAN PER ADEGAN. Ada dua ide → pecah jadi dua adegan.",
   "3. Teks layar maks ±6–7 kata per baris, maks 3 baris. Teks layar = inti VO, bukan salinan VO. Kata kunci disorot lewat layout.emphasis.",
   "4. Ritme: potongan & impact jatuh di ketukan musik dan jeda VO. Montage 0,5–1,5 dtk per adegan, penjelasan 2–5 dtk. Variasikan tempo: tegang → reveal → groove → klimaks → outro.",
-  "5. Durasi adegan harus muat VO: ±2,5 kata per detik + 0,4 dtk napas. VO kepanjangan → pendekkan kalimatnya, jangan dipaksa.",
+  "5. Durasi adegan harus muat VO: ±2,5 kata per detik + 0,4 dtk napas (+ vo.at kalau VO adegan itu mulai belakangan). VO kepanjangan → pendekkan kalimatnya, jangan dipaksa.",
   "6. Gerak halus ala 12 prinsip animasi: anticipation sebelum reveal, follow-through, staging (satu fokus per layar), timing & spacing, squash ringan, overshoot kecil. ease \"spring\" (bawaan, halus), \"overshoot\" untuk momen punchy, \"smooth\" untuk adegan tenang/premium. Kamera: push = fokus, pull = reveal, pan/tilt = menyusuri mockup.",
   "7. Safe zone TikTok/Reels: teks & tombol penting jauh dari tepi (9:16: atas ±11%, bawah ±21%, kanan ±14% dipakai tombol & caption aplikasi). Website sudah menjaga zona aman — jangan minta teks di pojok bawah/kanan.",
   "8. Kontras tinggi & warna brand konsisten: satu warna aksen (brand.primary) untuk sorotan, latar yang tegas. Jangan campur banyak warna.",
@@ -174,15 +179,17 @@ export const DIRECTOR_RULES = [
   "  }]",
   "}",
   "Aturan isi:",
-  "- brand: Konten.com = {\"id\":\"konten\"} (oranye #f97316, latar #09090b), TWS = {\"id\":\"tws\"} (biru #2f5ff0, latar hitam) — cukup id-nya, warna terisi otomatis. Brand lain = \"custom\" + nama & warna dari user. Logo HANYA milik Konten.com, TWS, atau logo yang diupload user (pakai src lampirannya).",
+  "- brand: Konten.com = {\"id\":\"konten\"} (oranye #f97316, latar #09090b), TWS = {\"id\":\"tws\"} (biru #2f5ff0, latar hitam) — cukup id-nya, warna terisi otomatis. Brand lain = \"custom\" + nama & warna dari user. Logo HANYA milik Konten.com, TWS, atau logo yang diupload user (pakai src lampirannya). Logo bawaan Konten.com/TWS terisi otomatis dari id — jangan ditulis, dan saat ganti brand jangan salin logo brand lama.",
   `- id adegan: rencana baru pakai s1, s2, …; revisi pertahankan id lama, adegan baru pakai id yang belum dipakai. dur ${MIN_DUR}–${MAX_DUR} dtk per adegan, maks ${MAX_SCENES} adegan, total maks ${MAX_TOTAL} dtk. Jumlahkan dur supaya total sesuai durasi yang diminta (±1 dtk).`,
   "- transition = cara MASUK ke adegan itu; adegan pertama \"cut\". Variasikan tapi tetap satu bahasa visual (energik: slide + whip + zoom; premium: fade + mask; berita: cut + slide; teknologi: glitch secukupnya).",
-  "- sfx.at = detik dari awal adegan saat \"pukulan\" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks 6 SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.",
+  `- sfx.at = detik dari awal adegan saat "pukulan" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks ${MAX_SFX_PER_SCENE} SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.`,
   "- music.src: \"bed\" = trailer bed bebas hak cipta (bawaan kalau tidak ada musik), \"none\" = tanpa musik, atau src dari MUSIK TERSEDIA / lampiran audio user. JANGAN pakai lagu berhak cipta (lagu artis, sound viral) — kalau diminta, jelaskan singkat & tawarkan trailer bed atau upload musik bebas hak cipta.",
   "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca. Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"Si-es Treker\", \"AI\" → \"E-ai\", \"review\" → \"riviu\", \"real-time\" → \"ril-taim\", \"download\" → \"daun-lod\", \"PPT\" → \"pe-pe-te\", \"ranking\" → \"renking\". Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
   "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). exaggeration 0.25–1 (makin tinggi makin ekspresif), cfg 0.1–1 (makin rendah makin santai).",
   "- subtitles true kalau ada VO (false kalau teks layarnya sudah sama persis dengan VO).",
   "- bg.media, layout.src, brand.logo hanya boleh src dari LAMPIRAN USER (alamat /api/studio/…). Jangan menulis URL luar.",
+  '- ADEGAN PREMIUM (layout.kind "teaser", mis. di proyek Teaser CS Tracker) = animasi buatan tangan yang sinkron dengan ketukan musik. Saat revisi, salin PERSIS dari TIMELINE SEKARANG: id, layout (kind + shot), bg, camera, visual, dur, dan vo.at. Yang boleh diubah HANYA teks VO (vo.text & vo.spell — VO mulai di detik vo.at, jadi harus muat di dur − vo.at − 0,25 dtk, ±2,5 kata per detik; mis. dur 5,4 & vo.at 1,2 → maks ±3,9 dtk ≈ 9 kata. Kepanjangan → pendekkan kalimatnya, dur tidak bisa ditambah), SFX (nyala/mati, tambah, hapus; detik SFX bawaannya jangan digeser), transition, dan level musik (scene.music). Teks layar (text) hanya tampil di shot chat & montage (1 baris) dan trainAi (maks 2 baris), maks 6 kata per baris; shot lain teks layarnya bagian dari animasi, jadi biarkan. Jangan membuat adegan "teaser" baru dan jangan mengubah adegan lain menjadi "teaser".',
+  "- Kalau user minta durasi total berubah (mis. \"pendekin jadi 45 detik\") di proyek yang punya adegan premium: ubah, hapus, atau tambah adegan NON-teaser; kalau tetap tidak cukup, jelaskan singkat bahwa durasi adegan premium dikunci & tawarkan menghapus adegan premium tertentu (hanya kalau user setuju).",
   "",
   "CONTOH (3 adegan pertama teaser CS Tracker 60 dtk — video aslinya lanjut sampai outro; jangan disalin mentah untuk brief lain):",
   "```studio",
@@ -217,12 +224,13 @@ const LAYOUT_PROPS: Record<LayoutKind, string> = {
   cta: "ajakan penutup + tombol. Props: title, subtitle, button",
   media: "gambar/klip upload user (cover + ken burns). Props: src (dari LAMPIRAN USER), fit cover|contain, kenburns",
   quote: "kutipan besar (kutipan asli dari user saja!). Props: title (isi kutipan), by",
+  teaser: "JANGAN DIPAKAI — adegan premium buatan tangan khusus teaser resmi",
 };
 
 const SCREEN_DESC: Record<ScreenKind, string> = {
   dashboard: "ringkasan CS Tracker (kartu angka, grafik kecil)",
   hotIssue: "daftar Hot Issue + badge HOT naik peringkat",
-  videoReview: "kartu Video Review + status (Rilis/Banding/Menunggu)",
+  videoReview: "kartu kasus Video Review + status (Menunggu → Diproses → Disetujui/Ditolak)",
   chat: "chat tim real-time (bubble, reaksi, lampiran)",
   ai: "chat AI: kartu pertanyaan, langkah berpikir, jawaban",
   design: "desain konten berita (cover, carousel, unduh)",
@@ -285,7 +293,7 @@ export function directorCatalog(): string {
     ...sfx,
     "",
     "## KATALOG LAYOUT (layout.kind — fungsi & props)",
-    ...LAYOUTS.map((k) => `- ${k}: ${LAYOUT_PROPS[k]}`),
+    ...PLAN_LAYOUTS.map((k) => `- ${k}: ${LAYOUT_PROPS[k]}`),
     "",
     "## LAYAR MOCKUP (layout.screen untuk phone/laptop — UI website asli yang beranimasi, bukan screenshot)",
     ...SCREENS.map((k) => `- ${k}: ${SCREEN_DESC[k]}`),
@@ -383,6 +391,8 @@ function prune(v: unknown): unknown {
 /** timeline dalam JSON ringkas untuk AI (tanpa data VO hasil generate & daftar ketukan yang panjang — diganti jarak ketukan + ketukan pertama) */
 export function compactTimeline(tl: Timeline): string {
   const rest: Record<string, unknown> = { ...tl };
+  // logo bawaan brand terisi otomatis dari id → tidak ditampilkan (supaya AI tidak menyalinnya ke brand lain saat ganti brand)
+  if (isOwnPresetLogo(tl.brand)) rest.brand = { ...tl.brand, logo: undefined };
   delete rest.vo;
   delete rest.v;
   delete rest.fps;
@@ -479,11 +489,14 @@ export type DirectorParsed = {
   broken: string | null;
 };
 
-/** pisahkan jawaban AI: prosa, kartu pertanyaan, dan timeline */
-export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {}): DirectorParsed {
-  const src = String(text ?? "");
+/** letak rencana yang dipakai di jawaban AI: [start, end) di teks asli, isi JSON-nya, dan apakah sudah di pagar ```studio yang tertutup */
+type PlanSpan = { start: number; end: number; body: string; studio: boolean };
+
+/** cari rencana di jawaban AI (logika tunggal untuk parseDirector & withStudioFence) */
+function locatePlan(src: string): { raw: Record<string, unknown> | null; broken: string | null; partial: boolean; prose: string; span: PlanSpan | null } {
   let raw: Record<string, unknown> | null = null;
   let broken: string | null = null;
+  let span: PlanSpan | null = null;
   // blok rencana: ```studio (utama), ```timeline / ```json yang berisi scenes. Yang terakhir valid dipakai.
   for (const m of src.matchAll(HIDDEN_ALL)) {
     const label = m[1].toLowerCase();
@@ -492,6 +505,8 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     if (parsed) {
       raw = parsed;
       broken = null;
+      const at = m.index ?? 0;
+      span = { start: at, end: at + m[0].length, body: m[2], studio: label === "studio" };
     } else if (label !== "json" || /"scenes"/.test(m[2])) broken = m[2];
   }
   // blok rencana yang belum ditutup (jawaban terpotong)
@@ -505,8 +520,10 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
       const label = lastOpen[1].toLowerCase();
       if (label !== "ask" && !raw) {
         const parsed = rawTimeline(looseJson(after));
-        if (parsed) raw = parsed;
-        else if (label !== "json" || /"scenes"/.test(after)) broken = after;
+        if (parsed) {
+          raw = parsed;
+          span = { start: lastOpen.index, end: src.length, body: after, studio: false };
+        } else if (label !== "json" || /"scenes"/.test(after)) broken = after;
       }
     }
   }
@@ -516,13 +533,23 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     const a = prose.indexOf("{");
     const b = prose.lastIndexOf("}");
     if (a >= 0 && b > a && /"scenes"\s*:/.test(prose.slice(a, b + 1))) {
-      const parsed = rawTimeline(looseJson(prose.slice(a, b + 1)));
+      const json = prose.slice(a, b + 1);
+      const parsed = rawTimeline(looseJson(json));
       if (parsed) {
         raw = parsed;
         prose = prose.slice(0, a) + prose.slice(b + 1);
+        const at = src.indexOf(json);
+        if (at >= 0) span = { start: at, end: at + json.length, body: json, studio: false };
       }
     }
   }
+  return { raw, broken: raw ? null : broken, partial, prose, span };
+}
+
+/** pisahkan jawaban AI: prosa, kartu pertanyaan, dan timeline */
+export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {}): DirectorParsed {
+  const src = String(text ?? "");
+  const { raw, broken, partial, prose } = locatePlan(src);
   const ask = splitChoice(src);
   return {
     prose: prose.replace(/\n{3,}/g, "\n\n").trim(),
@@ -530,8 +557,22 @@ export function parseDirector(text: string, opts: { extraSfx?: SfxMeta[] } = {})
     timeline: raw ? normalizeTimeline(raw, { extraSfx: opts.extraSfx }) : null,
     partial,
     raw,
-    broken: raw ? null : broken,
+    broken,
   };
+}
+
+/**
+ * Rencana yang dipakai parseDirector tapi tidak ditulis di pagar ```studio yang tertutup (pagar ```timeline / ```json,
+ * blok terpotong tanpa penutup, atau JSON tanpa pagar) dipindah ke pagar ```studio — isi & hasil parse-nya tetap sama.
+ * Dipakai sebelum jawaban disimpan, supaya semua rencana yang benar-benar diterapkan tersimpan dalam satu bentuk
+ * (hitungan kuota mesin berat mencari ```studio). Teks tanpa rencana yang dipakai dikembalikan apa adanya.
+ */
+export function withStudioFence(text: string): string {
+  const src = String(text ?? "");
+  const { raw, span } = locatePlan(src);
+  if (!raw || !span || span.studio) return src;
+  // tanpa tambahan baris di luar pagar → prosa hasil parse tetap persis sama
+  return `${src.slice(0, span.start)}\`\`\`studio\n${span.body.trim()}\n\`\`\`${src.slice(span.end)}`;
 }
 
 /**
@@ -548,7 +589,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   for (const k of ["concept", "hook", "platform", "goal", "mood"] as const) if (!has(o, k)) out[k] = prev[k];
   // brand
   if (!has(o, "brand")) out.brand = prev.brand;
-  else if (!has(o.brand, "logo") && prev.brand.logo && out.brand.id === prev.brand.id) out.brand = { ...out.brand, logo: prev.brand.logo };
+  else if (!has(o.brand, "logo") && prev.brand.logo && out.brand.id === prev.brand.id && logoFitsBrand(prev.brand.logo, out.brand.id))
+    out.brand = { ...out.brand, logo: prev.brand.logo };
   // suara
   if (!has(o, "voice")) out.voice = prev.voice;
   else if (out.voice.mode === prev.voice.mode) {
@@ -587,8 +629,12 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     let scene = s;
     if (old.layout.src && !s.layout.src && s.layout.kind === old.layout.kind && !has(rs.layout, "src")) scene = { ...scene, layout: { ...scene.layout, src: old.layout.src } };
     if (old.bg.media && !s.bg.media && s.bg.kind === old.bg.kind && !has(rs.bg, "media")) scene = { ...scene, bg: { ...scene.bg, media: old.bg.media } };
+    // adegan biasa tidak boleh diubah jadi adegan premium teaser (animasinya buatan tangan untuk isi teaser, bukan isi adegan ini)
+    if (old.layout.kind !== "teaser" && scene.layout.kind === "teaser") scene = { ...scene, layout: old.layout };
     return scene;
   });
+  // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
+  out.scenes = keepTeaserVisual(prev, out).scenes;
   out.vo = keepVo(prev, out);
   return out;
 }
@@ -620,22 +666,38 @@ function keepVo(prev: Timeline, next: Timeline): VoTrack | null {
 // ---------------------------------------------------------------------------------------------
 /** permintaan yang butuh kreativitas besar (rencana / konsep baru) */
 const BIG_EDIT =
-  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video|dari awal|rombak|remake|versi (baru|lain|kedua)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
+  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video)(nya)?\b|\b(sudut pandang|dari awal|(di)?rombak|remake|versi (baru|lain|kedua)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
 /** revisi kecil: durasi, teks, hapus/tukar adegan, warna, transisi, SFX, musik */
 const SMALL_EDIT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;
+
+/**
+ * sudah ada timeline tapi minta video LAIN (rencana baru). Wajib ada kata benda video/versi/konten (atau "yang buat/untuk …"),
+ * supaya revisi kecil seperti "satu lagi, logonya digedein" / "buat lagi transisinya" tidak ikut dianggap rencana baru.
+ */
+const NEW_VIDEO =
+  /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(satu|1) (video|versi|konten) lagi\b|\b(bikin|buat)(in|kan)? (juga|lagi) (video|versi|konten|yang (buat|untuk|versi)|(buat|untuk) (fitur|produk|brand|layanan))\b/i;
 
 /** revisi kecil pada timeline yang sudah ada → boleh pakai mesin cepat (rencana baru / revisi besar → mesin berat) */
 export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   if (!hasTimeline) return false;
   const t = String(text ?? "").trim();
   if (!t || t.length > 240 || /^📌/.test(t)) return false;
-  if (BIG_EDIT.test(t)) return false;
+  // revisi besar / minta video lain → bukan revisi kecil, walau menyebut durasi/logo/warna ("bikinin juga video buat fitur X, 30 detik")
+  if (BIG_EDIT.test(t) || NEW_VIDEO.test(t)) return false;
   return SMALL_EDIT.test(t);
 }
 
-/** obrolan ringan di awal pesan: sapaan, terima kasih, "oke" */
-const CHITCHAT = /^\s*(halo+|hallo|hai+|hi+|hey|selamat (pagi|siang|sore|malam)|makasih|makasi|terima ?kasih|thanks|thank you|thx|oke+|ok|okay|sip+|siap|mantap|keren|bagus|nice|noted|wkwk\w*|haha\w*)\b/i;
+/**
+ * satu kata/frasa basa-basi: sapaan, terima kasih, "oke", pujian singkat (+ sapaan orang: kak, bang, Harley, ya, dong…).
+ * Tawa pakai [a-z]*, BUKAN \w*: "_" juga cocok dengan CHAT_SEP (\p{P}) → tiap "_" bisa dibelah dua cara → backtracking eksponensial (ReDoS).
+ */
+const PLEASANTRY =
+  "(halo+|hallo+|hai+|hi+|hey+|selamat (pagi|siang|sore|malam)|(makasih+|makasi+|terima ?kasih)( banyak)?|thanks?|thank you|thx|oke+y?|ok+|okay|sip+|siap|mantap+|mantul|keren+|bagus+|nice|noted|good|great|cakep|wkwk[a-z]*|haha[a-z]*|hehe[a-z]*)(\\s+(kak|ka|bang|mas|mbak|bro|sis|min|harley|ya+|yah|deh|dong|banget|bgt|sekali|nih))*";
+/** pemisah antar basa-basi: spasi, tanda baca, emoji */
+const CHAT_SEP = "[\\s\\p{P}\\p{S}\\p{Extended_Pictographic}\\uFE0F\\u200D]";
+/** obrolan ringan: SELURUH pesan hanya basa-basi ("Oke makasih kak! 🙏"). "Halo, aku mau bikin video…" bukan obrolan (lanjut dinilai sebagai brief). */
+const CHITCHAT = new RegExp(`^${CHAT_SEP}*${PLEASANTRY}(${CHAT_SEP}+${PLEASANTRY})*${CHAT_SEP}*$`, "iu");
 /** pertanyaan cara pakai / kenapa — dijawab singkat tanpa rencana */
 const HOWTO = /^\s*((gimana|bagaimana|gmn) ?(cara|caranya)\b|caranya\b|cara (pakai|bikin|buat|download|unduh|export|ekspor|upload|ganti|hapus|simpan|share|bagi)\b|kenapa\b|mengapa\b|kok\b)/i;
 /** kata yang menandakan brief video (bukan sekadar obrolan) */
@@ -657,7 +719,7 @@ export function needsHeavy(text: string, o: { hasTimeline: boolean; afterAsk?: b
   if (o.afterAsk && !(question && !brief)) return true;
   if (t.length <= 160 && !brief && (question || CHITCHAT.test(t))) return false;
   // sudah ada timeline: pesan pendek = revisi ringan / obrolan (kecuali minta video baru); belum ada: brief video
-  return o.hasTimeline ? t.length > 60 || /\b(video|rencana|proyek) baru\b/i.test(t) : brief || t.length >= 25;
+  return o.hasTimeline ? t.length > 60 || NEW_VIDEO.test(t) : brief || t.length >= 25;
 }
 
 /** pesan lama untuk riwayat: blok rencana diringkas (timeline terbaru sudah ada di sesi), kartu jadi daftar pertanyaannya */

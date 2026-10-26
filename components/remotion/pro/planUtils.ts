@@ -31,6 +31,7 @@ export const LAYOUT_LABEL: Record<LayoutKind, string> = {
   cta: "👉 Ajakan (CTA)",
   media: "🎞️ Klip / gambar",
   quote: "💬 Kutipan",
+  teaser: "🎞️ Adegan premium (teaser)",
 };
 
 export const SCREEN_LABEL: Record<ScreenKind, string> = {

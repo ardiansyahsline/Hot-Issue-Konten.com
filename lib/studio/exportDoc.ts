@@ -9,6 +9,7 @@ import {
   MUSIC_LEVEL_DB,
   sceneStartSecs,
   totalFrames,
+  voStartOf,
   type BgKind,
   type Camera,
   type Dir,
@@ -51,6 +52,7 @@ const LAYOUT_LABEL: Record<LayoutKind, string> = {
   cta: "Ajakan penutup (CTA)",
   media: "Video / foto upload",
   quote: "Kutipan",
+  teaser: "Adegan premium teaser",
 };
 const TR_LABEL: Record<TransitionKind, string> = { cut: "Potong langsung", fade: "Memudar", slide: "Geser", zoom: "Zoom", mask: "Sapuan bentuk", whip: "Kibas cepat", glitch: "Glitch" };
 const DIR_LABEL: Record<Dir, string> = { left: "ke kiri", right: "ke kanan", up: "ke atas", down: "ke bawah" };
@@ -187,7 +189,7 @@ function cueSheet(tl: Timeline, starts: number[], end: number, extra: SfxMeta[])
       const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
       const words = sc.vo.text.split(/\s+/).filter(Boolean);
       cues.push({
-        t: t0 + (line?.at ?? 0.15),
+        t: t0 + voStartOf(sc, line),
         kind: "VO",
         what: `“${words.slice(0, 7).join(" ")}${words.length > 7 ? "…" : ""}”`,
         note: `${line ? `${num(line.dur, 1)} dtk` : "belum dibuat"} · musik turun saat VO bicara`,
@@ -252,7 +254,7 @@ export function storyboardHtml(tl: Timeline, extra: SfxMeta[] = []): string {
     ? voScenes
         .map(({ s, i }) => {
           const line = tl.vo?.lines.find((l) => l.sceneId === s.id);
-          const t0 = starts[i] + (line?.at ?? 0.15);
+          const t0 = starts[i] + voStartOf(s, line);
           const t1 = line ? t0 + line.dur : starts[i] + s.dur;
           const spell = s.vo?.spell && s.vo.spell !== s.vo.text ? esc(s.vo.spell) : `<span class="muted">sama</span>`;
           return `<tr><td class="nowrap">${i + 1}. ${esc(s.name)}</td><td class="nowrap mono">${clock(t0)}–${clock(t1)}</td><td>${esc(s.vo?.text)}</td><td>${spell}</td></tr>`;

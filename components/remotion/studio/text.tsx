@@ -6,7 +6,7 @@
  */
 import { useMemo, type CSSProperties } from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
-import { alignWords, sceneStartSecs, subtitleCues, type Ease, type Timeline } from "@/lib/studio/timeline";
+import { alignWords, sceneStartSecs, subtitleCues, voStartOf, type Ease, type Timeline } from "@/lib/studio/timeline";
 import { splitShadow, useSplit } from "./fx";
 import { clamp, clamp01, ease, ink, rgba, textEm, useScene, useStudio } from "./theme";
 
@@ -290,16 +290,19 @@ export function buildSubs(tl: Timeline): SubCue[] {
   tl.scenes.forEach((sc, i) => {
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
     if (!sc.vo?.text || !line?.words?.length) return;
-    const t0 = starts[i] + (line.at ?? 0.15);
+    const t0 = starts[i] + voStartOf(sc, line);
     const tw = sc.vo.text.split(/\s+/).filter(Boolean);
     // sama dengan pemetaan di subtitleCues: kata mesin → kata asli (alignWords)
     timed.set(i, alignWords(line.words, tw).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e })));
   });
-  return cues.map((c, k) => {
+  // urut WAKTU, bukan urutan adegan: VO adegan yang lewat batas bisa masih bunyi saat VO adegan berikutnya mulai (VoPanel
+  // memperingatkan "menabrak"), jadi potongan berikutnya = yang mulai paling dekat sesudahnya. Tiap potongan tampil ≥ 0,3 dtk.
+  const order = cues.map((c, k) => ({ c, k })).sort((a, b) => a.c.s - b.c.s || a.k - b.k);
+  return order.map(({ c }, n) => {
     const si = c.scene; // adegan pemilik VO, walau suaranya lewat batas adegan
     const ws = timed.get(si)?.filter((w) => w.s >= c.s - 1e-4 && w.e <= c.e + 1e-4) ?? [];
-    const next = cues[k + 1]?.s ?? Infinity;
-    return { ...c, end: Math.min(next, c.e + 0.3), scene: si, words: ws.length ? ws : null };
+    const next = order.slice(n + 1).find((x) => x.c.s > c.s + 1e-4)?.c.s ?? Infinity;
+    return { ...c, end: Math.max(c.s + 0.3, Math.min(next, c.e + 0.3)), scene: si, words: ws.length ? ws : null };
   });
 }
 

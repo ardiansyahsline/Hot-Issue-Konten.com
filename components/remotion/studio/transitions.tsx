@@ -109,9 +109,15 @@ function lookIn(t: Tr, f: number, fps: number, W: number, H: number, accent: str
       const jx = (random(`gx${seed}`) - 0.5) * 46 * k;
       const jy = (random(`gy${seed}`) - 0.5) * 10 * k;
       return {
-        style: { opacity: on ? 1 : 0.35, transform: `translate(${jx}px, ${jy}px) skewX(${(random(`gs${seed}`) - 0.5) * 5 * k}deg)` },
+        // kedip "mati" = lapisan hitam, bukan opacity wadah (render browser menerapkan opacity per elemen → adegan tembus berlapis)
+        style: { transform: `translate(${jx}px, ${jy}px) skewX(${(random(`gs${seed}`) - 0.5) * 5 * k}deg)` },
         split: 14 * k + 4 * random(`gr${seed}`) * k,
-        overlay: <GlitchBars f={f} k={k} W={W} H={H} />,
+        overlay: (
+          <>
+            {!on && <AbsoluteFill style={{ background: "#000", opacity: 0.6 }} />}
+            <GlitchBars f={f} k={k} W={W} H={H} />
+          </>
+        ),
       };
     }
     default:
@@ -146,7 +152,17 @@ function lookOut(t: Tr, f: number, fps: number, W: number, H: number): Look {
     case "glitch": {
       const seed = Math.floor(f) + 99;
       const jx = (random(`go${seed}`) - 0.5) * 40 * p;
-      return { style: { transform: `translate(${jx}px, 0)`, opacity: random(`gf${seed}`) > 0.3 ? 1 : 0.5 }, split: 10 * p, overlay: <GlitchBars f={f + 50} k={p} W={W} H={H} /> };
+      const off = random(`gf${seed}`) <= 0.3;
+      return {
+        style: { transform: `translate(${jx}px, 0)` },
+        split: 10 * p,
+        overlay: (
+          <>
+            {off && <AbsoluteFill style={{ background: "#000", opacity: 0.45 }} />}
+            <GlitchBars f={f + 50} k={p} W={W} H={H} />
+          </>
+        ),
+      };
     }
     default:
       return { style: {}, split: 0, overlay: null };

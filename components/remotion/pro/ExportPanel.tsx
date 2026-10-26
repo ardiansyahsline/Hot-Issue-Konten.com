@@ -21,7 +21,7 @@ import {
 } from "@/lib/studio/client";
 import { storyboardHtml } from "@/lib/studio/exportDoc";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { subtitleCues, toSrt, type Timeline } from "@/lib/studio/timeline";
+import { subtitleCues, toSrt, voClashes, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf, storageSrc } from "@/lib/studio/urls";
 
 // Remotion gratis untuk perorangan / tim ≤ 3 orang. Perusahaan > 3 orang: isi key lisensi di env Vercel.
@@ -36,6 +36,69 @@ type Render =
   | { s: "error"; kind: Kind; msg: string; detail?: string };
 
 const fmt = (n: number) => String(Number(n.toFixed(1))).replace(".", ",");
+
+/** akhiran nama file kalau VO-nya masih "VO sementara" (cadangan Edge) — supaya tidak tertukar dengan versi final suara bank */
+const TEMP_SUFFIX = "-vo-sementara";
+/** akhiran tambahan kalau sebagian adegan yang punya teks VO belum bersuara (gagal / naskah berubah, belum di-generate ulang) */
+const PART_SUFFIX = "-sebagian";
+
+/**
+ * Keadaan VO timeline untuk nama file & peringatan. Baris yang dihitung = yang benar-benar diputar planAudio (punya src & adegannya
+ * masih punya teks VO). `has` false = video "Dengan VO" sebenarnya tanpa suara VO (belum dibuat / dimatikan / mode Tanpa VO).
+ */
+function voState(t: Timeline) {
+  const on = t.voice.mode !== "none" && !t.muteVo;
+  const want = t.scenes.filter((s) => s.vo?.text);
+  const played = on && t.vo ? want.filter((s) => t.vo!.lines.some((l) => l.sceneId === s.id && !!l.src)) : [];
+  const has = played.length > 0;
+  return {
+    on,
+    has,
+    temp: has && !!t.vo?.temp,
+    /** jumlah adegan bersuara / adegan yang punya teks VO */
+    done: played.length,
+    want: want.length,
+    partial: has && played.length < want.length,
+    clash: has ? voClashes(t) : [],
+  };
+}
+type VoState = ReturnType<typeof voState>;
+/**
+ * akhiran nama file: MP4 tanpa VO (dipilih, atau VO belum ada / dimatikan) → "-tanpa-vo"; VO sementara → "-vo-sementara";
+ * VO lengkap suara bank → tanpa akhiran (MP4) / "-vo" (.mp3); sebagian adegan belum bersuara → "...-sebagian" (mis. "-vo-sebagian")
+ */
+function voSuffix(st: VoState, kind: Kind, variant: Variant): string {
+  if (kind === "mp4" && (variant === "novo" || !st.has)) return "-tanpa-vo";
+  const base = st.temp ? TEMP_SUFFIX : kind === "mp3" ? "-vo" : "";
+  return st.partial ? `${base || "-vo"}${PART_SUFFIX}` : base;
+}
+/** ingat per job render laptop: VO-nya sementara atau bukan saat diantrikan (RenderJob tidak membawa timeline) */
+const tempKey = (id: string) => `studio-render-vo-temp:${id}`;
+/** ingat per job render laptop: akhiran nama file saat diantrikan (VO sementara / sebagian) */
+const suffixKey = (id: string) => `studio-render-vo-suffix:${id}`;
+function markJobVo(id: string, temp: boolean, suffix: string) {
+  try {
+    localStorage.setItem(tempKey(id), temp ? "1" : "0");
+    localStorage.setItem(suffixKey(id), suffix);
+  } catch {
+    /* mode privat: abaikan */
+  }
+}
+function jobSuffix(id: string): string | null {
+  try {
+    return localStorage.getItem(suffixKey(id));
+  } catch {
+    return null;
+  }
+}
+function jobWasTemp(id: string): boolean | null {
+  try {
+    const v = localStorage.getItem(tempKey(id));
+    return v === null ? null : v === "1";
+  } catch {
+    return null;
+  }
+}
 
 /** pesan awam untuk error render di browser */
 function renderError(e: unknown): { msg: string; detail?: string } {
@@ -60,8 +123,12 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
   const meta = studioMeta(tl);
   const secs = meta.durationInFrames / meta.fps;
   const slug = fileSlug(tl.title);
-  const voOn = tl.voice.mode !== "none" && !tl.muteVo;
-  const hasVo = voOn && !!tl.vo?.lines.length;
+  const vs = voState(tl);
+  const voOn = vs.on;
+  /** ada suara VO yang benar-benar ikut diputar (bukan cuma teks naskah) */
+  const hasVo = vs.has;
+  /** VO yang ada masih cadangan Edge ("VO sementara") */
+  const voTemp = vs.temp;
   const hasVoText = tl.scenes.some((s) => s.vo?.text);
   const busy = render.s === "run";
 
@@ -83,6 +150,9 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     setRender({ s: "run", kind, p: 0 });
     const t0 = performance.now();
     const snap = tl; // pakai timeline saat tombol diklik
+    const st = voState(snap);
+    // "Dengan VO" tanpa suara VO (belum dibuat / dimatikan) = versi tanpa VO, jangan sampai bernama versi VO
+    const vari: Variant = st.has ? variant : "novo";
     let note: string | undefined;
     try {
       const [wr] = await Promise.all([import("@remotion/web-renderer"), import("@/components/remotion/studio/fonts").then((m) => m.registerStudioFonts())]);
@@ -112,7 +182,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
           } else note = "Browser ini belum bisa MP4 — file dibikin WebM (tetap bisa diupload ke kebanyakan platform).";
         }
       }
-      const inputProps: StudioVideoProps = { timeline: snap, audio: kind === "mp3" ? "vo" : variant === "vo" ? "all" : "novo", sfxExtra: sfxExtra ?? [] };
+      const inputProps: StudioVideoProps = { timeline: snap, audio: kind === "mp3" ? "vo" : vari === "vo" ? "all" : "novo", sfxExtra: sfxExtra ?? [] };
       const res = await wr.renderMediaOnWeb({
         composition: { id: "studio-video", component: StudioVideo, ...studioMeta(snap), defaultProps: inputProps },
         inputProps,
@@ -132,7 +202,8 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
         },
       });
       const blob = await res.getBlob();
-      const name = `${slug}${kind === "mp3" ? "-vo" : variant === "novo" ? "-tanpa-vo" : ""}.${container}`;
+      // VO sementara (Edge) -> "-vo-sementara", sebagian adegan belum bersuara -> "...-sebagian", versi tanpa VO -> "-tanpa-vo"
+      const name = `${slug}${voSuffix(st, kind, vari)}.${container}`;
       const file = new File([blob], name, { type: blob.type || (kind === "mp3" ? "audio/mpeg" : `video/${container}`) });
       const url = URL.createObjectURL(file);
       setRender({ s: "done", kind, url, file, secs: Math.round((performance.now() - t0) / 1000), note });
@@ -163,7 +234,9 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     setJobErr(null);
     setQueueing(true);
     try {
-      const j = await createRenderJob({ project_id: projectId, timeline: tl, variant: variant === "vo" ? "vo" : "tanpa-vo" });
+      const vari: Variant = vs.has ? variant : "novo";
+      const j = await createRenderJob({ project_id: projectId, timeline: tl, variant: vari === "vo" ? "vo" : "tanpa-vo" });
+      markJobVo(j.id, vari === "vo" && voTemp, voSuffix(vs, "mp4", vari));
       rememberJob(jobKey, j.id);
       setJobId(j.id);
     } catch (e) {
@@ -190,7 +263,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     const full = voOn ? tl.vo?.full : null;
     if (full) {
       const ext = fileExt(storagePathOf(full) ?? "") || "mp3";
-      void downloadStudioUrl(full, `${slug}-vo.${ext}`);
+      void downloadStudioUrl(full, `${slug}${voSuffix(vs, "mp3", "vo")}.${ext}`);
     } else void renderWeb("mp3");
   };
   const downloadSrt = () => saveBlob(new Blob([toSrt(cues)], { type: "application/x-subrip;charset=utf-8" }), `${slug}.srt`);
@@ -235,16 +308,25 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
       <div className="grid grid-cols-2 gap-2">
         {(
           [
-            ["vo", "Dengan VO", hasVo ? "Suara + musik + SFX" : "VO belum dibuat"],
+            [
+              "vo",
+              "Dengan VO",
+              hasVo
+                ? `${voTemp ? "VO sementara" : "Suara"}${vs.partial ? ` (${vs.done}/${vs.want} adegan)` : ""} + musik + SFX`
+                : voOn
+                  ? "VO belum dibuat"
+                  : "VO dimatikan",
+            ],
             ["novo", "Tanpa VO", "Musik + SFX + teks"],
           ] as [Variant, string, string][]
         ).map(([id, title, sub]) => (
           <button
             key={id}
             type="button"
-            disabled={busy || laptopActive}
+            disabled={busy || laptopActive || (id === "vo" && !hasVo)}
+            title={id === "vo" && !hasVo ? (voOn ? "Bikin VO dulu di panel suara" : "VO dimatikan (Tanpa VO)") : undefined}
             onClick={() => setVariant(id)}
-            className={`rounded-xl border px-3 py-2 text-left transition ${variant === id ? "border-orange-500 bg-orange-500/10" : "border-zinc-800 hover:border-zinc-700"}`}
+            className={`rounded-xl border px-3 py-2 text-left transition disabled:cursor-not-allowed ${variant === id && (id !== "vo" || hasVo) ? "border-orange-500 bg-orange-500/10" : "border-zinc-800 hover:border-zinc-700"} ${id === "vo" && !hasVo ? "opacity-60" : ""}`}
           >
             <div className="text-sm font-semibold">{title}</div>
             <div className="text-[11px] text-zinc-500">{sub}</div>
@@ -306,6 +388,22 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
             )}
           </div>
         )}
+        {variant === "vo" && hasVo && vs.clash.length > 0 && (
+          <p className="rounded-lg bg-red-500/10 px-2.5 py-2 text-[11px] text-red-300" data-vo-clash role="alert">
+            ⛔ VO menabrak VO adegan berikutnya:{" "}
+            {vs.clash.map((c) => `${tl.scenes[c.scene]?.name} → ${tl.scenes[c.next]?.name} (${fmt(Math.max(0.1, c.sec))} dtk)`).join(", ")} — dua suara bunyi bersamaan di video. Pendekkan teks VO adegan itu, lalu generate ulang VO sebelum download.
+          </p>
+        )}
+        {variant === "vo" && vs.partial && (
+          <p className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-300" data-vo-partial>
+            ⚠️ Baru {vs.done} dari {vs.want} adegan yang bersuara — nama file diberi akhiran <b>{voSuffix(vs, "mp4", "vo")}</b>. Klik &quot;Generate ulang VO&quot; supaya semua adegan bersuara.
+          </p>
+        )}
+        {variant === "vo" && voTemp && (
+          <p className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-300" data-vo-temp>
+            ⚠️ VO masih <b>VO sementara</b> (suara cadangan Edge) — nama file diberi akhiran <b>{voSuffix(vs, "mp4", "vo")}</b>. Versi final: nyalakan laptop, &quot;Generate ulang VO&quot; pakai bank suara, lalu download lagi.
+          </p>
+        )}
         <p className="text-[11px] text-zinc-500">Dibikin langsung di browser — paling lancar di Chrome / Edge laptop. Di HP bisa lama.</p>
       </div>
 
@@ -332,9 +430,20 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
         {job?.status === "selesai" && job.result_path && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
             <span>✅ Video dari laptop siap.</span>
-            <button type="button" className="font-semibold underline" onClick={() => downloadStudioUrl(storageSrc(job.result_path!), `${slug}${job.variant === "tanpa-vo" ? "-tanpa-vo" : ""}.${fileExt(job.result_path!) || "mp4"}`)}>
-              ⬇️ Download
-            </button>
+            {(() => {
+              // VO sementara saat job diantrikan (cadangan: VO timeline sekarang)
+              const temp = job.variant !== "tanpa-vo" && (jobWasTemp(job.id) ?? voTemp);
+              // akhiran saat diantrikan (VO sementara / sebagian); job lama tanpa catatan akhiran -> dari status sementara
+              const suffix = job.variant === "tanpa-vo" ? "-tanpa-vo" : (jobSuffix(job.id) ?? (temp ? TEMP_SUFFIX : ""));
+              return (
+                <>
+                  {temp && <span className="text-amber-300">(VO sementara)</span>}
+                  <button type="button" className="font-semibold underline" onClick={() => downloadStudioUrl(storageSrc(job.result_path!), `${slug}${suffix}.${fileExt(job.result_path!) || "mp4"}`)}>
+                    ⬇️ Download
+                  </button>
+                </>
+              );
+            })()}
             <button type="button" className="ml-auto text-emerald-400/70 hover:text-emerald-300" onClick={() => setJobId(null)}>
               Tutup
             </button>

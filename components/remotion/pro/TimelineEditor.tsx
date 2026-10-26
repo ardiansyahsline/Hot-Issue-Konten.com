@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { extraSfxOf, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, snapScenesToBeats, totalFrames, totalSec, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, totalFrames, totalSec, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { beatReport, isTeaserScene, snapAroundTeaser, type BeatReport } from "@/lib/studio/teaserLock";
 
 /** warna titik SFX per kategori (palet yang otomatis ikut mode terang) */
 const CAT: Record<string, { dot: string; label: string }> = {
@@ -51,6 +52,16 @@ function withScenes(tl: Timeline, scenes: Scene[]): Timeline {
   return { ...tl, scenes, vo: moved && tl.vo?.full ? { ...tl.vo, full: null } : tl.vo };
 }
 
+/** laporan jujur tombol "Tempel ke ketukan": berapa potongan yang benar-benar di ketukan, dan kenapa sisanya tidak */
+function snapNote(r: BeatReport, changed: boolean, locked: boolean): string {
+  if (r.onBeat === r.cuts) return changed ? "🎯 Semua potongan adegan sudah nempel ke ketukan musik" : locked ? "🔒 Adegan premium teaser dikunci · semua potongan sudah pas di ketukan" : "Potongan sudah pas di ketukan";
+  const why = [
+    r.offLocked ? `${r.offLocked} di akhir adegan premium (durasinya dikunci, tidak ikut digeser)` : "",
+    r.offFree ? `${r.offFree} di adegan biasa (ketukan terdekat lebih dari 0,35 dtk atau membuat video lebih panjang)` : "",
+  ].filter(Boolean);
+  return `${changed ? "🎯" : "⚠️"} ${r.onBeat} dari ${r.cuts} potongan pas di ketukan · ${r.cuts - r.onBeat} tidak: ${why.join(", ")}`;
+}
+
 type Drag = { id: string; x0: number; d0: number; dur: number; start: number; others: number; moved: boolean };
 
 /**
@@ -81,7 +92,8 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
 
   useEffect(() => {
     if (!note) return;
-    const t = setTimeout(() => setNote(null), 3500);
+    // catatan panjang (laporan tempel ketukan) dibiarkan lebih lama supaya sempat dibaca
+    const t = setTimeout(() => setNote(null), note.length > 60 ? 7000 : 3500);
     return () => clearTimeout(t);
   }, [note]);
 
@@ -126,8 +138,9 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   const onHandleDown = (e: PointerEvent<HTMLDivElement>, i: number) => {
     e.stopPropagation();
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
     const s = tl.scenes[i];
+    if (isTeaserScene(s)) return; // adegan premium teaser: durasi dikunci di ketukan
+    e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { id: s.id, x0: e.clientX, d0: s.dur, dur: s.dur, start: starts[i], others: tl.scenes.reduce((a, x) => a + x.dur, 0) - s.dur, moved: false };
     setDraft({ id: s.id, dur: s.dur, snapped: false });
   };
@@ -165,6 +178,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     const s = tl.scenes[i];
+    if (isTeaserScene(s)) return;
     const step = (e.shiftKey ? 0.5 : 0.1) * (e.key === "ArrowRight" ? 1 : -1);
     const others = tl.scenes.reduce((a, x) => a + x.dur, 0) - s.dur;
     const dur = Math.round(Math.min(Math.max(s.dur + step, MIN_DUR), MAX_DUR, MAX_TOTAL - others) * fps) / fps;
@@ -198,12 +212,14 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   };
 
   const snapAll = () => {
-    const next = snapScenesToBeats(tl, beats);
+    // adegan premium teaser tidak ikut digeser (durasinya dikunci; animasinya sinkron dengan batas itu). Adegan biasa ditempel
+    // dari awal yang sebenarnya (sesudah adegan teaser), jadi hasilnya benar-benar di ketukan
+    const next = snapAroundTeaser(tl, beats);
     const changed = next.scenes.some((s, i) => Math.abs(s.dur - tl.scenes[i].dur) > 1e-6);
     // total lewat 3 menit -> adegan terakhir nanti dibuang diam-diam saat dirapikan, jadi ditolak
     if (changed && totalSec(next) > MAX_TOTAL + 1e-6) return setNote(`Tidak ditempel: total video jadi lewat ${MAX_TOTAL} dtk. Pendekkan adegan dulu.`);
     if (changed) onChange(withScenes(tl, next.scenes));
-    setNote(changed ? "🎯 Potongan adegan sudah nempel ke ketukan musik" : "Potongan sudah pas di ketukan");
+    setNote(snapNote(beatReport(next, beats), changed, tl.scenes.some(isTeaserScene)));
   };
 
   // penggaris: label tiap 1/2/5/10/… dtk, minimal 44 px antarlabel
@@ -309,7 +325,16 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                         </div>
                       )}
                     </div>
-                    {/* pegangan ubah durasi */}
+                    {/* pegangan ubah durasi (adegan premium teaser: dikunci, tampil gembok) */}
+                    {isTeaserScene(s) ? (
+                      <div
+                        title="Durasi dikunci di ketukan musik (adegan premium)"
+                        aria-label={`Durasi ${s.name} dikunci`}
+                        className="pointer-events-none absolute right-0 top-0 flex h-full w-3.5 items-center justify-center bg-zinc-700/20 text-[8px] leading-none opacity-70"
+                      >
+                        🔒
+                      </div>
+                    ) : (
                     <div
                       role="slider"
                       tabIndex={0}
@@ -330,6 +355,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                     >
                       <span className={`h-4 w-0.5 rounded-full ${dragging ? "bg-orange-300" : "bg-zinc-400/70"}`} />
                     </div>
+                    )}
                   </div>
                 );
               })}
@@ -393,7 +419,9 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
 
       <div className="mt-2 flex min-h-[18px] flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
         {note ? (
-          <span className="font-semibold text-orange-400">{note}</span>
+          <span role="status" className="font-semibold text-orange-400">
+            {note}
+          </span>
         ) : (
           <>
             {cats.map((c) => (
@@ -403,7 +431,11 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
               </span>
             ))}
             {beatInfo && <span className="text-zinc-600">· {beatInfo}</span>}
-            <span className="text-zinc-600">· Tarik tepi kanan blok untuk ubah durasi, klik titik SFX untuk nyala/mati</span>
+            <span className="text-zinc-600">
+              {scenes.length > 0 && scenes.every(isTeaserScene)
+                ? "· 🔒 Durasi adegan premium dikunci di ketukan, klik titik SFX untuk nyala/mati"
+                : "· Tarik tepi kanan blok untuk ubah durasi, klik titik SFX untuk nyala/mati"}
+            </span>
           </>
         )}
       </div>
