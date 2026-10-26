@@ -15,8 +15,8 @@
  *     public/konten-logo.png & public/brand/tws-logo.svg ikut di-bundle webpack, jadi render tidak gagal karena logo 404.
  *
  * Teaser CS Tracker premium (komposisi "TeaserCsTracker", props bawaan = teaserTimeline() dari lib/studio/teaser.ts):
- *   npx remotion render remotion/index.ts TeaserCsTracker teaser.mp4 --config=remotion.config.mjs --public-dir=<folder>
- *   npx remotion render remotion/index.ts TeaserCsTracker teaser-tanpa-vo.mp4 --props='{"audio":"novo"}' --config=… --public-dir=<folder>
+ *   npx remotion render remotion/index.ts TeaserCsTracker teaser-cs-tracker-tanpa-vo.mp4 --props='{"audio":"novo"}' --config=remotion.config.mjs --public-dir=<folder>
+ *   (props bawaan tidak berisi suara VO, jadi render CLI selalu = versi tanpa VO.)
  *   --public-dir harus berisi brand/konten-logo.png + brand/tws-logo.svg (salin dari public/konten-logo.png & public/brand/tws-logo.svg)
  *   plus sfx/ (salin assets/audio/sfx) dan music/ bila dipakai — sama dengan yang disiapkan worker. Tanpa --public-dir (bawaan
  *   assets/audio, tanpa brand/) render tetap jalan: logo diambil dari file repo yang di-bundle (lihat presetLogoSrc).

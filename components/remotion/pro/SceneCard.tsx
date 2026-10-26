@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { isTeaserBeatCue, teaserTextLines } from "@/lib/studio/teaserLock";
+import { captionLineWidth, captionMaxChars, isTeaserBeatCue, roughWordWidth, teaserCaptionFit, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
   PLAN_LAYOUTS,
   MAX_DUR,
@@ -94,6 +94,9 @@ export default function SceneCard({
   const textLines = teaserTextLines(s);
   const teaser = textLines !== null;
   const textLocked = textLines === 0;
+  // teaser selalu 9:16; baris yang lebih lebar dari kotak aman turun ke baris berikut dan menabrak UI animasi
+  const fit = teaser && !textLocked ? teaserCaptionFit(s, "9:16") : null;
+  const tooWide = fit ? shown.slice(0, fit.lines).map((l, i) => ({ i, w: captionLineWidth(l, fit.size, roughWordWidth(fit.size)) })).filter((x) => x.w > fit.maxW) : [];
   const headId = `scene-${s.id}`;
 
   return (
@@ -224,8 +227,12 @@ export default function SceneCard({
           <Field
             label="🔤 Teks di layar (satu baris per baris)"
             hint={
-              teaser && !long.length && shown.length <= MAX_LINES ? (
-                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks 6 kata per baris. ${
+              fit && tooWide.length ? (
+                <span className="text-amber-400">
+                  {tooWide.map((x) => `Baris ${x.i + 1}`).join(" · ")} kepanjangan — bisa turun baris & menabrak animasi. Maks ±{captionMaxChars(fit)} huruf per baris.
+                </span>
+              ) : teaser && !long.length && shown.length <= MAX_LINES ? (
+                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks ±${fit ? captionMaxChars(fit) : 20} huruf per baris supaya muat satu baris. ${
                   // chat & montage: `text[0] ?? teks bawaan`; trainAi: `lines={text}` → kosong = tanpa teks layar
                   s.layout.shot === "trainAi" ? "Kosongkan = tanpa teks layar." : "Kosongkan untuk teks bawaan animasi."
                 }`

@@ -108,8 +108,8 @@ const voAtOf = (vo: Scene["vo"]): number | undefined => (typeof vo?.at === "numb
  * Adegan premium teaser: batasnya di ketukan musik (0,6 dtk) & visualnya buatan tangan, jadi durasi, jenis tampilan (kind + shot),
  * latar, kamera, catatan visual, detik mulai VO, dan teks layar shot yang teksnya bagian dari animasi TIDAK boleh berubah — baik
  * lewat editor rencana/timeline (tombol "Pas-kan ke ketukan", tarik tepi blok) maupun lewat revisi Harley (mergeRevision).
- * Teks VO, SFX, transisi & level musik tetap bebas. VO yang lebih panjang dari adegan (VoPanel) lewat jalur lain dan tetap boleh
- * memanjangkan adegan supaya suara tidak terpotong (versi lama itulah yang kemudian dipertahankan).
+ * Teks VO, SFX, transisi & level musik tetap bebas. VO yang lebih panjang dari adegan teaser TIDAK memanjangkan adegan
+ * (grid ketukan harus utuh) — VoPanel hanya menampilkan peringatan.
  * Adegan dicocokkan lewat id; adegan teaser yang id-nya ditulis ulang (id lama hilang) dicocokkan lewat shot-nya, lalu sisanya
  * (id ditulis ulang DAN shot hilang/berubah — normalizeTimeline mengisi shot "hook") dipasangkan berurutan dengan adegan teaser
  * lama yang belum punya pasangan.
