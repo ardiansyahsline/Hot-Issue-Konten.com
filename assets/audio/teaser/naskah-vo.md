@@ -3,8 +3,10 @@
 - **Suara:** bank suara "Alif - Energik" (`voice-worker/bank-suara/referensi-alif-energik-10dtk.wav`)
 - **Gaya:** energik, percaya diri, santai, seperti ngobrol ke teman kantor. Senyum saat bicara.
 - **Tempo:** sedang-cepat. Titik tiga (…) = jeda dramatis ±0,4 detik. Titik = jeda ±0,25 detik.
-- **Saran Chatterbox:** `exaggeration` 0.6-0.7, `cfg_weight` 0.3-0.4 (lebih ekspresif). Generate per baris,
-  ambil versi terbaik (cek ASR), lalu susun di timeline.
+- **Saran Chatterbox:** gaya bicara **Promo energik** (`exaggeration` 0.65, `cfg_weight` 0.5, `temperature` 0.85 —
+  cfg lebih tinggi = tempo asli lebih cepat, jadi jarang perlu dipercepat atempo). Tiap baris dibuat 3 versi, diambil
+  yang paling jelas & natural (cek ASR), lalu disusun di timeline. Ejaan mesin bank otomatis diberi bunyi luncur
+  (soal → sowal, dia → diya) — subtitle tetap tulisan asli.
 - Total ±95 kata. Sisakan ruang untuk musik & SFX (montage 50-55 detik nyaris tanpa VO).
 
 | # | Waktu target | Adegan | Teks VO (tampil di subtitle) | Ejaan untuk mesin suara (kalau salah baca) |

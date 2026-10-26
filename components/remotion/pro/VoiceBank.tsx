@@ -315,11 +315,18 @@ export default function VoiceBank({ active = true }: { active?: boolean }) {
           {file && (
             <p className="mt-1 text-[11px] text-zinc-500">
               {(file.size / 1e6).toFixed(1).replace(".", ",")} MB{dur !== null ? ` · ${dur.toFixed(1).replace(".", ",")} dtk` : ""}
-              {dur !== null && dur < 5 && <span className="text-amber-400"> — terlalu pendek, idealnya 10–30 detik</span>}
-              {dur !== null && dur > 300 && <span className="text-amber-400"> — panjang sekali, cukup 10–30 detik</span>}
+              {dur !== null && dur < 5 && <span className="text-amber-400"> — terlalu pendek, idealnya 10–20 detik</span>}
+              {dur !== null && dur > 300 && <span className="text-amber-400"> — panjang sekali, cukup 10–20 detik</span>}
             </p>
           )}
-          <p className="mt-1 text-[11px] text-zinc-500">Tips: 10–30 detik, ruangan sepi, HP ±20 cm dari mulut, bicara natural.</p>
+          <div className="mt-1.5 rounded-lg bg-zinc-950/50 px-2.5 py-2 text-[11px] leading-relaxed text-zinc-400" data-ref-tips>
+            <p className="font-semibold text-zinc-300">💡 Biar hasilnya natural (nggak kedengeran AI):</p>
+            <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
+              <li>Rekam 10–20 detik, satu orang, ruangan sepi (tanpa kipas / AC), HP ±20 cm dari mulut.</li>
+              <li>Gaya bicaranya sama dengan videonya — promo: semangat; penjelasan: tenang. Mesin suara meniru nada rekaman ini.</li>
+              <li>Ngomong kayak ngobrol: intonasi naik-turun, ada jeda napas wajar. Jangan datar seperti membaca.</li>
+            </ul>
+          </div>
         </div>
 
         <label className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 text-sm ${consent ? "border-orange-500/60 bg-orange-500/10" : "border-zinc-700"}`}>

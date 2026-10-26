@@ -411,9 +411,23 @@ export type JobTable = "studio_voice_jobs" | "studio_render_jobs";
 export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number; speed?: number };
 /**
  * `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat (negatif = diperlambat);
- * `tempo` = kecepatan diatur sendiri yang dipakai; `squeeze` = detik jeda di dalam baris yang dipadatkan supaya muat di `max`
+ * `tempo` = kecepatan diatur sendiri yang dipakai; `squeeze` = detik jeda di dalam baris yang dipadatkan supaya muat di `max`.
+ * `heard` = teks yang terdengar oleh pengecek ucapan (ASR) untuk baris ini, atau `takes[].heard` per kalimat / potongan
+ * (dibaca heardFromResult, lib/studio/heard.ts) — worker lama tidak mengirimnya.
  */
-export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[]; start?: number; speed?: number; tempo?: number; squeeze?: number };
+export type VoiceJobResultLine = {
+  id: string;
+  scene_id: string;
+  path: string;
+  dur: number;
+  words?: Word[];
+  start?: number;
+  speed?: number;
+  tempo?: number;
+  squeeze?: number;
+  heard?: string | null;
+  takes?: { heard?: string | null }[];
+};
 export type VoiceJobResult = {
   lines?: VoiceJobResultLine[];
   full_path?: string | null;

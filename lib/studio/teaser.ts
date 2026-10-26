@@ -192,7 +192,8 @@ export function teaserTimelineRaw(): Record<string, unknown> {
     platform: "Internal tim (TikTok/Reels 9:16)",
     goal: "Kenalkan semua fitur terbaru CS Tracker ke tim",
     mood: "trailer premium, energik, percaya diri",
-    voice: { mode: "bank", voiceName: "Alif - Energik", exaggeration: 0.65, cfg: 0.35, edgeVoice: "id-ID-ArdiNeural" },
+    // gaya bicara Promo energik (lib/studio/voiceStyle.ts): cfg 0,5 = tempo asli lebih cepat → jarang perlu dipercepat atempo
+    voice: { mode: "bank", voiceName: "Alif - Energik", preset: "promo", exaggeration: 0.65, cfg: 0.5, temperature: 0.85, edgeVoice: "id-ID-ArdiNeural" },
     music: { src: "bed", name: "Trailer bed (100 BPM)", bpm: 100 },
     grain: true,
     vignette: true,

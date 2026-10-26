@@ -3,10 +3,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { cancelVoiceJob, createVoiceJob, fetchReadyVoices, requestTts, useStudioJob, useStudioStatus, type VoiceJob, type VoiceJobLine } from "@/lib/studio/client";
 import { voSayKey, voSpeech } from "@/lib/studio/pronounce";
+import { heardFromResult } from "@/lib/studio/heard";
+import { bankSettings } from "@/lib/studio/voiceStyle";
 import { normTempo, tempoRate, TEMPOS, voStartOf, type Scene, type Timeline, type VoLine, type VoTrack } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { isTeaserScene } from "./teaserLock";
-import { cleanWords, DEF_CFG, DEF_EXG, DEFAULT_VOICE, fitVo, fmtTempo, movedText, names, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
+import { cleanWords, DEFAULT_VOICE, fitVo, fmtTempo, movedText, names, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
 
 type Made = { line: VoLine; engine: VoTrack["engine"]; temp: boolean; label: string };
 /** buat ulang satu kalimat VO (per adegan) */
@@ -195,7 +197,8 @@ export function useVoTempo(timeline: Timeline, onApply: (fn: (t: Timeline) => Ti
   const viaBank = async (sid: string, tempo: number | undefined) => {
     const t = tlRef.current;
     const s = t.scenes.find((x) => x.id === sid);
-    const p = voSpeech(s?.vo, t.voice.lexicon);
+    // teks ucapan versi bank (+ bunyi luncur) & setelan gaya bicara sama dengan "Generate ulang VO" (cache laptop terpakai)
+    const p = voSpeech(s?.vo, t.voice.lexicon, "bank");
     if (!s || !p) return;
     const sig = voSayKey(s.vo, t.voice.lexicon);
     const win = tempo === undefined && isTeaserScene(s) ? teaserWindows(t).get(s.id) : undefined;
@@ -207,7 +210,7 @@ export function useVoTempo(timeline: Timeline, onApply: (fn: (t: Timeline) => Ti
       const voice = voices.find((x) => x.id === t.voice.voiceId) ?? voices.find((x) => x.name === DEFAULT_VOICE) ?? voices[0];
       if (!voice) return void (await viaEdge(sid, tempo));
       const line: VoiceJobLine = { id: sid, scene_id: sid, text: p.text, spell: p.spell, start: 0, ...(tempo !== undefined ? { speed: tempo } : win !== undefined ? { max: win } : {}) };
-      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: { exaggeration: t.voice.exaggeration ?? DEF_EXG, cfg_weight: t.voice.cfg ?? DEF_CFG, takes: 2 } });
+      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: bankSettings(t) });
       // editor ditutup / dibatalkan selagi antrian dibuat → job-nya langsung dibatalkan
       if (!alive.current || runsRef.current[sid]?.s !== "start") return void cancelVoiceJob(j.id).catch(() => {});
       setRun(sid, { s: "job", id: j.id, voice: voice.name, sig, tempo });
@@ -230,10 +233,20 @@ export function useVoTempo(timeline: Timeline, onApply: (fn: (t: Timeline) => Ti
       if (r.tempo !== undefined && tempo === undefined)
         return fail(sid, "Mesin suara di laptop versi lama belum bisa mengatur kecepatan — jalankan git pull di laptop lalu coba lagi. Suara tidak diganti.", true, r.tempo);
       const speed = tempo === undefined ? Math.round(Number(l.speed) || 0) : 0;
+      const heard = heardFromResult(l);
       apply(
         sid,
         {
-          line: { sceneId: sid, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}), ...(tempo !== undefined ? { tempo } : {}), say: r.sig },
+          line: {
+            sceneId: sid,
+            src: storageSrc(l.path),
+            dur: Math.max(0.05, Number(l.dur) || 0.05),
+            words: cleanWords(l.words),
+            ...(speed > 0 ? { speed } : {}),
+            ...(tempo !== undefined ? { tempo } : {}),
+            say: r.sig,
+            ...(heard ? { heard } : {}),
+          },
           engine: /pocket/i.test(job.engine_used ?? "") ? "pocket" : "chatterbox",
           temp: false,
           label: `Bank suara · ${r.voice}`,

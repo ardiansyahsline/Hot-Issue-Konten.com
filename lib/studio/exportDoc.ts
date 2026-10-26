@@ -23,6 +23,7 @@ import {
   type TransitionKind,
 } from "./timeline";
 import { storagePathOf } from "./urls";
+import { isTeaserTimeline, styleLabel, voiceStyle } from "./voiceStyle";
 
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
@@ -144,8 +145,8 @@ function voiceLabel(tl: Timeline): string {
   if (v.mode === "none" || tl.muteVo) return "Tanpa VO";
   if (v.mode === "edge") return `Cadangan Edge · ${v.edgeVoice === "id-ID-GadisNeural" ? "Gadis (cewek)" : "Ardi (cowok)"} — layanan tidak resmi`;
   if (v.mode === "elevenlabs") return "Premium ElevenLabs";
-  const tune = v.exaggeration !== undefined || v.cfg !== undefined ? ` (ekspresi ${num(v.exaggeration ?? 0.65)}, tempo ${num(v.cfg ?? 0.35)})` : "";
-  return `Bank suara · ${v.voiceName || "Alif - Energik"}${tune}`;
+  // gaya bicara yang benar-benar dikirim ke laptop (preset / kustom, lib/studio/voiceStyle.ts)
+  return `Bank suara · ${v.voiceName || "Alif - Energik"} · gaya ${styleLabel(voiceStyle(v, isTeaserTimeline(tl)))}`;
 }
 
 function voStatus(tl: Timeline): string {

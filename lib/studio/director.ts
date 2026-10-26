@@ -605,6 +605,9 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       edgeVoice: has(v, "edgeVoice") ? out.voice.edgeVoice : prev.voice.edgeVoice,
       exaggeration: has(v, "exaggeration") ? out.voice.exaggeration : prev.voice.exaggeration,
       cfg: has(v, "cfg") ? out.voice.cfg : prev.voice.cfg,
+      // gaya bicara pilihan user (panel Suara VO) tidak hilang kalau AI menulis ulang objek voice tanpa field ini
+      preset: has(v, "preset") ? out.voice.preset : prev.voice.preset,
+      temperature: has(v, "temperature") ? out.voice.temperature : prev.voice.temperature,
     };
   }
   // kamus ejaan proyek (diisi user di panel Suara VO) tidak boleh hilang gara-gara AI menulis ulang objek voice tanpa kamus
