@@ -4,10 +4,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BED_BPM } from "@/components/remotion/studio/audio";
 import { reloadStudioCatalog, type Catalog } from "@/lib/studio/client";
 import { SFX_BUILTIN } from "@/lib/studio/sfxMeta";
-import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, isOwnPresetLogo, isPresetLogo, snapScenesToBeats, totalSec, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { BRANDS, FORMATS, FPS, MAX_SCENES, MAX_TOTAL, MIN_DUR, RATIOS, beatGrid, isOwnPresetLogo, isPresetLogo, musicFileBeats, musicVolDb, snapScenesToBeats, totalSec, withMixDb, type Brand, type BrandId, type Ratio, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf } from "@/lib/studio/urls";
+import DbSlider from "./DbSlider";
 import SceneCard, { type ScenePatch, type SfxItem } from "./SceneCard";
 import { Field, Seg, Toggle, Txt, UploadBtn } from "./fields";
+import { withMusicSrc } from "./music";
 import { VOICE_LABEL, fmtSec, tidyTimeline } from "./planUtils";
 
 type Props = {
@@ -157,14 +159,10 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
   // ---------- musik ----------
   const music = tl.music;
   const inList = music.src === "bed" || music.src === "none" || !!catalog?.music.some((m) => m.src === music.src);
-  const pickMusic = (src: string) => {
-    const keep = { offset: 0, gain: music.gain ?? 0, beats: null };
-    if (src === "bed") return set({ music: { ...keep, src, name: "Trailer bed (cadangan)", bpm: BED_BPM, lufs: null } });
-    if (src === "none") return set({ music: { ...keep, src, name: "Tanpa musik", bpm: null, lufs: null } });
-    const m = catalog?.music.find((x) => x.src === src);
-    set({ music: { ...keep, src, name: m?.name ?? music.name, bpm: null, lufs: m?.lufs ?? null } });
-  };
-  const beats = music.beats?.length ? music.beats : music.src === "bed" ? beatGrid(BED_BPM, 0, total + 1) : music.bpm ? beatGrid(music.bpm, music.offset ?? 0, total + 1) : [];
+  // sama dengan "＋ Musik" di timeline (withMusicSrc): mulai dari awal lagu, ketukan dideteksi ulang
+  const pickMusic = (src: string) => update((t) => withMusicSrc(t, src, cat.current));
+  // ketukan di waktu video (file musik: digeser offset lagu) — sama dengan komposisi (audio.tsx musicBeats)
+  const beats = music.src === "none" ? [] : music.src === "bed" ? beatGrid(BED_BPM, 0, total + 1) : musicFileBeats(music, total + 1, 1);
   const bpm = music.src === "bed" ? BED_BPM : music.bpm;
 
   const voice = tl.voice;
@@ -273,7 +271,7 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
               sub="music"
               label="⬆️ Upload musik"
               onDone={(r) => {
-                set({ music: { src: r.src, name: r.name.replace(/\.[^.]+$/, "").slice(0, 80), bpm: null, beats: null, offset: 0, gain: music.gain ?? 0, lufs: null } });
+                update((t) => withMusicSrc(t, r.src, cat.current, { name: r.name }));
                 // muat ulang katalog supaya musik upload tetap ada di daftar walau user pindah ke musik lain
                 void reloadStudioCatalog();
               }}
@@ -288,24 +286,8 @@ function PlanCard({ timeline: tl, onChange, catalog, selected, onSelect, beatHin
               🥁 Pas-kan ke ketukan
             </button>
           </div>
-          {music.src !== "none" && (
-            <label className="block text-[12px] text-zinc-400">
-              <span className="flex justify-between">
-                <span>Volume musik</span>
-                <span className="tabular-nums text-zinc-500">{(music.gain ?? 0) > 0 ? "+" : ""}{music.gain ?? 0}</span>
-              </span>
-              <input
-                type="range"
-                min={-12}
-                max={6}
-                step={1}
-                value={music.gain ?? 0}
-                aria-label="Volume musik"
-                className="mt-1 w-full accent-orange-500"
-                onChange={(e) => set({ music: { ...music, gain: Number(e.target.value) } })}
-              />
-            </label>
-          )}
+          {/* volume musik = slider 🎵 Musik di mixer timeline (tl.mix.musicDb, sama angkanya) */}
+          {music.src !== "none" && <DbSlider label="Musik" value={musicVolDb(tl)} onChange={(db) => update((t) => withMixDb(t, "musicDb", db))} testId="plan-music" />}
         </div>
       </div>
 

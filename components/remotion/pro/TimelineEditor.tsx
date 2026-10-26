@@ -1,12 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { extraSfxOf, useStudioCatalog } from "@/lib/studio/client";
+import { extraSfxOf, reloadStudioCatalog, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
 import {
   arrangeVo,
   beatGrid,
+  cueDbView,
+  cueGainFor,
+  cueMaxDb,
+  cueMinDb,
+  dbOf,
   isLoudSfx,
+  maxMusicOffset,
+  musicFileBeats,
+  musicOffsetOf,
+  musicVolDb,
   MAX_DUR,
   MAX_TOTAL,
   MIN_DUR,
@@ -19,13 +28,21 @@ import {
   VO_END_ROOM,
   voClashes,
   voCutoffs,
+  voDbOf,
   voSpeechEnd,
   voStartOf,
+  withMixDb,
+  withSceneDb,
+  withVoDb,
+  type MixKey,
   type Scene,
   type Timeline,
   type VoLine,
 } from "@/lib/studio/timeline";
 import { beatReport, isLockedTeaser, isTeaserBeatCue, isTeaserScene, relockTeaser, snapAroundTeaser, teaserDur, teaserVoAt, type BeatReport } from "@/lib/studio/teaserLock";
+import DbSlider, { fmtDb } from "./DbSlider";
+import { UploadBtn } from "./fields";
+import { isMusicFile, useMusicDur, withMusicOffset, withMusicSrc } from "./music";
 import VoLineTools, { tempoBusy, useVoTempo } from "./VoLineTools";
 import { fmtTempo, movedText } from "./VoPanel";
 
@@ -54,25 +71,47 @@ const ZOOMS = [1, 1.6, 2.5, 4];
 const MIN_PPS = 36;
 const SNAP_PX = 10;
 const LANE_GAP = 12;
-const ROW = { ruler: 22, scene: 54, sfx: 44, vo: 28 };
+const ROW = { ruler: 22, scene: 54, sfx: 44, vo: 28, music: 30 };
 /** geser blok VO / titik SFX lewat keyboard & tombol: ±0,05 dtk (Shift ±0,25) */
 const NUDGE = 0.05;
 const NUDGE_BIG = 0.25;
 /** riwayat urungkan (perubahan dari timeline ini) */
 const UNDO_MAX = 30;
+/** geseran slider / tombol yang sama berturut-turut (jeda < 1,5 dtk) = satu langkah urungkan */
+const LIVE_MERGE_MS = 1500;
+/** offset musik: geser 0,1 dtk (Shift 1 dtk) */
+const OFF_STEP = 0.1;
+const OFF_BIG = 1;
+/** baris 🎚️ Volume terbuka / tertutup (per browser) */
+const MIX_OPEN_KEY = "studio:mixOpen";
 
 /** 2.5 -> "2,5" */
 const fmt = (n: number, d = 1) => String(Number(n.toFixed(d))).replace(".", ",");
 const clockLabel = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+const r1 = (n: number) => Math.round(n * 10) / 10;
+/** 72.35 -> "1:12,4" (posisi di lagu) */
+const songClock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")},${Math.floor(Math.round(t * 10) % 10)}`;
+
+/**
+ * perubahan dari luar yang hanya mengisi hasil deteksi ketukan (bpm / beats / lufs) musik yang sama → bukan perubahan user,
+ * jadi riwayat urungkan timeline tidak dihapus (mis. "＋ Musik" lalu ketukannya terdeteksi laptop, tetap bisa diurungkan)
+ */
+function beatsOnly(a: Timeline, b: Timeline): boolean {
+  if (a === b || a.music === b.music || a.music.src !== b.music.src) return false;
+  const ka = Object.keys(a) as (keyof Timeline)[];
+  if (ka.length !== Object.keys(b).length || ka.some((k) => k !== "music" && a[k] !== b[k])) return false;
+  const strip = (m: Timeline["music"]) => JSON.stringify({ ...m, bpm: null, beats: null, lufs: null });
+  return strip(a.music) === strip(b.music);
+}
 
 /** ketukan musik (detik) — sama dengan yang dipakai komposisi untuk menempel potongan */
 export function musicBeats(tl: Timeline, until: number): number[] {
   const m = tl.music;
   if (!m || m.src === "none") return [];
   if (m.src === "bed") return beatGrid(BED_BPM, 0, until);
-  if (m.beats && m.beats.length >= 2) return m.beats;
-  return m.bpm ? beatGrid(m.bpm, m.offset ?? 0, until) : [];
+  // file musik: ketukan lagu digeser offset (lagu mulai dari detik ke-offset) — sama dengan audio.tsx
+  return musicFileBeats(m, until, 2);
 }
 
 /**
@@ -108,7 +147,15 @@ type Drag = { id: string; x0: number; d0: number; dur: number; start: number; ot
 /** blok VO / titik SFX yang sedang ditekan: `can` = boleh digeser (sentuhan: hanya kalau sudah dipilih, supaya geser layar tetap bisa) */
 type VoDrag = { id: string; x0: number; at0: number; at: number; max: number; can: boolean; moved: boolean };
 type SfxDrag = { si: number; ci: number; x0: number; at0: number; at: number; start: number; dur: number; can: boolean; moved: boolean };
-type Picked = { kind: "vo"; sceneId: string } | { kind: "sfx"; sceneId: string; ci: number; id: string };
+type MusicDrag = { x0: number; off0: number; off: number; max: number; can: boolean; moved: boolean };
+/** yang sedang dibuka di bar bawah timeline: blok VO, titik SFX, volume adegan, musik, menu "＋ Musik", volume satu jalur */
+type Picked =
+  | { kind: "vo"; sceneId: string }
+  | { kind: "sfx"; sceneId: string; ci: number; id: string }
+  | { kind: "scene"; sceneId: string }
+  | { kind: "music" }
+  | { kind: "musicMenu" }
+  | { kind: "lane"; lane: "voDb" | "sfxDb" };
 
 /**
  * Timeline horizontal yang bisa diedit sendiri:
@@ -117,7 +164,11 @@ type Picked = { kind: "vo"; sceneId: string } | { kind: "sfx"; sceneId: string; 
  * - titik SFX: klik = pilih (nyala/mati, geser), tarik / panah ←→ = geser detiknya (cue.at); detik SFX bawaan teaser dikunci
  * - blok VO (bagian yang terdengar): klik = pilih, tarik / panah ←→ = geser mulainya (line.at & scene.vo.at, suara tidak dibuat
  *   ulang), merah kalau menabrak VO lain / terpotong di akhir video; bar VO: atur mulai, kecepatan kalimat (VoLineTools)
- * - 🪄 Susun otomatis (arrangeVo) & ↶ Urungkan (perubahan dari timeline ini)
+ * - 🪄 Susun otomatis (arrangeVo) & ↶ Urungkan (perubahan dari timeline ini, termasuk volume & musik)
+ * - 🎚️ Volume (mixer): Musik / VO / SFX semua adegan (tl.mix), per adegan (klik blok adegan → scene.gain), per kalimat VO
+ *   (bar VO → scene.vo.gainDb), per SFX (bar SFX → cue.gain). Slider dikirim berkala selama digeser → preview langsung terdengar
+ * - jalur musik: "＋ Musik" (katalog / trailer bed / tanpa musik / upload) langsung diputar; blok musik digeser = bagian lagu
+ *   yang diputar (tl.music.offset, nempel 0,1 dtk), ketukan ikut bergeser
  * Semua perubahan lewat `onChange` (changeEdit di StudioPro). Di HP: ketuk dulu untuk memilih, lalu geser.
  * `beatHint` = alasan ketukan musik belum ada (mis. laptop mati / lagi dideteksi), untuk tombol "Tempel ke ketukan".
  * `docKey` = id proyek: berganti → suara kalimat yang sedang dibuat ulang (kecepatan) untuk proyek lama dibatalkan.
@@ -131,8 +182,10 @@ export default function TimelineEditor(p: {
   onSeek?: (frame: number) => void;
   beatHint?: string | null;
   docKey?: string | null;
+  /** putar preview (dipakai setelah musik dipilih dari "＋ Musik") */
+  onPlay?: () => void;
 }) {
-  const { timeline: tl, onChange, selected, onSelect, frame, onSeek, beatHint, docKey } = p;
+  const { timeline: tl, onChange, selected, onSelect, frame, onSeek, beatHint, docKey, onPlay } = p;
   const catalog = useStudioCatalog();
   const extra = useMemo<SfxMeta[]>(() => extraSfxOf(catalog), [catalog]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -149,6 +202,18 @@ export default function TimelineEditor(p: {
   const drag = useRef<Drag | null>(null);
   const voDrag = useRef<VoDrag | null>(null);
   const sfxDrag = useRef<SfxDrag | null>(null);
+  const musicDrag = useRef<MusicDrag | null>(null);
+  const [musicDraft, setMusicDraft] = useState<number | null>(null);
+  // baris 🎚️ Volume: terbuka di laptop, tertutup di HP (layar pendek) — pilihan user diingat per browser
+  const [mixOpen, setMixOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(MIX_OPEN_KEY);
+      if (v !== null) return v !== "0";
+    } catch {
+      /* mode privat: pakai bawaan */
+    }
+    return typeof window === "undefined" || window.matchMedia("(min-width: 640px)").matches;
+  });
   const scrub = useRef(false);
   const tlRef = useRef(tl);
   tlRef.current = tl;
@@ -157,23 +222,42 @@ export default function TimelineEditor(p: {
   const hist = useRef<{ before: Timeline; after: Timeline | null }[]>([]);
   const pending = useRef<Timeline | null>(null);
   const undoing = useRef(false);
+  /** perubahan berikutnya digabung ke langkah urungkan terakhir (slider yang sama masih digeser) */
+  const merging = useRef(false);
+  const liveKey = useRef<{ key: string; t: number } | null>(null);
   const [undoN, setUndoN] = useState(0);
   useEffect(() => {
     const h = hist.current;
+    const top = h[h.length - 1];
     if (undoing.current) {
       undoing.current = false;
-      if (h.length) h[h.length - 1].after = tl;
+      if (top) top.after = tl;
+    } else if (merging.current) {
+      merging.current = false;
+      if (top) top.after = tl;
     } else if (pending.current && tl !== pending.current) {
       h.push({ before: pending.current, after: tl });
       if (h.length > UNDO_MAX) h.shift();
       pending.current = null;
-    } else if (h.length && tl !== h[h.length - 1].after) hist.current = []; // diubah dari luar (kartu rencana, suara, Harley)
+    } else if (top && tl !== top.after) {
+      // diubah dari luar (kartu rencana, suara, Harley) → riwayat dihapus; hasil deteksi ketukan musik yang sama tidak
+      if (top.after && beatsOnly(top.after, tl)) top.after = tl;
+      else hist.current = [];
+    }
     setUndoN(hist.current.length);
   }, [tl]);
-  /** satu-satunya pintu perubahan dari timeline ini (dicatat untuk urungkan) */
-  const commit = (next: Timeline, msg?: string) => {
+  /**
+   * satu-satunya pintu perubahan dari timeline ini (dicatat untuk urungkan). `key` = kontrol yang sama (slider / tombol ±):
+   * perubahan berturut-turut dengan key sama digabung jadi satu langkah urungkan
+   */
+  const commit = (next: Timeline, msg?: string, key?: string) => {
     if (next === tlRef.current) return;
-    pending.current = tlRef.current;
+    const h = hist.current;
+    const lk = liveKey.current;
+    const now = Date.now();
+    if (key && lk?.key === key && now - lk.t < LIVE_MERGE_MS && h.length && h[h.length - 1].after === tlRef.current) merging.current = true;
+    else pending.current = tlRef.current;
+    liveKey.current = key ? { key, t: now } : null;
     onChange(next);
     if (msg) setNote(msg);
   };
@@ -188,6 +272,7 @@ export default function TimelineEditor(p: {
     h.pop();
     undoing.current = true;
     pending.current = null;
+    liveKey.current = null;
     onChange(top.before);
     setNote("↶ Perubahan terakhir di timeline diurungkan");
   };
@@ -221,16 +306,30 @@ export default function TimelineEditor(p: {
 
   // adegan lain dipilih (kartu rencana / blok adegan) -> pilihan blok VO / titik SFX adegan lain ditutup
   useEffect(() => {
-    setPick((pk) => (pk && selected && pk.sceneId !== selected ? null : pk));
+    setPick((pk) => (pk && "sceneId" in pk && selected && pk.sceneId !== selected ? null : pk));
     setAskUnlock(null);
   }, [selected]);
+  const toggleMix = () =>
+    setMixOpen((v) => {
+      try {
+        localStorage.setItem(MIX_OPEN_KEY, v ? "0" : "1");
+      } catch {
+        /* mode privat: abaikan */
+      }
+      return !v;
+    });
 
   // durasi yang tampil = durasi asli, kecuali adegan yang sedang ditarik
   const scenes = useMemo(() => (draft ? tl.scenes.map((s) => (s.id === draft.id ? { ...s, dur: draft.dur } : s)) : tl.scenes), [tl.scenes, draft]);
   const fps = tl.fps || 30;
   const starts = useMemo(() => sceneStartSecs({ scenes, fps }), [scenes, fps]);
   const total = useMemo(() => totalFrames({ scenes, fps }) / fps, [scenes, fps]);
-  const beats = useMemo(() => musicBeats(tl, Math.max(total, totalFrames(tl) / fps) + 2), [tl, total, fps]);
+  // musik: panjang lagu (metadata browser) untuk batas offset; offset yang sedang digeser ikut menggeser ketukan
+  const fileMusic = isMusicFile(tl.music?.src);
+  const mDur = useMusicDur(tl.music?.src, tl.music?.dur);
+  const offNow = musicOffsetOf(tl.music);
+  const beatTl = useMemo(() => (musicDraft !== null && mDur ? { ...tl, music: { ...tl.music, offset: musicDraft, dur: mDur } } : tl), [tl, musicDraft, mDur]);
+  const beats = useMemo(() => musicBeats(beatTl, Math.max(total, totalFrames(tl) / fps) + 2), [beatTl, tl, total, fps]);
   // zoom 1 = seluruh video pas di layar (sisa 24 px di kanan untuk pegangan blok terakhir)
   const pps = Math.max(MIN_PPS, (width - 24) / Math.max(1, total)) * ZOOMS[zoom];
   const inner = Math.max(width, Math.ceil(total * pps) + 24);
@@ -538,6 +637,114 @@ export default function TimelineEditor(p: {
     setNote(snapNote(beatReport(next, beats), changed, tl.scenes.some(isLockedTeaser)));
   };
 
+  // ---------------- 🎚️ volume (mixer) ----------------
+  const musicVol = musicVolDb(tl);
+  const laneDb: Record<MixKey, number> = { musicDb: musicVol, voDb: dbOf(tl.mix?.voDb), sfxDb: dbOf(tl.mix?.sfxDb) };
+  const setMix = (k: MixKey, db: number) => {
+    const t = tlRef.current;
+    if (db === (k === "musicDb" ? musicVolDb(t) : dbOf(t.mix?.[k]))) return;
+    commit(withMixDb(t, k, db), undefined, `mix:${k}`);
+  };
+  const setSceneDb = (id: string, k: MixKey, db: number) => {
+    const t = tlRef.current;
+    const next = withSceneDb(t, id, k, db);
+    if (next !== t) commit(next, undefined, `scene:${id}:${k}`);
+  };
+  const setLineDb = (id: string, db: number) => {
+    const t = tlRef.current;
+    const next = withVoDb(t, id, db);
+    if (next !== t) commit(next, undefined, `vo:${id}`);
+  };
+  /** volume satu SFX: angka yang terdengar (cueDbView) → cue.gain */
+  const setCueDb = (si: number, ci: number, db: number) => {
+    const t = tlRef.current;
+    const sc = t.scenes[si];
+    const cue = sc?.sfx[ci];
+    const m = cue ? metaOf(cue.id) : undefined;
+    if (!cue || !m) return;
+    const gain = cueGainFor(m, db);
+    if (gain === cue.gain) return;
+    const upd = (c: Scene["sfx"][number]) => {
+      const { gain: _old, ...rest } = c;
+      return gain === undefined ? rest : { ...rest, gain };
+    };
+    commit({ ...t, scenes: t.scenes.map((s, i) => (i === si ? { ...s, sfx: s.sfx.map((c, k) => (k === ci ? upd(c) : c)) } : s)) }, undefined, `cue:${sc.id}:${ci}`);
+  };
+
+  // ---------------- 🎵 musik: ganti (＋ Musik), geser bagian lagu (offset) ----------------
+  const pickMusicSrc = (src: string, upload?: { name: string }) => {
+    const t = tlRef.current;
+    setPick({ kind: "music" });
+    if (src === t.music.src && !upload) return;
+    const next = withMusicSrc(t, src, catalog, upload);
+    commit(next, src === "none" ? "🔇 Tanpa musik" : `🎵 Musik diganti: ${next.music.name ?? "musik"}`);
+    // dipilih langsung (ketukan user) → preview diputar supaya musiknya langsung terdengar
+    if (src !== "none" && !upload) onPlay?.();
+  };
+  const setMusicOffset = (off: number) => {
+    const t = tlRef.current;
+    if (!mDur || !isMusicFile(t.music.src)) return;
+    const next = withMusicOffset(t, off, mDur);
+    if (next.music.offset === musicOffsetOf(t.music) && t.music.dur === next.music.dur) return;
+    commit(next, `🎵 Lagu mulai dari ${songClock(next.music.offset ?? 0)}`, "music:offset");
+  };
+  const onMusicDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== undefined && e.button > 0) return;
+    const picked = pick?.kind === "music";
+    const can = fileMusic && !!mDur && (e.pointerType !== "touch" || picked);
+    if (can) {
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    musicDrag.current = { x0: e.clientX, off0: offNow, off: offNow, max: maxMusicOffset(mDur ?? 0), can, moved: false };
+  };
+  const onMusicMove = (e: PointerEvent<HTMLDivElement>) => {
+    const d = musicDrag.current;
+    if (!d || !d.can) return;
+    const dx = e.clientX - d.x0;
+    if (!d.moved && Math.abs(dx) <= 3) return;
+    d.moved = true;
+    // blok digeser ke kiri = bagian lagu yang lebih akhir mulai di detik 0 video (nempel 0,1 dtk)
+    d.off = r1(Math.min(d.max, Math.max(0, d.off0 - dx / pps)));
+    setMusicDraft(d.off);
+  };
+  const endMusic = (ok: boolean) => {
+    const d = musicDrag.current;
+    musicDrag.current = null;
+    setMusicDraft(null);
+    if (!d || !ok) return;
+    setPick({ kind: "music" });
+    if (d.moved && Math.abs(d.off - d.off0) > 1e-6) setMusicOffset(d.off);
+  };
+  const onMusicKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setPick({ kind: "music" });
+    } else if (e.key === "Escape") setPick(null);
+    else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && fileMusic && mDur) {
+      // panah = blok bergeser (kiri = bagian lagu lebih akhir)
+      e.preventDefault();
+      setPick({ kind: "music" });
+      setMusicOffset(offNow + (e.shiftKey ? OFF_BIG : OFF_STEP) * (e.key === "ArrowLeft" ? 1 : -1));
+    }
+  };
+  const musicName = tl.music.src === "none" ? "Tanpa musik" : tl.music.src === "bed" ? "Trailer bed (cadangan)" : tl.music.name || "Musik";
+  const musicOff = musicDraft ?? offNow;
+  /** keadaan ketukan musik (deteksi di laptop lewat useBeats) */
+  const beatState: { text: string; busy: boolean } | null = !fileMusic
+    ? tl.music.src === "bed"
+      ? { text: `🥁 Ketukan ${BED_BPM} BPM (ikut adegan otomatis)`, busy: false }
+      : null
+    : (tl.music.beats?.length ?? 0) >= 2
+      ? { text: `🥁 ${tl.music.beats?.length} ketukan terdeteksi${tl.music.bpm ? ` · ±${Math.round(tl.music.bpm)} BPM` : ""}`, busy: false }
+      : tl.music.bpm
+        ? { text: `🥁 ±${Math.round(tl.music.bpm)} BPM`, busy: false }
+        : !beatHint || /mendeteksi/i.test(beatHint)
+          ? { text: "⏳ Mendeteksi ketukan…", busy: true }
+          : { text: `⚠️ ${beatHint}`, busy: false };
+  const catalogMusic = catalog?.music ?? [];
+  const inCatalog = !fileMusic || catalogMusic.some((m) => m.src === tl.music.src);
+
   // penggaris: label tiap 1/2/5/10/… dtk, minimal 44 px antarlabel
   const step = [1, 2, 5, 10, 15, 30, 60].find((s) => s * pps >= 44) ?? 60;
   const ticks: number[] = [];
@@ -558,7 +765,12 @@ export default function TimelineEditor(p: {
     const cue = tl.scenes[si]?.sfx[pick.ci];
     return cue && cue.id === pick.id ? { si, s: tl.scenes[si], ci: pick.ci, cue } : null;
   })() : null;
-  const selTeaser = !pickVo && !pickCue && selected ? tl.scenes.find((s) => s.id === selected && isTeaserScene(s)) ?? null : null;
+  // bar kunci durasi adegan teaser: adegan teaser dipilih & bar lain (VO / SFX / musik / jalur) tidak terbuka
+  const selTeaser = (!pick || pick.kind === "scene") && selected ? tl.scenes.find((s) => s.id === selected && isTeaserScene(s)) ?? null : null;
+  const pickScene = pick?.kind === "scene" ? (() => {
+    const i = tl.scenes.findIndex((s) => s.id === pick.sceneId);
+    return i >= 0 ? { i, s: tl.scenes[i] } : null;
+  })() : null;
   const clashLabels = clashes.map((c) => `${scenes[c.scene]?.name} → ${scenes[c.next]?.name} (${fmt(Math.max(0.01, c.sec), 2)} dtk)`);
 
   let bar: ReactNode = null;
@@ -600,6 +812,14 @@ export default function TimelineEditor(p: {
             </button>
           )}
         </div>
+        <DbSlider
+          icon="🔊"
+          label="Volume"
+          value={dbOf(s.vo?.gainDb)}
+          onChange={(db) => setLineDb(s.id, db)}
+          testId="vo-line"
+          note={dbOf(tl.mix?.voDb) || dbOf(s.gain?.voDb) ? `Kalimat ini · total VO adegan ${fmtDb(voDbOf(tl, s))} (ikut 🎚️ VO${dbOf(s.gain?.voDb) ? " & volume adegan" : ""})` : "Volume kalimat ini saja · suara tidak dibuat ulang"}
+        />
         {hit ? (
           <p className="text-[11.5px] text-red-400" data-vo-bar-clash>
             ⛔ Menabrak VO {hit.scene === i ? `${scenes[hit.next]?.name} sesudahnya` : `${scenes[hit.scene]?.name} sebelumnya`} — geser mulainya, pilih kecepatan lebih cepat, atau 🪄 Susun otomatis.
@@ -645,6 +865,18 @@ export default function TimelineEditor(p: {
             {cue.on ? "🔇 Matikan" : "🔊 Nyalakan"}
           </button>
         </div>
+        {meta && (
+          <DbSlider
+            icon="🔊"
+            label="Volume"
+            value={cueDbView(meta, cue.gain)}
+            min={cueMinDb(meta)}
+            max={cueMaxDb(meta)}
+            onChange={(db) => setCueDb(si, ci, db)}
+            testId="sfx-cue"
+            note={cueMaxDb(meta) < 6 ? `Maks ${fmtDb(cueMaxDb(meta))} untuk file ini (puncaknya sudah tinggi) — lebih keras: naikkan 🎚️ SFX` : null}
+          />
+        )}
         <p className="text-[11px] text-zinc-500">
           {locked
             ? "🔒 Detiknya dikunci — sinkron dengan gerakan animasi premium. Buka kunci durasi adegan ini (klik blok adegannya) untuk menggeser."
@@ -652,46 +884,189 @@ export default function TimelineEditor(p: {
         </p>
       </div>
     );
-  } else if (selTeaser) {
-    const s = selTeaser;
-    const canon = teaserDur(s.layout.shot) ?? s.dur;
-    const diff = Math.abs(canon - s.dur) > 1e-6;
+  } else if (pick?.kind === "music") {
     bar = (
-      <div className="space-y-2" data-tl-bar="lock">
-        {isLockedTeaser(s) ? (
-          askUnlock === s.id ? (
-            <div className="space-y-2 rounded-lg bg-amber-500/10 px-2.5 py-2 text-[12px] leading-relaxed text-amber-200" role="alert" data-unlock-warn>
-              <p>
-                ⚠️ Animasi premium <b>{s.name}</b> dibuat pas untuk {fmt(canon, 2)} dtk. Kalau durasinya diubah, animasinya bisa <b>terpotong</b> (lebih pendek) atau{" "}
-                <b>diam di akhir</b> (lebih panjang), dan potongan adegan sesudahnya bisa tidak pas ketukan musik lagi. Detik SFX bawaan juga jadi bisa digeser.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-ghost px-3 py-1.5 text-[12px] text-amber-200" onClick={() => unlock(s.id)} data-unlock-yes>
-                  🔓 Ya, buka kunci
-                </button>
-                <button type="button" className="px-2 text-[12px] font-semibold text-zinc-400 hover:text-zinc-200" onClick={() => setAskUnlock(null)}>
-                  Batal
+      <div className="space-y-2" data-tl-bar="music">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-0 truncate font-semibold text-zinc-200">
+            {tl.music.src === "bed" ? "🥁" : tl.music.src === "none" ? "🔇" : "🎵"} {musicName}
+          </span>
+          {beatState && (
+            <span className={`text-[11px] ${beatState.busy ? "animate-pulse text-violet-300" : "text-zinc-500"}`} data-music-beats>
+              {beatState.text}
+            </span>
+          )}
+          <button type="button" className="ml-auto h-7 w-7 rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300" aria-label="Tutup bar musik" onClick={() => setPick(null)}>
+            ✕
+          </button>
+        </div>
+        {fileMusic && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11.5px] font-semibold text-zinc-300">⏱️ Mulai lagu dari</span>
+            <button type="button" className="btn-ghost h-8 w-8 p-0" aria-label="Mulai lagu 0,1 detik lebih awal" disabled={!mDur || offNow <= 0} onClick={() => setMusicOffset(offNow - OFF_STEP)}>
+              −
+            </button>
+            <span className="min-w-[64px] text-center text-[12.5px] tabular-nums text-zinc-100" data-music-offset>
+              {songClock(musicOff)}
+            </span>
+            <button type="button" className="btn-ghost h-8 w-8 p-0" aria-label="Mulai lagu 0,1 detik lebih akhir" disabled={!mDur || offNow >= maxMusicOffset(mDur) - 1e-6} onClick={() => setMusicOffset(offNow + OFF_STEP)}>
+              +
+            </button>
+            {offNow > 0 && (
+              <button type="button" className="text-[11.5px] font-semibold text-orange-400 hover:text-orange-300" onClick={() => setMusicOffset(0)}>
+                ↺ Dari awal lagu
+              </button>
+            )}
+            {mDur && <span className="text-[11px] text-zinc-500">· panjang lagu {songClock(mDur)}</span>}
+          </div>
+        )}
+        {tl.music.src !== "none" && <DbSlider icon="🎵" label="Musik" value={musicVol} onChange={(db) => setMix("musicDb", db)} testId="music-bar" />}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => setPick({ kind: "musicMenu" })} data-music-change>
+            🔁 Ganti musik
+          </button>
+          <span className="text-[11px] text-zinc-500">
+            {fileMusic
+              ? mDur
+                ? "Geser blok 🎵 ke kiri / kanan untuk pilih bagian lagu (nempel 0,1 dtk) — ketukan ikut bergeser."
+                : "Membaca panjang lagu…"
+              : tl.music.src === "bed"
+                ? "Trailer bed otomatis ikut level musik tiap adegan."
+                : "Video tanpa musik."}
+          </span>
+        </div>
+      </div>
+    );
+  } else if (pick?.kind === "musicMenu") {
+    const chip = (on: boolean) =>
+      `inline-flex min-h-[34px] max-w-full items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
+        on ? "border-orange-500 bg-orange-500/10 text-orange-300" : "border-zinc-700 text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800"
+      }`;
+    bar = (
+      <div className="space-y-2" data-tl-bar="music-menu">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-zinc-200">＋ Musik</span>
+          <span className="min-w-0 truncate text-[11px] text-zinc-500">pilih → langsung diputar di preview</span>
+          <button type="button" className="ml-auto h-7 w-7 flex-none rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300" aria-label="Tutup menu musik" onClick={() => setPick(null)}>
+            ✕
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Pilih musik">
+          {catalogMusic.map((m) => (
+            <button key={m.src} type="button" className={chip(tl.music.src === m.src)} aria-pressed={tl.music.src === m.src} onClick={() => pickMusicSrc(m.src)} data-music-opt={m.src}>
+              🎵 <span className="max-w-[220px] truncate">{m.name}</span>
+            </button>
+          ))}
+          {!inCatalog && (
+            <button type="button" className={chip(true)} aria-pressed onClick={() => setPick({ kind: "music" })}>
+              🎵 <span className="max-w-[220px] truncate">{tl.music.name || "Musik upload"}</span>
+            </button>
+          )}
+          <button type="button" className={chip(tl.music.src === "bed")} aria-pressed={tl.music.src === "bed"} onClick={() => pickMusicSrc("bed")} data-music-opt="bed">
+            🥁 Trailer bed (cadangan)
+          </button>
+          <button type="button" className={chip(tl.music.src === "none")} aria-pressed={tl.music.src === "none"} onClick={() => pickMusicSrc("none")} data-music-opt="none">
+            🔇 Tanpa musik
+          </button>
+          <UploadBtn
+            accept="audio/*"
+            sub="music"
+            label="⬆️ Upload file"
+            className="min-h-[34px]"
+            onDone={(r) => {
+              pickMusicSrc(r.src, { name: r.name });
+              // muat ulang katalog supaya musik upload tetap ada di daftar
+              void reloadStudioCatalog();
+            }}
+          />
+        </div>
+        <p className="text-[11px] text-zinc-500">
+          {catalogMusic.length ? "" : "Belum ada musik di katalog. "}Pakai musik bebas hak cipta (mp3 / wav / m4a). Ketukan dideteksi otomatis di laptop.
+        </p>
+      </div>
+    );
+  } else if (pick?.kind === "lane") {
+    const vo = pick.lane === "voDb";
+    const lane = pick.lane;
+    bar = (
+      <div className="space-y-1.5" data-tl-bar="lane">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-zinc-200">{vo ? "🎙️ Volume semua VO" : "🔊 Volume semua SFX"}</span>
+          <button type="button" className="ml-auto h-7 w-7 rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300" aria-label="Tutup bar volume" onClick={() => setPick(null)}>
+            ✕
+          </button>
+        </div>
+        <DbSlider icon={vo ? "🎙️" : "🔊"} label={vo ? "VO" : "SFX"} value={laneDb[lane]} onChange={(db) => setMix(lane, db)} testId={`lane-${lane}`} />
+        <p className="text-[11px] text-zinc-500">{vo ? "Per kalimat: klik blok VO-nya." : "Per SFX: klik titiknya."} Per adegan: klik blok adegan.</p>
+      </div>
+    );
+  } else if (selTeaser || pickScene) {
+    let lockBar: ReactNode = null;
+    if (selTeaser) {
+      const s = selTeaser;
+      const canon = teaserDur(s.layout.shot) ?? s.dur;
+      const diff = Math.abs(canon - s.dur) > 1e-6;
+      lockBar = (
+        <div className="space-y-2" data-tl-bar="lock">
+          {isLockedTeaser(s) ? (
+            askUnlock === s.id ? (
+              <div className="space-y-2 rounded-lg bg-amber-500/10 px-2.5 py-2 text-[12px] leading-relaxed text-amber-200" role="alert" data-unlock-warn>
+                <p>
+                  ⚠️ Animasi premium <b>{s.name}</b> dibuat pas untuk {fmt(canon, 2)} dtk. Kalau durasinya diubah, animasinya bisa <b>terpotong</b> (lebih pendek) atau{" "}
+                  <b>diam di akhir</b> (lebih panjang), dan potongan adegan sesudahnya bisa tidak pas ketukan musik lagi. Detik SFX bawaan juga jadi bisa digeser.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className="btn-ghost px-3 py-1.5 text-[12px] text-amber-200" onClick={() => unlock(s.id)} data-unlock-yes>
+                    🔓 Ya, buka kunci
+                  </button>
+                  <button type="button" className="px-2 text-[12px] font-semibold text-zinc-400 hover:text-zinc-200" onClick={() => setAskUnlock(null)}>
+                    Batal
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                <span className="text-zinc-300">
+                  🔒 Durasi <b>{s.name}</b> dikunci di ketukan musik ({fmt(s.dur, 2)} dtk)
+                </span>
+                <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => setAskUnlock(s.id)} data-unlock>
+                  🔓 Buka kunci durasi
                 </button>
               </div>
-            </div>
+            )
           ) : (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-              <span className="text-zinc-300">
-                🔒 Durasi <b>{s.name}</b> dikunci di ketukan musik ({fmt(s.dur, 2)} dtk)
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-unlocked>
+              <span className="text-amber-300">
+                🔓 Kunci durasi <b>{s.name}</b> dibuka · animasi dibuat untuk {fmt(canon, 2)} dtk{diff ? ` (sekarang ${fmt(s.dur, 2)} dtk — bisa terpotong / diam di akhir)` : ""}
               </span>
-              <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => setAskUnlock(s.id)} data-unlock>
-                🔓 Buka kunci durasi
+              <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" title="Durasi & detik SFX bawaan kembali ke aslinya, lalu dikunci lagi" onClick={() => relock(s.id)} data-relock>
+                {diff ? "↺ Kembalikan durasi asli" : "🔒 Kunci lagi"}
               </button>
             </div>
-          )
-        ) : (
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-unlocked>
-            <span className="text-amber-300">
-              🔓 Kunci durasi <b>{s.name}</b> dibuka · animasi dibuat untuk {fmt(canon, 2)} dtk{diff ? ` (sekarang ${fmt(s.dur, 2)} dtk — bisa terpotong / diam di akhir)` : ""}
-            </span>
-            <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" title="Durasi & detik SFX bawaan kembali ke aslinya, lalu dikunci lagi" onClick={() => relock(s.id)} data-relock>
-              {diff ? "↺ Kembalikan durasi asli" : "🔒 Kunci lagi"}
-            </button>
+          )}
+        </div>
+      );
+    }
+    const sc = pickScene;
+    bar = (
+      <div className="space-y-3">
+        {lockBar}
+        {sc && (
+          <div className={`space-y-1.5 ${lockBar ? "border-t border-zinc-800 pt-2.5" : ""}`} data-tl-bar="scene">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 truncate font-semibold text-zinc-200">
+                🎚️ Volume adegan {sc.i + 1}. {sc.s.name}
+              </span>
+              <button type="button" className="ml-auto h-7 w-7 flex-none rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300" aria-label="Tutup volume adegan" onClick={() => setPick(null)}>
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(20rem,100%),1fr))] gap-x-4 gap-y-1">
+              <DbSlider icon="🎵" label="Musik" value={dbOf(sc.s.gain?.musicDb)} disabled={tl.music.src === "none"} onChange={(db) => setSceneDb(sc.s.id, "musicDb", db)} testId="scene-musicDb" />
+              <DbSlider icon="🎙️" label="VO" value={dbOf(sc.s.gain?.voDb)} disabled={!sc.s.vo?.text} onChange={(db) => setSceneDb(sc.s.id, "voDb", db)} testId="scene-voDb" />
+              <DbSlider icon="🔊" label="SFX" value={dbOf(sc.s.gain?.sfxDb)} disabled={!sc.s.sfx.length} onChange={(db) => setSceneDb(sc.s.id, "sfxDb", db)} testId="scene-sfxDb" />
+            </div>
+            <p className="text-[11px] text-zinc-500">Hanya selama adegan ini · ditambah 🎚️ Volume semua adegan.</p>
           </div>
         )}
       </div>
@@ -718,6 +1093,9 @@ export default function TimelineEditor(p: {
           <button type="button" className="btn-ghost h-8 w-8 p-0 text-base" aria-label="Urungkan perubahan terakhir di timeline" title="Urungkan (Ctrl+Z)" disabled={!undoN} onClick={undo} data-tl-undo>
             ↶
           </button>
+          <button type="button" className={`btn-ghost px-2.5 py-1.5 text-xs ${mixOpen ? "border-orange-500/60 text-orange-300" : ""}`} aria-expanded={mixOpen} aria-controls="tl-mixer" title="Volume musik, VO & SFX" onClick={toggleMix} data-tl-mix-toggle>
+            🎚️ Volume
+          </button>
           <button type="button" className="btn-ghost px-2.5 py-1.5 text-xs" disabled={beats.length < 2} title={beats.length >= 2 ? "Geser batas adegan ke ketukan musik terdekat" : !tl.music || tl.music.src === "none" ? "Pilih musik dulu supaya ada ketukan" : beatHint || "Tempo musik belum diketahui"} onClick={snapAll}>
             🎯 Tempel ke ketukan
           </button>
@@ -730,19 +1108,31 @@ export default function TimelineEditor(p: {
         </div>
       </div>
 
+      {/* 🎚️ Volume: musik / VO / SFX semua adegan (tl.mix) */}
+      {mixOpen && (
+        <div id="tl-mixer" className="mb-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5" data-tl-mixer>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-[11px]">
+            <span className="font-semibold text-zinc-300">🎚️ Volume · semua adegan</span>
+            <span className="text-zinc-500">ketuk 2x slider = normal (0 dB)</span>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(20rem,100%),1fr))] gap-x-4">
+            <DbSlider icon="🎵" label="Musik" value={musicVol} disabled={tl.music.src === "none"} onChange={(db) => setMix("musicDb", db)} testId="musicDb" />
+            <DbSlider icon="🎙️" label="VO" value={laneDb.voDb} onChange={(db) => setMix("voDb", db)} testId="voDb" />
+            <DbSlider icon="🔊" label="SFX" value={laneDb.sfxDb} onChange={(db) => setMix("sfxDb", db)} testId="sfxDb" />
+          </div>
+        </div>
+      )}
+
       <div className="flex min-w-0 gap-1.5">
-        {/* label baris */}
-        <div className="flex w-6 flex-none flex-col text-center text-[13px] leading-none text-zinc-500" aria-hidden>
-          <div style={{ height: ROW.ruler }} />
-          <div className="flex items-center justify-center" style={{ height: ROW.scene }} title="Adegan">
+        {/* label baris (SFX / VO / musik = tombol volume jalur) */}
+        <div className="flex w-6 flex-none flex-col text-center text-[13px] leading-none text-zinc-500">
+          <div style={{ height: ROW.ruler }} aria-hidden />
+          <div className="flex items-center justify-center" style={{ height: ROW.scene }} title="Adegan" aria-hidden>
             🎬
           </div>
-          <div className="flex items-center justify-center" style={{ height: ROW.sfx }} title="SFX">
-            🔊
-          </div>
-          <div className="flex items-center justify-center" style={{ height: ROW.vo }} title="Voice over">
-            🎙️
-          </div>
+          <LaneBtn icon="🔊" name="SFX" db={laneDb.sfxDb} h={ROW.sfx} on={pick?.kind === "lane" && pick.lane === "sfxDb"} onClick={() => setPick((pk) => (pk?.kind === "lane" && pk.lane === "sfxDb" ? null : { kind: "lane", lane: "sfxDb" }))} />
+          <LaneBtn icon="🎙️" name="VO" db={laneDb.voDb} h={ROW.vo} on={pick?.kind === "lane" && pick.lane === "voDb"} onClick={() => setPick((pk) => (pk?.kind === "lane" && pk.lane === "voDb" ? null : { kind: "lane", lane: "voDb" }))} />
+          <LaneBtn icon="🎵" name="Musik" db={tl.music.src === "none" ? 0 : musicVol} h={ROW.music} on={pick?.kind === "music"} onClick={() => setPick((pk) => (pk?.kind === "music" ? null : { kind: "music" }))} />
         </div>
 
         <div ref={scroller} className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain rounded-xl border border-zinc-800 bg-zinc-950/60 [scrollbar-width:thin]">
@@ -786,13 +1176,14 @@ export default function TimelineEditor(p: {
                     aria-pressed={sel}
                     title={`${i + 1}. ${s.name} · ${fmt(s.dur, 2)} dtk${isTeaserScene(s) ? (locked ? " · 🔒 durasi dikunci" : " · 🔓 kunci durasi dibuka") : ""}`}
                     onClick={() => {
-                      setPick(null);
+                      // pilih adegan + buka volume adegan ini (dan kunci durasi kalau adegan premium)
+                      setPick({ kind: "scene", sceneId: s.id });
                       onSelect(s.id);
                     }}
                     onKeyDown={(e) => {
                       if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
                       e.preventDefault();
-                      setPick(null);
+                      setPick({ kind: "scene", sceneId: s.id });
                       onSelect(s.id);
                     }}
                     className={`group absolute top-1.5 bottom-1.5 overflow-hidden rounded-lg border text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-orange-500/60 ${
@@ -936,6 +1327,52 @@ export default function TimelineEditor(p: {
               )}
             </div>
 
+            {/* jalur musik: ＋ Musik (menempel di kiri) + blok musik (geser = bagian lagu), tanda ketukan */}
+            <div className="relative border-t border-zinc-800/70" style={{ height: ROW.music }} data-music-lane>
+              {tl.music.src !== "none" && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={pick?.kind === "music"}
+                  aria-label={`Musik ${musicName}${fileMusic ? `, mulai dari ${songClock(musicOff)} lagu` : ""}${beatState ? `, ${beatState.text.replace(/^\S+\s/, "")}` : ""}. ${fileMusic ? "Geser blok atau panah kiri kanan untuk pilih bagian lagu" : "Klik untuk atur"}`}
+                  title={`${musicName}${fileMusic ? ` · mulai dari ${songClock(musicOff)}${mDur ? ` · tarik ke kiri / kanan untuk pilih bagian lagu` : ""}` : ""}${beatState ? `\n${beatState.text}` : ""}`}
+                  onPointerDown={onMusicDown}
+                  onPointerMove={onMusicMove}
+                  onPointerUp={() => endMusic(true)}
+                  onPointerCancel={() => endMusic(false)}
+                  onLostPointerCapture={() => musicDrag.current && endMusic(true)}
+                  onKeyDown={onMusicKey}
+                  className={`absolute top-1 bottom-1 overflow-hidden rounded border text-[10px] leading-[20px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70 ${
+                    fileMusic && mDur ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+                  } ${tl.music.src === "bed" ? "border-indigo-400/50 bg-indigo-400/15 text-indigo-300" : "border-violet-400/60 bg-violet-400/20 text-violet-300"} ${pick?.kind === "music" ? "z-[5] ring-2 ring-orange-500" : ""}`}
+                  style={{ left: 0, width: Math.max(8, total * pps), touchAction: pick?.kind === "music" && fileMusic ? "none" : "pan-x" }}
+                  data-music-block
+                >
+                  {showBeats &&
+                    beats
+                      .filter((b) => b <= total + 0.01)
+                      .map((b, k) => <span key={`m${k}`} className="pointer-events-none absolute top-0 bottom-0 w-px bg-current opacity-30" style={{ left: b * pps }} data-music-beat />)}
+                  <span className={`pointer-events-none relative block truncate pl-[84px] pr-2 ${musicDraft !== null ? "font-bold text-orange-400" : ""}`}>
+                    {musicName}
+                    {fileMusic && (musicOff > 0 || musicDraft !== null) ? ` · dari ${songClock(musicOff)}` : ""}
+                    {beatState?.busy ? " · ⏳ Mendeteksi ketukan…" : ""}
+                  </span>
+                </div>
+              )}
+              <div className="pointer-events-none sticky left-0 z-[6] inline-flex h-full items-center gap-1.5 pl-1">
+                <button
+                  type="button"
+                  className={`pointer-events-auto rounded-md border px-2 py-1 text-[11px] font-semibold leading-none shadow-sm ${pick?.kind === "musicMenu" ? "border-orange-500 bg-orange-500/15 text-orange-300" : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-600"}`}
+                  aria-expanded={pick?.kind === "musicMenu"}
+                  onClick={() => setPick((pk) => (pk?.kind === "musicMenu" ? null : { kind: "musicMenu" }))}
+                  data-music-add
+                >
+                  ＋ Musik
+                </button>
+                {tl.music.src === "none" && <span className="text-[11px] text-zinc-600">Tanpa musik</span>}
+              </div>
+            </div>
+
             {/* playhead */}
             {head !== null && head <= inner && (
               <div className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-orange-500" style={{ left: head }}>
@@ -988,5 +1425,24 @@ export default function TimelineEditor(p: {
         )}
       </div>
     </div>
+  );
+}
+
+/** tombol volume jalur (kolom label kiri): ikon + titik oranye kalau volumenya tidak 0 dB */
+function LaneBtn({ icon, name, db, h, on, onClick }: { icon: string; name: string; db: number; h: number; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`relative flex w-full items-center justify-center rounded-md transition hover:bg-zinc-800 ${on ? "bg-zinc-800 ring-1 ring-orange-500/70" : ""}`}
+      style={{ height: h }}
+      aria-label={`Volume ${name}: ${fmtDb(db)}`}
+      aria-pressed={on}
+      title={`Volume ${name} (${fmtDb(db)})`}
+      onClick={onClick}
+      data-lane-btn={name}
+    >
+      <span aria-hidden>{icon}</span>
+      {db !== 0 && <span className="absolute right-0 top-1 h-1.5 w-1.5 rounded-full bg-orange-500" aria-hidden />}
+    </button>
   );
 }

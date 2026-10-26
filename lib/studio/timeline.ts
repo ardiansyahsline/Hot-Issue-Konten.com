@@ -137,8 +137,9 @@ export type Scene = {
    * timeline / disusun otomatis (arrangeVo) supaya VO tidak numpuk.
    * `tempo` = kecepatan VO yang diatur sendiri (TEMPO_MIN–TEMPO_MAX × normal, mis. 1,1); kosong = otomatis (adegan teaser dipercepat
    * sendiri kalau kepanjangan). Dipakai saat suara adegan ini dibuat (Edge: rate, laptop: atempo).
+   * `gainDb` = volume kalimat VO ini (dB, -24..+6, kosong = 0) — diatur di mixer timeline, suara tidak dibuat ulang.
    */
-  vo: { text: string; spell?: string; at?: number; tempo?: number } | null;
+  vo: { text: string; spell?: string; at?: number; tempo?: number; gainDb?: number } | null;
   /** teks di layar, maks ±6–7 kata per baris */
   text: string[];
   /** catatan storyboard (apa yang terlihat) */
@@ -156,6 +157,8 @@ export type Scene = {
    * untuk durasi aslinya → bisa terpotong / diam di akhir). Kosong = dikunci di ketukan musik (lihat teaserLock.isLockedTeaser).
    */
   unlocked?: boolean;
+  /** volume adegan ini (dB, -24..+6 per jalur; kosong = 0): musik selama adegan, VO & SFX milik adegan. Diatur di mixer timeline */
+  gain?: Mix;
 };
 
 export type VoiceMode = "bank" | "edge" | "elevenlabs" | "none";
@@ -169,9 +172,14 @@ export type Voice = { mode: VoiceMode; voiceId?: string | null; voiceName?: stri
 /**
  * Musik: `src` = "bed" (trailer bed cadangan dari SFX), "none", atau URL file yang bisa diputar
  * (/api/studio/asset/music/… untuk file repo, /api/studio/file?p=… untuk upload user).
- * `beats` (detik) dari deteksi BPM — dipakai untuk menempel potongan & impact ke ketukan.
+ * `beats` (detik lagu) dari deteksi BPM — dipakai untuk menempel potongan & impact ke ketukan.
+ * `offset` = detik lagu yang dilewati: file musik diputar mulai detik ke-`offset` (0 = dari awal; digeser di jalur musik timeline).
+ * Ketukan ikut digeser ke waktu video (musicFileBeats). Trailer bed tidak memakai offset (selalu ikut adegan).
+ * `dur` = panjang file musik (detik), ditulis editor bersama offset — offset dijepit supaya tidak lewat ujung lagu, dan hanya
+ * dipakai kalau `dur` ada (musicOffsetOf).
+ * `gain` = volume lama file musik (dB); volume musik sekarang diatur lewat `Timeline.mix.musicDb` (lihat musicVolDb).
  */
-export type Music = { src: string; name?: string; bpm?: number | null; beats?: number[] | null; offset?: number; gain?: number; lufs?: number | null };
+export type Music = { src: string; name?: string; bpm?: number | null; beats?: number[] | null; offset?: number; gain?: number; lufs?: number | null; dur?: number };
 
 export type Word = { w: string; s: number; e: number };
 /**
@@ -261,7 +269,7 @@ export type Timeline = {
  * dikirim ke AI sebagai CATATAN, bukan perintah sistem. Server memeriksa hero sebelum dipakai (route chat).
  */
 export type Director = { hero: string; name?: string; notes?: string[] };
-/** volume campuran per jalur (dB, -24..+6). Data saja — dipakai mixer audio nanti. */
+/** volume campuran per jalur (dB, -24..+6; kosong = 0) — dipakai mixer audio (components/remotion/studio/audio.tsx, lihat usesMixer) */
 export type Mix = { musicDb?: number; voDb?: number; sfxDb?: number };
 
 // ---------------------------------------------------------------------------------------------
@@ -311,6 +319,35 @@ export function sfxGain(m: Pick<SfxMeta, "cat" | "lufs" | "tp">, extraDb = 0): n
   const headroom = -1 - m.tp; // jangan sampai puncak > -1 dBTP
   return dbToGain(Math.max(-40, Math.min(want, headroom, 24)));
 }
+
+/**
+ * Slider volume per SFX (mixer): angka yang TERDENGAR relatif bawaan, bukan `cue.gain` mentah — sfxGain menjepit tiap file di
+ * batas puncaknya, jadi menaikkan `cue.gain` di atas batas itu tidak berbunyi apa-apa (dan file yang sudah di batas punya "zona mati"
+ * di bawah 0). `cueDbView` = `cue.gain` → dB terdengar, `cueGainFor` = dB terdengar → `cue.gain`, `cueMaxDb` = naik maksimal (0..+6),
+ * `cueMinDb` = turun maksimal (cue.gain dibatasi -24 dB, jadi file yang sudah dijepit puncaknya tidak bisa turun sejauh -24).
+ */
+const cueBase = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">) => {
+  const want0 = (TARGET_LUFS[m.cat] ?? -17) - m.lufs;
+  const cap = Math.min(-1 - m.tp, 24);
+  return { want0, cap, base: Math.max(-40, Math.min(want0, cap)) };
+};
+export const cueMaxDb = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">): number => {
+  const { cap, base } = cueBase(m);
+  return Math.max(0, Math.min(6, Math.floor((cap - base) * 2) / 2));
+};
+export const cueMinDb = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">): number => {
+  const { want0, cap, base } = cueBase(m);
+  return Math.min(0, Math.ceil((Math.max(-40, Math.min(want0 - 24, cap)) - base) * 2) / 2);
+};
+export const cueDbView = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">, gain: number | undefined): number => {
+  const { want0, cap, base } = cueBase(m);
+  return Math.round((Math.max(-40, Math.min(want0 + (gain ?? 0), cap)) - base) * 10) / 10;
+};
+export const cueGainFor = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">, db: number): number | undefined => {
+  if (Math.abs(db) < 1e-9) return undefined;
+  const { want0, base } = cueBase(m);
+  return Math.round(Math.max(-24, Math.min(12, base + db - want0)) * 10) / 10;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Helper waktu
@@ -510,11 +547,13 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     const voAt = voAtRaw === undefined || voAtRaw === null || voAtRaw === "" ? NaN : num(voAtRaw, NaN, 0, dur);
     // ejaan teaser versi lama (pakai strip) → versi baru tanpa strip (hanya kalimat yang persis sama, lihat upgradeTeaserSpell)
     const tempo = normTempo(voRaw?.tempo);
+    // volume kalimat VO (mixer): -24..+6 dB; 0 / kosong tidak disimpan
+    const voDb = mixDb(voRaw?.gainDb);
     const spellRaw = str(voRaw?.spell, 400);
     const spell = upgradeTeaserSpell(spellRaw);
     if (voText && spellRaw && spell !== spellRaw) legacySay.set(id, legacySayKey(voText, spellRaw));
     const vo: Scene["vo"] = voText
-      ? { text: voText, spell: spell || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}), ...(tempo !== undefined ? { tempo } : {}) }
+      ? { text: voText, spell: spell || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}), ...(tempo !== undefined ? { tempo } : {}), ...(voDb ? { gainDb: voDb } : {}) }
       : null;
     const tr = (s.transition && typeof s.transition === "object" ? s.transition : { kind: s.transition }) as Record<string, unknown>;
     const bg = (s.bg && typeof s.bg === "object" ? s.bg : {}) as Record<string, unknown>;
@@ -536,6 +575,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       return true;
     });
     const layout = normLayout(s.layout, text);
+    const gain = normGain(s.gain);
     scenes.push({
       id,
       name: str(s.name, 40) || `Adegan ${scenes.length + 1}`,
@@ -553,12 +593,17 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       subtitles: s.subtitles === undefined ? true : !!s.subtitles,
       // kunci durasi hanya ada di adegan premium teaser; hanya `true` yang disimpan
       ...(layout.kind === "teaser" && s.unlocked === true ? { unlocked: true } : {}),
+      // volume adegan (mixer): hanya jalur ≠ 0 dB yang disimpan
+      ...(gain ? { gain } : {}),
     });
   }
   if (!scenes.length) scenes.push(...defaultTimeline().scenes);
   const v = (o.voice && typeof o.voice === "object" ? o.voice : {}) as Record<string, unknown>;
   const m = (o.music && typeof o.music === "object" ? o.music : {}) as Record<string, unknown>;
   const mSrc = str(m.src, 600);
+  // panjang file musik (detik, opsional) → offset tidak boleh lewat ujung lagu
+  const mDur = m.dur === undefined || m.dur === null ? 0 : Math.round(num(m.dur, 0, 0, 3600) * 1000) / 1000;
+  const mOff = num(m.offset, 0, 0, 120);
   // baris VO tanpa `at` (data lama) mulai di offset adegannya (vo.at) atau bawaan 0,15
   const vo0 = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
   const vo = vo0 && legacySay.size ? { ...vo0, lines: vo0.lines.map((l) => (!l.say && legacySay.has(l.sceneId) ? { ...l, say: legacySay.get(l.sceneId) } : l)) } : vo0;
@@ -590,9 +635,10 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       name: str(m.name, 80) || undefined,
       bpm: m.bpm === undefined || m.bpm === null ? null : num(m.bpm, 100, 40, 240),
       beats: Array.isArray(m.beats) ? m.beats.map((x) => num(x, NaN, 0, MAX_TOTAL)).filter(Number.isFinite).slice(0, 2000) : null,
-      offset: num(m.offset, 0, 0, 120),
+      offset: mDur > 0 ? Math.min(mOff, maxMusicOffset(mDur)) : mOff,
       gain: num(m.gain, 0, -24, 12),
       lufs: m.lufs === undefined || m.lufs === null ? null : num(m.lufs, -14, -40, 0),
+      ...(mDur > 0 ? { dur: mDur } : {}),
     },
     scenes,
     vo,
@@ -661,6 +707,106 @@ function normDirectorMix(o: Record<string, unknown>): Pick<Timeline, "director" 
   const director = normDirector(o.director);
   const mix = normMix(o.mix);
   return { ...(director ? { director } : {}), ...(mix ? { mix } : {}) };
+}
+
+// ---------- mixer: volume campuran (tl.mix), per adegan (scene.gain), per kalimat VO (scene.vo.gainDb); SFX = cue.gain ----------
+export type MixKey = keyof Mix;
+export const MIX_KEYS: readonly MixKey[] = ["musicDb", "voDb", "sfxDb"];
+/** volume adegan: seperti normMix, tapi jalur 0 dB tidak disimpan (kosong = 0) */
+function normGain(v: unknown): Mix | undefined {
+  const m = normMix(v);
+  if (!m) return undefined;
+  for (const k of MIX_KEYS) if (!m[k]) delete m[k];
+  return Object.keys(m).length ? m : undefined;
+}
+/** dB dari data (kosong / rusak = 0), dijepit -24..+6 */
+export const dbOf = (v: unknown): number => mixDb(v) ?? 0;
+/**
+ * true kalau mixer dipakai: ada volume ≠ 0 di campuran, adegan, atau kalimat VO. false → audio persis sama dengan sebelum ada
+ * mixer (timeline lama). Gain per SFX lama (`cue.gain`) tidak dihitung: aturannya tidak berubah.
+ */
+export function usesMixer(tl: Pick<Timeline, "mix" | "scenes">): boolean {
+  if (MIX_KEYS.some((k) => dbOf(tl.mix?.[k]) !== 0)) return true;
+  return tl.scenes.some((s) => dbOf(s.vo?.gainDb) !== 0 || MIX_KEYS.some((k) => dbOf(s.gain?.[k]) !== 0));
+}
+/** dB total VO adegan: campuran + adegan + kalimat (bisa lewat +6; puncaknya dijaga limiter audio) */
+export const voDbOf = (tl: Pick<Timeline, "mix">, sc: Pick<Scene, "gain" | "vo">): number => dbOf(tl.mix?.voDb) + dbOf(sc.gain?.voDb) + dbOf(sc.vo?.gainDb);
+/** dB total SFX adegan: campuran + adegan (di luar gain per SFX `cue.gain`) */
+export const sfxDbOf = (tl: Pick<Timeline, "mix">, sc: Pick<Scene, "gain">): number => dbOf(tl.mix?.sfxDb) + dbOf(sc.gain?.sfxDb);
+const isMusicFile = (m: Pick<Music, "src"> | undefined) => !!m && m.src !== "none" && m.src !== "bed";
+/**
+ * volume musik yang terdengar (dB dari bawaan): tl.mix.musicDb + gain lama file musik (music.gain — trailer bed tidak memakainya).
+ * Slider musik di timeline & kartu rencana memakai angka ini, jadi yang tampil = yang terdengar.
+ */
+export function musicVolDb(tl: Pick<Timeline, "mix" | "music">): number {
+  const legacy = isMusicFile(tl.music) ? Math.min(6, Math.max(MIX_MIN_DB, Number(tl.music.gain) || 0)) : 0;
+  return Math.round(Math.min(MIX_MAX_DB, Math.max(MIX_MIN_DB, dbOf(tl.mix?.musicDb) + legacy)) * 10) / 10;
+}
+/** Mix dengan satu jalur diganti (0 dB = jalurnya dihapus; semua kosong = undefined) */
+export function setMixKey(mix: Mix | undefined, k: MixKey, db: number): Mix | undefined {
+  const out: Mix = { ...(mix ?? {}) };
+  const d = mixDb(db) ?? 0;
+  if (d) out[k] = d;
+  else delete out[k];
+  return Object.keys(out).length ? out : undefined;
+}
+/** timeline dengan volume campuran satu jalur diganti. Musik: gain lama file musik dilebur ke mix.musicDb (lihat musicVolDb) */
+export function withMixDb<T extends Pick<Timeline, "mix" | "music">>(tl: T, k: MixKey, db: number): T {
+  const mix = setMixKey(tl.mix, k, db);
+  const out = { ...tl, mix } as T;
+  if (!mix) delete out.mix;
+  if (k === "musicDb" && tl.music.gain) out.music = { ...tl.music, gain: 0 };
+  return out;
+}
+/** timeline dengan volume adegan `id` satu jalur diganti. Volume VO berubah → VO lengkap (.mp3 dari laptop) dilepas (tidak sama lagi) */
+export function withSceneDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, k: MixKey, db: number): T {
+  let hit = false;
+  const scenes = tl.scenes.map((s) => {
+    if (s.id !== id) return s;
+    const gain = setMixKey(s.gain, k, db);
+    if (dbOf(gain?.[k]) === dbOf(s.gain?.[k])) return s;
+    hit = true;
+    const { gain: _old, ...rest } = s;
+    return gain ? { ...rest, gain } : rest;
+  });
+  if (!hit) return tl;
+  return { ...tl, scenes, ...(k === "voDb" && tl.vo?.full ? { vo: { ...tl.vo, full: null } } : {}) };
+}
+/** timeline dengan volume kalimat VO adegan `id` diganti (teks naskah tidak disentuh). VO lengkap (.mp3) dilepas */
+export function withVoDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, db: number): T {
+  const d = mixDb(db) ?? 0;
+  let hit = false;
+  const scenes = tl.scenes.map((s) => {
+    if (s.id !== id || !s.vo || dbOf(s.vo.gainDb) === d) return s;
+    hit = true;
+    const { gainDb: _old, ...vo } = s.vo;
+    return { ...s, vo: d ? { ...vo, gainDb: d } : vo };
+  });
+  if (!hit) return tl;
+  return { ...tl, scenes, ...(tl.vo?.full ? { vo: { ...tl.vo, full: null } } : {}) };
+}
+/** offset terbesar untuk lagu sepanjang `dur` detik: sisa minimal 0,5 dtk (Remotion tidak bisa mengulang potongan kosong) */
+export const maxMusicOffset = (dur: number | undefined): number => (dur && dur > 0 ? Math.max(0, Math.min(120, Math.floor((dur - 0.5) * 10) / 10)) : 120);
+/**
+ * detik lagu yang dilewati, dijepit ke panjang lagu. Hanya berlaku kalau panjang lagu (`dur`) diketahui — editor selalu menulisnya
+ * bersama offset; offset tanpa `dur` (data lama / tulisan AI) diabaikan supaya render tidak gagal karena offset lewat ujung lagu.
+ * Trailer bed / tanpa musik = 0.
+ */
+export function musicOffsetOf(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  if (!m || !isMusicFile(m) || !(Number(m.dur) > 0)) return 0;
+  const o = Number(m.offset) || 0;
+  return o > 0 ? Math.min(o, maxMusicOffset(m.dur)) : 0;
+}
+/**
+ * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) dikurangi offset, atau grid dari
+ * BPM (ketukan pertama lagu dianggap di detik 0 lagu). Offset 0 → persis sama dengan sebelum ada offset.
+ */
+export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset" | "dur">, until: number, minBeats = 1): number[] {
+  const off = musicOffsetOf(m);
+  if (m.beats && m.beats.length >= Math.max(1, minBeats)) return off > 0 ? m.beats.map((b) => Math.round((b - off) * 1000) / 1000).filter((b) => b >= 0) : m.beats;
+  if (!m.bpm) return [];
+  const step = 60 / m.bpm;
+  return beatGrid(m.bpm, off > 0 ? (step - (off % step)) % step : 0, until);
 }
 
 /** VO cadangan tanpa penyimpanan server (service role kosong) dikirim sebagai data URL mp3/wav — dibatasi ±1,5 MB per baris */
