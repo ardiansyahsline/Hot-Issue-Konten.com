@@ -99,6 +99,8 @@ class Config:
     idle_unload_min: int
     freesound_key: str
     sfx_dir: str
+    # skor kealamian UTMOS saat memilih take (NATURAL_MOS=0 → hanya kejelasan + nada)
+    natural_mos: bool = True
 
     @property
     def cache(self) -> Path:
@@ -187,6 +189,7 @@ def load(env_file: Path | None = None) -> Config:
         idle_unload_min=_int("IDLE_UNLOAD_MIN", 0, 0, 1440),
         freesound_key=_env("FREESOUND_API_KEY"),
         sfx_dir=_env("SFX_DIR", r"C:\Konten.com\STUDIO-FX"),
+        natural_mos=_bool("NATURAL_MOS", True),
     )
     cfg.ensure_dirs()
     return cfg
