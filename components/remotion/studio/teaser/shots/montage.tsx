@@ -35,17 +35,17 @@ const CUTS: Cut[] = [
   // 0,0 bass-drop-jumpstart → kartu #1 🔥 HOT "Video ditolak padahal sesuai brief" (dashboard)
   { shot: "dashboard", from: 0, at: 3.5, enter: "drop", z: 1.3, hx: 436, hy: 1000, ty: 0.47, drift: 0.6, win: [0.13, 9] },
   // 0,3 (setengah ketukan) → pill "Disetujui" + centang hijau (video review), dropdown sudah tertutup
-  { shot: "videoReview", from: BEAT * 0.5, at: 3.8, enter: "whip", z: 1.25, hx: 600, hy: 666, ty: 0.54, drift: 0.3, win: [-9, 1.03] },
+  { shot: "videoReview", from: BEAT * 0.5, at: 3.8, enter: "whip", z: 1.25, hx: 560, hy: 666, ty: 0.54, drift: 0.3, win: [-9, 1.03] },
   // 0,6 transisi-shaker-snap → lampiran screenshot clipper (identitas diburamkan) di chat tim
-  { shot: "chat", from: BEAT, at: 5.5, enter: "shake", z: 1.2, hx: 500, hy: 850, ty: 0.52, drift: 0.4 },
+  { shot: "chat", from: BEAT, at: 5.5, enter: "shake", z: 1.2, hx: 465, hy: 850, ty: 0.52, drift: 0.4 },
   // 1,2 transisi-snap-spin → AI: chart BTC/USDT 4H dengan Resistance / Support
-  { shot: "ai", from: BEAT * 2, at: 11.0, enter: "spin", z: 1.25, hx: 565, hy: 890, ty: 0.5, drift: 0.4 },
+  { shot: "ai", from: BEAT * 2, at: 11.0, enter: "spin", z: 1.25, hx: 522, hy: 890, ty: 0.5, drift: 0.4 },
   // 1,8 transisi-shaker-snap → TWS: angka 3D "-11,57%"
-  { shot: "tws", from: BEAT * 3, at: 1.7, enter: "shake", z: 1.4, hx: 500, hy: 770, ty: 0.47, drift: 0.4, win: [0.14, 9] },
+  { shot: "tws", from: BEAT * 3, at: 1.7, enter: "shake", z: 1.4, hx: 470, hy: 770, ty: 0.47, drift: 0.4, win: [0.14, 9] },
   // 2,1 (setengah ketukan) → Train AI: huruf E N F P + "ENFP · Si Penyemangat" (sebelum rack focus)
   { shot: "trainAi", from: BEAT * 3.5, at: 3.0, enter: "whip", z: 1.3, hx: 500, hy: 930, ty: 0.5, drift: 0.3 },
   // 2,4 glitch-tinggi → Musik: baris "Fokus kerja ▶ diputar"
-  { shot: "musicReport", from: BEAT * 4, at: 1.5, enter: "glitch", z: 1.45, hx: 560, hy: 930, ty: 0.49, drift: 0.3 },
+  { shot: "musicReport", from: BEAT * 4, at: 1.5, enter: "glitch", z: 1.45, hx: 522, hy: 930, ty: 0.49, drift: 0.3 },
 ];
 /** 3,0 transisi-snap-spin → Studio */
 const STUDIO_AT = BEAT * 5;
