@@ -9,6 +9,7 @@ Semua langkah dicatat jelas di log.
 """
 from __future__ import annotations
 
+import inspect
 import time
 from pathlib import Path
 
@@ -23,6 +24,9 @@ PATTERNS = ["*.safetensors", "*.pt", "*.bin", "*.json", "*.yaml", "*.md", "*.txt
 BASE_EN = ["ve.safetensors", "t3_cfg.safetensors", "s3gen.safetensors", "tokenizer.json", "conds.pt"]
 BASE_MTL = ["ve.pt", "t3_mtl23ls_v2.safetensors", "s3gen.pt", "grapheme_mtl_merged_expanded_v1.json", "conds.pt", "Cangjie5_TC.json"]
 T3_KEYS = ("text_emb.weight", "speech_emb.weight", "speech_head.weight")
+# sampling yang lebih stabil & tidak mengulang kata (sama dengan bawaan generate() Chatterbox terbaru) — dikirim HANYA kalau
+# generate() versi terpasang punya parameternya (versi lama tetap jalan)
+SAMPLING = {"min_p": 0.05, "repetition_penalty": 1.2}
 
 
 def _keys(p: Path) -> list[str]:
@@ -169,6 +173,15 @@ def load_model(cfg, device: str = "cuda"):
     return model, bool(f["mtl"]), f"{cfg.chatterbox_repo} ({mode})"
 
 
+def sampling_kwargs(fn) -> dict:
+    """min_p / repetition_penalty yang didukung signature generate() (parameter bernama; **kwargs saja tidak dianggap mendukung)"""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {k: v for k, v in SAMPLING.items() if k in params and params[k].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
+
+
 def check_gpu() -> tuple[str, float]:
     """pastikan GPU benar-benar bisa dipakai PyTorch (RTX 50xx / sm_120 butuh build cu128+)"""
     import torch
@@ -200,6 +213,9 @@ class ChatterboxEngine:
     name = "chatterbox"
     label = "Bank suara · Chatterbox (GPU laptop)"
     credit = "Chatterbox-TTS-Indonesian oleh grandhigh (Apache-2.0), berbasis Chatterbox dari Resemble AI"
+    # tempo bicara asli ikut cfg_weight (lebih tinggi = lebih cepat) → baris teaser yang kepanjangan boleh dibuat ulang lebih cepat
+    # sebelum di-atempo (jobs_tts.native_fit)
+    native_tempo = True
 
     def __init__(self, cfg):
         import torch
@@ -216,7 +232,9 @@ class ChatterboxEngine:
         self.sr = int(self.model.sr)
         self.lang = self._lang(cfg.chatterbox_lang) if self.mtl else None
         self._ref: tuple[str, float] | None = None
+        self._sampling = sampling_kwargs(self.model.generate)
         log.info("Chatterbox dimuat dari %s%s", src, f", bahasa={self.lang}" if self.lang else "")
+        log.info("Sampling: temperature dari setelan%s", "".join(f", {k}={v}" for k, v in self._sampling.items()) or " (versi lama: min_p/repetition_penalty bawaan)")
 
     def _lang(self, want: str) -> str:
         from chatterbox import mtl_tts
@@ -246,10 +264,11 @@ class ChatterboxEngine:
                 torch.manual_seed(seed)
                 torch.cuda.manual_seed_all(seed)
                 t0 = time.time()
+                extra = getattr(self, "_sampling", {})
                 if self.mtl:
-                    wav = self.model.generate(text, language_id=self.lang, exaggeration=ex, cfg_weight=cw, temperature=temp)
+                    wav = self.model.generate(text, language_id=self.lang, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
                 else:
-                    wav = self.model.generate(text, exaggeration=ex, cfg_weight=cw, temperature=temp)
+                    wav = self.model.generate(text, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
                 y = to_mono(wav)
                 log.debug("chatterbox %.1f dtk audio dalam %.1f dtk", len(y) / self.sr, time.time() - t0)
                 return y

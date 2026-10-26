@@ -46,6 +46,56 @@ def clean_voice(rt: Runtime, voice: dict, progress: Callable[[float, str], None]
         shutil.rmtree(work, ignore_errors=True)
 
 
+# suara yang sudah dicoba dibersihkan ulang di sesi ini (berhasil / gagal) — jangan diulang tiap job
+_RECLEANED: set[str] = set()
+
+
+def clean_ver(voice: dict) -> int:
+    """versi pembersih yang menghasilkan clean_path suara ini (quality.ver; suara lama tanpa ver = 1)"""
+    q = voice.get("quality") if isinstance(voice.get("quality"), dict) else {}
+    try:
+        return int(q.get("ver") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def outdated(voice: dict) -> bool:
+    """suara siap tapi dibersihkan versi pembersih lama (mis. potongan paling datar + denoise 18 dB tetap) dan rekaman mentah masih
+    ada → perlu dibersihkan ulang sekali. Yang sudah pernah dicoba & gagal (quality.ver_try) tidak diulang."""
+    q = voice.get("quality") if isinstance(voice.get("quality"), dict) else {}
+    try:
+        tried = int(q.get("ver_try") or 0)
+    except (TypeError, ValueError):
+        tried = 0
+    return (
+        voice.get("status") == "siap"
+        and bool(voice.get("clean_path"))
+        and bool(voice.get("raw_path"))
+        and clean_ver(voice) < clean.CLEAN_VER
+        and tried < clean.CLEAN_VER
+        and str(voice.get("id")) not in _RECLEANED
+    )
+
+
+def reclean(rt: Runtime, voice: dict, progress: Callable[[float, str], None] | None = None) -> dict:
+    """bersihkan ulang SEKALI dengan pembersih versi sekarang. Gagal apa pun → hasil bersih lama tetap dipakai (status & quality
+    dikembalikan, ditandai ver_try supaya tidak dicoba terus), tanpa error ke job."""
+    vid = str(voice.get("id"))
+    _RECLEANED.add(vid)
+    log.info("Suara %s (%s): dibersihkan ulang dengan pembersih versi %d (potongan paling hidup, denoise adaptif)…", voice.get("name"), vid, clean.CLEAN_VER)
+    try:
+        return clean_voice(rt, voice, progress)
+    except Exception as e:
+        log.warning("Bersihkan ulang suara %s gagal (%s) — tetap pakai rekaman bersih lama.", vid, e)
+        q = {**(voice.get("quality") if isinstance(voice.get("quality"), dict) else {}), "ver_try": clean.CLEAN_VER}
+        try:
+            rows = rt.supa.update("studio_voices", {"id": f"eq.{vid}"}, {"status": "siap", "clean_path": voice.get("clean_path"), "quality": q})
+        except Exception as e2:
+            log.warning("Status suara %s tidak bisa dikembalikan (%s).", vid, e2)
+            rows = []
+        return rows[0] if rows else {**voice, "quality": q}
+
+
 def run(ctx: JobCtx) -> None:
     vid = ctx.job.get("voice_id")
     if not vid:
