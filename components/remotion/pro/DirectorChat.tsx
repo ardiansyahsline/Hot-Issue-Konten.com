@@ -9,13 +9,14 @@ import Markdown from "@/components/ai/Markdown";
 import { personaOf } from "@/lib/aiPersona";
 import { splitChoice, type Choice } from "@/lib/choiceCard";
 import { reloadStudioCatalog, uploadStudioFile } from "@/lib/studio/client";
-import type { Timeline } from "@/lib/studio/timeline";
+import type { Director, Timeline } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { createClient } from "@/lib/supabase/client";
+import DirectorPicker, { DEFAULT_DIRECTOR, activeDirector, useMyChars } from "./DirectorPicker";
 import { MAX_UPLOAD } from "./fields";
 import { dbErrorText } from "./planUtils";
 
-const HERO = "Harley";
+const HERO = DEFAULT_DIRECTOR;
 
 export type AttKind = "image" | "video" | "audio" | "logo";
 export type Att = { path: string; kind: AttKind; name: string };
@@ -76,8 +77,8 @@ const cleanAtts = (v: unknown): Att[] =>
     .filter((a) => typeof a.path === "string" && a.path)
     .map((a) => ({ path: String(a.path), kind: ATT_KINDS.includes(a.kind as AttKind) ? (a.kind as AttKind) : "image", name: String(a.name ?? "lampiran").slice(0, 80) }));
 
-const failText = (status: number) =>
-  status === 401 ? "Sesi login habis. Muat ulang halaman lalu masuk lagi." : status === 403 ? "Kamu belum punya akses Studio." : status >= 500 ? "Harley lagi gangguan. Coba lagi sebentar." : `Gagal (${status}). Coba lagi.`;
+const failText = (status: number, name: string) =>
+  status === 401 ? "Sesi login habis. Muat ulang halaman lalu masuk lagi." : status === 403 ? "Kamu belum punya akses Studio." : status >= 500 ? `${name} lagi gangguan. Coba lagi sebentar.` : `Gagal (${status}). Coba lagi.`;
 
 type Props = {
   projectId: string | null;
@@ -88,10 +89,15 @@ type Props = {
   onPlan: (raw: unknown) => void;
   onExample?: () => void;
   exampleBusy?: boolean;
+  /** sutradara pilihan proyek ini (kosong = Harley) — dikirim tiap pesan, server memeriksanya */
+  director?: Director | null;
+  onDirector?: (d: Director | null) => void;
+  /** buka panel 🧠 Skill (tab catatan gaya / simpan / impor / library) */
+  onSkill?: (tab?: "notes") => void;
 };
 
-/** Chat dengan Harley si Sutradara: ide -> tanya balik -> rencana video (timeline) -> revisi */
-function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onExample, exampleBusy }: Props) {
+/** Chat dengan sutradara (bawaan Harley; bisa hero lain / karakter buatan user): ide -> tanya balik -> rencana video (timeline) -> revisi */
+function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onExample, exampleBusy, director = null, onDirector, onSkill }: Props) {
   const sb = useMemo(() => createClient(), []);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
@@ -111,8 +117,13 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const modeRef = useRef<Mode>("media");
-  const cb = useRef({ onProject, onPlan, getTimeline });
-  cb.current = { onProject, onPlan, getTimeline };
+  const { chars, loaded: charsLoaded } = useMyChars();
+  const act = activeDirector(director, chars, charsLoaded);
+  const name = act.name;
+  /** catatan dari server untuk sutradara pilihan ini (mis. karakter tidak bisa dibaca → Harley) */
+  const [dirNote, setDirNote] = useState<{ hero: string; note: string } | null>(null);
+  const cb = useRef({ onProject, onPlan, getTimeline, director, name });
+  cb.current = { onProject, onPlan, getTimeline, director, name };
 
   // ganti proyek -> hentikan jawaban yang berjalan & muat riwayat dari studio_messages
   useEffect(() => {
@@ -121,6 +132,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
     own.current = null;
     setMsgs([]);
     setLoadErr(null);
+    setDirNote(null);
     stick.current = true;
     if (!projectId) return setLoading(false);
     let dead = false;
@@ -181,7 +193,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
     setMsgs((m) => [
       ...m,
       { id: `u${now}`, role: "user", content, attachments: atts },
-      { id: tempId, role: "assistant", content: "", attachments: [], persona: HERO, steps: [], startedAt: now },
+      { id: tempId, role: "assistant", content: "", attachments: [], persona: cb.current.name, steps: [], startedAt: now },
     ]);
     const patch = (f: (x: Msg) => Msg) => setMsgs((m) => m.map((x) => (x.id === tempId ? f(x) : x)));
     const ac = new AbortController();
@@ -193,12 +205,12 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
       const res = await fetch("/api/studio/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: pid.current, content, attachments: atts, timeline: cb.current.getTimeline() }),
+        body: JSON.stringify({ projectId: pid.current, content, attachments: atts, timeline: cb.current.getTimeline(), director: cb.current.director ?? null }),
         signal: ac.signal,
       });
       if (!res.ok || !res.body) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || failText(res.status));
+        throw new Error(j.error || failText(res.status, cb.current.name));
       }
       const onFrame = (f: Record<string, unknown>) => {
         if (f.t === "project") {
@@ -219,6 +231,12 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
               else steps.push({ k, s });
               return { ...x, steps };
             });
+        } else if (f.t === "director") {
+          // sutradara yang benar-benar dipakai server (pilihan tidak bisa dipakai -> Harley + catatan)
+          const nm = typeof f.name === "string" && f.name ? f.name.slice(0, 40) : "";
+          if (nm) patch((x) => ({ ...x, persona: nm }));
+          const want = cb.current.director?.hero ?? HERO;
+          setDirNote(typeof f.note === "string" && f.note ? { hero: want, note: f.note.slice(0, 160) } : null);
         } else if (f.t === "meta") {
           patch((x) => ({ ...x, persona: typeof f.persona === "string" && f.persona ? f.persona : x.persona, model: typeof f.model === "string" ? f.model : x.model }));
         } else if (f.t === "ask") {
@@ -231,7 +249,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           got = true;
           cb.current.onPlan(f.timeline);
           patch((x) => ({ ...x, planned: true }));
-        } else if (f.t === "error") failMsg = typeof f.message === "string" && f.message ? f.message : "Harley lagi error. Coba lagi.";
+        } else if (f.t === "error") failMsg = typeof f.message === "string" && f.message ? f.message : `${cb.current.name} lagi error. Coba lagi.`;
       };
       // aliran = teks biasa + bingkai kontrol "\u001e{json}\n"
       const reader = res.body.getReader();
@@ -264,12 +282,12 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
       }
       const end = (x: Msg): Msg => ({ ...x, doneAt: Date.now(), steps: x.steps?.map((s) => ({ ...s, s: "done" as const })) });
       if (failMsg) patch((x) => (text.trim() || got ? { ...end(x), content: `${text.trim()}\n\n⚠️ ${failMsg}`.trim() } : { ...end(x), content: `⚠️ ${failMsg}`, error: true }));
-      else if (!text.trim() && !got) patch((x) => ({ ...end(x), content: "⚠️ Harley belum ngasih jawaban. Coba kirim ulang.", error: true }));
+      else if (!text.trim() && !got) patch((x) => ({ ...end(x), content: `⚠️ ${cb.current.name} belum ngasih jawaban. Coba kirim ulang.`, error: true }));
       else patch(end);
     } catch (e) {
       if ((e as Error).name === "AbortError") patch((x) => ({ ...x, doneAt: Date.now(), content: `${text.trim()}\n\n_⏹ Dihentikan._`.trim() }));
       else {
-        const msg = e instanceof Error && e.message && !/fetch|network|load failed/i.test(e.message) ? e.message : "Harley nggak bisa dihubungi. Cek internet lalu coba lagi.";
+        const msg = e instanceof Error && e.message && !/fetch|network|load failed/i.test(e.message) ? e.message : `${cb.current.name} nggak bisa dihubungi. Cek internet lalu coba lagi.`;
         patch((x) => ({ ...x, doneAt: Date.now(), content: `⚠️ ${msg}`, error: true }));
       }
     } finally {
@@ -357,15 +375,34 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
   const firstPlan = msgs.findIndex((m) => m.planned);
 
   return (
-    <section aria-label="Chat dengan Harley si Sutradara" className="card flex flex-col p-3 sm:p-4 lg:h-[min(74vh,780px)]">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
-          <HeroArt hero={HERO} size={38} still={!busy} talk={busy} />
-        </span>
-        <div className="min-w-0 leading-tight">
-          <div className="text-[14px] font-bold">Harley · Sutradara</div>
-          <div className="truncate text-[11.5px] text-zinc-500">Ketik ide → cek rencana → preview → download</div>
-        </div>
+    <section aria-label={`Chat dengan ${name} si Sutradara`} className="card flex flex-col p-3 sm:p-4 lg:h-[min(74vh,780px)]">
+      <div className="mb-2 flex items-center gap-1.5">
+        {onDirector ? (
+          <DirectorPicker
+            value={director}
+            onChange={onDirector}
+            chars={chars}
+            loaded={charsLoaded}
+            busy={busy}
+            note={dirNote && dirNote.hero === (director?.hero ?? HERO) ? dirNote.note : null}
+            onNotes={onSkill ? () => onSkill("notes") : undefined}
+          />
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
+              <HeroArt hero={name} size={38} still={!busy} talk={busy} />
+            </span>
+            <div className="min-w-0 leading-tight">
+              <div className="text-[14px] font-bold">{name} · Sutradara</div>
+              <div className="truncate text-[11.5px] text-zinc-500">Ketik ide → cek rencana → preview → download</div>
+            </div>
+          </div>
+        )}
+        {onSkill && (
+          <button type="button" className="btn-ghost shrink-0 px-2.5 py-1.5 text-[12px]" title="Skill Studio: catatan gaya, simpan / impor setelan, Library tim" onClick={() => onSkill()}>
+            🧠 Skill
+          </button>
+        )}
       </div>
 
       <div
@@ -382,9 +419,9 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           <p className="py-10 text-center text-[13px] text-red-400">{loadErr}</p>
         ) : !msgs.length ? (
           <div className="flex flex-col items-center px-2 py-4 text-center">
-            <HeroArt hero={HERO} size={110} />
+            <HeroArt hero={name} size={110} />
             <p className="mt-2 max-w-[420px] text-[13.5px] leading-relaxed text-zinc-300">
-              Halo! Aku <b className="text-zinc-100">Harley</b>, sutradara videomu 🎬 Ceritain idenya — buat apa, tayang di mana, berapa detik. Aku bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
+              Halo! Aku <b className="text-zinc-100">{name}</b>, sutradara videomu 🎬 Ceritain idenya — buat apa, tayang di mana, berapa detik. Aku bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
             </p>
             <div className="mt-3 flex max-w-[480px] flex-wrap justify-center gap-1.5">
               {IDEAS.map((t) => (
@@ -421,7 +458,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
                 </span>
                 <div className="min-w-0 flex-1 text-[14px] leading-relaxed text-zinc-200">
                   {!m.error && <HelperLine hero={m.persona || HERO} />}
-                  {!!m.steps?.length || (live && !ch.text) ? <DirectorSteps steps={m.steps ?? []} live={live && !ch.text} startedAt={m.startedAt} doneAt={m.doneAt} /> : null}
+                  {!!m.steps?.length || (live && !ch.text) ? <DirectorSteps hero={m.persona || name} steps={m.steps ?? []} live={live && !ch.text} startedAt={m.startedAt} doneAt={m.doneAt} /> : null}
                   {m.error ? (
                     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-red-400">
                       <span className="min-w-0 flex-1">{m.content}</span>
@@ -584,8 +621,8 @@ function UserMsg({ m }: { m: Msg }) {
   );
 }
 
-/** langkah berpikir singkat gaya Harley (pahami → rancang → tulis → cek), dilipat setelah jawaban keluar */
-function DirectorSteps({ steps, live, startedAt, doneAt }: { steps: Step[]; live: boolean; startedAt?: number; doneAt?: number }) {
+/** langkah berpikir singkat gaya sutradara (pahami → rancang → tulis → cek), dilipat setelah jawaban keluar */
+function DirectorSteps({ hero, steps, live, startedAt, doneAt }: { hero: string; steps: Step[]; live: boolean; startedAt?: number; doneAt?: number }) {
   const [open, setOpen] = useState(false);
   const secs = startedAt && doneAt ? Math.max(1, Math.round((doneAt - startedAt) / 1000)) : null;
   const list = (
@@ -603,7 +640,7 @@ function DirectorSteps({ steps, live, startedAt, doneAt }: { steps: Step[]; live
     return (
       <div className="mb-1.5 rounded-xl border border-zinc-800 px-3 py-2">
         <div className="text-[12.5px] font-bold text-orange-400">
-          {HERO} ({personaOf(HERO).type}): “Oke, aku racik dulu ya~ 🎬”
+          {hero} ({personaOf(hero).type}): “Oke, aku racik dulu ya~ 🎬”
         </div>
         {list}
       </div>
