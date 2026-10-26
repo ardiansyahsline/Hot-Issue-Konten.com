@@ -24,7 +24,8 @@ Hanya 2 nama file ini yang dikenali (nama lain = 404):
   tanpa VO). Suara VO hanya ada di proyek Studio Pro yang sudah "Bikin suara VO".
 - Durasi adegan teaser dikunci di ketukan musik, jadi kalimat VO yang sedikit kepanjangan **otomatis dipercepat maksimal 30%**
   (nada suara tetap) supaya pas sebelum VO adegan berikutnya. Kotak biru ⏩ di panel suara menyebut berapa kalimat yang
-  dipercepat; kalau di 30% masih belum muat, muncul peringatan merah/kuning.
+  dipercepat; kalau di 30% masih belum muat, muncul peringatan merah/kuning (untuk VO Outro: "ujung VO terpotong di akhir
+  video" kalau kalimatnya belum selesai saat video habis — pendekkan teks VO Outro).
 - Label kuning **VO sementara** = suara cadangan (Edge) karena laptop mati. File-nya otomatis bernama
   `teaser-cs-tracker-vo-sementara.mp4` — **jangan** diganti nama jadi `teaser-cs-tracker.mp4`. Tunggu laptop nyala,
   klik **Generate ulang VO**, lalu download lagi.

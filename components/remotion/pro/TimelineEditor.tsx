@@ -393,7 +393,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                 const speech = voSpeechEnd(l);
                 const over = at + speech + 0.05 > scenes[i].dur;
                 // video habis di total adegan + ekor hening -> ucapan sesudahnya terpotong (sama dengan voCutoffs)
-                const cut = starts[i] + at + speech - (total + Math.round(TAIL_SEC * fps) / fps);
+                const cut = l.src && scenes[i].vo?.text ? starts[i] + at + speech - (total + Math.round(TAIL_SEC * fps) / fps) : 0;
                 return (
                   <div
                     key={l.sceneId}
