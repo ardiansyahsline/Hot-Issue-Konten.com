@@ -302,7 +302,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
           <div>
             <div style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 700, color: Z[50] }}>▶️ Preview</div>
             <div style={{ fontSize: 11.5, color: Z[500] }}>
-              {fmt(total)} dtk · {tl.ratio} · {ratio.label}
+              {`${fmt(total)} dtk · ${tl.ratio} · ${ratio.label}`}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: Z[300], marginTop: 6 }}>
@@ -324,7 +324,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
               <span style={{ width: 3, height: 9, background: "#fff", borderRadius: 1 }} />
               <span style={{ width: 3, height: 9, background: "#fff", borderRadius: 1 }} />
             </span>
-            {clockLabel(head)} / {clockLabel(total)}
+            {`${clockLabel(head)} / ${clockLabel(total)}`}
           </div>
           {/* bingkai tipis pemutar (div terpisah: ring box-shadow tidak tergambar di render browser) */}
           <div style={{ position: "absolute", left: 0, top: 0, width: UI.player.w, height: UI.player.h, borderRadius: 14, border: "1px solid rgba(63,63,70,0.6)", boxSizing: "border-box" }} />
@@ -338,7 +338,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
         <div style={{ height: UI.tlHead, display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 8, alignContent: "flex-start" }}>
           <div style={labelStyle}>Timeline</div>
           <div style={{ fontSize: 12, color: Z[400] }}>
-            Total <b style={{ color: Z[200] }}>{fmt(total)} dtk</b> · {tl.scenes.length} adegan
+            {"Total "}<b style={{ color: Z[200] }}>{`${fmt(total)} dtk`}</b>{` · ${tl.scenes.length} adegan`}
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <span style={ghostBtn({ padding: "6px 10px", height: 30 })}>🎯 Tempel ke ketukan</span>
@@ -392,7 +392,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
                         <div style={{ fontSize: 11, fontWeight: 600, color: sel ? "#fdba74" : Z[200], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{w > 40 ? `${i + 1}. ${s.name}` : i + 1}</div>
                         {w > 34 && (
                           <div style={{ fontSize: 10, color: Z[500], whiteSpace: "nowrap", overflow: "hidden" }}>
-                            {fmt(s.dur, 2)}s{s.vo?.text && w > 60 ? " · 🎙" : ""}
+                            {`${fmt(s.dur, 2)}s${s.vo?.text && w > 60 ? " · 🎙" : ""}`}
                           </div>
                         )}
                       </div>
@@ -454,7 +454,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
         <div style={{ position: "relative", marginTop: 12, height: 44 }}>
           {progress <= 0 ? (
             <div style={{ position: "relative", height: 44, borderRadius: 12, overflow: "hidden", backgroundImage: ORANGE, boxShadow: "0 8px 18px rgba(234,88,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, color: "#fff", transform: `scale(${press.toFixed(4)})` }}>
-              ⬇️ Download MP4 ({fmt(meta.secs)} dtk)
+              {`⬇️ Download MP4 (${fmt(meta.secs)} dtk)`}
               {sheen > 0 && sheen < 1 && (
                 <div style={{ position: "absolute", top: 0, left: `${(sheen * 150 - 40).toFixed(1)}%`, width: "36%", height: "100%", background: "linear-gradient(105deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)" }} />
               )}
@@ -470,7 +470,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
                 </div>
               </div>
               <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", fontSize: 12, color: Z[400] }}>
-                <span>Bikin video… {Math.round(progress * 100)}% — jangan tutup tab ini</span>
+                <span>{`Bikin video… ${Math.round(progress * 100)}% — jangan tutup tab ini`}</span>
                 <span style={{ fontWeight: 600, color: "#f87171" }}>Batal</span>
               </div>
             </div>
