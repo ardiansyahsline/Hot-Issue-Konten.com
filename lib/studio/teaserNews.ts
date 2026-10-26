@@ -1,7 +1,7 @@
 /**
  * Berita ASLI untuk cover TWS di adegan 7 teaser (dicek silang beberapa media, per 25 Okt 2026).
  * Judul ditulis sebagai ringkasan berita, BUKAN kutipan langsung. Angka persis seperti dilaporkan.
- * Sumber juga dicantumkan di deskripsi PR teaser.
+ * Sumber juga dicantumkan di docs/teaser-cs-tracker.md dan deskripsi PR teaser.
  */
 import type { TwsDeck } from "@/lib/tws";
 
