@@ -86,8 +86,9 @@ export const DEFAULT_LEXICON: readonly LexEntry[] = [
   { from: "MP3", to: "em pe tiga" },
   { from: "MP4", to: "em pe empat" },
   { from: "BPM", to: "be pe em" },
+  // API hanya kalau ditulis kapital (lihat CAPS_ONLY: "api" = api unggun). UI sengaja tidak ada: "ui" = seruan, UI = Universitas
+  // Indonesia ("u i") — kalau maksudnya user interface, tambahkan sendiri di 📖 Kamus ejaan proyek.
   { from: "API", to: "a pe i" },
-  { from: "UI", to: "yu ai" },
   { from: "UX", to: "yu eks" },
   { from: "KPI", to: "ka pe i" },
   { from: "SEO", to: "es i o" },
@@ -188,6 +189,16 @@ export function lexiconOf(user?: readonly LexEntry[] | null): LexEntry[] {
   return [...DEFAULT_LEXICON.filter((e) => !own.has(keyOf(e.from))), ...mine];
 }
 
+/**
+ * singkatan yang huruf kecilnya kata Indonesia biasa: entri kamus yang ditulis kapital ("API", "ROI") hanya mengganti kata yang
+ * juga ditulis kapital — "api unggun", "berapi-api", "Api kecil" tetap dibaca biasa (Edge maupun bank).
+ */
+const CAPS_ONLY: ReadonlySet<string> = new Set(["api", "roi"]);
+const allCaps = (s: string) => {
+  const l = s.replace(/[^\p{L}]/gu, "");
+  return l.length >= 2 && l === l.toUpperCase() && l !== l.toLowerCase();
+};
+
 // ---------------------------------------------------------------------------------------------
 // kamus ejaan
 // ---------------------------------------------------------------------------------------------
@@ -206,7 +217,7 @@ const glueOk = (core: string) => {
   return k.length >= 4 || (k.length >= 2 && core === core.toUpperCase() && core !== core.toLowerCase());
 };
 
-type Compiled = { re: RegExp; map: Map<string, string | null> };
+type Compiled = { re: RegExp; map: Map<string, string | null>; caps: Set<string> };
 const cache = new Map<string, Compiled | null>();
 
 function compile(entries: readonly LexEntry[]): Compiled | null {
@@ -216,6 +227,7 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
   const map = new Map<string, string | null>();
   for (const e of entries) map.set(keyOf(e.from), e.to);
   for (const e of entries) if (!map.has(keyOf(e.to))) map.set(keyOf(e.to), null);
+  const caps = new Set(entries.filter((e) => CAPS_ONLY.has(keyOf(e.from)) && allCaps(e.from)).map((e) => keyOf(e.from)));
   const pats = new Map<string, number>();
   for (const s of entries.flatMap((e) => [e.from, e.to])) {
     const parts = s.split(/[\s-]+/).filter(Boolean);
@@ -227,7 +239,7 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
   // kata kamus utuh yang kebetulan berawalan di/ke tetap cocok utuh
   const alts = [...pats.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(([p]) => p);
   const out = alts.length
-    ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-|(${PRE2}))??(${alts.join("|")})(?:-(${SUF})|(${SUF2}))?(?![${B}])`, "giu"), map }
+    ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-|(${PRE2}))??(${alts.join("|")})(?:-(${SUF})|(${SUF2}))?(?![${B}])`, "giu"), map, caps }
     : null;
   cache.set(sig, out);
   if (cache.size > 20) cache.delete(cache.keys().next().value as string);
@@ -246,6 +258,8 @@ export function applyLexicon(text: string, entries: readonly LexEntry[], keep?: 
     const to = c.map.get(keyOf(core));
     // hasil ejaan yang sudah tertulis (mis. "ei ai") juga dilindungi dari bunyi luncur mesin bank
     if (!to) return mark ? `${b}${m0}${m.slice(b.length)}${m1}` : m;
+    // "api" (bukan "API") → kata biasa, bukan singkatan
+    if (c.caps.has(keyOf(core)) && !allCaps(core)) return m;
     if (keep?.size && tokens(core).some((t) => keep.has(t))) return m;
     // imbuhan tanpa strip hanya untuk singkatan kapital / kata kamus panjang (lihat glueOk) — selain itu kata utuhnya dibiarkan
     if ((preGlue || sufGlue) && !glueOk(core)) return m;
@@ -330,6 +344,8 @@ export function glideWord(w: string): string {
   if (w.length < 2 || /\d/.test(w) || ENGLISH.test(w)) return w;
   const letters = w.replace(/[^\p{L}]/gu, "");
   if (letters.length >= 2 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return w;
+  // nama merek berhuruf besar di tengah (iOS, eSport, camelCase) dibiarkan
+  if (/\p{Ll}\p{Lu}/u.test(w)) return w;
   const lo = w.toLowerCase();
   let out = "";
   for (let i = 0; i < w.length; i++) {

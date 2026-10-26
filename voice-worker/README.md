@@ -190,8 +190,9 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `data/` | Dibuat otomatis: log, cache suara, model, file sementara (tidak masuk Git) |
 
 ## Pengaturan `.env` lain
-Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris bila website tidak menentukan,
-1–4, bawaan 3; `.env` lama berisi `TAKES=2` → ganti ke 3 supaya lebih natural, atau 1–2 kalau laptop lambat), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
+Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris untuk job yang tidak membawa
+setelan, 1–4, bawaan 3 — website Studio sekarang selalu meminta 3 versi, jadi angka ini tidak mengubah job dari website; laptop lambat
+tidak perlu diatur: versi ke-3 otomatis dilewati kalau batas waktu per baris terlewati, minimal 2 versi), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
 berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`.
 
 ---

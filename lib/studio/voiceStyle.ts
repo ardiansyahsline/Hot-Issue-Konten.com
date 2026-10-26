@@ -69,7 +69,9 @@ const matchPreset = (s: Omit<VoiceStyle, "preset">): NamedPreset | undefined =>
  * Gaya bicara yang dipakai untuk suara ini:
  * - tanpa preset & angka kosong / angka lama bawaan (LEGACY) → preset bawaan (teaser: Promo energik, lainnya: Natural ngobrol)
  * - preset bernama → angkanya; angka tersimpan yang beda dari preset (diubah AI / skill) → Kustom dengan angka itu
- * - "kustom" / tanpa preset dengan angka sendiri → Kustom (yang kosong: 0,65 / 0,35 / 0,8 seperti dulu)
+ * - tanpa preset dengan angka sendiri: data lama (tanpa variasi) → Kustom, yang kosong 0,65 / 0,35 / 0,8 seperti dulu; data baru
+ *   (ada variasi, mis. rencana AI {temperature: 0.9}) → yang kosong dari preset bawaan; angka cocok persis preset bernama → preset itu
+ * - "kustom" → Kustom (yang kosong dari preset bawaan)
  */
 export function voiceStyle(v: Pick<Voice, "exaggeration" | "cfg" | "preset" | "temperature"> | null | undefined, teaser = false): VoiceStyle {
   const exg = v?.exaggeration;
@@ -85,13 +87,13 @@ export function voiceStyle(v: Pick<Voice, "exaggeration" | "cfg" | "preset" | "t
     const s = { exaggeration: exg ?? base.exaggeration, cfg: cfg ?? base.cfg, temperature: temp ?? base.temperature };
     return matchPreset(s) === preset ? base : { preset: "kustom", ...s };
   }
-  const k = preset === "kustom" ? styleOf(defaultPreset(teaser)) : { exaggeration: 0.65, cfg: 0.35, temperature: 0.8 };
-  return {
-    preset: "kustom",
+  const k = preset === "kustom" || temp !== undefined ? styleOf(defaultPreset(teaser)) : { exaggeration: 0.65, cfg: 0.35, temperature: 0.8 };
+  const s = {
     exaggeration: clampNum(exg, EXG_MIN, EXG_MAX) ?? k.exaggeration,
     cfg: clampNum(cfg, CFG_MIN, CFG_MAX) ?? k.cfg,
     temperature: normTemperature(temp) ?? k.temperature,
   };
+  return { preset: (!preset && matchPreset(s)) || "kustom", ...s };
 }
 
 /** isi timeline.voice untuk gaya bicara ini (preset + angka yang dipakai, supaya skill / ekspor membaca angka yang sama) */
@@ -110,7 +112,8 @@ export type StylePatch = { preset?: unknown; exaggeration?: unknown; cfg?: unkno
  * - preset bernama tanpa angka → angka preset itu (angka lama di proyek tidak membuat pilihan itu terbaca Kustom)
  * - preset bernama / tanpa preset + angka → gaya sekarang (atau preset itu) diganti angkanya; angka cocok persis preset bernama
  *   → preset itu, selain itu Kustom. "kustom" = Kustom dengan angka itu (yang kosong: angka yang sedang dipakai)
- * - tanpa preset dengan angka lama bawaan (0,65/0,35 · 0,6/0,4 tanpa variasi) = bukan pilihan user → tidak diubah
+ * - angka lama bawaan (0,65/0,35 · 0,6/0,4 tanpa variasi, contoh lama di prompt sutradara) = bukan pilihan user: tanpa preset →
+ *   tidak diubah; bersama preset bernama → preset itu persis (angka contoh diabaikan)
  * - tidak ada kolom gaya → voice tidak berubah (objek yang sama)
  * Hasil selalu lengkap (preset + 3 angka) supaya ekspor, skill & job laptop membaca angka yang sama.
  */
@@ -121,7 +124,9 @@ export function applyStyle<V extends Voice>(v: V, patch: StylePatch | null | und
   const cfg = clampNum(patch.cfg, CFG_MIN, CFG_MAX);
   const temp = normTemperature(patch.temperature);
   if (!preset && exg === undefined && cfg === undefined && temp === undefined) return v;
-  if (!preset && temp === undefined && exg !== undefined && cfg !== undefined && LEGACY.some(([e, c]) => near(e, exg) && near(c, cfg))) return v;
+  const legacy = temp === undefined && exg !== undefined && cfg !== undefined && LEGACY.some(([e, c]) => near(e, exg) && near(c, cfg));
+  if (legacy && !preset) return v;
+  if (legacy && preset !== "kustom") return { ...v, ...voicePatch(styleOf(preset as NamedPreset)) };
   const base = preset && preset !== "kustom" ? styleOf(preset) : voiceStyle(v, teaser);
   const s = { exaggeration: exg ?? base.exaggeration, cfg: cfg ?? base.cfg, temperature: temp ?? base.temperature };
   const named = preset === "kustom" ? undefined : matchPreset(s);

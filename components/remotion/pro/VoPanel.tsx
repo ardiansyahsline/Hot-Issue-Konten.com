@@ -823,6 +823,9 @@ export default function VoPanel({
             <p className="text-[10.5px] leading-relaxed text-zinc-500" data-vo-ref-tip>
               💡 Masih kedengeran datar? Rekam ulang suara referensi 10–20 dtk dengan gaya yang sama dengan videonya — tips di tab <b>🎙️ Bank suara</b>.
             </p>
+            <p className="text-[10.5px] leading-relaxed text-zinc-500" data-vo-takes-tip>
+              ⏱️ Laptop membuat 3 versi tiap kalimat lalu memilih yang paling jelas &amp; natural — bisa ±1,5× lebih lama dari dulu.
+            </p>
             {!workerOn && status !== null && <p className="text-[11px] text-amber-400">{status.worker.online ? "Mesin suara laptop belum bisa dipakai" : "Laptop mati"} — sementara dibikin pakai suara cadangan.</p>}
           </div>,
         )}

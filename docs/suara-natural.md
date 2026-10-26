@@ -25,8 +25,9 @@ bersih lama tetap dipakai.
 
 1. **Satu tarikan**: satu baris naskah (≤ 260 huruf) dibaca sekali jalan, jadi intonasi tidak "reset" tiap kalimat. Baris yang
    lebih panjang dipotong di akhir kalimat.
-2. **Beberapa versi per baris**: bawaan 3 bila website tidak menentukan (`TAKES` di `.env`, 1–4).
-   Website mengirim 3 versi + angka **gaya bicara** (Natural ngobrol / Promo energik / Tenang meyakinkan / Kustom: ekspresi,
+2. **Beberapa versi per baris**: website selalu meminta 3 versi (`TAKES` di `.env`, 1–4, hanya untuk job tanpa setelan).
+   Laptop lambat tidak perlu diatur: versi ke-3 dilewati otomatis kalau batas waktu per baris (maks(45 dtk, 6 × durasi ucapan))
+   terlewati, minimal 2 versi — jadi job paling lama ±1,5× dibanding 2 versi dulu. Website mengirim 3 versi + angka **gaya bicara** (Natural ngobrol / Promo energik / Tenang meyakinkan / Kustom: ekspresi,
    tempo, variasi) yang sama untuk "Generate ulang VO", 🔊 Dengar, dan kecepatan per kalimat di Timeline. Versi yang paling jelas menang; kalau ada beberapa yang sama jelasnya, dipilih
    yang **paling natural**.
 3. **Jeda alami**: jeda antar kalimat dijaga 0,25–0,6 detik (sesudah "…" 0,45–0,7 detik) dan diisi **suara ruangan** dari rekaman

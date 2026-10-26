@@ -48,7 +48,11 @@ const SAME: Record<string, string> = {
   nggak: "gak", enggak: "gak", ngga: "gak", engga: "gak", ga: "gak", gak: "gak", gk: "gak", nggk: "gak",
   saja: "aja", aja: "aja", sudah: "udah", udah: "udah", dah: "udah", kalau: "kalo", kalo: "kalo", begitu: "gitu", gitu: "gitu",
   memang: "emang", emang: "emang", tetapi: "tapi", tapi: "tapi", bgt: "banget", banget: "banget", gimana: "gimana", bagaimana: "gimana",
+  // "hot issue" biasa ditulis ASR "hot isu" / "isyu"; "ei ai" (AI) kadang "eh ai"
+  issue: "isu", isyu: "isu", isu: "isu", issu: "isu", eh: "e",
 };
+/** huruf kembar disatukan ("ppt" → "pt"), juga sesudah kunci beberapa kata digabung ("p"+"p"+"t") */
+const squash = (s: string) => s.replace(/(.)\1+/g, "$1");
 /** kunci bunyi satu kata / frasa (lihat keterangan modul) */
 export function soundKey(s: string): string {
   let t = s
@@ -60,6 +64,7 @@ export function soundKey(s: string): string {
   t = t
     .replace(/([uo])w(?=[aeiou])/g, "$1")
     .replace(/iy(?=[aeiou])/g, "i")
+    .replace(/sy/g, "s")
     .replace(/ph/g, "f")
     .replace(/kh/g, "h")
     .replace(/[cq]/g, "k")
@@ -67,8 +72,9 @@ export function soundKey(s: string): string {
     .replace(/v/g, "f")
     .replace(/y/g, "i")
     .replace(/w/g, "u")
-    .replace(/(.)\1+/g, "$1");
-  return t;
+    // diftong ei ≈ e ("survei" = "surve", "ei ai" = "e ai")
+    .replace(/ei/g, "e");
+  return squash(t);
 }
 
 type Unit = { raw: string; start: number; end: number };
@@ -160,14 +166,14 @@ export function heardDiff(text: string, heard: string, opts: { spell?: string | 
         // satu kata naskah = 1..KH kata terdengar
         let cat = "";
         for (let k = 1; k <= KH && j + k <= m; k++) {
-          cat += hk[j + k - 1];
+          cat = squash(cat + hk[j + k - 1]);
           if (rk[i].includes(cat)) relax(i, j, { di: 1, dj: k, op: "ok" }, 0.001 * (k - 1));
           else if (k === 1 && Math.min(cat.length, rk[i][0].length) >= 6 && rk[i].some((x) => lev(x, cat) <= 1)) relax(i, j, { di: 1, dj: 1, op: "ok" }, 0.3);
         }
         // 2..KR kata naskah = satu kata terdengar
         for (let k = 2; k <= KR && i + k <= n; k++) {
-          const a = rk.slice(i, i + k).map((x) => x[0]).join("");
-          const b = rk.slice(i, i + k).map((x) => x[x.length - 1]).join("");
+          const a = squash(rk.slice(i, i + k).map((x) => x[0]).join(""));
+          const b = squash(rk.slice(i, i + k).map((x) => x[x.length - 1]).join(""));
           if (a === hk[j] || b === hk[j]) relax(i, j, { di: k, dj: 1, op: "ok" }, 0.001 * (k - 1));
         }
         // salah ucap: satu kata naskah terdengar sebagai 1–2 kata lain ("soal" → "su ul"), atau dua kata naskah jadi satu kata lain
@@ -203,7 +209,7 @@ export function heardDiff(text: string, heard: string, opts: { spell?: string | 
     if (s.op === "ok") return push(s.j, s.j + s.dj, true, s.i);
     if (s.op === "del") return void missing.push(s.i);
     if (s.op === "sub") {
-      const key = hk.slice(s.j, s.j + s.dj).join("");
+      const key = squash(hk.slice(s.j, s.j + s.dj).join(""));
       const fine = sent.has(key) || hk.slice(s.j, s.j + s.dj).every((x) => sent.has(x));
       return push(s.j, s.j + s.dj, fine, s.i);
     }
