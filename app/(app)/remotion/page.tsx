@@ -10,7 +10,7 @@ export default async function StudioPage() {
     <div className="space-y-5">
       <div>
         <h1 className="page-title">🎬 Studio</h1>
-        <p className="page-sub">Bikin video pro bareng Harley si Sutradara — ketik ide, cek rencana, preview, lalu download.</p>
+        <p className="page-sub">Bikin video pro bareng AI Sutradara (Harley, hero lain, atau karakter buatanmu) — ketik ide, cek rencana, preview, lalu download.</p>
       </div>
       <StudioTabs />
     </div>

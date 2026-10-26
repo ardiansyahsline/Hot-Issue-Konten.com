@@ -53,11 +53,19 @@ const BUILTIN_IDS = new Set(SFX_BUILTIN.map((s) => s.id));
 /** alamat file SFX: bawaan → route aset repo, tambahan → src dari katalog */
 const srcOf = (m: SfxMeta): string | null => (BUILTIN_IDS.has(m.id) ? sfxSrc(m.file) : m.src || null);
 
-/** bahan trailer bed (lihat assets/audio/music/BACA-INI.md & assets/audio/teaser/cue-sheet.md) */
-const BED = { pulse: "trailer-pulse-sedang", sustain: "trailer-pulse-panjang", riser: "riser-blastoff", braam1: "braam-epik-1", braam2: "braam-epik-2", booms: ["boom-trailer-1", "boom-trailer-3", "boom-trailer-2"] };
+/**
+ * bahan trailer bed (lihat assets/audio/music/BACA-INI.md & assets/audio/teaser/cue-sheet.md).
+ * pulse = pukulan sub tanpa nada (turunan trailer-pulse-sedang, hanya < 150 Hz): versi lama berbunyi seperti alarm/sirene berulang
+ * (nada ±340-450 Hz + sapuan naik tiap 1,2 dtk) di sepanjang video. trailer-pulse-sedang tetap ada di pustaka SFX (pilih manual).
+ */
+const BED = { pulse: "trailer-groove-perkusi", sustain: "trailer-pulse-panjang", riser: "riser-blastoff", braam1: "braam-epik-1", braam2: "braam-epik-2", booms: ["boom-trailer-1", "boom-trailer-3", "boom-trailer-2"] };
 export const BED_BPM = 100;
-/** file trailer-pulse: groove/pukulan hanya 32 ketukan (19,2 dtk) pertama, sisanya ekor sunyi -> yang diulang hanya bagian itu */
+/** file trailer-pulse: groove/pukulan hanya 32 ketukan (19,2 dtk) pertama, sisanya ekor sunyi -> yang diulang hanya bagian itu
+ *  (trailer-groove-perkusi panjangnya pas 32 ketukan, ekornya sudah dilipat ke awal -> sambungan loop mulus) */
 const BED_LOOP_BEATS = 32;
+/** groove bed (mid/high/drop) jauh di bawah target kategori trailer-pulse: file-nya hanya sub (LUFS kecil, puncak besar),
+ *  -15 dB = level sub yang sama dengan bed lama -> bobot bass tetap, tidak jadi suara latar yang menonjol */
+const BED_PULSE_DB = -15;
 
 /** rata-rata bergerak (jendela 2r+1) untuk menghaluskan perubahan level antar adegan */
 function smooth(a: Float32Array, r: number): Float32Array {
@@ -223,7 +231,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
   /** trailer bed: musik cadangan dari SFX, di grid 100 BPM, ikut level adegan & ducking */
   function trailerBed() {
     // lapisan loop dari frame 0 supaya tetap di grid: groove (mid/high/drop) + sustain (low)
-    const layer = (id: string, on: Set<MusicLevel>) => {
+    const layer = (id: string, on: Set<MusicLevel>, extraDb = 0) => {
       const m = sfxById(id, extra);
       const s = m ? srcOf(m) : null;
       if (!m || !s) return;
@@ -235,7 +243,7 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       }
       if (!any) return;
       const g = smooth(g0, Math.round(0.2 * fps));
-      const base = sfxGain(m, 0);
+      const base = sfxGain(m, extraDb);
       const tp = dbToGain(m.tp);
       const vol = new Float32Array(N);
       for (let f = 0; f < N; f++) {
@@ -244,7 +252,8 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
       }
       loops.push({ key: `bed-${id}`, src: s, vol, end: stop, name: `Musik cadangan · ${id}`, loopFrames: Math.round(((BED_LOOP_BEATS * 60) / BED_BPM) * fps) });
     };
-    layer(BED.pulse, new Set<MusicLevel>(["mid", "high", "drop"]));
+    // groove = alas ritme sub (tidak bernada), bukan suara utama
+    layer(BED.pulse, new Set<MusicLevel>(["mid", "high", "drop"]), BED_PULSE_DB);
     layer(BED.sustain, new Set<MusicLevel>(["low"]));
 
     // aksen: riser memuncak di adegan high/drop pertama, braam di reveal & adegan terakhir, boom di tiap drop

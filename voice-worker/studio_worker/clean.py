@@ -231,7 +231,10 @@ def pick_segment(y: np.ndarray, sr: int, lo: float = SEG_LO, hi: float = SEG_HI,
         return ratio * 2.0 - max(0.0, longest - 0.6) * 1.5 - min(nclip, 50) * 0.02 - size + pitch_bonus(pitch_var(f0, a, b))
 
     best: tuple[float, int, int] | None = None
-    for lo_, hi_ in ((lo, hi), (6.0, 14.0)):
+    # rentang utama dulu; rekaman yang bicaranya sedikit di bawah 9 dtk (mis. referensi 9 dtk) → 8–12 dtk dulu supaya tetap dapat
+    # potongan terpanjang (S3Gen memakai sampai 10 dtk), baru cadangan longgar 6–14 dtk
+    passes = list(dict.fromkeys(((lo, hi), (min(lo, 8.0), hi), (min(lo, 6.0), max(hi, 14.0)))))
+    for lo_, hi_ in passes:
         for i in range(len(cuts)):
             for j in range(i + 1, len(cuts)):
                 sp_ = span(cuts[i], cuts[j])

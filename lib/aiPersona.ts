@@ -305,6 +305,8 @@ export type CustomLook = { type: string; hair: number; skin: string; hc: string;
 const CUSTOM = new Map<string, CustomLook>();
 /** daftarkan karakter buatan user supaya avatar, tipe & kalimatnya dikenali di seluruh tab AI */
 export function registerCustom(name: string, look: CustomLook) {
+  // nama hero bawaan tidak boleh ditimpa karakter buatan (registry ini juga hidup di server → bisa bocor ke user lain)
+  if (isBuiltinHero(name.trim())) return;
   CUSTOM.set(name, look);
 }
 export const isBuiltinHero = (name: string) => name in LOOKS || name === "Layla" || !!heroRole(name);
@@ -315,11 +317,12 @@ export const CHIBI_PROPS: Prop[] = ["orb", "staff", "bow", "sword", "dagger", "s
 export const typeGroup = (t: string): Group => (t[1] === "N" ? (t[2] === "T" ? "NT" : "NF") : t[3] === "J" ? "SJ" : "SP");
 
 /** kepribadian + tampilan satu hero (hero di luar daftar dapat tipe tetap dari namanya) */
-export function personaOf(heroIn: string): Persona {
+export function personaOf(heroIn: string, opts?: { builtinOnly?: boolean }): Persona {
   const hero = heroIn.replace(/ \d+$/, "");
   const role = heroRole(hero);
   const h = hash(hero);
-  const custom = CUSTOM.get(heroIn.trim()) ?? CUSTOM.get(hero);
+  // builtinOnly: abaikan karakter buatan yang terdaftar (dipakai prompt sutradara Studio di server)
+  const custom = opts?.builtinOnly ? undefined : (CUSTOM.get(heroIn.trim()) ?? CUSTOM.get(hero));
   if (custom) {
     const hero = heroIn.trim();
     const t = TYPES[custom.type] ?? TYPES.INFJ;
@@ -377,8 +380,8 @@ export const groupVoices = (type: string) => {
 export const typeInfo = (type: string) => TYPES[type] ?? TYPES.INFJ;
 export const MBTI_TYPES = Object.keys(TYPES);
 
-export function personaPrompt(hero: string) {
-  const p = personaOf(hero);
+export function personaPrompt(hero: string, opts?: { builtinOnly?: boolean }) {
+  const p = personaOf(hero, opts);
   return [
     `KARAKTER KAMU: kamu adalah "${p.hero}", kepribadian ${p.type} — ${p.label} (${p.traits.join(", ")}).`,
     `GAYA MENJAWAB: ${p.style}`,
