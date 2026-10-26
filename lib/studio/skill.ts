@@ -16,9 +16,11 @@ import {
   type Director,
   type EdgeVoice,
   type Mix,
+  type Timeline,
   type Voice,
   type VoiceMode,
 } from "./timeline";
+import { applyStyle, isTeaserTimeline, normPreset, normTemperature, styleLabel, voicePatch, voiceStyle, CFG_MAX, CFG_MIN, EXG_MAX, EXG_MIN, type VoicePreset } from "./voiceStyle";
 
 export const SKILL_KIND = "studio-skill";
 export const SKILL_VERSION = 1;
@@ -39,7 +41,8 @@ export const SECTION_LABEL: Record<SkillSection, string> = {
 export const SECTION_ICON: Record<SkillSection, string> = { lexicon: "📖", voice: "🎙️", mix: "🎚️", director: "🎬", notes: "✍️" };
 
 /** setelan suara di skill (tanpa voiceId: id bank suara beda per database — dicocokkan lewat voiceName saat diterapkan) */
-export type SkillVoice = { mode?: VoiceMode; voiceName?: string; edgeVoice?: EdgeVoice; exaggeration?: number; cfg?: number; temperature?: number; preset?: string };
+/** suara di skill: `preset` / `temperature` = nama & rentang yang sama dengan timeline.voice (lib/studio/voiceStyle.ts) */
+export type SkillVoice = { mode?: VoiceMode; voiceName?: string; edgeVoice?: EdgeVoice; exaggeration?: number; cfg?: number; temperature?: number; preset?: VoicePreset };
 export type StudioSkill = {
   kind: typeof SKILL_KIND;
   v: typeof SKILL_VERSION;
@@ -69,14 +72,17 @@ export type SkillLibraryRow = {
   skill: StudioSkill;
 };
 
-/** voice di timeline + kolom tambahan yang mungkin dipakai mesin suara (temperature / preset) */
-export type VoiceLike = Voice & { temperature?: number; preset?: string };
-/** bagian timeline yang dibaca / diubah skill (Timeline memenuhi tipe ini; tanpa rencana cukup { director }) */
-export type SkillTarget = { voice?: VoiceLike; mix?: Mix; director?: Director };
+/** voice di timeline (gaya bicara: preset + temperature ada di Voice sendiri) */
+export type VoiceLike = Voice;
+/**
+ * bagian timeline yang dibaca / diubah skill (Timeline memenuhi tipe ini; tanpa rencana cukup { director }). `scenes` hanya dibaca
+ * untuk gaya bicara bawaan (proyek teaser: Promo energik).
+ */
+export type SkillTarget = { voice?: VoiceLike; mix?: Mix; director?: Director; scenes?: Timeline["scenes"] };
+const teaserOf = (t: SkillTarget) => isTeaserTimeline(t.scenes ? { scenes: t.scenes } : null);
 
 const MODES: readonly VoiceMode[] = ["bank", "edge", "elevenlabs", "none"];
 const EDGE_VOICES: readonly EdgeVoice[] = ["id-ID-ArdiNeural", "id-ID-GadisNeural"];
-const PRESET = /^[\w .-]{1,40}$/;
 
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 /** angka (atau teks angka "0,7") di rentang lo..hi (2 angka di belakang koma); bukan angka → undefined */
@@ -95,15 +101,15 @@ const lexKey = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
 function normVoice(v: unknown): SkillVoice | undefined {
   const o = obj(v);
   if (!o) return undefined;
-  const preset = plainText(o.preset, 40);
   const out = compact<SkillVoice>({
     mode: MODES.includes(o.mode as VoiceMode) ? (o.mode as VoiceMode) : undefined,
     voiceName: plainText(o.voiceName, 60) || undefined,
     edgeVoice: EDGE_VOICES.includes(o.edgeVoice as EdgeVoice) ? (o.edgeVoice as EdgeVoice) : undefined,
-    exaggeration: clampNum(o.exaggeration, 0.25, 1),
-    cfg: clampNum(o.cfg, 0, 1),
-    temperature: clampNum(o.temperature, 0.3, 1.2),
-    preset: preset && PRESET.test(preset) ? preset : undefined,
+    // rentang sama dengan normalizeTimeline / slider panel Suara VO; preset hanya id yang dikenal (natural|promo|tenang|kustom)
+    exaggeration: clampNum(o.exaggeration, EXG_MIN, EXG_MAX),
+    cfg: clampNum(o.cfg, CFG_MIN, CFG_MAX),
+    temperature: normTemperature(o.temperature),
+    preset: normPreset(o.preset),
   });
   return Object.keys(out).length ? out : undefined;
 }
@@ -199,10 +205,8 @@ export function collectSkill(src: SkillTarget, parts: readonly SkillSection[], i
       mode: v.mode,
       voiceName: v.voiceName,
       edgeVoice: v.edgeVoice,
-      exaggeration: v.exaggeration,
-      cfg: v.cfg,
-      temperature: v.temperature,
-      preset: v.preset,
+      // gaya bicara yang benar-benar dipakai (preset bawaan / angka lama ikut terbaca) → proyek lain mendapat suara yang sama
+      ...voicePatch(voiceStyle(v, teaserOf(src))),
     };
   if (want.has("mix") && src.mix) sections.mix = src.mix;
   if (want.has("director")) sections.director = { hero: src.director?.hero ?? "Harley", name: src.director?.name };
@@ -261,7 +265,9 @@ export function applySkill<T extends SkillTarget>(target: T, skill: StudioSkill,
     }
     if (want.has("voice") && sec.voice) {
       const sv = sec.voice;
-      const next: VoiceLike = { ...voice, ...compact({ ...sv }) };
+      const { exaggeration, cfg, temperature, preset, ...rest } = sv;
+      // gaya bicara lewat applyStyle: preset tanpa angka → angka preset itu (angka lama proyek tidak mengubahnya jadi Kustom)
+      const next: VoiceLike = applyStyle({ ...voice, ...compact({ ...rest }) }, { exaggeration, cfg, temperature, preset }, teaserOf(target));
       if (sv.voiceName !== undefined && sv.voiceName !== voice.voiceName) {
         // bank suara dicocokkan lewat nama; tidak ada di database ini → kosong (Studio memakai suara bawaan)
         const hit = opts.voices?.find((x) => x.name.trim().toLowerCase() === sv.voiceName!.trim().toLowerCase());
@@ -285,7 +291,6 @@ export function applySkill<T extends SkillTarget>(target: T, skill: StudioSkill,
 
 const VOICE_MODE_LABEL: Record<VoiceMode, string> = { bank: "Bank suara", edge: "Suara cadangan", elevenlabs: "Premium", none: "Tanpa suara" };
 const EDGE_LABEL: Record<EdgeVoice, string> = { "id-ID-ArdiNeural": "Ardi (pria)", "id-ID-GadisNeural": "Gadis (wanita)" };
-const num = (n: number | undefined) => (n === undefined ? "–" : String(n).replace(".", ","));
 const db = (n: number | undefined) => (n === undefined ? "–" : `${n > 0 ? "+" : n < 0 ? "−" : ""}${String(Math.abs(n)).replace(".", ",")} dB`);
 
 /** label sutradara untuk ringkasan (nama karakter / hero) */
@@ -298,8 +303,9 @@ export function sectionSummary(src: SkillTarget, key: SkillSection, dirName?: st
   if (key === "voice") {
     if (!v) return "";
     const who = v.mode === "bank" ? v.voiceName || "bawaan" : v.mode === "edge" ? EDGE_LABEL[v.edgeVoice ?? "id-ID-ArdiNeural"] : "";
-    const knobs = [v.exaggeration !== undefined ? `ekspresi ${num(v.exaggeration)}` : "", v.cfg !== undefined ? `tempo ${num(v.cfg)}` : "", v.preset ? `preset ${v.preset}` : ""].filter(Boolean);
-    return [VOICE_MODE_LABEL[v.mode], who, ...knobs].filter(Boolean).join(" · ");
+    // gaya bicara hanya berarti untuk bank suara (Chatterbox di laptop)
+    const style = v.mode === "bank" ? styleLabel(voiceStyle(v, teaserOf(src))) : "";
+    return [VOICE_MODE_LABEL[v.mode], who, style].filter(Boolean).join(" · ");
   }
   if (key === "mix") {
     const m = src.mix;
@@ -340,10 +346,11 @@ export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: Appl
         lines.push(`Suara bank: ${v.voiceName || "bawaan"} → ${s.voiceName}${hit ? "" : " (tidak ada di bank — pakai suara bawaan)"}`);
       }
       if (s.edgeVoice && s.edgeVoice !== v.edgeVoice) lines.push(`Suara cadangan: ${EDGE_LABEL[v.edgeVoice ?? "id-ID-ArdiNeural"]} → ${EDGE_LABEL[s.edgeVoice]}`);
-      if (s.exaggeration !== undefined && s.exaggeration !== v.exaggeration) lines.push(`Ekspresi: ${num(v.exaggeration)} → ${num(s.exaggeration)}`);
-      if (s.cfg !== undefined && s.cfg !== v.cfg) lines.push(`Tempo: ${num(v.cfg)} → ${num(s.cfg)}`);
-      if (s.temperature !== undefined && s.temperature !== v.temperature) lines.push(`Variasi suara: ${num(v.temperature)} → ${num(s.temperature)}`);
-      if (s.preset !== undefined && s.preset !== v.preset) lines.push(`Preset: ${v.preset || "–"} → ${s.preset}`);
+      // gaya bicara: dibandingkan hasil akhirnya (sama dengan applySkill), label awam "Natural ngobrol" / "Kustom (ekspresi …)"
+      const teaser = teaserOf(target);
+      const before = styleLabel(voiceStyle(v, teaser));
+      const after = styleLabel(voiceStyle(applyStyle(v, s, teaser), teaser));
+      if (before !== after) lines.push(`Gaya bicara: ${before} → ${after}`);
       out.push({ key: "voice", ok: true, lines: lines.length ? lines : ["Sama dengan setelan sekarang."] });
     }
   }

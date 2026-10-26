@@ -7,6 +7,8 @@
  */
 import { SFX_BUILTIN, type SfxMeta } from "./sfxMeta";
 import { legacySayKey, normLexicon, upgradeTeaserSpell, type LexEntry } from "./pronounce";
+import { normHeard } from "./heard";
+import { normPreset, normTemperature, type VoicePreset } from "./voiceStyle";
 
 export const FPS = 30;
 export type Ratio = "9:16" | "16:9" | "1:1" | "4:5";
@@ -163,8 +165,21 @@ export type EdgeVoice = "id-ID-ArdiNeural" | "id-ID-GadisNeural";
 /**
  * `lexicon` = kamus ejaan milik proyek ({from, to}, maks 60): kata yang sering salah dibaca mesin suara → cara bacanya.
  * Ditambah kamus bawaan & dipakai otomatis untuk teks ucapan tiap adegan (lib/studio/pronounce.ts); subtitle tidak berubah.
+ * `preset` = gaya bicara bank suara (natural | promo | tenang | kustom) dan `temperature` = variasi intonasi (0,5–1,0) — dibaca
+ * lewat voiceStyle (lib/studio/voiceStyle.ts) bersama `exaggeration` & `cfg`; kosong = preset bawaan (teaser: Promo energik).
  */
-export type Voice = { mode: VoiceMode; voiceId?: string | null; voiceName?: string; edgeVoice?: EdgeVoice; exaggeration?: number; cfg?: number; lexicon?: LexEntry[] };
+export type Voice = {
+  mode: VoiceMode;
+  voiceId?: string | null;
+  voiceName?: string;
+  edgeVoice?: EdgeVoice;
+  exaggeration?: number;
+  cfg?: number;
+  temperature?: number;
+  /** id VoicePreset ("natural" | "promo" | "tenang" | "kustom"); bertipe string supaya data skill / lama tetap bisa ditampung */
+  preset?: VoicePreset | (string & {});
+  lexicon?: LexEntry[];
+};
 
 /**
  * Musik: `src` = "bed" (trailer bed cadangan dari SFX), "none", atau URL file yang bisa diputar
@@ -179,8 +194,10 @@ export type Word = { w: string; s: number; e: number };
  * (bisa membawa hening di ujung). `speed` = persen suara dipercepat otomatis supaya pas di jendela adegan teaser (1–30, kosong = tidak).
  * `say` = kunci 8 hex teks + teks ucapan saat suara dibuat (voSayKey, lib/studio/pronounce.ts): beda dengan naskah / kamus ejaan
  * sekarang = suaranya dibuat dari versi lama (perlu "Generate ulang VO"). Kosong = VO lama (tidak diketahui).
+ * `heard` = teks yang terdengar oleh pengecek ucapan (ASR) di laptop saat suara bank dibuat (maks 400 huruf, teks biasa) —
+ * dibandingkan dengan naskah untuk menyorot kata yang salah dengar (lib/studio/heard.ts). Kosong = tidak diketahui (Edge / premium).
  */
-export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[]; speed?: number; say?: string; tempo?: number };
+export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[]; speed?: number; say?: string; tempo?: number; heard?: string };
 /**
  * Kecepatan VO yang diatur sendiri per kalimat (× tempo normal). `VoLine.tempo` = kecepatan yang dipakai saat baris itu dibuat
  * (diatur user; kosong = otomatis, lihat `speed`).
@@ -583,6 +600,9 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       edgeVoice: oneOf(v.edgeVoice, ["id-ID-ArdiNeural", "id-ID-GadisNeural"] as const, "id-ID-ArdiNeural"),
       exaggeration: v.exaggeration === undefined ? undefined : num(v.exaggeration, 0.6, 0.25, 1),
       cfg: v.cfg === undefined ? undefined : num(v.cfg, 0.4, 0.1, 1),
+      // gaya bicara bank suara (opsional): id preset dikenal & variasi 0,5–1,0 — kosong / rusak tidak disimpan
+      ...(normPreset(v.preset) ? { preset: normPreset(v.preset) } : {}),
+      ...(normTemperature(v.temperature) !== undefined ? { temperature: normTemperature(v.temperature) } : {}),
       ...(lexicon.length ? { lexicon } : {}),
     },
     music: {
@@ -686,6 +706,7 @@ function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
       const speed = Math.round(num(x.speed, 0, 0, 100));
       const say = typeof x.say === "string" && /^[0-9a-f]{8}$/.test(x.say) ? x.say : "";
       const tempo = normTempo(x.tempo);
+      const heard = normHeard(x.heard);
       const line: VoLine | null =
         src && sceneAt.has(sid)
           ? {
@@ -697,6 +718,7 @@ function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
               ...(speed > 0 ? { speed } : {}),
               ...(say ? { say } : {}),
               ...(tempo !== undefined ? { tempo } : {}),
+              ...(heard ? { heard } : {}),
             }
           : null;
       return line;

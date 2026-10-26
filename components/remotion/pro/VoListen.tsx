@@ -2,11 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cancelVoiceJob, createVoiceJob, fetchReadyVoices, requestTts, useStudioJob, useStudioStatus, type VoiceJob, type VoiceJobLine } from "@/lib/studio/client";
-import { voSayKey, voSpeech } from "@/lib/studio/pronounce";
+import { voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
+import { heardFromResult } from "@/lib/studio/heard";
+import { bankSettings } from "@/lib/studio/voiceStyle";
 import { normTempo, tempoRate, type Scene, type Timeline, type VoLine, type VoTrack } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { isTeaserScene } from "./teaserLock";
-import { cleanWords, DEF_CFG, DEF_EXG, DEFAULT_VOICE, fitVo, fmtTempo, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
+import { cleanWords, DEFAULT_VOICE, fitVo, fmtTempo, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
+import VoHeard, { upsertLexicon } from "./VoHeard";
 
 type Ready = { s: "ready"; line: VoLine; label: string; engine: VoTrack["engine"]; temp: boolean; sig: string; used?: boolean };
 type St =
@@ -48,7 +51,8 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
   const workerOn = !!status?.worker.online && status.engines.bank;
   const eleven = !!status?.engines.elevenlabs;
   const engine: "bank" | "edge" | "elevenlabs" = v.mode === "bank" && workerOn ? "bank" : v.mode === "elevenlabs" && eleven ? "elevenlabs" : "edge";
-  const pay = voSpeech(scene.vo, v.lexicon);
+  // teks yang dibaca mesin: bank = + bunyi luncur ("sowal"), Edge / premium = teks ucapan biasa
+  const pay = voSpeech(scene.vo, v.lexicon, engine === "bank" ? "bank" : undefined);
   const sigNow = voSayKey(scene.vo, v.lexicon);
   const busy = st.s === "tts" || st.s === "start" || st.s === "job";
   const engineName =
@@ -89,8 +93,17 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
     setPlay(false);
   };
 
+  /** "Buat ulang kalimat ini" (👂 Terdengar): contoh berikutnya langsung dipasang ke VO proyek */
+  const autoUse = useRef(false);
+  const [rebuildNote, setRebuildNote] = useState<string | null>(null);
   const ready = (r: Omit<Ready, "s">) => {
-    setSt({ s: "ready", ...r });
+    const rd: Ready = { s: "ready", ...r };
+    if (autoUse.current && onTimeline) {
+      autoUse.current = false;
+      const ok = apply(rd);
+      setRebuildNote(ok ? null : "Naskah / ejaan berubah lagi selama suara dibuat — klik lagi untuk buat ulang.");
+      setSt(ok ? { ...rd, used: true } : rd);
+    } else setSt(rd);
     playSrc(r.line.src);
   };
 
@@ -138,7 +151,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
   const viaBank = async () => {
     const t = tlRef.current;
     const s = t.scenes.find((x) => x.id === scene.id) ?? scene;
-    const p = voSpeech(s.vo, t.voice.lexicon);
+    const p = voSpeech(s.vo, t.voice.lexicon, "bank");
     if (!p) return;
     const sig = voSayKey(s.vo, t.voice.lexicon);
     const tempo = s.vo?.tempo;
@@ -150,7 +163,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
       if (!voice) return void (await viaTts("edge"));
       const line: VoiceJobLine = { id: s.id, scene_id: s.id, text: p.text, spell: p.spell, start: 0, ...(tempo !== undefined ? { speed: tempo } : win !== undefined ? { max: win } : {}) };
       // setelan sama dengan "Generate ulang VO" → suara mentah kalimat ini dipakai ulang dari cache laptop
-      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: { exaggeration: t.voice.exaggeration ?? DEF_EXG, cfg_weight: t.voice.cfg ?? DEF_CFG, takes: 2 } });
+      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: bankSettings(t) });
       jobRef.current = j.id;
       setSt({ s: "job", id: j.id, voice: voice.name, sig });
     } catch (e) {
@@ -173,6 +186,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
       const tempo = normTempo(l.tempo);
       const speed = tempo === undefined ? Math.round(Number(l.speed) || 0) : 0;
       const s = tlRef.current.scenes.find((x) => x.id === scene.id) ?? scene;
+      const heard = heardFromResult(l);
       ready({
         line: {
           sceneId: scene.id,
@@ -183,6 +197,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
           ...(speed > 0 ? { speed } : {}),
           ...(tempo !== undefined ? { tempo } : {}),
           say: st.sig,
+          ...(heard ? { heard } : {}),
         },
         label: `Bank suara · ${st.voice}`,
         engine: /pocket/i.test(job.engine_used ?? "") ? "pocket" : "chatterbox",
@@ -191,22 +206,27 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
       });
     } else if (job.status === "gagal") {
       jobRef.current = null;
+      autoUse.current = false;
       setSt({ s: "error", msg: "Mesin suara di laptop gagal bikin contoh suara.", detail: job.message ?? undefined, fallback: true });
     } else if (job.status === "batal") {
       jobRef.current = null;
+      autoUse.current = false;
       setSt({ s: "idle" });
     }
     // ready() memakai ref terbaru; cukup dipicu perubahan job
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, missing, st]);
 
-  const listen = () => {
+  const listen = (rebuild = false) => {
     stop();
+    autoUse.current = rebuild;
+    setRebuildNote(null);
     if (engine === "bank") return void viaBank();
     return void viaTts(engine);
   };
 
   const cancel = () => {
+    autoUse.current = false;
     abortRef.current?.abort();
     if (st.s === "job") {
       void cancelVoiceJob(st.id).catch(() => {});
@@ -222,10 +242,14 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
     void viaTts("edge");
   };
 
-  /** pasang contoh ini sebagai VO adegan di proyek (adegan lain tidak berubah; VO lengkap .mp3 dilepas karena tidak sinkron lagi) */
-  const use = () => {
-    if (st.s !== "ready" || !onTimeline) return;
-    const r = st;
+  /**
+   * pasang contoh ini sebagai VO adegan di proyek (adegan lain tidak berubah; VO lengkap .mp3 dilepas karena tidak sinkron lagi).
+   * false = naskah / ejaan sudah berubah sejak contoh dibuat (tidak dipasang).
+   */
+  function apply(r: Ready): boolean {
+    if (!onTimeline) return false;
+    const cur = tlRef.current.scenes.find((x) => x.id === scene.id);
+    if (!cur?.vo?.text || voSayKey(cur.vo, tlRef.current.voice.lexicon) !== r.sig) return false;
     onTimeline((t) => {
       const s = t.scenes.find((x) => x.id === scene.id);
       if (!s?.vo?.text || voSayKey(s.vo, t.voice.lexicon) !== r.sig) return t;
@@ -237,7 +261,33 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
         : { jobId: null, engine: r.engine, temp: r.temp, label: r.label, lines, full: null };
       return fitVo({ ...t, vo, muteVo: false }, vo).tl;
     });
-    setSt({ ...r, used: true });
+    return true;
+  }
+  const use = () => {
+    if (st.s !== "ready" || !apply(st)) return;
+    setSt({ ...st, used: true });
+  };
+
+  // ---------- 👂 Terdengar: contoh yang belum dipakai, atau VO proyek adegan ini (suara bank yang membawa teks terdengar) ----------
+  const lineNow = timeline.vo?.lines.find((l) => l.sceneId === scene.id);
+  // kamus sebelum perbaikan pertama di kartu ini: suara proyek tetap "sesuai naskah" walau kamusnya baru ditambah dari sini
+  const lexBefore = useRef<LexEntry[] | undefined | null>(null);
+  const freshSig = (sig: string | undefined) => !!sig && (sig === sigNow || (lexBefore.current !== null && sig === voSayKey(scene.vo, lexBefore.current)));
+  const sampleHeard = st.s === "ready" && !st.used && freshSig(st.sig) ? st.line.heard : undefined;
+  const lineFresh = freshSig(lineNow?.say);
+  // `src` = kunci suara: suara baru (walau teks terdengarnya sama) → isian & catatan perbaikan di panel mulai dari awal
+  const heardSrc =
+    st.s === "ready" && sampleHeard ? { heard: sampleHeard, sample: true, src: st.line.src } : lineNow?.heard && lineFresh ? { heard: lineNow.heard, sample: false, src: lineNow.src } : null;
+  const fixWord = (e: LexEntry): string | null => {
+    if (!onTimeline) return "Kamus tidak bisa diubah dari sini.";
+    const next = upsertLexicon(tlRef.current.voice.lexicon, e);
+    if (!next) return "📖 Kamus ejaan sudah penuh (60 kata) — hapus kata yang tidak dipakai dulu di panel Suara VO.";
+    if (lexBefore.current === null) lexBefore.current = tlRef.current.voice.lexicon;
+    onTimeline((t) => {
+      const n2 = upsertLexicon(t.voice.lexicon, e);
+      return n2 ? { ...t, voice: { ...t.voice, lexicon: n2.length ? n2 : undefined } } : t;
+    });
+    return null;
   };
 
   if (!pay || v.mode === "none") return null;
@@ -250,6 +300,20 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
         <p className="break-words text-[11.5px] leading-relaxed text-zinc-400" data-vo-say>
           🗣️ Dibaca mesin: <span className="text-zinc-200">“{pay.spell}”</span>
         </p>
+      )}
+      {heardSrc && scene.vo?.text && (
+        <VoHeard
+          key={heardSrc.src}
+          text={scene.vo.text}
+          heard={heardSrc.heard}
+          spell={scene.vo.spell}
+          lexicon={v.lexicon}
+          sample={heardSrc.sample}
+          onFix={onTimeline ? fixWord : undefined}
+          onRebuild={onTimeline ? () => listen(true) : undefined}
+          rebuildBusy={busy}
+          rebuildNote={rebuildNote ?? (engine === "bank" ? null : `Laptop mati — dibuat ulang pakai ${engineName}.`)}
+        />
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {busy ? (
@@ -272,7 +336,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
           </>
         ) : (
           <>
-            <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={listen} data-vo-listen-btn>
+            <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => listen()} data-vo-listen-btn>
               🔊 {st.s === "ready" ? "Bikin lagi" : "Dengar"}
             </button>
             {st.s === "ready" && (

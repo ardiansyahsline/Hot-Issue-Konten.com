@@ -18,6 +18,8 @@ Job kind 'tts': VO dari bank suara.
     (apply_speed); job lama tanpa `speed` / `max` hasilnya sama persis seperti dulu
   → upload vo/<job>/<baris>.mp3, vo/<job>/full.mp3 (tiap baris di detik `start`), vo/<job>/full.srt
   → ringkasan kealamian per baris (row.natural: MOS, variasi nada, persen dipercepat asli vs atempo) + per job (result.natural)
+  → teks yang terdengar ASR per baris (row.heard, gabungan take terpilih per potongan / kalimat, maks 400 huruf; kosong kalau ASR
+    tidak ada) → website menyorot kata yang salah ucap ("👂 Terdengar") supaya ejaannya bisa diperbaiki lewat kamus
 Cache: hasil job selesai dengan cache_key sama (ikut `max`) dipakai ulang; suara mentah per baris juga di-cache di laptop
 (data/cache/tts, tanpa `max` — ganti jendela cukup percepat ulang, tidak perlu bikin suara lagi).
 """
@@ -71,6 +73,8 @@ PAUSE_MIN = 0.12
 PAUSE_LEN = 0.20
 # kecepatan yang boleh diminta website per baris (`speed`, × normal) — website memakai 0,85–1,3
 SPEED_MIN, SPEED_MAX = 0.7, 1.5
+# teks terdengar ASR per baris (row.heard) — sama dengan HEARD_MAX di lib/studio/heard.ts
+HEARD_MAX = 400
 
 
 # ---------------------------------------------------------------- input
@@ -563,6 +567,41 @@ def line_clarity(meta: dict) -> float | None:
     return sum(a * b for a, b in vals) / sum(b for _, b in vals)
 
 
+def line_heard(meta: dict) -> str | None:
+    """
+    teks yang terdengar oleh pengecek ucapan (ASR) untuk baris ini, untuk sorot salah dengar di website (row.heard): gabungan
+    `heard` take terpilih per potongan (meta.takes, urut); potongan mode per kalimat tidak punya `heard` sendiri → gabungan
+    `parts[].heard` per kalimat. Ada potongan / kalimat tanpa hasil ASR (ASR mati / gagal) → None: teks sebagian akan membuat
+    website menyorot kata yang sebenarnya terucap sebagai "tidak terdengar". Spasi dirapikan, maks 400 huruf (potong di spasi).
+    """
+    takes = meta.get("takes")
+    if not isinstance(takes, list) or not takes:
+        return None
+    got: list[str] = []
+    for t in takes:
+        if not isinstance(t, dict):
+            return None
+        if isinstance(t.get("heard"), str):
+            got.append(t["heard"])
+            continue
+        parts = t.get("parts")
+        if not isinstance(parts, list) or not parts:
+            return None
+        for p in parts:
+            h = p.get("heard") if isinstance(p, dict) else None
+            if not isinstance(h, str):
+                return None
+            got.append(h)
+    s = re.sub(r"\s+", " ", " ".join(got)).strip()
+    if not s:
+        return None
+    if len(s) > HEARD_MAX:
+        cut = s[:HEARD_MAX]
+        sp = cut.rfind(" ")
+        s = (cut[:sp] if sp > HEARD_MAX * 0.6 else cut).strip()
+    return s
+
+
 def native_fit(wav: Path, meta: dict, mx: float | None, st: dict, work: Path, lid: str, regen) -> tuple[Path, dict]:
     """
     Tempo alami dulu, baru atempo (baris adegan teaser yang punya `max`): sesudah jeda dipadatkan masih kelebihan > 4% → `regen(st2)`
@@ -742,6 +781,10 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             if meta.get("squeeze"):
                 row["squeeze"] = meta["squeeze"]
             row["natural"] = line_natural(meta, bool(ln.get("speed")))
+            # teks yang terdengar ASR (versi terpilih yang benar-benar dipakai) → website menyorot kata yang salah ucap
+            heard = line_heard(meta)
+            if heard:
+                row["heard"] = heard
             out_lines.append(row)
         ctx.progress(0.92, "Menyusun VO lengkap…", force=True)
         full = mix.place_clips(clips, 48000, tail=0.5, ceiling_db=-1.0)

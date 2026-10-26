@@ -6,7 +6,7 @@ Yang dites: skor nada (datar vs meliuk) & aturan pilih take, potongan teks satu 
 digital), ekor kalimat tidak terpotong, jeda antar kalimat dirapikan ke rentang alami, pilih potongan referensi paling hidup,
 denoise adaptif, UTMOS gagal / dimatikan / palsu, satu tarikan → cadangan per kalimat, tempo alami dulu baru atempo (mesin palsu),
 job lama tanpa max tetap sama, cadangan per kalimat hanya bila jelas lebih baik, level potongan disamakan, takes bawaan 3 + batas
-waktu, ringkasan kealamian di hasil job, bersihkan ulang referensi sekali,
+waktu, ringkasan kealamian di hasil job, teks terdengar per baris (row.heard), bersihkan ulang referensi sekali,
 signature sampling Chatterbox. Mesin suara, ASR & Supabase dipalsukan.
 """
 from __future__ import annotations
@@ -801,6 +801,63 @@ def t_ringkasan_kealamian_di_hasil_job():
     assert s["lines"] == 2 and s["st"] is not None and s["mos"] is None and s["native"] == 0 and s["atempo"] == 0, s
     assert s["mos_status"].startswith("tidak dipakai") or s["mos_status"] == "belum dimuat", s
     return f"baris: {r['lines'][1]['natural']}; job: {s}"
+
+
+@test
+def t_teks_terdengar_per_baris():
+    """row.heard = gabungan teks ASR take terpilih per potongan / kalimat (sorot salah dengar di website); ASR mati → tidak ada"""
+    sb, v = bank()
+    text = "Soal kerjaan numpuk? Tenang aja. Coba sekarang juga."
+    spell = "Sowal kerjaan numpuk? Tenang aja. Coba sekarang juga."
+    # (1) satu tarikan: ASR mendengar "su ul" → row.heard persis yang terdengar dari take terpilih (bukan naskah / ejaan)
+    eng = Eng()
+    said = "Su ul kerjaan numpuk? Tenang aja. Coba sekarang juga."
+    rt = Runtime(cfg=cfg_("hd1"), supa=sb, engines=Engines(eng), asr=Asr(lambda n: said, line=text))  # type: ignore[arg-type]
+    j = run_job(sb, rt, "hd-1", [{"id": "a", "scene_id": "s1", "text": text, "spell": spell, "start": 0.1}], {"takes": 3})
+    row = j["result"]["lines"][0]
+    assert len(eng.calls) == 3 and eng.calls[0][0] == T.clean_text(spell), eng.calls
+    assert row["heard"] == said, row.get("heard")
+    assert [w["w"] for w in row["words"]] == text.split(), "timestamp kata tetap kata naskah asli"
+    # (2) mode per kalimat (satu tarikan salah terus) → take punya parts[] tanpa heard sendiri → gabungan heard per kalimat, urut
+    eng2 = Eng()
+
+    def heard2(n):
+        cur = eng2.calls[-1][0]
+        return "bla bla salah total sekali" if cur == T.clean_text(text) else cur.lower()
+
+    rt2 = Runtime(cfg=cfg_("hd2"), supa=sb, engines=Engines(eng2), asr=Asr(heard2, line=text))  # type: ignore[arg-type]
+    j2 = run_job(sb, rt2, "hd-2", [{"id": "b", "scene_id": "s2", "text": text, "start": 0.1}], {"takes": 1})
+    r2 = j2["result"]["lines"][0]
+    assert r2["natural"]["mode"] == "per-kalimat", r2["natural"]
+    assert r2["heard"] == " ".join(s.lower() for s in T.split_sentences(text)), r2.get("heard")
+    # (3) teks panjang (beberapa potongan satu tarikan) → heard tiap potongan disambung urut
+    eng3 = Eng()
+    longt = " ".join(f"Kalimat ke {i} ini dibuat agak panjang supaya baris melewati batas satu tarikan." for i in range(1, 7))
+    rt3 = Runtime(cfg=cfg_("hd3"), supa=sb, engines=Engines(eng3), asr=Asr(lambda n: eng3.calls[-1][0].upper(), line=longt))  # type: ignore[arg-type]
+    j3 = run_job(sb, rt3, "hd-3", [{"id": "c", "scene_id": "s3", "text": longt, "start": 0}], {"takes": 1})
+    r3 = j3["result"]["lines"][0]
+    chunks = [c[0] for c in eng3.calls]
+    assert len(chunks) >= 2, chunks
+    want = " ".join(c.upper() for c in chunks)
+    assert len(want) > jobs_tts.HEARD_MAX and len(r3["heard"]) <= jobs_tts.HEARD_MAX and want.startswith(r3["heard"]), r3["heard"]
+    assert not r3["heard"].endswith(" ") and want[len(r3["heard"])] == " ", "dipotong di batas kata"
+    # (4) ASR tidak ada → tidak ada row.heard (website: tidak diketahui, panel sorot tidak muncul)
+    eng4 = Eng()
+    rt4 = Runtime(cfg=cfg_("hd4"), supa=sb, engines=Engines(eng4), asr=None)  # type: ignore[arg-type]
+    j4 = run_job(sb, rt4, "hd-4", [{"id": "d", "scene_id": "s4", "text": text, "start": 0}], {"takes": 2})
+    assert "heard" not in j4["result"]["lines"][0], j4["result"]["lines"][0]
+    # (5) bentuk meta.takes (unit): sebagian tanpa ASR → None (jangan kirim teks sebagian); kosong semua → None
+    lh = jobs_tts.line_heard
+    assert lh({"takes": [{"heard": " halo  semua "}, {"mode": "per-kalimat", "parts": [{"heard": "apa"}, {"heard": "kabar"}]}]}) == "halo semua apa kabar"
+    assert lh({"takes": [{"heard": "halo"}, {"heard": None}]}) is None
+    assert lh({"takes": [{"heard": "halo"}, {"mode": "per-kalimat", "parts": [{"heard": "x"}, {"heard": None}]}]}) is None
+    assert lh({"takes": [{"mode": "per-kalimat", "parts": []}]}) is None
+    assert lh({"takes": [{"heard": ""}, {"heard": "  "}]}) is None and lh({}) is None and lh({"takes": "x"}) is None and lh({"takes": [1]}) is None
+    # (6) baris dari cache laptop (meta lama berbentuk sama) tetap membawa heard
+    calls = len(eng.calls)
+    j5 = run_job(sb, rt, "hd-5", [{"id": "a", "scene_id": "s1", "text": text, "spell": spell, "start": 0.4}], {"takes": 3})
+    assert len(eng.calls) == calls and j5["result"]["lines"][0]["heard"] == said
+    return f"satu tarikan: {row['heard']!r}; per kalimat: {r2['heard']!r}; panjang {len(r3['heard'])} huruf; tanpa ASR: kosong"
 
 
 @test

@@ -80,6 +80,36 @@ export const DEFAULT_LEXICON: readonly LexEntry[] = [
   { from: "trader", to: "treder" },
   { from: "software", to: "sofwer" },
   { from: "podcast", to: "podkes" },
+  { from: "SVG", to: "es ve ge" },
+  { from: "PNG", to: "pe en ge" },
+  { from: "JPG", to: "je pe ge" },
+  { from: "MP3", to: "em pe tiga" },
+  { from: "MP4", to: "em pe empat" },
+  { from: "BPM", to: "be pe em" },
+  // API hanya kalau ditulis kapital (lihat CAPS_ONLY: "api" = api unggun). UI sengaja tidak ada: "ui" = seruan, UI = Universitas
+  // Indonesia ("u i") — kalau maksudnya user interface, tambahkan sendiri di 📖 Kamus ejaan proyek.
+  { from: "API", to: "a pe i" },
+  { from: "UX", to: "yu eks" },
+  { from: "KPI", to: "ka pe i" },
+  { from: "SEO", to: "es i o" },
+  { from: "ROI", to: "er o i" },
+  { from: "OJK", to: "o je ka" },
+  { from: "IPO", to: "i pe o" },
+  { from: "GPU", to: "ji pi yu" },
+  { from: "CPU", to: "si pi yu" },
+  { from: "DM", to: "di em" },
+  { from: "voice over", to: "vois over" },
+  { from: "live", to: "laif" },
+  { from: "streaming", to: "striming" },
+  { from: "story", to: "stori" },
+  { from: "caption", to: "kepsyen" },
+  { from: "thumbnail", to: "tambnel" },
+  { from: "slide", to: "slaid" },
+  { from: "preview", to: "priviu" },
+  { from: "subtitle", to: "sabtaitel" },
+  { from: "workflow", to: "werkflo" },
+  { from: "followers", to: "folowers" },
+  { from: "viewers", to: "viuwers" },
   { from: "vs", to: "versus" },
   { from: "dll", to: "dan lain lain" },
   { from: "dsb", to: "dan sebagainya" },
@@ -116,6 +146,10 @@ const tokens = (s: string) => s.toLowerCase().split(SPLIT).filter(Boolean);
 /** kunci pencocokan: huruf kecil, spasi & strip diabaikan ("Real time" = "real-time" = "realtime") */
 const keyOf = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+/** penanda (Private Use Area) bagian teks hasil kamus / angka — dilindungi dari bunyi luncur mesin bank, dibuang sebelum dikirim */
+const MK0 = "\uE000";
+const MK1 = "\uE001";
+const MKS = /[\uE000\uE001]/g;
 /** FNV-1a 32 bit → 8 hex (kunci pendek teks ucapan, disimpan di VoLine.say) */
 function fnv(s: string): string {
   let h = 0x811c9dc5;
@@ -155,6 +189,16 @@ export function lexiconOf(user?: readonly LexEntry[] | null): LexEntry[] {
   return [...DEFAULT_LEXICON.filter((e) => !own.has(keyOf(e.from))), ...mine];
 }
 
+/**
+ * singkatan yang huruf kecilnya kata Indonesia biasa: entri kamus yang ditulis kapital ("API", "ROI") hanya mengganti kata yang
+ * juga ditulis kapital — "api unggun", "berapi-api", "Api kecil" tetap dibaca biasa (Edge maupun bank).
+ */
+const CAPS_ONLY: ReadonlySet<string> = new Set(["api", "roi"]);
+const allCaps = (s: string) => {
+  const l = s.replace(/[^\p{L}]/gu, "");
+  return l.length >= 2 && l === l.toUpperCase() && l !== l.toLowerCase();
+};
+
 // ---------------------------------------------------------------------------------------------
 // kamus ejaan
 // ---------------------------------------------------------------------------------------------
@@ -173,7 +217,7 @@ const glueOk = (core: string) => {
   return k.length >= 4 || (k.length >= 2 && core === core.toUpperCase() && core !== core.toLowerCase());
 };
 
-type Compiled = { re: RegExp; map: Map<string, string | null> };
+type Compiled = { re: RegExp; map: Map<string, string | null>; caps: Set<string> };
 const cache = new Map<string, Compiled | null>();
 
 function compile(entries: readonly LexEntry[]): Compiled | null {
@@ -183,6 +227,7 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
   const map = new Map<string, string | null>();
   for (const e of entries) map.set(keyOf(e.from), e.to);
   for (const e of entries) if (!map.has(keyOf(e.to))) map.set(keyOf(e.to), null);
+  const caps = new Set(entries.filter((e) => CAPS_ONLY.has(keyOf(e.from)) && allCaps(e.from)).map((e) => keyOf(e.from)));
   const pats = new Map<string, number>();
   for (const s of entries.flatMap((e) => [e.from, e.to])) {
     const parts = s.split(/[\s-]+/).filter(Boolean);
@@ -194,7 +239,7 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
   // kata kamus utuh yang kebetulan berawalan di/ke tetap cocok utuh
   const alts = [...pats.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(([p]) => p);
   const out = alts.length
-    ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-|(${PRE2}))??(${alts.join("|")})(?:-(${SUF})|(${SUF2}))?(?![${B}])`, "giu"), map }
+    ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-|(${PRE2}))??(${alts.join("|")})(?:-(${SUF})|(${SUF2}))?(?![${B}])`, "giu"), map, caps }
     : null;
   cache.set(sig, out);
   if (cache.size > 20) cache.delete(cache.keys().next().value as string);
@@ -205,12 +250,16 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
  * Ganti kata/frasa sesuai kamus: per kata utuh, tidak peka huruf besar, sekali jalan (hasil ejaan tidak diganti lagi).
  * `keep` = kata (huruf kecil) yang tidak boleh disentuh (ejaan khusus adegan). Tanda baca, angka & kata lain tetap.
  */
-export function applyLexicon(text: string, entries: readonly LexEntry[], keep?: ReadonlySet<string>): string {
+export function applyLexicon(text: string, entries: readonly LexEntry[], keep?: ReadonlySet<string>, mark = false): string {
   const c = compile(entries);
   if (!c || !text) return text;
+  const [m0, m1] = mark ? [MK0, MK1] : ["", ""];
   return text.replace(c.re, (m: string, b: string, preDash: string | undefined, preGlue: string | undefined, core: string, sufDash: string | undefined, sufGlue: string | undefined) => {
     const to = c.map.get(keyOf(core));
-    if (!to) return m;
+    // hasil ejaan yang sudah tertulis (mis. "ei ai") juga dilindungi dari bunyi luncur mesin bank
+    if (!to) return mark ? `${b}${m0}${m.slice(b.length)}${m1}` : m;
+    // "api" (bukan "API") → kata biasa, bukan singkatan
+    if (c.caps.has(keyOf(core)) && !allCaps(core)) return m;
     if (keep?.size && tokens(core).some((t) => keep.has(t))) return m;
     // imbuhan tanpa strip hanya untuk singkatan kapital / kata kamus panjang (lihat glueOk) — selain itu kata utuhnya dibiarkan
     if ((preGlue || sufGlue) && !glueOk(core)) return m;
@@ -218,7 +267,7 @@ export function applyLexicon(text: string, entries: readonly LexEntry[], keep?: 
     const suf = sufDash ?? sufGlue;
     // "Hot issue" → "Hot isyu" (huruf besar di awal ikut); singkatan kapital ("AI") tetap ejaan apa adanya
     const cap = !pre && core[0] !== core[0].toLowerCase() && core !== core.toUpperCase();
-    return `${b}${pre ?? ""}${cap ? to[0].toUpperCase() + to.slice(1) : to}${suf ?? ""}`;
+    return `${b}${m0}${pre ?? ""}${cap ? to[0].toUpperCase() + to.slice(1) : to}${suf ?? ""}${m1}`;
   });
 }
 
@@ -258,36 +307,102 @@ const TIME = new RegExp(`(^|[^${W}.,:])((?:pukul|jam)\\s+)?(\\d{1,2})([:.])(\\d{
 const NUM = new RegExp(`(^|[^${W}.,])(ke-)?(rp\\.?\\s?)?(\\d{1,3}(?:\\.\\d{3})+(?:,\\d+)?|\\d+(?:,\\d+)?)(\\s?%)?(?![${W}]|[.,]\\d)`, "giu");
 
 /** angka di teks ucapan → kata bahasa Indonesia; angka yang menempel huruf, kode, & format ragu-ragu dibiarkan */
-export function numbersToWords(text: string): string {
+export function numbersToWords(text: string, mark = false): string {
   if (!/\d/.test(text)) return text;
+  const [m0, m1] = mark ? [MK0, MK1] : ["", ""];
   const t = text.replace(TIME, (m: string, b: string, pk: string | undefined, h: string, sep: string, mm: string) => {
     const H = Number(h);
     const M = Number(mm);
     if ((sep === "." && !pk) || H > 24 || M > 59) return m;
-    return `${b}${pk ?? ""}${terbilang(H)}${M ? ` ${M < 10 ? "lewat " : ""}${terbilang(M)}` : ""}`;
+    return `${b}${pk ?? ""}${m0}${terbilang(H)}${M ? ` ${M < 10 ? "lewat " : ""}${terbilang(M)}` : ""}${m1}`;
   });
   return t.replace(NUM, (m: string, b: string, ord: string | undefined, rp: string | undefined, num: string, pct: string | undefined) => {
     const [int, dec] = num.split(",");
     const intDigits = int.replace(/\./g, "");
-    if (intDigits.length > 15 && !dec) return `${b}${ord ?? ""}${rp ?? ""}${digits(intDigits)}${pct ? " persen" : ""}`;
+    if (intDigits.length > 15 && !dec) return `${b}${m0}${ord ?? ""}${rp ?? ""}${digits(intDigits)}${pct ? " persen" : ""}${m1}`;
     let w = readInt(intDigits) + (dec ? ` koma ${digits(dec)}` : "");
     if (ord) w = `${ord.slice(0, 2)}${w}`;
     if (pct) w += " persen";
     if (rp) w += " rupiah";
-    return `${b}${w}`;
+    return `${b}${m0}${w}${m1}`;
   });
+}
+
+// ---------------------------------------------------------------------------------------------
+// bunyi luncur (khusus mesin bank / Chatterbox)
+// ---------------------------------------------------------------------------------------------
+/**
+ * Mesin bank (Chatterbox, dasar bahasa Inggris) sering melebur / memecah deret vokal Indonesia ("soal" → "su ul" / "soul").
+ * Orang Indonesia mengucapkannya dengan bunyi luncur, jadi ditulis eksplisit: u/o + vokal → w (soal → sowal, buat → buwat,
+ * uang → uwang), i + vokal → y (dia → diya, biar → biyar, Indonesia → Indonesiya).
+ * Tidak diubah: diftong ai / au / oi / ei (pantai, pulau, amboi, survei — termasuk u/i yang jadi bagian diftong), vokal kembar
+ * (maaf, koordinasi), "ou" & "qu", kata berangka, singkatan kapital (OJK), kata bergaya Inggris (th/sh/ch/ph/ck, akhiran -tion/-sion, x/q…).
+ */
+const VOW = "aeiou";
+const ENGLISH = /th|sh|ch|ph|ck|[ts]ions?$|[xq]|w[^aeiouy]|[^aeiou]y$/i;
+export function glideWord(w: string): string {
+  if (w.length < 2 || /\d/.test(w) || ENGLISH.test(w)) return w;
+  const letters = w.replace(/[^\p{L}]/gu, "");
+  if (letters.length >= 2 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return w;
+  // nama merek berhuruf besar di tengah (iOS, eSport, camelCase) dibiarkan
+  if (/\p{Ll}\p{Lu}/u.test(w)) return w;
+  const lo = w.toLowerCase();
+  let out = "";
+  for (let i = 0; i < w.length; i++) {
+    out += w[i];
+    const c = lo[i];
+    const n = lo[i + 1];
+    const p = lo[i - 1];
+    if (!n || !VOW.includes(n) || c === n) continue;
+    const up = w[i + 1] !== n;
+    if (c === "u" || c === "o") {
+      // diftong oi, "ou", u bagian diftong au ("kauan"), "qu"
+      if ((c === "o" && (n === "i" || n === "u")) || (c === "u" && (p === "a" || p === "q"))) continue;
+      out += up ? "W" : "w";
+    } else if (c === "i") {
+      // i bagian diftong ai / ei / oi ("pantaian")
+      if (p === "a" || p === "e" || p === "o") continue;
+      out += up ? "Y" : "y";
+    }
+  }
+  return out;
+}
+const WORD = new RegExp(`[${W}]+`, "gu");
+/** bunyi luncur untuk semua kata di luar bagian bertanda (hasil kamus / angka) & kata `skip` (ejaan khusus adegan) */
+function glideText(s: string, skip?: ReadonlySet<string>): string {
+  let out = "";
+  let depth = 0;
+  let buf = "";
+  const flush = () => {
+    out += depth ? buf : buf.replace(WORD, (m) => (skip?.has(m.toLowerCase()) ? m : glideWord(m)));
+    buf = "";
+  };
+  for (const ch of s) {
+    if (ch === MK0 || ch === MK1) {
+      flush();
+      depth = Math.max(0, depth + (ch === MK0 ? 1 : -1));
+      continue;
+    }
+    buf += ch;
+  }
+  flush();
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
 // teks ucapan akhir
 // ---------------------------------------------------------------------------------------------
-const HYPHEN = new RegExp(`(\\p{L})-(?=\\p{L})`, "gu");
+// penanda bagian kamus / angka (mesin bank) boleh menempel di kiri / kanan strip
+const HYPHEN = new RegExp(`(\\p{L}[\\uE000\\uE001]*)-(?=[\\uE000\\uE001]*\\p{L})`, "gu");
+/** mesin suara tujuan: "bank" = Chatterbox di laptop (pakai bunyi luncur); selain itu (Edge / premium) teks ucapan biasa */
+export type SpeechEngine = "bank" | "edge" | "elevenlabs";
 
 /**
  * Teks yang dibaca mesin suara untuk satu kalimat VO: `spell` (kalau ada) atau `text`, lalu kamus ejaan (bawaan + `lexicon`
  * proyek), angka → kata, dan strip di antara huruf → spasi. Kata yang sengaja dieja ulang di `spell` tidak disentuh kamus.
+ * `engine` "bank" → ditambah bunyi luncur (glideWord) di kata biasa; hasil kamus, angka & ejaan khusus adegan tidak disentuh.
  */
-export function speakText(text: string, spell?: string | null, lexicon?: readonly LexEntry[] | null): string {
+export function speakText(text: string, spell?: string | null, lexicon?: readonly LexEntry[] | null, engine?: SpeechEngine): string {
   const t = tidy(text);
   const sp = tidy(spell);
   const base = sp || t;
@@ -297,9 +412,11 @@ export function speakText(text: string, spell?: string | null, lexicon?: readonl
     const inText = new Set(tokens(t));
     keep = new Set(tokens(sp).filter((x) => !inText.has(x)));
   }
-  let s = applyLexicon(base, lexiconOf(lexicon), keep);
-  s = numbersToWords(s);
+  const bank = engine === "bank";
+  let s = applyLexicon(base, lexiconOf(lexicon), keep, bank);
+  s = numbersToWords(s, bank);
   s = s.replace(HYPHEN, "$1 ");
+  if (bank) s = glideText(s, keep).replace(MKS, "");
   return tidy(s);
 }
 
@@ -307,11 +424,12 @@ type VoLike = { text: string; spell?: string | null } | null | undefined;
 
 /**
  * Isi yang dikirim ke mesin suara untuk VO adegan: `text` (subtitle, apa adanya) + `spell` = teks ucapan akhir
- * (null kalau sama dengan teks). Dipakai Edge (/api/studio/tts) & job bank suara (laptop), juga untuk cek naskah berubah.
+ * (null kalau sama dengan teks). Dipakai Edge (/api/studio/tts) & job bank suara (laptop, `engine` "bank" = + bunyi luncur),
+ * juga untuk cek naskah berubah.
  */
-export function voSpeech(vo: VoLike, lexicon?: readonly LexEntry[] | null): { text: string; spell: string | null } | null {
+export function voSpeech(vo: VoLike, lexicon?: readonly LexEntry[] | null, engine?: SpeechEngine): { text: string; spell: string | null } | null {
   if (!vo?.text) return null;
-  const say = speakText(vo.text, vo.spell, lexicon);
+  const say = speakText(vo.text, vo.spell, lexicon, engine);
   return { text: vo.text, spell: say && say !== vo.text ? say : null };
 }
 
