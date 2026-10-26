@@ -3,8 +3,11 @@ Job kind 'tts': VO dari bank suara.
   per baris → pecah kalimat → tiap kalimat dibuat 2 versi (takes) → pilih yang paling jelas (cek ASR: WER/CER + cek durasi/hening)
   → sambung dengan jeda alami (0,18–0,4 dtk; lebih panjang setelah "…") → post-processing ffmpeg (-16 LUFS / TP -1,5)
   → timestamp per kata (faster-whisper) dipetakan ke kata TEKS ASLI (kolom spell hanya untuk mesin suara)
-  → baris adegan teaser punya `max` (jendela ucapan, detik): ucapan lebih panjang → dipercepat ffmpeg atempo (nada tetap,
-    maks 1,3×), waktu kata & durasi diskalakan ulang (fit_to_max)
+  → baris adegan teaser punya `max` (jendela ucapan, detik): ucapan lebih panjang → (1) jeda di DALAM baris dipadatkan dulu
+    (hening antar kalimat / sesudah "…" disisakan min 0,12 dtk, suara tidak berubah), (2) kalau masih kepanjangan baru dipercepat
+    ffmpeg atempo (nada tetap, maks 1,3×); waktu kata & durasi ikut disesuaikan (fit_to_max)
+  → baris punya `speed` (kecepatan diatur sendiri di website, mis. 0,85–1,3×) → atempo persis faktor itu, `max` diabaikan
+    (apply_speed); job lama tanpa `speed` / `max` hasilnya sama persis seperti dulu
   → upload vo/<job>/<baris>.mp3, vo/<job>/full.mp3 (tiap baris di detik `start`), vo/<job>/full.srt
 Cache: hasil job selesai dengan cache_key sama (ikut `max`) dipakai ulang; suara mentah per baris juga di-cache di laptop
 (data/cache/tts, tanpa `max` — ganti jendela cukup percepat ulang, tidak perlu bikin suara lagi).
@@ -34,6 +37,11 @@ CACHE_V = "tts-v1"
 MAX_SPEED = 1.30
 # ekor napas sesudah kata terakhir yang masih dihitung ucapan — sama dengan VO_SPEECH_PAD di lib/studio/timeline.ts
 SPEECH_PAD = 0.12
+# jeda di dalam baris yang boleh dipadatkan sebelum mempercepat suara: hening ≥ 0,2 dtk, disisakan min 0,12 dtk
+PAUSE_MIN = 0.12
+PAUSE_LEN = 0.20
+# kecepatan yang boleh diminta website per baris (`speed`, × normal) — website memakai 0,85–1,3
+SPEED_MIN, SPEED_MAX = 0.7, 1.5
 
 
 # ---------------------------------------------------------------- input
@@ -73,7 +81,10 @@ def parse_lines(raw) -> list[dict]:
         # `max` (opsional) = jendela ucapan maksimal (detik) untuk adegan teaser; kosong / ≤ 0 = tidak dibatasi (job lama)
         mx = x.get("max")
         mx = round(_num(mx, 0, 0, 3600), 3) if mx is not None else 0
-        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None, "max": mx if mx > 0 else None})
+        # `speed` (opsional) = kecepatan diatur sendiri (× normal); kosong / bukan angka = otomatis (job lama)
+        sp = x.get("speed")
+        sp = round(_num(sp, 0, SPEED_MIN, SPEED_MAX), 3) if sp not in (None, "") and _num(sp, 0, 0, 10) > 0 else None
+        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None, "max": mx if mx > 0 else None, "speed": sp})
     return out
 
 
@@ -112,8 +123,19 @@ def line_key(engine: str, vhash: str, ln: dict, st: dict) -> str:
 
 
 def job_key(engine: str, vhash: str, lines: list[dict], st: dict) -> str:
-    # `max` hanya ikut kalau ada → kunci job lama (tanpa max) tetap sama
-    return _sha([CACHE_V, engine, vhash, st, [[x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] + ([x["max"]] if x.get("max") else []) for x in lines]])
+    # `max` & `speed` hanya ikut kalau ada → kunci job lama (tanpa keduanya) tetap sama
+    return _sha(
+        [
+            CACHE_V,
+            engine,
+            vhash,
+            st,
+            [
+                [x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] + ([x["max"]] if x.get("max") else []) + ([{"speed": x["speed"]}] if x.get("speed") else [])
+                for x in lines
+            ],
+        ]
+    )
 
 
 class LineCache:
@@ -255,17 +277,116 @@ def speech_end(meta: dict) -> float:
     return min(dur, last + SPEECH_PAD) if last > 0 else dur
 
 
+def find_pauses(y: np.ndarray, sr: int) -> list[tuple[float, float]]:
+    """
+    Hening di DALAM ucapan (antara suara pertama & terakhir, bukan hening di ujung): [(mulai, akhir)] detik, panjang ≥ PAUSE_LEN.
+    Hening = jendela 30 ms yang lebih pelan dari puncak − 40 dB (min -55 dBFS), sama dengan _longest_gap. Napas / desah yang
+    terdengar tidak dihitung hening (tidak dipotong).
+    """
+    fd = meter.frame_db(y, sr, 0.03, 0.01)
+    if fd.size < 3:
+        return []
+    sp = fd > max(float(fd.max()) - 40, -55)
+    idx = np.where(sp)[0]
+    if len(idx) < 2:
+        return []
+    hop, win = 0.01, 0.03
+    out: list[tuple[float, float]] = []
+    run = None
+    for j in range(int(idx[0]), int(idx[-1]) + 1):
+        if not sp[j]:
+            run = j if run is None else run
+        elif run is not None:
+            a, b = run * hop, (j - 1) * hop + win  # gabungan jendela yang hening
+            if b - a >= PAUSE_LEN - 1e-9:
+                out.append((round(a, 4), round(b, 4)))
+            run = None
+    return out
+
+
+def _remap(t: float, cuts: list[tuple[float, float]]) -> float:
+    """detik di audio lama → detik di audio yang potongan `cuts` [(mulai, akhir)]-nya sudah dibuang"""
+    gone = 0.0
+    for a, b in cuts:
+        if t >= b:
+            gone += b - a
+        elif t > a:
+            gone += t - a
+    return t - gone
+
+
+def squeeze_pauses(wav: Path, meta: dict, need: float, work: Path, lid: str) -> tuple[Path, dict]:
+    """
+    Padatkan jeda di dalam baris (hening antar kalimat dari text.pauses, mis. "…" 0,45–0,62 dtk) sebanyak `need` detik — langkah
+    termurah sebelum suara dipercepat: suara tidak diubah sama sekali, hanya hening di tengah tiap jeda yang dibuang (sebanding
+    panjang jedanya), tiap jeda disisakan min PAUSE_MIN dtk. Waktu kata digeser ikut. Tidak ada jeda yang bisa dipadatkan → apa adanya.
+    Balikan meta tambahan: squeeze (detik hening yang dibuang).
+    """
+    if need <= 1e-3:
+        return wav, meta
+    y, sr = ff.read_wav(wav)
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    pauses = find_pauses(y, sr)
+    room = [(a, b, (b - a) - PAUSE_MIN) for a, b in pauses if (b - a) - PAUSE_MIN > 0.005]
+    total = sum(r for _, _, r in room)
+    if total <= 0.005:
+        return wav, meta
+    take = min(need, total)
+    cuts: list[tuple[float, float]] = []
+    for a, b, r in room:
+        c = r * take / total
+        mid = (a + b) / 2
+        cuts.append((mid - c / 2, mid + c / 2))
+    keep, pos = [], 0
+    for a, b in cuts:
+        i, j = int(round(a * sr)), int(round(b * sr))
+        keep.append(y[pos:i])
+        pos = max(pos, j)
+    keep.append(y[pos:])
+    y2 = np.concatenate(keep).astype(np.float32)
+    dst = ff.write_wav(work / f"{lid}-sq.wav", y2, sr)
+    dur = len(y2) / sr
+    words = [{**w, "s": round(_remap(float(w.get("s") or 0), cuts), 3), "e": round(_remap(float(w.get("e") or 0), cuts), 3)} for w in meta.get("words") or [] if isinstance(w, dict)]
+    gone = round(sum(b - a for a, b in cuts), 3)
+    log.info("Baris %s: %d jeda dipadatkan, %.2f dtk hening dibuang", lid, len(cuts), gone)
+    return dst, {**meta, "dur": round(dur, 3), "words": words, "squeeze": round(float(meta.get("squeeze") or 0) + gone, 3)}
+
+
+def _stretch(wav: Path, meta: dict, f: float, work: Path, lid: str, tag: str) -> tuple[Path, dict] | None:
+    """time-stretch ffmpeg atempo faktor `f` (nada tetap), waktu kata & dur diskalakan, loudness disamakan lagi; gagal → None"""
+    y = ff.decode(wav, post.SR, mono=True, af=f"atempo={f:.5f}")
+    if y.size < int(0.05 * post.SR):
+        log.warning("Baris %s: hasil ubah kecepatan kosong — dipakai versi asli.", lid)
+        return None
+    y = post.fade(y, post.SR, 0.003, 0.02)
+    y, _ = meter.normalize(y, post.SR, post.VO_LUFS, post.VO_TP)
+    dst = ff.write_wav(work / f"{lid}-{tag}.wav", y, post.SR)
+    old = float(meta.get("dur") or 0)
+    new = len(y) / post.SR
+    k = new / old if old > 0 else 1 / f
+    words = [{**w, "s": round(float(w.get("s") or 0) * k, 3), "e": round(float(w.get("e") or 0) * k, 3)} for w in meta.get("words") or [] if isinstance(w, dict)]
+    return dst, {**meta, "dur": round(new, 3), "words": words}
+
+
 def fit_to_max(wav: Path, meta: dict, mx: float | None, work: Path, lid: str) -> tuple[Path, dict]:
     """
-    Ucapan lebih panjang dari `mx` detik → time-stretch ffmpeg atempo (tempo naik, nada tetap), faktor ≈ min(1,3, ucapan/mx).
-    Waktu kata & dur diskalakan ulang, loudness disamakan lagi (-16 LUFS / TP -1,5). Tanpa `mx` / sudah muat → apa adanya.
-    Balikan meta tambahan: speed (persen dipercepat), fit (muat atau belum walau sudah maks).
+    Ucapan lebih panjang dari `mx` detik → (1) jeda di dalam baris dipadatkan dulu (squeeze_pauses, min 0,12 dtk per jeda);
+    (2) masih kepanjangan → time-stretch ffmpeg atempo (tempo naik, nada tetap), faktor ≈ min(1,3, ucapan/mx).
+    Waktu kata & dur disesuaikan, loudness disamakan lagi (-16 LUFS / TP -1,5). Tanpa `mx` / sudah muat → apa adanya.
+    Balikan meta tambahan: squeeze (detik jeda dibuang), speed (persen dipercepat), fit (muat atau belum walau sudah maks).
     """
     if not mx or mx <= 0:
         return wav, meta
     sp = speech_end(meta)
     if sp <= mx + 1e-3:
         return wav, meta
+    sp0 = sp
+    wav, meta = squeeze_pauses(wav, meta, sp - mx, work, lid)
+    sp = speech_end(meta)
+    if sp <= mx + 1e-3:
+        log.info("Baris %s: ucapan %.2f dtk > jendela %.2f dtk → cukup jeda dipadatkan %.2f dtk (muat)", lid, sp0, mx, meta.get("squeeze") or 0)
+        return wav, {**meta, "max": mx, "fit": True}
     # ucapan baru = min(dur/f, kata_terakhir/f + 0,12) — ekor 0,12 dtk tidak ikut terskala, jadi faktor dari kata terakhir
     # dihitung terhadap (mx − 0,12); pilih faktor terkecil yang cukup
     dur = float(meta.get("dur") or 0)
@@ -275,22 +396,31 @@ def fit_to_max(wav: Path, meta: dict, mx: float | None, work: Path, lid: str) ->
         need = min(need, last / (mx - SPEECH_PAD))
     f = min(MAX_SPEED, need)
     if f < 1.005:  # selisih < 0,5% — tidak terdengar, tidak perlu diproses
+        return wav, ({**meta, "max": mx, "fit": sp <= mx + 0.01} if meta.get("squeeze") else meta)
+    got = _stretch(wav, meta, f, work, lid, "fit")
+    if not got:
         return wav, meta
-    y = ff.decode(wav, post.SR, mono=True, af=f"atempo={f:.5f}")
-    if y.size < int(0.05 * post.SR):
-        log.warning("Baris %s: hasil percepatan kosong — dipakai versi asli.", lid)
-        return wav, meta
-    y = post.fade(y, post.SR, 0.003, 0.02)
-    y, _ = meter.normalize(y, post.SR, post.VO_LUFS, post.VO_TP)
-    dst = ff.write_wav(work / f"{lid}-fit.wav", y, post.SR)
-    old = float(meta.get("dur") or 0)
-    new = len(y) / post.SR
-    k = new / old if old > 0 else 1 / f
-    words = [{**w, "s": round(float(w.get("s") or 0) * k, 3), "e": round(float(w.get("e") or 0) * k, 3)} for w in meta.get("words") or [] if isinstance(w, dict)]
-    out = {**meta, "dur": round(new, 3), "words": words, "speed": int(round((f - 1) * 100)), "max": mx}
+    dst, out = got
+    out = {**out, "speed": int(round((f - 1) * 100)), "max": mx}
     out["fit"] = speech_end(out) <= mx + 0.01
-    log.info("Baris %s: ucapan %.2f dtk > jendela %.2f dtk → dipercepat %.0f%% (%s)", lid, sp, mx, (f - 1) * 100, "muat" if out["fit"] else "masih belum muat")
+    log.info("Baris %s: ucapan %.2f dtk > jendela %.2f dtk → jeda dipadatkan %.2f dtk, dipercepat %.0f%% (%s)", lid, sp0, mx, out.get("squeeze") or 0, (f - 1) * 100, "muat" if out["fit"] else "masih belum muat")
     return dst, out
+
+
+def apply_speed(wav: Path, meta: dict, f: float, work: Path, lid: str) -> tuple[Path, dict]:
+    """
+    Kecepatan diatur sendiri di website (job baris `speed`, × normal): atempo persis faktor itu (nada tetap), tanpa memadatkan jeda
+    dan tanpa melihat `max`. Balikan meta tambahan: tempo (faktor), speed (persen, negatif = diperlambat).
+    """
+    f = max(SPEED_MIN, min(SPEED_MAX, float(f)))
+    if abs(f - 1) < 0.005:
+        return wav, {**meta, "tempo": 1.0}
+    got = _stretch(wav, meta, f, work, lid, "tempo")
+    if not got:
+        return wav, meta
+    dst, out = got
+    log.info("Baris %s: kecepatan diatur %.2f× → %.2f dtk", lid, f, out["dur"])
+    return dst, {**out, "tempo": round(f, 3), "speed": int(round((f - 1) * 100))}
 
 
 # ---------------------------------------------------------------- job
@@ -359,8 +489,12 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
                     engine = rt.engines.get(name)
                 wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"))
                 wav = cache.put(k, wav, meta)
-            # adegan teaser: ucapan lebih panjang dari jendelanya → dipercepat (maks 1,3×) — cache baris tetap suara mentah
-            wav, meta = fit_to_max(wav, meta, ln.get("max"), work, ln["id"])
+            # kecepatan diatur sendiri → atempo persis; selain itu adegan teaser: ucapan lebih panjang dari jendelanya → jeda
+            # dipadatkan lalu dipercepat (maks 1,3×) — cache baris tetap suara mentah
+            if ln.get("speed"):
+                wav, meta = apply_speed(wav, meta, ln["speed"], work, ln["id"])
+            else:
+                wav, meta = fit_to_max(wav, meta, ln.get("max"), work, ln["id"])
             mp3 = ff.encode_mp3(wav, work / f"{ln['id']}.mp3", 48000, "160k", mono=True)
             path = rt.supa.upload(f"vo/{ctx.id}/{ln['id']}.mp3", mp3, "audio/mpeg")
             start = ln["start"] if ln["start"] is not None else t_next
@@ -371,6 +505,10 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             row = {"id": ln["id"], "scene_id": ln["scene_id"], "path": path, "dur": meta["dur"], "words": meta["words"], "start": start}
             if meta.get("speed"):
                 row["speed"] = meta["speed"]
+            if meta.get("tempo") is not None:
+                row["tempo"] = meta["tempo"]
+            if meta.get("squeeze"):
+                row["squeeze"] = meta["squeeze"]
             out_lines.append(row)
         ctx.progress(0.92, "Menyusun VO lengkap…", force=True)
         full = mix.place_clips(clips, 48000, tail=0.5, ceiling_db=-1.0)

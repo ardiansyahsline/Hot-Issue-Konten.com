@@ -9,7 +9,7 @@ import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { teaserTimelineRaw } from "@/lib/studio/teaser";
 import { keepTeaserVisual, retimesTeaser, snapAroundTeaser } from "@/lib/studio/teaserLock";
-import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
+import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, voStartOf, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
@@ -55,13 +55,16 @@ type Job = { id: string | null; tl: Timeline };
  * Studio Pro: proyek + chat Harley + kartu rencana (kiri) dan preview, timeline, suara, export (kanan, sticky).
  * Timeline disimpan otomatis ke studio_projects.timeline (jeda 1,5 dtk) lewat Supabase client (RLS).
  */
-/** file VO utuh (untuk unduh MP3) basi kalau posisi adegan yang bersuara bergeser -> dibuang, unduh VO lalu dirender ulang */
+/**
+ * file VO utuh (untuk unduh MP3) basi kalau posisi VO bergeser (adegan bergeser, atau blok VO digeser di timeline / disusun otomatis)
+ * -> dibuang, unduh VO lalu dirender ulang
+ */
 function dropStaleFullVo(prev: Timeline | null, next: Timeline): Timeline {
   const vo = next.vo;
   if (!vo?.full || !prev?.vo || prev.vo.full !== vo.full) return next; // file baru dari generate -> biarkan
   const at = (tl: Timeline) => {
     const st = sceneStartSecs(tl);
-    return new Map(tl.scenes.map((s, i) => [s.id, st[i]]));
+    return new Map(tl.scenes.map((s, i) => [s.id, st[i] + voStartOf(s, tl.vo?.lines.find((l) => l.sceneId === s.id))]));
   };
   const a = at(prev);
   const b = at(next);
@@ -220,6 +223,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
   /**
    * perubahan dari editor rencana & timeline: visual + durasi adegan premium teaser dikunci (VO panjang tetap lewat `change`).
+   * Detik mulai VO yang digeser user & kunci durasi yang dibuka user diterima (keepTeaserVisual mode user).
    * Tempel ke ketukan versi lama (🥁 di kartu rencana: snapScenesToBeats) ikut menggeser adegan teaser → diulang dengan
    * snapAroundTeaser dari durasi semula, supaya adegan biasa sesudah adegan teaser benar-benar jatuh di ketukan.
    */
@@ -230,7 +234,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         const base = { ...next, scenes: prev.scenes };
         return change(snapAroundTeaser(base, musicBeats(base, totalSec(base) + 1)));
       }
-      change(keepTeaserVisual(prev, next));
+      change(keepTeaserVisual(prev, next, { user: true }));
     },
     [change],
   );

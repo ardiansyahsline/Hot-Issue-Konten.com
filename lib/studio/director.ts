@@ -633,6 +633,15 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     if (old.bg.media && !s.bg.media && s.bg.kind === old.bg.kind && !has(rs.bg, "media")) scene = { ...scene, bg: { ...scene.bg, media: old.bg.media } };
     // adegan biasa tidak boleh diubah jadi adegan premium teaser (animasinya buatan tangan untuk isi teaser, bukan isi adegan ini)
     if (old.layout.kind !== "teaser" && scene.layout.kind === "teaser") scene = { ...scene, layout: old.layout };
+    // detik mulai VO (digeser user di timeline / disusun otomatis) & kecepatan VO yang diatur sendiri tidak hilang kalau AI menulis
+    // ulang objek vo tanpa kolom itu
+    const rv = rs.vo && typeof rs.vo === "object" ? rs.vo : null;
+    if (scene.vo && old.vo) {
+      const at = !has(rv, "at") && old.vo.at !== undefined && scene.vo.at === undefined ? old.vo.at : undefined;
+      const tempo = !has(rv, "tempo") && old.vo.tempo !== undefined && scene.vo.tempo === undefined ? old.vo.tempo : undefined;
+      if (at !== undefined || tempo !== undefined)
+        scene = { ...scene, vo: { ...scene.vo, ...(at !== undefined ? { at: Math.min(at, scene.dur) } : {}), ...(tempo !== undefined ? { tempo } : {}) } };
+    }
     return scene;
   });
   // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
