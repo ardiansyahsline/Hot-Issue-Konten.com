@@ -826,21 +826,29 @@ export const VO_MIN_IN_SCENE = 0.3;
 /** satu VO yang digeser arrangeVo: indeks adegan, detik mulai lama & baru (dari awal adegan) */
 export type VoMove = { scene: number; from: number; to: number };
 
-/** isotonic regression (bobot sama, pool-adjacent-violators): urutan naik terdekat (kuadrat terkecil) dari `q` */
-function isotonic(q: number[]): number[] {
-  const blocks: { sum: number; n: number }[] = [];
-  for (const v of q) {
-    blocks.push({ sum: v, n: 1 });
+/**
+ * isotonic regression berbatas (pool-adjacent-violators untuk kerugian kuadrat + batas lo..hi tiap titik): urutan naik terdekat
+ * (jumlah kuadrat terkecil) dari `q` dengan lo[k] ≤ hasil[k] ≤ hi[k]. Nilai tiap blok = rata-rata blok yang dijepit ke batas blok
+ * (maks lo, min hi) — PAV tetap optimal untuk kerugian cembung terpisah seperti ini. Batas harus bisa dipenuhi (lihat arrangeVo).
+ */
+function isotonicBounded(q: number[], lo: number[], hi: number[]): number[] {
+  type B = { sum: number; n: number; lo: number; hi: number };
+  const val = (b: B) => Math.min(Math.max(b.sum / b.n, b.lo), Math.max(b.lo, b.hi));
+  const blocks: B[] = [];
+  q.forEach((v, k) => {
+    blocks.push({ sum: v, n: 1, lo: lo[k], hi: hi[k] });
     while (blocks.length > 1) {
       const b = blocks[blocks.length - 1];
       const a = blocks[blocks.length - 2];
-      if (a.sum / a.n <= b.sum / b.n) break;
+      if (val(a) <= val(b) + 1e-12) break;
       a.sum += b.sum;
       a.n += b.n;
+      a.lo = Math.max(a.lo, b.lo);
+      a.hi = Math.min(a.hi, b.hi);
       blocks.pop();
     }
-  }
-  return blocks.flatMap((b) => new Array<number>(b.n).fill(b.sum / b.n));
+  });
+  return blocks.flatMap((b) => new Array<number>(b.n).fill(val(b)));
 }
 
 /**
@@ -881,15 +889,19 @@ export function arrangeVo<T extends Pick<Timeline, "scenes" | "fps" | "vo">>(tl:
     if (want > sp[k].hi + 1e-9) d[k - 1] = Math.max(0, sp[k].hi - early);
     early = Math.min(sp[k].hi, Math.max(sp[k].lo, early + d[k - 1]));
   }
-  // b_k = a_k − C_k (C = jumlah jarak sebelumnya) → syarat tidak numpuk jadi b naik; rentang mulai jadi batas b yang dibuat naik
-  // (maks berjalan dari kiri / min berjalan dari kanan) → solusi = isotonic regression lalu dijepit ke batas (optimal untuk batas naik)
+  // b_k = a_k − C_k (C = jumlah jarak sebelumnya) → syarat tidak numpuk jadi b naik; rentang mulai jadi batas b (dibuat naik:
+  // maks berjalan dari kiri / min berjalan dari kanan — himpunan yang sama) → isotonic regression berbatas (geseran kuadrat terkecil)
   const C: number[] = [0];
   for (let k = 1; k < n; k++) C.push(C[k - 1] + d[k - 1]);
   const lo = sp.map((x, k) => x.lo - C[k]);
   const hi = sp.map((x, k) => x.hi - C[k]);
   for (let k = 1; k < n; k++) lo[k] = Math.max(lo[k], lo[k - 1]);
   for (let k = n - 2; k >= 0; k--) hi[k] = Math.min(hi[k], hi[k + 1]);
-  const y = isotonic(sp.map((x, k) => x.a0 - C[k]));
+  const y = isotonicBounded(
+    sp.map((x, k) => x.a0 - C[k]),
+    lo.map((v, k) => Math.min(v, hi[k])),
+    hi,
+  );
   const moved: VoMove[] = [];
   const at = new Map<string, number>();
   sp.forEach((x, k) => {
