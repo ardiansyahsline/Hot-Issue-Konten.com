@@ -35,7 +35,7 @@ const CUTS: Cut[] = [
   // 0,0 bass-drop-jumpstart → kartu #1 🔥 HOT "Video ditolak padahal sesuai brief" (dashboard)
   { shot: "dashboard", from: 0, at: 3.5, enter: "drop", z: 1.3, hx: 436, hy: 1000, ty: 0.47, drift: 0.6, win: [0.13, 9] },
   // 0,3 (setengah ketukan) → pill "Disetujui" + centang hijau (video review), dropdown sudah tertutup
-  { shot: "videoReview", from: BEAT * 0.5, at: 3.8, enter: "whip", z: 1.25, hx: 560, hy: 666, ty: 0.54, drift: 0.3, win: [-9, 1.03] },
+  { shot: "videoReview", from: BEAT * 0.5, at: 3.8, enter: "whip", z: 1.25, hx: 500, hy: 666, ty: 0.54, drift: 0.3, win: [-9, 1.03] },
   // 0,6 transisi-shaker-snap → lampiran screenshot clipper (identitas diburamkan) di chat tim
   { shot: "chat", from: BEAT, at: 5.5, enter: "shake", z: 1.2, hx: 465, hy: 850, ty: 0.52, drift: 0.4 },
   // 1,2 transisi-snap-spin → AI: chart BTC/USDT 4H dengan Resistance / Support
