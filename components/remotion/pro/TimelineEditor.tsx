@@ -322,15 +322,12 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
 
   // ---------------- blok VO: geser mulai ----------------
   const voMax = (s: Scene) => Math.max(0, r3(s.dur - VO_END_ROOM));
-  /** catatan setelah VO digeser: menabrak / terpotong / aman */
-  const voMoveNote = (next: Timeline, id: string): string => {
+  /** catatan setelah VO digeser (menabrak / terpotong sudah tampil di peringatan merah & bar VO → tanpa catatan dobel) */
+  const voMoveNote = (next: Timeline, id: string): string | undefined => {
     const i = next.scenes.findIndex((s) => s.id === id);
     const s = next.scenes[i];
     const line = next.vo?.lines.find((l) => l.sceneId === id);
-    const hit = voClashes(next).find((c) => c.scene === i || c.next === i);
-    if (hit) return `⛔ VO ${next.scenes[hit.scene].name} menabrak VO ${next.scenes[hit.next].name} (${fmt(Math.max(0.01, hit.sec), 2)} dtk) — geser lagi atau 🪄 Susun otomatis`;
-    const cut = voCutoffs(next).find((c) => c.scene === i);
-    if (cut) return `⛔ Ujung VO ${s.name} terpotong di akhir video (${fmt(cut.sec, 2)} dtk) — geser lebih awal`;
+    if (voClashes(next).some((c) => c.scene === i || c.next === i) || voCutoffs(next).some((c) => c.scene === i)) return undefined;
     return `🎙️ VO ${s.name} mulai ${fmt(voStartOf(s, line), 2)} dtk dari awal adegan`;
   };
   const setVoAt = (id: string, at: number) => {
@@ -340,7 +337,9 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
     const line = tlRef.current.vo?.lines.find((l) => l.sceneId === id);
     if (Math.abs(a - voStartOf(s, line)) < 5e-4) return;
     const next = withVoAt(tlRef.current, id, a);
-    commit(next, voMoveNote(next, id));
+    const msg = voMoveNote(next, id);
+    if (!msg) setNote(null);
+    commit(next, msg);
   };
   const onVoDown = (e: PointerEvent<HTMLDivElement>, s: Scene, l: VoLine) => {
     if (e.button !== undefined && e.button > 0) return;
@@ -571,11 +570,11 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
           )}
         </div>
         {hit ? (
-          <p className="text-[11.5px] text-red-400" role="alert">
-            ⛔ Menabrak: {scenes[hit.scene]?.name} → {scenes[hit.next]?.name} ({fmt(Math.max(0.01, hit.sec), 2)} dtk). Geser mulainya, pilih kecepatan lebih cepat, atau 🪄 Susun otomatis.
+          <p className="text-[11.5px] text-red-400" data-vo-bar-clash>
+            ⛔ Menabrak VO {hit.scene === i ? `${scenes[hit.next]?.name} sesudahnya` : `${scenes[hit.scene]?.name} sebelumnya`} — geser mulainya, pilih kecepatan lebih cepat, atau 🪄 Susun otomatis.
           </p>
         ) : cut ? (
-          <p className="text-[11.5px] text-red-400" role="alert">
+          <p className="text-[11.5px] text-red-400" data-vo-bar-clash>
             ⛔ Ujungnya terpotong di akhir video ({fmt(cut.sec, 2)} dtk) — geser lebih awal atau pilih lebih cepat.
           </p>
         ) : (
