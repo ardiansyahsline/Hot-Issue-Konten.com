@@ -43,7 +43,7 @@ import {
 } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { teaserVoAt } from "@/lib/studio/teaserLock";
-import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
+import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, legacySayKey, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
 import { isTeaserScene } from "./teaserLock";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
@@ -198,7 +198,7 @@ export function movedText(tl: Pick<Timeline, "scenes">, moved: VoMove[]): string
 export function fitVo(
   tl: Timeline,
   vo: VoTrack,
-): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[]; moved: VoMove[] } {
+): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[]; moved: VoMove[]; before: number; after: number } {
   const fps = tl.fps || 30;
   let total = tl.scenes.reduce((a, s) => a + s.dur, 0);
   const grown: string[] = [];
@@ -229,7 +229,7 @@ export function fitVo(
   // adegan bergeser -> VO lengkap (.mp3) dari worker tidak sinkron lagi
   const grownTl: Timeline = { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo };
   // langkah terakhir anti-numpuk: susun mulai VO (setelah jeda dipadatkan & dipercepat maks 30% di mesin suara)
-  const { tl: out, moved } = arrangeVo(grownTl);
+  const { tl: out, moved, before, after } = arrangeVo(grownTl);
   // catatan lewat / mepet dihitung ulang dari posisi baru
   const over2 = over.length || tight.length ? out.scenes.filter((s) => isTeaserScene(s) && vo.lines.some((l) => l.sceneId === s.id)) : [];
   const fit2 = new Map(over2.map((s) => [s.name, teaserVoFit(s, out.vo!.lines.find((l) => l.sceneId === s.id)!)] as const));
@@ -242,6 +242,8 @@ export function fitVo(
     clash: voClashList(out),
     cut: voCutList(out),
     moved,
+    before,
+    after,
   };
 }
 
@@ -277,7 +279,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   // adegan teaser yang VO-nya lewat / mepet batas adegan (tidak diperpanjang — durasi dikunci di ketukan) & VO yang menabrak
   // VO adegan berikutnya -> peringatan tetap terlihat
   // VO yang terpotong di akhir video -> peringatan merah tersendiri
-  const { overNow, tightNow, clashNow, clashHint, cutNow, cutHint, fast, arranged, tempos } = useMemo(() => {
+  const { overNow, tightNow, clashNow, clashSec, clashHint, cutNow, cutHint, fast, arranged, tempos } = useMemo(() => {
     const clashNow = voClashList(tl);
     const cutNow = voCutList(tl);
     const overNext: string[] = [];
@@ -297,6 +299,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       overNow: overText(overNext, overTail),
       tightNow,
       clashNow: clashNow.map((c) => c.label),
+      // total detik dua suara bersamaan (semua pasangan)
+      clashSec: voClashes(tl).reduce((a, c) => a + c.sec, 0),
       clashHint: clashNow.length ? clashTip(tl, clashNow.map((c) => c.id)) : "",
       cutNow: cutNow.map((c) => c.label),
       cutHint: cutNow.length ? clashTip(tl, cutNow.map((c) => c.id), "terpotong") : "",
@@ -315,15 +319,20 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const r = arrangeVo(tlRef.current);
     if (!r.moved.length) return;
     onChange(r.tl);
-    const left = voClashList(r.tl).length + voCutList(r.tl).length;
-    setNote(`🪄 Disusun otomatis: ${movedText(r.tl, r.moved)}.${left ? " Masih ada yang belum muat — lihat peringatan merah." : " Sekarang tidak ada suara yang numpuk."}`);
+    setNote(
+      `🪄 Disusun otomatis: ${movedText(r.tl, r.moved)}.${r.after > 1e-3 ? ` Suara numpuk berkurang ${fmt(r.before)} → ${fmt(r.after)} dtk — sisanya lihat peringatan merah.` : " Sekarang tidak ada suara yang numpuk."}`,
+    );
   };
-  // VO yang dibuat dari naskah / ejaan lama: kunci teks ucapan saat dibuat (VoLine.say) beda dengan naskah + kamus ejaan sekarang
+  // VO yang dibuat dari naskah / ejaan lama: kunci teks ucapan saat dibuat (VoLine.say) beda dengan naskah + kamus ejaan sekarang.
+  // Baris tanpa `say` (dibuat sebelum ada kamus ejaan): mesin dulu menerima ejaan / teks apa adanya → dianggap lama kalau teks ucapan
+  // sekarang berbeda (kamus / angka / ejaan teaser baru mengubahnya; ejaan teaser yang di-upgrade diberi kunci lama saat dimuat)
   const oldSay = useMemo(
     () =>
       (tl.vo?.lines ?? []).flatMap((l) => {
         const s = tl.scenes.find((x) => x.id === l.sceneId);
-        return l.say && s?.vo?.text && l.say !== voSayKey(s.vo, tl.voice.lexicon) ? [s.name] : [];
+        if (!l.src || !s?.vo?.text) return [];
+        const made = l.say || legacySayKey(s.vo.text, s.vo.spell);
+        return made !== voSayKey(s.vo, tl.voice.lexicon) ? [s.name] : [];
       }),
     [tl],
   );
@@ -356,7 +365,12 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const msgs = extra.filter(Boolean);
     if (r.grown.length) msgs.push(`Adegan ${names(r.grown)} diperpanjang otomatis supaya VO-nya muat.`);
     if (r.tooLong.length) msgs.push(`VO adegan ${names(r.tooLong)} masih kepanjangan — pendekkan naskahnya.`);
-    if (r.moved.length) msgs.push(`🪄 Disusun otomatis supaya suara tidak numpuk: ${movedText(r.tl, r.moved)}.`);
+    if (r.moved.length)
+      msgs.push(
+        r.after > 1e-3
+          ? `🪄 Mulai VO digeser supaya numpuknya berkurang (${fmt(r.before)} → ${fmt(r.after)} dtk): ${movedText(r.tl, r.moved)}.`
+          : `🪄 Disusun otomatis supaya suara tidak numpuk: ${movedText(r.tl, r.moved)}.`,
+      );
     if (r.clash.length)
       msgs.push(
         `⛔ VO tetap menabrak VO adegan berikutnya${r.moved.length ? " walau sudah disusun ulang" : ""}: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). ${clashTip(r.tl, r.clash.map((c) => c.id))}`,
@@ -803,7 +817,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
           )}
           {clashNow.length > 0 && (
             <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-clash role="alert">
-              ⛔ VO menabrak VO adegan berikutnya: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
+              ⛔ VO menabrak VO adegan berikutnya{clashNow.length > 1 ? ` (total ${fmt(Math.max(0.01, clashSec))} dtk)` : ""}: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
             </div>
           )}
           {cutNow.length > 0 && (

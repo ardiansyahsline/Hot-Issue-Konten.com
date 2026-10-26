@@ -161,6 +161,17 @@ export function lexiconOf(user?: readonly LexEntry[] | null): LexEntry[] {
 /** imbuhan yang sering ditempel pakai strip ke kata asing: "di-upload", "ke-ranking", "AI-nya" → disambung tanpa strip */
 const PRE = "ke|di|se|ter|ber|me|pe|nge|ng";
 const SUF = "nya|in|an|kan|lah|kah|pun|ku|mu";
+/**
+ * imbuhan yang juga lazim ditulis TANPA strip: "diupload", "PPTnya", "AInya", "HPku". Hanya untuk kata kamus yang ditulis sebagai
+ * singkatan kapital ("PPT", "AI") atau kata kamus ≥ 4 huruf ("upload") — "ainya" / "wanya" huruf kecil tidak dianggap singkatan.
+ */
+const PRE2 = "di|ke";
+const SUF2 = "nya|mu|ku";
+/** kata kamus boleh ditempeli imbuhan tanpa strip: ditulis kapital semua (≥ 2 huruf) atau panjangnya ≥ 4 huruf */
+const glueOk = (core: string) => {
+  const k = keyOf(core);
+  return k.length >= 4 || (k.length >= 2 && core === core.toUpperCase() && core !== core.toLowerCase());
+};
 
 type Compiled = { re: RegExp; map: Map<string, string | null> };
 const cache = new Map<string, Compiled | null>();
@@ -179,9 +190,12 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
     const p = parts.map(esc).join("[\\s-]*");
     pats.set(p, Math.max(pats.get(p) ?? 0, s.length));
   }
-  // yang terpanjang dicoba dulu ("CS Tracker" sebelum "CS", "ei ai" sebelum "ai")
+  // yang terpanjang dicoba dulu ("CS Tracker" sebelum "CS", "ei ai" sebelum "ai"); awalan dicoba paling akhir (`??`) supaya
+  // kata kamus utuh yang kebetulan berawalan di/ke tetap cocok utuh
   const alts = [...pats.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(([p]) => p);
-  const out = alts.length ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-)?(${alts.join("|")})(?:-(${SUF}))?(?![${B}])`, "giu"), map } : null;
+  const out = alts.length
+    ? { re: new RegExp(`(^|[^${B}])(?:(${PRE})-|(${PRE2}))??(${alts.join("|")})(?:-(${SUF})|(${SUF2}))?(?![${B}])`, "giu"), map }
+    : null;
   cache.set(sig, out);
   if (cache.size > 20) cache.delete(cache.keys().next().value as string);
   return out;
@@ -194,10 +208,14 @@ function compile(entries: readonly LexEntry[]): Compiled | null {
 export function applyLexicon(text: string, entries: readonly LexEntry[], keep?: ReadonlySet<string>): string {
   const c = compile(entries);
   if (!c || !text) return text;
-  return text.replace(c.re, (m: string, b: string, pre: string | undefined, core: string, suf: string | undefined) => {
+  return text.replace(c.re, (m: string, b: string, preDash: string | undefined, preGlue: string | undefined, core: string, sufDash: string | undefined, sufGlue: string | undefined) => {
     const to = c.map.get(keyOf(core));
     if (!to) return m;
     if (keep?.size && tokens(core).some((t) => keep.has(t))) return m;
+    // imbuhan tanpa strip hanya untuk singkatan kapital / kata kamus panjang (lihat glueOk) — selain itu kata utuhnya dibiarkan
+    if ((preGlue || sufGlue) && !glueOk(core)) return m;
+    const pre = preDash ?? preGlue;
+    const suf = sufDash ?? sufGlue;
     // "Hot issue" → "Hot isyu" (huruf besar di awal ikut); singkatan kapital ("AI") tetap ejaan apa adanya
     const cap = !pre && core[0] !== core[0].toLowerCase() && core !== core.toUpperCase();
     return `${b}${pre ?? ""}${cap ? to[0].toUpperCase() + to.slice(1) : to}${suf ?? ""}`;
@@ -295,6 +313,17 @@ export function voSpeech(vo: VoLike, lexicon?: readonly LexEntry[] | null): { te
   if (!vo?.text) return null;
   const say = speakText(vo.text, vo.spell, lexicon);
   return { text: vo.text, spell: say && say !== vo.text ? say : null };
+}
+
+/**
+ * kunci VoLine.say untuk suara yang dibuat SEBELUM ada teks ucapan (kamus ejaan, baris tanpa `say`): mesin suara dulu menerima
+ * `spell || text` apa adanya. Sama dengan voSayKey kalau teks ucapan sekarang sama persis dengan yang dulu dikirim.
+ */
+export function legacySayKey(text: string, spell?: string | null): string {
+  const t = typeof text === "string" ? text : "";
+  if (!t) return "";
+  const raw = tidy(spell) || t;
+  return fnv(`${t}\u0001${raw === t ? "" : raw}`);
 }
 
 /** kunci pendek (8 hex) dari teks + teks ucapan akhir — VoLine.say; beda = suara dibuat dari naskah / ejaan lama */

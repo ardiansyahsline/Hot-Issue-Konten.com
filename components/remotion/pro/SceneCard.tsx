@@ -6,7 +6,7 @@ import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { FONTS } from "@/components/remotion/studio/theme";
-import { captionLineWidth, captionMaxChars, isLockedTeaser, isTeaserBeatCue, roughWordWidth, teaserCaptionFit, teaserDur, teaserTextLines } from "@/lib/studio/teaserLock";
+import { captionLineWidth, captionMaxChars, isLockedTeaser, isTeaserBeatCue, relockTeaser, roughWordWidth, teaserCaptionFit, teaserDur, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
   PLAN_LAYOUTS,
   MAX_DUR,
@@ -295,7 +295,13 @@ export default function SceneCard({
                       <button
                         type="button"
                         className="text-[12px] font-semibold text-orange-400 hover:text-orange-300"
-                        onClick={() => patch({ unlocked: undefined, dur: canonDur })}
+                        title="Durasi & detik SFX bawaan kembali ke aslinya, lalu dikunci lagi"
+                        onClick={() =>
+                          patch((x) => {
+                            const r = relockTeaser(x).scene;
+                            return { unlocked: undefined, dur: r.dur, sfx: r.sfx };
+                          })
+                        }
                         data-relock
                       >
                         {Math.abs(canonDur - s.dur) > 1e-6 ? "↺ Kembalikan durasi asli" : "🔒 Kunci lagi"}

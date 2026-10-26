@@ -138,6 +138,39 @@ export function teaserDur(shot: TeaserShot | undefined): number | undefined {
 }
 
 /**
+ * "↺ Kembalikan durasi asli" / "🔒 Kunci lagi" adegan teaser yang kuncinya dibuka: durasi kembali ke cue sheet, `unlocked` dilepas,
+ * dan detik SFX bawaan yang sempat digeser kembali ke detik cue sheet (cue dengan id yang sama, dipasangkan ke yang terdekat) supaya
+ * terkunci lagi & sinkron dengan animasi. SFX tambahan user tetap, dijepit ≤ durasi. `sfxBack` = jumlah SFX bawaan yang dikembalikan.
+ */
+export function relockTeaser(s: Scene): { scene: Scene; sfxBack: number } {
+  const { unlocked: _u, ...rest } = s;
+  void _u;
+  if (!isTeaserScene(s)) return { scene: rest, sfxBack: 0 };
+  const dur = teaserDur(s.layout.shot) ?? s.dur;
+  const used = new Set<number>();
+  const at = new Map<number, number>();
+  for (const c of canonCues(s.layout.shot ?? "hook")) {
+    let best = -1;
+    s.sfx.forEach((x, k) => {
+      if (used.has(k) || x.id !== c.id) return;
+      if (best < 0 || Math.abs(x.at - c.at) < Math.abs(s.sfx[best].at - c.at)) best = k;
+    });
+    if (best < 0) continue;
+    used.add(best);
+    at.set(best, c.at);
+  }
+  let sfxBack = 0;
+  const sfx = s.sfx
+    .map((x, k) => {
+      const want = at.has(k) ? (at.get(k) as number) : Math.min(x.at, dur);
+      if (at.has(k) && Math.abs(want - x.at) > 5e-4) sfxBack++;
+      return Math.abs(want - x.at) > 5e-4 ? { ...x, at: want } : x;
+    })
+    .sort((a, b) => a.at - b.at);
+  return { scene: { ...rest, dur, sfx }, sfxBack };
+}
+
+/**
  * Adegan premium teaser: batasnya di ketukan musik (0,6 dtk) & visualnya buatan tangan, jadi durasi, jenis tampilan (kind + shot),
  * latar, kamera, catatan visual, detik mulai VO, dan teks layar shot yang teksnya bagian dari animasi TIDAK boleh berubah — baik
  * lewat editor rencana/timeline (tombol "Pas-kan ke ketukan", tarik tepi blok) maupun lewat revisi Harley (mergeRevision).

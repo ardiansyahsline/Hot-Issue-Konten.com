@@ -16,6 +16,7 @@ import {
   totalSec,
   TAIL_SEC,
   VO_AT,
+  VO_END_ROOM,
   voClashes,
   voCutoffs,
   voSpeechEnd,
@@ -24,8 +25,8 @@ import {
   type Timeline,
   type VoLine,
 } from "@/lib/studio/timeline";
-import { beatReport, isLockedTeaser, isTeaserBeatCue, isTeaserScene, snapAroundTeaser, teaserDur, teaserVoAt, type BeatReport } from "@/lib/studio/teaserLock";
-import VoLineTools from "./VoLineTools";
+import { beatReport, isLockedTeaser, isTeaserBeatCue, isTeaserScene, relockTeaser, snapAroundTeaser, teaserDur, teaserVoAt, type BeatReport } from "@/lib/studio/teaserLock";
+import VoLineTools, { tempoBusy, useVoTempo } from "./VoLineTools";
 import { fmtTempo, movedText } from "./VoPanel";
 
 /** warna titik SFX per kategori (palet yang otomatis ikut mode terang) */
@@ -57,8 +58,6 @@ const ROW = { ruler: 22, scene: 54, sfx: 44, vo: 28 };
 /** geser blok VO / titik SFX lewat keyboard & tombol: ±0,05 dtk (Shift ±0,25) */
 const NUDGE = 0.05;
 const NUDGE_BIG = 0.25;
-/** blok VO boleh mulai paling lambat segini sebelum adegannya habis (ucapannya boleh masuk sedikit ke adegan berikut) */
-const VO_END_ROOM = 0.1;
 /** riwayat urungkan (perubahan dari timeline ini) */
 const UNDO_MAX = 30;
 
@@ -76,7 +75,10 @@ export function musicBeats(tl: Timeline, until: number): number[] {
   return m.bpm ? beatGrid(m.bpm, m.offset ?? 0, until) : [];
 }
 
-/** ganti adegan; durasi berubah -> VO lengkap (.mp3 hasil worker) tidak sinkron lagi, jadi dilepas */
+/**
+ * ganti adegan; durasi berubah -> VO lengkap (.mp3 hasil worker) tidak sinkron lagi, jadi dilepas. Mulai VO & detik SFX yang lewat
+ * ujung adegan yang diperpendek dijepit di StudioPro (clampToScenes di `change`).
+ */
 function withScenes(tl: Timeline, scenes: Scene[]): Timeline {
   const moved = scenes.some((s, i) => s.dur !== tl.scenes[i]?.dur);
   return { ...tl, scenes, vo: moved && tl.vo?.full ? { ...tl.vo, full: null } : tl.vo };
@@ -118,9 +120,19 @@ type Picked = { kind: "vo"; sceneId: string } | { kind: "sfx"; sceneId: string; 
  * - 🪄 Susun otomatis (arrangeVo) & ↶ Urungkan (perubahan dari timeline ini)
  * Semua perubahan lewat `onChange` (changeEdit di StudioPro). Di HP: ketuk dulu untuk memilih, lalu geser.
  * `beatHint` = alasan ketukan musik belum ada (mis. laptop mati / lagi dideteksi), untuk tombol "Tempel ke ketukan".
+ * `docKey` = id proyek: berganti → suara kalimat yang sedang dibuat ulang (kecepatan) untuk proyek lama dibatalkan.
  */
-export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: Timeline) => void; selected: string | null; onSelect: (sceneId: string) => void; frame?: number; onSeek?: (frame: number) => void; beatHint?: string | null }) {
-  const { timeline: tl, onChange, selected, onSelect, frame, onSeek, beatHint } = p;
+export default function TimelineEditor(p: {
+  timeline: Timeline;
+  onChange: (tl: Timeline) => void;
+  selected: string | null;
+  onSelect: (sceneId: string) => void;
+  frame?: number;
+  onSeek?: (frame: number) => void;
+  beatHint?: string | null;
+  docKey?: string | null;
+}) {
+  const { timeline: tl, onChange, selected, onSelect, frame, onSeek, beatHint, docKey } = p;
   const catalog = useStudioCatalog();
   const extra = useMemo<SfxMeta[]>(() => extraSfxOf(catalog), [catalog]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -130,6 +142,8 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   const [voDraft, setVoDraft] = useState<{ id: string; at: number } | null>(null);
   const [sfxDraft, setSfxDraft] = useState<{ si: number; ci: number; at: number; snapped: boolean } | null>(null);
   const [pick, setPick] = useState<Picked | null>(null);
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
   const [askUnlock, setAskUnlock] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
@@ -177,6 +191,17 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
     onChange(top.before);
     setNote("↶ Perubahan terakhir di timeline diurungkan");
   };
+
+  // 🎚️ kecepatan per kalimat: job/permintaan dipegang di sini (per adegan), jadi menutup bar VO / pindah pilihan tidak memutusnya.
+  // Selesai saat bar adegan itu tertutup → hasilnya dicatat di bawah timeline
+  const tempo = useVoTempo(tl, (fn) => commit(fn(tlRef.current)), {
+    docKey,
+    onDone: (sid, msg) => {
+      const pk = pickRef.current;
+      if (pk?.kind === "vo" && pk.sceneId === sid) return;
+      setNote(msg);
+    },
+  });
 
   // lebar area (supaya zoom 1 = seluruh video pas di layar)
   useEffect(() => {
@@ -242,6 +267,8 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   const clashes = useMemo(() => (voView ? voClashes(voView) : []), [voView]);
   const cuts = useMemo(() => (voView ? voCutoffs(voView) : []), [voView]);
   const red = useMemo(() => new Set([...clashes.flatMap((c) => [c.scene, c.next]), ...cuts.map((c) => c.scene)]), [clashes, cuts]);
+  // total detik dua suara bersamaan (semua pasangan, bukan hanya tabrakan pertama per VO)
+  const clashSec = clashes.reduce((a, c) => a + c.sec, 0);
   const canArrange = useMemo(() => (!voDraft && (clashes.length || cuts.length) ? arrangeVo(tl).moved.length > 0 : false), [tl, clashes, cuts, voDraft]);
 
   // playhead ikut terlihat saat video diputar
@@ -386,9 +413,12 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   };
   const arrange = () => {
     const r = arrangeVo(tlRef.current);
-    if (!r.moved.length) return setNote("Tidak ada VO yang bisa digeser lagi di dalam adegannya — pendekkan teks VO atau pilih kecepatan lebih cepat.");
-    const left = voClashes(r.tl).length + voCutoffs(r.tl).length;
-    commit(r.tl, `🪄 Disusun otomatis: ${movedText(r.tl, r.moved)}.${left ? " Masih ada yang numpuk (blok merah) — pendekkan teks VO atau pilih kecepatan lebih cepat." : " Sekarang tidak ada suara yang numpuk."}`);
+    if (!r.moved.length)
+      return setNote("Menggeser mulai VO tidak mengurangi suara yang numpuk (VO-nya lebih panjang dari ruangnya) — pilih kecepatan lebih cepat atau pendekkan teks VO.");
+    commit(
+      r.tl,
+      `🪄 Disusun otomatis: ${movedText(r.tl, r.moved)}.${r.after > 1e-3 ? ` Suara numpuk berkurang ${fmt(r.before, 2)} → ${fmt(r.after, 2)} dtk, sisanya (blok merah) — pilih kecepatan lebih cepat atau pendekkan teks VO.` : " Sekarang tidak ada suara yang numpuk."}`,
+    );
   };
 
   // ---------------- titik SFX: pilih, nyala/mati, geser ----------------
@@ -484,16 +514,17 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
     const t = tlRef.current;
     const s = t.scenes.find((x) => x.id === id);
     if (!s || !isTeaserScene(s)) return;
-    const want = teaserDur(s.layout.shot) ?? s.dur;
+    const { scene: back, sfxBack } = relockTeaser(s);
+    const want = back.dur;
     const others = t.scenes.reduce((a, x) => a + x.dur, 0) - s.dur;
     if (others + want > MAX_TOTAL + 1e-6) return setNote(`Tidak bisa dikembalikan: total video jadi lewat ${MAX_TOTAL} dtk. Pendekkan adegan lain dulu.`);
-    const scenesNext = t.scenes.map((x) => {
-      if (x.id !== id) return x;
-      const { unlocked: _u, ...rest } = x;
-      void _u;
-      return { ...rest, dur: want };
-    });
-    commit(withScenes(t, scenesNext), Math.abs(want - s.dur) > 1e-6 ? `↺ Durasi ${s.name} kembali ${fmt(want, 2)} dtk & dikunci lagi` : `🔒 Durasi ${s.name} dikunci lagi`);
+    // detik SFX bawaan yang sempat digeser ikut kembali ke cue sheet (sinkron animasi, terkunci lagi) → pilihan titik SFX ditutup
+    if (sfxBack && pick?.kind === "sfx" && pick.sceneId === id) setPick(null);
+    const sfxMsg = sfxBack ? ` · ${sfxBack} detik SFX bawaan ikut dikembalikan` : "";
+    commit(
+      withScenes(t, t.scenes.map((x) => (x.id === id ? back : x))),
+      Math.abs(want - s.dur) > 1e-6 ? `↺ Durasi ${s.name} kembali ${fmt(want, 2)} dtk & dikunci lagi${sfxMsg}` : `🔒 Durasi ${s.name} dikunci lagi${sfxMsg}`,
+    );
   };
 
   const snapAll = () => {
@@ -580,7 +611,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
         ) : (
           <p className="text-[11px] text-zinc-500">Tarik bloknya atau pakai panah ←/→ (Shift = 0,25 dtk). Suara tidak dibuat ulang.</p>
         )}
-        <VoLineTools scene={s} timeline={tl} onApply={(fn) => commit(fn(tlRef.current))} />
+        <VoLineTools key={s.id} scene={s} timeline={tl} tools={tempo} />
       </div>
     );
   } else if (pickCue) {
@@ -658,7 +689,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
             <span className="text-amber-300">
               🔓 Kunci durasi <b>{s.name}</b> dibuka · animasi dibuat untuk {fmt(canon, 2)} dtk{diff ? ` (sekarang ${fmt(s.dur, 2)} dtk — bisa terpotong / diam di akhir)` : ""}
             </span>
-            <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => relock(s.id)} data-relock>
+            <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" title="Durasi & detik SFX bawaan kembali ke aslinya, lalu dikunci lagi" onClick={() => relock(s.id)} data-relock>
               {diff ? "↺ Kembalikan durasi asli" : "🔒 Kunci lagi"}
             </button>
           </div>
@@ -869,17 +900,20 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                 // video habis di total adegan + ekor hening -> ucapan sesudahnya terpotong (sama dengan voCutoffs)
                 const cut = l.src && s.vo?.text ? starts[i] + at + speech - videoEnd : 0;
                 const picked = pick?.kind === "vo" && pick.sceneId === s.id;
+                // kalimat ini sedang dibuat ulang (kecepatan) — tetap jalan walau barnya ditutup
+                const making = tempoBusy(tempo.runs[s.id]);
                 return (
                   <div
                     key={l.sceneId}
                     role="slider"
+                    aria-busy={making || undefined}
                     tabIndex={0}
                     aria-label={`Mulai VO ${s.name}`}
                     aria-valuemin={0}
                     aria-valuemax={voMax(s)}
                     aria-valuenow={r3(at)}
-                    aria-valuetext={`${fmt(at, 2)} detik dari awal adegan ${s.name}${bad ? ", menabrak" : ""}`}
-                    title={`VO ${s.name} · mulai ${fmt(at, 2)} dtk · ucapan ${fmt(speech, 2)} dtk${l.dur - speech > 0.05 ? ` (file ${fmt(l.dur, 2)} dtk, ujungnya hening)` : ""}${l.tempo !== undefined ? ` · kecepatan ${fmtTempo(l.tempo)}` : l.speed ? ` · dipercepat ${l.speed}%` : ""}${cut > 1e-3 ? ` — ujungnya terpotong di akhir video (${fmt(cut, 2)} dtk)` : bad ? " — menabrak VO lain" : past ? " — masuk ke adegan berikutnya" : ""}\nTarik / panah ←→ untuk geser mulai, klik untuk atur`}
+                    aria-valuetext={`${fmt(at, 2)} detik dari awal adegan ${s.name}${bad ? ", menabrak" : ""}${making ? ", suaranya sedang dibuat ulang" : ""}`}
+                    title={`VO ${s.name} · mulai ${fmt(at, 2)} dtk · ucapan ${fmt(speech, 2)} dtk${l.dur - speech > 0.05 ? ` (file ${fmt(l.dur, 2)} dtk, ujungnya hening)` : ""}${l.tempo !== undefined ? ` · kecepatan ${fmtTempo(l.tempo)}` : l.speed ? ` · dipercepat ${l.speed}%` : ""}${cut > 1e-3 ? ` — ujungnya terpotong di akhir video (${fmt(cut, 2)} dtk)` : bad ? " — menabrak VO lain" : past ? " — masuk ke adegan berikutnya" : ""}${making ? "\n⏳ Suaranya sedang dibuat ulang" : ""}\nTarik / panah ←→ untuk geser mulai, klik untuk atur`}
                     onPointerDown={(e) => onVoDown(e, s, l)}
                     onPointerMove={onVoMove}
                     onPointerUp={() => endVo(true)}
@@ -888,12 +922,12 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
                     onKeyDown={(e) => onVoKey(e, s, l)}
                     className={`absolute top-1 bottom-1 cursor-grab overflow-hidden rounded border px-1 text-[9px] leading-[18px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70 active:cursor-grabbing ${
                       bad ? "border-red-500/80 bg-red-500/25 text-red-300" : tl.vo?.temp ? "border-amber-400/60 bg-amber-400/20 text-amber-300" : "border-emerald-400/60 bg-emerald-400/20 text-emerald-300"
-                    } ${past && !bad ? "border-dashed" : ""} ${picked ? "z-[5] ring-2 ring-orange-500" : ""}`}
+                    } ${past && !bad ? "border-dashed" : ""} ${picked ? "z-[5] ring-2 ring-orange-500" : ""} ${making ? "animate-pulse" : ""}`}
                     style={{ left: (starts[i] + at) * pps, width: Math.max(8, speech * pps), touchAction: picked ? "none" : "pan-x" }}
                     data-vo-block={s.id}
                     data-vo-clash={bad || undefined}
                   >
-                    {speech * pps > 26 ? (l.tempo !== undefined ? `VO ${fmtTempo(l.tempo)}` : "VO") : ""}
+                    {making ? (speech * pps > 14 ? "⏳" : "") : speech * pps > 26 ? (l.tempo !== undefined ? `VO ${fmtTempo(l.tempo)}` : "VO") : ""}
                   </div>
                 );
               })}
@@ -916,7 +950,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
       {(clashes.length > 0 || cuts.length > 0) && !voDraft && (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-red-500/10 px-2.5 py-1.5 text-[11.5px] text-red-300" role="alert" data-tl-clash>
           <span>
-            ⛔ {clashes.length ? `VO numpuk: ${clashLabels.join(", ")}` : ""}
+            ⛔ {clashes.length ? `VO numpuk${clashes.length > 1 ? ` total ${fmt(Math.max(0.01, clashSec), 2)} dtk` : ""}: ${clashLabels.join(", ")}` : ""}
             {clashes.length && cuts.length ? " · " : ""}
             {cuts.length ? `Terpotong di akhir video: ${cuts.map((c) => scenes[c.scene]?.name).join(", ")}` : ""}
           </span>
@@ -929,6 +963,7 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
       )}
 
       {bar && <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-[12px]">{bar}</div>}
+      {tempo.watchers}
 
       <div className="mt-2 flex min-h-[18px] flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
         {note ? (
