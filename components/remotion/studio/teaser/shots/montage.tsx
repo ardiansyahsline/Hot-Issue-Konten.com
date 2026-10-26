@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * Adegan 10 — Montage + Studio (4,8 dtk). VO: "Dan video ini… juga dibikin di sini."
+ * Adegan 10 — Montage + Studio (5,4 dtk). VO (mulai 1,2 dtk): "Dan video ini… juga dibikin di sini." — "di sini" ±3,4–3,8 dtk.
  * 0,0 bass drop → potongan cepat di tiap ketukan (setengah ketukan untuk potongan 0,3 dtk) berisi momen terbaik adegan lain:
  * komponen adegan ASLI diputar ulang di frame yang dibekukan (SceneFreeze) + kamera close-up + transisi sesuai SFX
  * (snap + guncang, spin, glitch, whip). 3,0 snap-spin → Studio Pro (UI asli, timeline teaser ini, preview memutar ulang montage ini,
- * tombol Download MP4) dengan teks "Dibikin di sini": pesan meta — video ini dibuat di Studio.
+ * tombol Download MP4) dengan teks "Dibikin di sini": pesan meta — video ini dibuat di Studio. Bagian Studio 2,4 dtk:
+ * 3,0 close-up preview → 3,6 bidikan lebar → 4,2 ketuk Download (ketukan) → progress + kilau 4,8 → dorongan kamera terus
+ * berjalan sampai tertutup transisi mask Outro (5,4–5,8).
  */
 import { useContext } from "react";
 import { AbsoluteFill, random } from "remotion";
@@ -176,9 +178,12 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
   const wx = (x: number) => X0 + x * k;
   const wy = (y: number) => Y0 + y * k;
 
-  // preview memutar ulang montage ini dari potongan chat; playhead ikut posisi di adegan "Montage + Studio"
-  const replayF = Math.min(Math.round(STUDIO_AT * fps) - 1, Math.round(BEAT * 2 * fps) + 4 + (f - Math.round(STUDIO_AT * fps)));
-  const head = useMontageStart() + replayF / fps;
+  // preview memutar ulang montage ini mulai potongan chat (sampai ±5,3 dtk masih berputar); playhead di timeline terus berjalan
+  // (preview sesudah potongan terakhir sudah redup / di luar bingkai, jadi bekunya tidak terlihat)
+  const studioF = Math.round(STUDIO_AT * fps);
+  const replayRaw = Math.round(BEAT * fps) + 4 + (f - studioF);
+  const replayF = Math.min(studioF - 1, replayRaw);
+  const head = useMontageStart() + replayRaw / fps;
 
   const pc = { x: wx(UI.player.x + UI.player.w / 2), y: wy(UI.player.y + UI.player.h / 2) };
   const btn = { x: wx(UI.button.x + UI.button.w / 2), y: wy(UI.button.y + UI.button.h / 2) };
@@ -201,22 +206,25 @@ function StudioPart({ f, fps, W, H }: { f: number; fps: number; W: number; H: nu
   const fin = camOn(wx(UI_W / 2), midW, zEnd, W / 2, midS, W, H);
   // dorongan akhir kecil (×1,06) berpusat di tombol / progress: tombol diam di layar, sekitarnya membesar
   const btnS = { x: W / 2 + (btn.x - wx(UI_W / 2)) * zEnd, y: midS + (btn.y - midW) * zEnd };
-  const push = camOn(btn.x, btn.y, zEnd * 1.06, btnS.x, btnS.y, W, H);
+  // dorongan akhir pelan (×1,12) berpusat di tombol / progress — linear, tetap bergerak sampai tertutup mask Outro
+  const push = camOn(btn.x, btn.y, zEnd * 1.12, btnS.x - 14, btnS.y - 8, W, H);
   const tapAt = A + BEAT * 2; // 4,2 dtk tepat di ketukan (frame 126 adegan)
   const keys: CamKey[] = [
     { t: A, ...close, r: -18 },
     { t: A + 0.2, ...settle, r: 0, ease: EASE.out },
+    // 3,6 (ketukan): mundur ke bidikan lebar Studio, lalu tetap melayang pelan
     { t: A + 0.6, ...wide, ease: EASE.inOut },
-    { t: A + 0.86, ...wide, z: wide.z * 1.012 },
+    { t: A + 0.9, ...wide, z: wide.z * 1.018, y: wide.y - 10, ease: EASE.inOut },
     // pan ke timeline + download, mendarat tepat saat tombol diketuk
     { t: tapAt, ...fin, ease: EASE.inOut },
-    { t: A + 1.75, ...push, ease: EASE.inOut },
+    { t: A + 2.4 + 0.5, ...push, ease: (x: number) => x },
   ];
 
   const press = 1 - 0.05 * Math.max(0, 1 - Math.abs(s - tapAt) / 0.1);
-  const progress = s < tapAt + 0.13 ? 0 : clamp01((s - tapAt - 0.13) / 1.6) * 0.82 + 0.06;
-  const sheen = clamp01((s - (A + 0.95)) / 0.45);
-  const barSheen = clamp01((s - (A + 1.45)) / 0.4);
+  const progress = s < tapAt + 0.13 ? 0 : clamp01((s - tapAt - 0.13) / 1.5) * 0.84 + 0.06;
+  // kilau tombol saat masuk bingkai (sebelum diketuk) & kilau bar progress tepat di ketukan 4,8
+  const sheen = clamp01((s - (A + 0.82)) / 0.36);
+  const barSheen = clamp01((s - (A + BEAT * 3)) / 0.4);
   const ripple = clamp01((s - tapAt) / 0.32);
   // jari: turun ke tombol (0,25 dtk), tekan tepat di ketukan, lalu terangkat menjauh sebelum progress muncul (tidak menutupi teks)
   const finger = s >= tapAt - 0.25 && s < tapAt + 0.2;

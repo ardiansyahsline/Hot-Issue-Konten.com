@@ -7,6 +7,8 @@
  * - `StudioUi`: Studio Pro dibuat ulang dari komponen asli (StudioTabs, ProjectBar, PreviewPane di StudioPro.tsx, TimelineEditor,
  *   ExportPanel) dan diisi data timeline teaser INI (nama & durasi adegan, titik SFX per kategori, blok VO, playhead).
  * Semua dari frame (deterministik), tanpa radial/conic-gradient, backdrop-filter, mix-blend-mode (aman untuk render browser).
+ * Render browser (@remotion/web-renderer): tanpa box-shadow spread/ring/inset (pakai border / div bingkai terpisah), tanpa
+ * color-stop negatif / px, tanpa segitiga border CSS (pakai svg seukuran isinya), tanpa filter blur di dalam induk yang di-skala.
  */
 import { Component, createContext, useMemo, type ComponentType, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 import { AbsoluteFill, Freeze, random } from "remotion";
@@ -180,7 +182,7 @@ const cardStyle = (extra?: CSSProperties): CSSProperties => ({
   background: Z[900],
   border: "1px solid rgba(39,39,42,0.9)",
   borderRadius: 16,
-  boxShadow: "0 1px 2px rgba(0,0,0,0.5), 0 18px 44px -22px rgba(0,0,0,0.8), 0 18px 30px -24px rgba(249,115,22,0.35)",
+  boxShadow: "0 1px 2px rgba(0,0,0,0.5), 0 12px 26px rgba(0,0,0,0.45)",
   boxSizing: "border-box",
   ...extra,
 });
@@ -210,10 +212,11 @@ function voBlocks(tl: Timeline): VoBlock[] {
   return tl.scenes
     .map((s, i): VoBlock | null => {
       const l = lines.find((x) => x.sceneId === s.id);
-      if (l) return { i, at: l.at ?? 0.15, dur: l.dur };
+      if (l) return { i, at: l.at ?? s.vo?.at ?? 0.15, dur: l.dur };
       const words = (s.vo?.text ?? "").split(/\s+/).filter(Boolean).length;
       if (!words) return null;
-      return { i, at: 0.15, dur: Math.min(s.dur - 0.25, 0.42 + words * 0.36) };
+      const at = s.vo?.at ?? 0.15;
+      return { i, at, dur: Math.max(0.3, Math.min(s.dur - at - 0.1, 0.42 + words * 0.36)) };
     })
     .filter((x): x is VoBlock => !!x);
 }
@@ -265,11 +268,11 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
   return (
     <div style={{ position: "relative", width: UI_W, height: UI.y.end, fontFamily: FONT, color: Z[100] }}>
       {/* bagian atas (tab, proyek, preview) — buram & redup saat fokus pindah ke timeline + download (depth of field) */}
-      <div style={{ position: "absolute", left: 0, top: 0, width: UI_W, height: UI.y.tl, opacity: 1 - 0.8 * dim, filter: dim > 0.02 ? `blur(${(dim * 2.5).toFixed(2)}px)` : undefined }}>
+      <div style={{ position: "absolute", left: 0, top: 0, width: UI_W, height: UI.y.tl, opacity: 1 - 0.82 * dim }}>
       {/* StudioTabs: pil 3 kolom, tab aktif bergradasi oranye */}
       <div style={{ position: "absolute", left: 0, top: UI.y.tabs, width: UI_W, height: UI.tabs, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", padding: 4, boxSizing: "border-box", borderRadius: 999, border: "1px solid rgba(39,39,42,0.8)", background: Z[900], fontSize: 11.5, fontWeight: 600 }}>
         {["🎬 Studio Pro", "🧩 Template lama", "🎙️ Bank suara"].map((l, i) => (
-          <div key={l} style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 999, whiteSpace: "nowrap", color: i === 0 ? "#fff" : Z[400], backgroundImage: i === 0 ? ORANGE : undefined, boxShadow: i === 0 ? "0 8px 18px -8px rgba(234,88,12,0.65)" : undefined }}>
+          <div key={l} style={{ display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 999, whiteSpace: "nowrap", color: i === 0 ? "#fff" : Z[400], backgroundImage: i === 0 ? ORANGE : undefined, boxShadow: i === 0 ? "0 4px 10px rgba(234,88,12,0.4)" : undefined }}>
             {l}
           </div>
         ))}
@@ -309,7 +312,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
             Zona aman
           </div>
         </div>
-        <div style={{ position: "absolute", left: UI.player.x, top: UI.player.y - UI.y.prev, width: UI.player.w, height: UI.player.h, borderRadius: 14, overflow: "hidden", background: "#000", boxShadow: "0 0 0 1px rgba(63,63,70,0.6), 0 22px 40px -18px rgba(249,115,22,0.45)" }}>
+        <div style={{ position: "absolute", left: UI.player.x, top: UI.player.y - UI.y.prev, width: UI.player.w, height: UI.player.h, borderRadius: 14, overflow: "hidden", background: "#000", boxShadow: "0 14px 28px rgba(249,115,22,0.22)" }}>
           {player}
           {/* kontrol Player */}
           <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 34, background: "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.7) 100%)" }} />
@@ -323,6 +326,8 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
             </span>
             {clockLabel(head)} / {clockLabel(total)}
           </div>
+          {/* bingkai tipis pemutar (div terpisah: ring box-shadow tidak tergambar di render browser) */}
+          <div style={{ position: "absolute", left: 0, top: 0, width: UI.player.w, height: UI.player.h, borderRadius: 14, border: "1px solid rgba(63,63,70,0.6)", boxSizing: "border-box" }} />
         </div>
       </div>
 
@@ -379,7 +384,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
                         borderRadius: 8,
                         border: `1px solid ${sel ? "#f97316" : Z[700]}`,
                         background: sel ? "rgba(249,115,22,0.15)" : i % 2 ? rgba(Z[800], 0.8) : rgba(Z[800], 0.5),
-                        boxShadow: sel ? "0 0 18px -2px rgba(249,115,22,0.55)" : undefined,
+                        boxShadow: sel ? "0 0 14px rgba(249,115,22,0.45)" : undefined,
                         boxSizing: "border-box",
                       }}
                     >
@@ -401,7 +406,7 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
               {/* titik SFX */}
               <div style={{ position: "relative", height: R.sfx, borderTop: `1px solid ${rgba(Z[800], 0.7)}` }}>
                 {dots.map((d, k) => (
-                  <span key={k} style={{ position: "absolute", left: d.x - 5, top: 6 + d.lane * 11, width: 10, height: 10, borderRadius: 999, background: d.on ? d.color : "transparent", boxShadow: d.on ? `0 0 0 2px ${Z[950]}` : `0 0 0 1px ${Z[500]}` }} />
+                  <span key={k} style={{ position: "absolute", left: d.x - 7, top: 4 + d.lane * 11, width: 14, height: 14, borderRadius: 999, boxSizing: "border-box", background: d.on ? d.color : "transparent", border: d.on ? `2px solid ${Z[950]}` : `1px solid ${Z[500]}` }} />
                 ))}
               </div>
               {/* blok VO */}
@@ -414,7 +419,9 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
               </div>
               {/* playhead */}
               <div style={{ position: "absolute", top: 0, bottom: 0, left: head * pps, width: 1.5, background: "#f97316", boxShadow: "0 0 8px rgba(249,115,22,0.9)" }}>
-                <span style={{ position: "absolute", left: -4, top: 0, width: 0, height: 0, borderLeft: "4.5px solid transparent", borderRight: "4.5px solid transparent", borderTop: "6px solid #f97316" }} />
+                <svg width={9} height={6} viewBox="0 0 9 6" style={{ position: "absolute", left: -3.75, top: 0, display: "block" }}>
+                  <path d="M0 0 H9 L4.5 6 Z" fill="#f97316" />
+                </svg>
               </div>
             </div>
           </div>
@@ -446,19 +453,19 @@ export function StudioUi({ head, player, press, progress, sheen, barSheen = 0, d
         </div>
         <div style={{ position: "relative", marginTop: 12, height: 44 }}>
           {progress <= 0 ? (
-            <div style={{ position: "relative", height: 44, borderRadius: 12, overflow: "hidden", backgroundImage: ORANGE, boxShadow: "0 10px 24px -8px rgba(234,88,12,0.75)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, color: "#fff", transform: `scale(${press.toFixed(4)})` }}>
+            <div style={{ position: "relative", height: 44, borderRadius: 12, overflow: "hidden", backgroundImage: ORANGE, boxShadow: "0 8px 18px rgba(234,88,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, color: "#fff", transform: `scale(${press.toFixed(4)})` }}>
               ⬇️ Download MP4 ({fmt(meta.secs)} dtk)
               {sheen > 0 && sheen < 1 && (
-                <div style={{ position: "absolute", inset: 0, background: `linear-gradient(105deg, rgba(255,255,255,0) ${sheen * 160 - 40}%, rgba(255,255,255,0.55) ${sheen * 160 - 25}%, rgba(255,255,255,0) ${sheen * 160 - 10}%)` }} />
+                <div style={{ position: "absolute", top: 0, left: `${(sheen * 150 - 40).toFixed(1)}%`, width: "36%", height: "100%", background: "linear-gradient(105deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)" }} />
               )}
             </div>
           ) : (
             <div>
               <div style={{ height: 10, borderRadius: 999, overflow: "hidden", background: Z[800] }}>
                 <div style={{ position: "relative", width: `${Math.round(progress * 100)}%`, height: "100%", borderRadius: 999, overflow: "hidden", background: "#f97316", boxShadow: "0 0 12px rgba(249,115,22,0.8)" }}>
-                  {/* kilau lewat di bar progress (detik 4,45–4,85) */}
+                  {/* kilau lewat di bar progress (detik 4,8–5,2, ketukan) */}
                   {barSheen > 0 && barSheen < 1 && (
-                    <div style={{ position: "absolute", inset: 0, background: `linear-gradient(100deg, rgba(255,255,255,0) ${barSheen * 220 - 60}%, rgba(255,255,255,0.75) ${barSheen * 220 - 35}%, rgba(255,255,255,0) ${barSheen * 220 - 10}%)` }} />
+                    <div style={{ position: "absolute", top: 0, left: `${(barSheen * 170 - 50).toFixed(1)}%`, width: "50%", height: "100%", background: "linear-gradient(100deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%)" }} />
                   )}
                 </div>
               </div>
