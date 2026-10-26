@@ -223,9 +223,13 @@ export default function TimelineEditor(p: {
   const hist = useRef<{ before: Timeline; after: Timeline | null }[]>([]);
   const pending = useRef<Timeline | null>(null);
   const undoing = useRef(false);
-  /** perubahan berikutnya digabung ke langkah urungkan terakhir (slider yang sama masih digeser) */
-  const merging = useRef(false);
+  /**
+   * kontrol yang sedang digeser (slider / tombol ±, key sama, kiriman terakhir < LIVE_MERGE_MS): semua perubahan timeline
+   * sesudahnya = satu langkah urungkan. Tidak bergantung urutan render — slider mengirim lewat timer, jadi di HP lambat beberapa
+   * kiriman bisa sampai sebelum timeline baru tampil (dulu dianggap perubahan dari luar → riwayat urungkan terhapus).
+   */
   const liveKey = useRef<{ key: string; t: number } | null>(null);
+  const liveOn = () => !!liveKey.current && Date.now() - liveKey.current.t < LIVE_MERGE_MS;
   const [undoN, setUndoN] = useState(0);
   useEffect(() => {
     const h = hist.current;
@@ -233,13 +237,13 @@ export default function TimelineEditor(p: {
     if (undoing.current) {
       undoing.current = false;
       if (top) top.after = tl;
-    } else if (merging.current) {
-      merging.current = false;
-      if (top) top.after = tl;
     } else if (pending.current && tl !== pending.current) {
       h.push({ before: pending.current, after: tl });
       if (h.length > UNDO_MAX) h.shift();
       pending.current = null;
+    } else if (top && tl !== top.after && liveOn()) {
+      // kiriman berikutnya dari kontrol yang sama (masih digeser) → langkah urungkan yang sama
+      top.after = tl;
     } else if (top && tl !== top.after) {
       // diubah dari luar (kartu rencana, suara, Harley) → riwayat dihapus; hasil deteksi ketukan musik yang sama tidak
       if (top.after && beatsOnly(top.after, tl)) top.after = tl;
@@ -253,11 +257,10 @@ export default function TimelineEditor(p: {
    */
   const commit = (next: Timeline, msg?: string, key?: string) => {
     if (next === tlRef.current) return;
-    const h = hist.current;
     const lk = liveKey.current;
     const now = Date.now();
-    if (key && lk?.key === key && now - lk.t < LIVE_MERGE_MS && h.length && h[h.length - 1].after === tlRef.current) merging.current = true;
-    else pending.current = tlRef.current;
+    // kontrol yang sama masih digeser → digabung (pending lama tetap = keadaan sebelum geseran); selain itu langkah baru
+    if (!(key && lk?.key === key && now - lk.t < LIVE_MERGE_MS && (hist.current.length || pending.current))) pending.current = tlRef.current;
     liveKey.current = key ? { key, t: now } : null;
     onChange(next);
     if (msg) setNote(msg);
@@ -654,6 +657,15 @@ export default function TimelineEditor(p: {
   }, [voUp, tlLazy, extra]);
   const guardAll = guardPlan ? voGuardDb(guardPlan) : 0;
   const guardNote = (db: number) => `🛡️ VO sudah hampir paling keras — pengaman puncak menahannya ${fmtDb(db)} supaya tidak pecah; musik & SFX ikut turun saat VO bicara (VO tetap lebih menonjol).`;
+  // musik / SFX dinaikkan + ada VO: saat VO bicara keduanya tidak dibuat lebih keras dari bawaan (VO tidak pernah diturunkan)
+  const voHeard = tl.voice?.mode !== "none" && !tl.muteVo && !!tl.vo?.lines.length;
+  const restUp = (k: "musicDb" | "sfxDb") => (k === "musicDb" ? tl.music.src !== "none" && musicVol > 0 : dbOf(tl.mix?.sfxDb) > 0) || tl.scenes.some((s) => dbOf(s.gain?.[k]) > 0);
+  const restNote = (k?: "musicDb" | "sfxDb") =>
+    voHeard && (k ? restUp(k) : restUp("musicDb") || restUp("sfxDb")) ? (
+      <p className="text-[11px] leading-snug text-sky-300" data-rest-guard>
+        ℹ️ Saat VO bicara, {k === "musicDb" ? "musik" : k === "sfxDb" ? "SFX" : "musik & SFX"} tidak dibuat lebih keras dari bawaan supaya VO tetap jelas — yang lain dikecilkan, jadi tetap lebih menonjol. Di luar VO terdengar penuh.
+      </p>
+    ) : null;
   const laneDb: Record<MixKey, number> = { musicDb: musicVol, voDb: dbOf(tl.mix?.voDb), sfxDb: dbOf(tl.mix?.sfxDb) };
   const setMix = (k: MixKey, db: number) => {
     const t = tlRef.current;
@@ -745,6 +757,13 @@ export default function TimelineEditor(p: {
   };
   const musicName = tl.music.src === "none" ? "Tanpa musik" : tl.music.src === "bed" ? "Trailer bed (cadangan)" : tl.music.name || "Musik";
   const musicOff = musicDraft ?? offNow;
+  /** detik video tempat lagu habis lalu diulang dari awal (sisa lagu sesudah offset, lalu tiap panjang lagu) */
+  const musicSeams = useMemo(() => {
+    if (!fileMusic || !mDur || mDur < 1) return [] as number[];
+    const out: number[] = [];
+    for (let t = mDur - Math.min(musicOff, mDur); t < total - 0.05 && out.length < 50; t += mDur) if (t > 0.05) out.push(t);
+    return out;
+  }, [fileMusic, mDur, musicOff, total]);
   /** keadaan ketukan musik (deteksi di laptop lewat useBeats) */
   const beatState: { text: string; busy: boolean } | null = !fileMusic
     ? tl.music.src === "bed"
@@ -949,7 +968,13 @@ export default function TimelineEditor(p: {
             {mDur && <span className="text-[11px] text-zinc-500">· panjang lagu {songClock(mDur)}</span>}
           </div>
         )}
+        {musicSeams.length > 0 && (
+          <p className="text-[11px] leading-snug text-orange-300" data-music-loop-note>
+            ↺ Lagu habis di detik {fmt(musicSeams[0], 1)} video, lalu diulang dari awal lagu (garis putus-putus di blok 🎵).
+          </p>
+        )}
         {tl.music.src !== "none" && <DbSlider icon="🎵" label="Musik" value={musicVol} onChange={(db) => setMix("musicDb", db)} testId="music-bar" />}
+        {restNote("musicDb")}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" className="btn-ghost px-2.5 py-1.5 text-[12px]" onClick={() => setPick({ kind: "musicMenu" })} data-music-change>
             🔁 Ganti musik
@@ -1027,6 +1052,7 @@ export default function TimelineEditor(p: {
         </div>
         <DbSlider icon={vo ? "🎙️" : "🔊"} label={vo ? "VO" : "SFX"} value={laneDb[lane]} onChange={(db) => setMix(lane, db)} testId={`lane-${lane}`} />
         {vo && laneDb.voDb > 0 && guardAll <= -1 && <p className="text-[11px] leading-snug text-amber-300">{guardNote(guardAll)}</p>}
+        {!vo && restNote("sfxDb")}
         <p className="text-[11px] text-zinc-500">{vo ? "Per kalimat: klik blok VO-nya." : "Per SFX: klik titiknya."} Per adegan: klik blok adegan.</p>
       </div>
     );
@@ -1155,12 +1181,13 @@ export default function TimelineEditor(p: {
               {guardNote(guardAll)}
             </p>
           )}
+          <div className="pb-1">{restNote()}</div>
         </div>
       )}
 
       <div className="flex min-w-0 gap-1.5">
         {/* label baris (SFX / VO / musik = tombol volume jalur) */}
-        <div className="flex w-6 flex-none flex-col text-center text-[13px] leading-none text-zinc-500">
+        <div className="flex w-8 flex-none flex-col text-center text-[13px] leading-none text-zinc-500">
           <div style={{ height: ROW.ruler }} aria-hidden />
           <div className="flex items-center justify-center" style={{ height: ROW.scene }} title="Adegan" aria-hidden>
             🎬
@@ -1381,6 +1408,11 @@ export default function TimelineEditor(p: {
                   data-music-block
                 >
                   {beatMarks?.lane}
+                  {musicSeams.map((t) => (
+                    <span key={`seam${t}`} className="pointer-events-none absolute top-0 bottom-0 border-l-2 border-dashed border-orange-400/80" style={{ left: t * pps }} data-music-seam={Math.round(t * 10) / 10}>
+                      <span className="absolute left-0.5 top-0 text-[9px] leading-none text-orange-300">↺</span>
+                    </span>
+                  ))}
                   <span className={`pointer-events-none relative block truncate pl-[84px] pr-2 ${musicDraft !== null ? "font-bold text-orange-400" : ""}`}>
                     {musicName}
                     {fileMusic && (musicOff > 0 || musicDraft !== null) ? ` · dari ${songClock(musicOff)}` : ""}

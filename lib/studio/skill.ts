@@ -10,7 +10,9 @@ import { MAX_LEXICON, normLexicon, type LexEntry } from "./pronounce";
 import {
   isDirectorHero,
   mixDb,
+  musicVolDb,
   normNotes,
+  setMixKey,
   plainText,
   DIRECTOR_NOTES_MAX,
   type Director,
@@ -78,8 +80,17 @@ export type VoiceLike = Voice;
  * bagian timeline yang dibaca / diubah skill (Timeline memenuhi tipe ini; tanpa rencana cukup { director }). `scenes` hanya dibaca
  * untuk gaya bicara bawaan (proyek teaser: Promo energik).
  */
-export type SkillTarget = { voice?: VoiceLike; mix?: Mix; director?: Director; scenes?: Timeline["scenes"] };
+export type SkillTarget = { voice?: VoiceLike; mix?: Mix; director?: Director; scenes?: Timeline["scenes"]; music?: Timeline["music"] };
 const teaserOf = (t: SkillTarget) => isTeaserTimeline(t.scenes ? { scenes: t.scenes } : null);
+const isMusicFile = (m: Timeline["music"] | undefined) => !!m && m.src !== "none" && m.src !== "bed";
+/**
+ * volume campuran yang TERDENGAR: musik = tl.mix.musicDb + volume lama file musik (music.gain, proyek yang diatur dengan slider
+ * lama) — sama dengan slider mixer (musicVolDb). Dipakai saat skill disimpan / dibandingkan.
+ */
+function heardMix(t: SkillTarget): Mix | undefined {
+  if (!t.music || !isMusicFile(t.music) || !t.music.gain) return t.mix;
+  return setMixKey(t.mix, "musicDb", musicVolDb({ mix: t.mix, music: t.music }));
+}
 
 const MODES: readonly VoiceMode[] = ["bank", "edge", "elevenlabs", "none"];
 const EDGE_VOICES: readonly EdgeVoice[] = ["id-ID-ArdiNeural", "id-ID-GadisNeural"];
@@ -185,7 +196,7 @@ export function availableSections(src: SkillTarget): SkillSection[] {
   return SKILL_SECTIONS.filter((k) => {
     if (k === "lexicon") return !!src.voice?.lexicon?.length;
     if (k === "voice") return !!src.voice;
-    if (k === "mix") return !!src.mix && Object.keys(src.mix).length > 0;
+    if (k === "mix") return Object.keys(heardMix(src) ?? {}).length > 0;
     if (k === "director") return true; // kosong = Harley
     return !!src.director?.notes?.length;
   });
@@ -208,7 +219,8 @@ export function collectSkill(src: SkillTarget, parts: readonly SkillSection[], i
       // gaya bicara yang benar-benar dipakai (preset bawaan / angka lama ikut terbaca) → proyek lain mendapat suara yang sama
       ...voicePatch(voiceStyle(v, teaserOf(src))),
     };
-  if (want.has("mix") && src.mix) sections.mix = src.mix;
+  const mix = heardMix(src);
+  if (want.has("mix") && mix) sections.mix = mix;
   if (want.has("director")) sections.director = { hero: src.director?.hero ?? "Harley", name: src.director?.name };
   if (want.has("notes") && src.director?.notes?.length) sections.notes = src.director.notes;
   const r = normSkill({ kind: SKILL_KIND, v: SKILL_VERSION, name: info.name, desc: info.desc, created_at: (info.now ?? new Date()).toISOString(), sections });
@@ -277,7 +289,11 @@ export function applySkill<T extends SkillTarget>(target: T, skill: StudioSkill,
     }
     out.voice = voice;
   }
-  if (want.has("mix") && sec.mix) out.mix = { ...(out.mix ?? {}), ...sec.mix };
+  if (want.has("mix") && sec.mix) {
+    out.mix = { ...(out.mix ?? {}), ...sec.mix };
+    // musicDb skill = volume musik yang terdengar → volume lama file musik dilebur (tidak dobel, sama dengan withMixDb)
+    if (sec.mix.musicDb !== undefined && out.music && isMusicFile(out.music) && out.music.gain) out.music = { ...out.music, gain: 0 };
+  }
   if (want.has("director") && sec.director) {
     const notes = out.director?.notes;
     out.director = { hero: sec.director.hero, ...(sec.director.name ? { name: sec.director.name } : {}), ...(notes?.length ? { notes } : {}) };
@@ -308,7 +324,7 @@ export function sectionSummary(src: SkillTarget, key: SkillSection, dirName?: st
     return [VOICE_MODE_LABEL[v.mode], who, style].filter(Boolean).join(" · ");
   }
   if (key === "mix") {
-    const m = src.mix;
+    const m = heardMix(src);
     if (!m || !Object.keys(m).length) return "";
     return [m.musicDb !== undefined ? `Musik ${db(m.musicDb)}` : "", m.voDb !== undefined ? `VO ${db(m.voDb)}` : "", m.sfxDb !== undefined ? `SFX ${db(m.sfxDb)}` : ""].filter(Boolean).join(" · ");
   }
@@ -355,7 +371,7 @@ export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: Appl
     }
   }
   if (sec.mix) {
-    const m = target.mix ?? {};
+    const m = heardMix(target) ?? {};
     const s = sec.mix;
     const lines: string[] = [];
     if (s.musicDb !== undefined && s.musicDb !== m.musicDb) lines.push(`Musik: ${db(m.musicDb)} → ${db(s.musicDb)}`);

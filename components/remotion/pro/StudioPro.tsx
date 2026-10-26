@@ -495,7 +495,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     (next: SkillTarget) => {
       const tl = tlRef.current;
       if (!tl) return setDirector(next.director ?? null);
-      const out: Timeline = { ...tl, voice: next.voice ?? tl.voice };
+      // music: volume lama file musik dilebur kalau skill membawa volume musik (applySkill)
+      const out: Timeline = { ...tl, voice: next.voice ?? tl.voice, music: next.music ?? tl.music };
       if (next.mix && Object.keys(next.mix).length) out.mix = next.mix;
       else delete out.mix;
       const d = tidyDirector(next.director);

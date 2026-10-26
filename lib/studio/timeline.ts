@@ -188,8 +188,9 @@ export type Voice = {
  * Musik: `src` = "bed" (trailer bed cadangan dari SFX), "none", atau URL file yang bisa diputar
  * (/api/studio/asset/music/… untuk file repo, /api/studio/file?p=… untuk upload user).
  * `beats` (detik lagu) dari deteksi BPM — dipakai untuk menempel potongan & impact ke ketukan.
- * `offset` = detik lagu yang dilewati: file musik diputar mulai detik ke-`offset` (0 = dari awal; digeser di jalur musik timeline).
- * Ketukan ikut digeser ke waktu video (musicFileBeats). Trailer bed tidak memakai offset (selalu ikut adegan).
+ * `offset` = detik lagu yang dilewati: file musik diputar mulai detik ke-`offset` (0 = dari awal; digeser di jalur musik timeline);
+ * kalau sisa lagu lebih pendek dari video, sesudah lagu habis diulang dari awal (musicHeadSec). Ketukan ikut digeser ke waktu
+ * video (musicFileBeats). Trailer bed tidak memakai offset (selalu ikut adegan).
  * `dur` = panjang file musik (detik), ditulis editor bersama offset — offset dijepit supaya tidak lewat ujung lagu, dan hanya
  * dipakai kalau `dur` ada (musicOffsetOf).
  * `gain` = volume lama file musik (dB); volume musik sekarang diatur lewat `Timeline.mix.musicDb` (lihat musicVolDb).
@@ -620,7 +621,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const mSrc = str(m.src, 600);
   // panjang file musik (detik, opsional) → offset tidak boleh lewat ujung lagu
   const mDur = m.dur === undefined || m.dur === null ? 0 : Math.round(num(m.dur, 0, 0, 3600) * 1000) / 1000;
-  const mOff = num(m.offset, 0, 0, 120);
+  const mOff = num(m.offset, 0, 0, MAX_MUSIC_OFFSET);
   // baris VO tanpa `at` (data lama) mulai di offset adegannya (vo.at) atau bawaan 0,15
   const vo0 = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
   const vo = vo0 && legacySay.size ? { ...vo0, lines: vo0.lines.map((l) => (!l.say && legacySay.has(l.sceneId) ? { ...l, say: legacySay.get(l.sceneId) } : l)) } : vo0;
@@ -654,7 +655,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       src: mSrc === "none" || mSrc === "bed" ? mSrc : safeMediaSrc(mSrc) ?? "bed",
       name: str(m.name, 80) || undefined,
       bpm: m.bpm === undefined || m.bpm === null ? null : num(m.bpm, 100, 40, 240),
-      beats: Array.isArray(m.beats) ? m.beats.map((x) => num(x, NaN, 0, MAX_TOTAL)).filter(Number.isFinite).slice(0, 2000) : null,
+      // detik LAGU (bukan video): lagu bisa mulai dari detik ke-offset → batasnya video terpanjang + offset terbesar; di luar itu dibuang
+      beats: Array.isArray(m.beats) ? m.beats.map((x) => num(x, NaN, -1, 1e9)).filter((x) => x >= 0 && x <= MAX_TOTAL + MAX_MUSIC_OFFSET).slice(0, 2000) : null,
       offset: mDur > 0 ? Math.min(mOff, maxMusicOffset(mDur)) : mOff,
       gain: num(m.gain, 0, -24, 12),
       lufs: m.lufs === undefined || m.lufs === null ? null : num(m.lufs, -14, -40, 0),
@@ -810,8 +812,14 @@ export function withVoDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: s
   });
   return hit ? { ...tl, scenes } : tl;
 }
-/** offset terbesar untuk lagu sepanjang `dur` detik: sisa minimal 0,5 dtk (Remotion tidak bisa mengulang potongan kosong) */
-export const maxMusicOffset = (dur: number | undefined): number => (dur && dur > 0 ? Math.max(0, Math.min(120, Math.floor((dur - 0.5) * 10) / 10)) : 120);
+/** offset musik terbesar (detik lagu) */
+export const MAX_MUSIC_OFFSET = 120;
+/**
+ * offset terbesar untuk lagu sepanjang `dur` detik: sisa putaran pertama minimal 0,5 dtk. Sisa lagu yang lebih pendek dari video
+ * tidak masalah: sesudah habis lagu diulang dari awal (musicHeadSec).
+ */
+export const maxMusicOffset = (dur: number | undefined): number =>
+  dur && dur > 0 ? Math.max(0, Math.min(MAX_MUSIC_OFFSET, Math.floor((dur - 0.5) * 10) / 10)) : MAX_MUSIC_OFFSET;
 /**
  * detik lagu yang dilewati, dijepit ke panjang lagu. Hanya berlaku kalau panjang lagu (`dur`) diketahui — editor selalu menulisnya
  * bersama offset; offset tanpa `dur` (data lama / tulisan AI) diabaikan supaya render tidak gagal karena offset lewat ujung lagu.
@@ -823,16 +831,42 @@ export function musicOffsetOf(m: Pick<Music, "src" | "offset" | "dur"> | undefin
   return o > 0 ? Math.min(o, maxMusicOffset(m.dur)) : 0;
 }
 /**
- * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) dikurangi offset, atau grid dari
- * BPM (ketukan pertama lagu dianggap di detik 0 lagu). Tanpa `dur` (data lama) → persis sama dengan sebelum ada offset lagu.
+ * Panjang putaran pertama lagu di video (detik) kalau offset dipakai = sisa lagu sesudah detik ke-offset; sesudahnya lagu diulang
+ * DARI AWAL (audio.tsx). 0 = tanpa offset (lagu diulang utuh seperti biasa).
+ */
+export function musicHeadSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  const off = musicOffsetOf(m);
+  return off > 0 ? Math.max(0, Math.round((Number(m?.dur) - off) * 1000) / 1000) : 0;
+}
+/**
+ * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) atau grid dari BPM (ketukan
+ * pertama lagu dianggap di detik 0 lagu). Kalau panjang lagu (`dur`) diketahui: putaran pertama mulai dari detik ke-offset, lalu
+ * tiap putaran ulang (lagu dari awal, lihat musicHeadSec) ketukannya ikut sampai `until`.
+ * Tanpa `dur` (data lama) → persis sama dengan sebelum ada offset lagu.
  */
 export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset" | "dur">, until: number, minBeats = 1): number[] {
+  const detected = !!m.beats && m.beats.length >= Math.max(1, minBeats);
+  const dur = Number(m.dur) > 0 ? Number(m.dur) : 0;
+  if (!dur) {
+    if (detected) return m.beats as number[];
+    if (!m.bpm) return [];
+    // data lama (offset tanpa dur, mis. tulisan AI): offset = fase ketukan pertama grid BPM seperti dulu, lagu tetap diputar dari awal
+    return beatGrid(m.bpm, Math.max(0, Number(m.offset) || 0), until);
+  }
+  const song = (detected ? (m.beats as number[]).filter((b) => b < dur) : m.bpm ? beatGrid(m.bpm, 0, dur - 1e-3) : []).slice().sort((a, b) => a - b);
+  if (!song.length) return [];
   const off = musicOffsetOf(m);
-  if (m.beats && m.beats.length >= Math.max(1, minBeats)) return off > 0 ? m.beats.map((b) => Math.round((b - off) * 1000) / 1000).filter((b) => b >= 0) : m.beats;
-  if (!m.bpm) return [];
-  // data lama (offset tanpa dur, mis. tulisan AI): offset = fase ketukan pertama grid BPM seperti dulu, lagu tetap diputar dari awal
-  if (!(Number(m.dur) > 0)) return beatGrid(m.bpm, Math.max(0, Number(m.offset) || 0), until);
-  return beatGrid(m.bpm, musicGridPhase(m.bpm, off), until);
+  const r3 = (t: number) => Math.round(t * 1000) / 1000;
+  const out: number[] = [];
+  for (const b of song) if (b >= off && b - off <= until + 1e-6) out.push(r3(b - off));
+  // putaran ulang: lagu dari awal (maks 400 putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
+  for (let st = dur - off, k = 0; st <= until + 1e-6 && k < 400; st += dur, k++) {
+    for (const b of song) {
+      if (st + b > until + 1e-6) break;
+      out.push(r3(st + b));
+    }
+  }
+  return out;
 }
 /** ketukan pertama grid BPM di waktu video kalau lagu mulai dari detik ke-`off` (ketukan pertama lagu dianggap di detik 0 lagu) */
 export const musicGridPhase = (bpm: number, off: number): number => {

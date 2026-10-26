@@ -21,7 +21,7 @@ import {
 } from "@/lib/studio/client";
 import { storyboardHtml } from "@/lib/studio/exportDoc";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { subtitleCues, toSrt, voClashes, voCutoffs, voGainOn, type Timeline } from "@/lib/studio/timeline";
+import { subtitleCues, toSrt, voClashes, voCutoffs, voDbOf, voGainOn, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf, storageSrc } from "@/lib/studio/urls";
 
 // Remotion gratis untuk perorangan / tim ≤ 3 orang. Perusahaan > 3 orang: isi key lisensi di env Vercel.
@@ -489,6 +489,11 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
           </button>
         </div>
         {!hasVo && hasVoText && voOn && <p className="text-[11px] text-zinc-500">VO .mp3 bisa diunduh setelah suara VO dibuat.</p>}
+        {hasVo && tl.scenes.some((s) => s.vo?.text && voDbOf(tl, s) > 0) && (
+          <p className="text-[11px] leading-snug text-amber-300" data-vo-only-note>
+            🛡️ VO yang dinaikkan di 🎚️ Volume hampir tidak bisa lebih keras di file VO saja (sudah dekat batas puncak, supaya tidak pecah). Di video, musik & SFX yang dikecilkan supaya VO menonjol. VO yang diturunkan tetap ikut.
+          </p>
+        )}
       </div>
 
       <p className="border-t border-zinc-800 pt-3 text-[10px] leading-relaxed text-zinc-500">
