@@ -4,16 +4,18 @@
  * Audio komposisi Studio: VO, SFX, dan musik (file musik atau "trailer bed" dari SFX).
  * Pakai <Audio> dari @remotion/media (bukan dari "remotion") supaya ikut terender di browser (renderMediaOnWeb).
  *
- * Gain staging (target mix akhir ±-14 LUFS, true peak ≤ -1 dBTP):
+ * Gain staging (target mix akhir ±-14 LUFS, true peak ≤ -1 dBTP; VO Edge yang di-boost +1,5 dB bisa sedikit lewat di render
+ * browser / CLI mentah — render laptop lewat worker menyamakan akhir ke -14 LUFS / -1 dBTP, loudnorm_2pass):
  * - VO ke TARGET_LUFS.vo, SFX lewat sfxGain (target kategori + batas puncak per file),
  *   musik ke TARGET_LUFS.music + level adegan, turun DUCK_DB saat VO bicara.
  * - SFX keras maks 2 yang pukulannya berdekatan; SFX keras yang jatuh saat VO bicara diturunkan 3 dB.
  * - Puncak gabungan (SFX + VO + musik yang puncaknya berdekatan) dijaga ≤ -1 dBTP dengan menurunkan SFX.
  * - Musik berhenti tepat di ketukan terakhir (ekor pendek) lalu hening ±0,3–0,5 dtk sebelum video habis.
  * - Limiter dihitung di muka: selubung puncak tiap SFX per frame (lib/studio/sfxEnv) dijumlah bersama musik & VO;
- *   kalau melewati LIM_CEIL (-1,4 dBFS), musik & SFX diturunkan sebentar (VO tidak) — renderer browser tidak punya limiter.
- *   Turunnya ditahan 1 frame sesudah puncak: decoder render tidak membuang jeda awal mp3 (±23 ms), jadi puncak SFX / groove
- *   terdengar sedikit lebih lambat dari selubungnya dan bisa jatuh di frame berikutnya.
+ *   kalau melewati -1,2 dBFS, musik & SFX diturunkan sebentar (VO tidak) — renderer browser tidak punya limiter.
+ *   Decoder render tidak membuang jeda awal mp3 (±25 ms), jadi puncak SFX sekali-putar sebagian besar terdengar SATU frame sesudah
+ *   selubungnya: perkiraan puncak frame f memakai selubung frame f−1 (oneShotPk; lihat-depan limiter menutup sisa awalnya) —
+ *   kalau tidak, limiter sudah lepas tepat di frame klik / pukulan benar-benar berbunyi.
  * - Mixer (tl.mix, scene.gain, scene.vo.gainDb — lihat usesMixer): rencana tanpa mixer dihitung dulu (persis cara lama), lalu
  *   volume dikalikan SESUDAH limiter: musik (file & trailer bed) ikut campuran + adegan, VO per kalimat, SFX per adegan — jadi
  *   menurunkan musik saat VO bicara tetap terdengar turun (limiter tidak menaikkannya lagi). Pengaman puncak per jalur (applyMixer):
@@ -93,12 +95,9 @@ const VO_PEAK = dbToGain(-3);
 const CEIL = dbToGain(-1);
 /** perkiraan puncak file musik user (master komersial ≈ -1 dBTP) */
 const TRACK_PEAK = dbToGain(-1);
-/**
- * batas limiter (sisakan ruang untuk encoder AAC/MP3 & puncak antar-sampel: klik SFX kecil terukur +0,16 dB di atas puncak sampel,
- * selubung 1 byte/frame ±0,12 dB) — teaser tanpa VO terukur ≤ -1 dBTP
- */
-const LIM_CEIL = dbToGain(-1.4);
-/** plafon bagian yang dinaikkan mixer (cadangan 0,6 dB di bawah LIM_CEIL, lihat applyMixer) */
+/** batas limiter (sisakan ruang untuk encoder AAC/MP3 & puncak antar-sampel) */
+const LIM_CEIL = dbToGain(-1.2);
+/** plafon bagian yang dinaikkan mixer (cadangan 0,8 dB di bawah LIM_CEIL, lihat applyMixer) */
 const MIX_CEIL = dbToGain(-2);
 /** penurunan maksimal limiter */
 const LIM_FLOOR = dbToGain(-12);
@@ -142,16 +141,21 @@ function smooth(a: Float32Array, r: number): Float32Array {
 const at = (a: Float32Array, f: number) => (a.length ? a[Math.max(0, Math.min(a.length - 1, Math.floor(f)))] : 1);
 
 /**
- * gain limiter per frame dari gain mentah: lihat-depan 2 frame (turun sebelum pukulan), tahan 1 frame sesudahnya (decoder render
- * tidak membuang jeda awal mp3 ±23 ms → puncak bisa jatuh di frame berikutnya), lepas pelan ±0,3 dtk. Selalu ≤ gain mentah
+ * Puncak selubung SFX sekali-putar yang terdengar di frame ke-`idx` klip. Decoder render tidak membuang jeda awal mp3 (±25 ms ≈ 0,75
+ * frame): isi frame selubung idx−1 sebagian besar baru berbunyi di frame video idx, padahal volume (& limiter) berlaku per frame →
+ * pakai selubung idx−1 (`prev` = bukan frame pertama klip). Seperempat awal frame idx sendiri sudah tertutup lihat-depan limiter.
+ * Tanpa geser ini limiter lepas tepat di frame klik / pukulan berbunyi (teaser tanpa VO: -0,86 dBTP, sekarang -1,14).
  */
+const oneShotPk = (env: Float32Array, idx: number, prev: boolean) => (prev && idx > 0 ? env[idx - 1] : env[idx]) ?? 0;
+
+/** gain limiter per frame dari gain mentah: lihat-depan 2 frame (turun sebelum pukulan), lepas pelan ±0,3 dtk. Selalu ≤ gain mentah */
 function follow(raw: Float32Array, fps: number): Float32Array {
   const N = raw.length;
   const out = new Float32Array(N);
   const relStep = 1 / Math.max(1, Math.round(0.3 * fps));
   let g = 1;
   for (let f = 0; f < N; f++) {
-    let want = f > 0 ? Math.min(raw[f], raw[f - 1]) : raw[f];
+    let want = raw[f];
     for (let k = 1; k <= 2 && f + k < N; k++) want = Math.min(want, raw[f + k]);
     g = want < g ? want : Math.min(want, g + relStep * (1 - g) + relStep * 0.02);
     out[f] = g;
@@ -243,7 +247,7 @@ function estimateRest(p: AudioPlan, extra: SfxMeta[], fps: number, N: number, bu
       const f = from + k;
       if (f >= N) break;
       const idx = offset + k;
-      const pk = env ? (loop ? env[idx % cycle] : env[idx] ?? 0) : tpLin;
+      const pk = env ? (loop ? env[idx % cycle] : oneShotPk(env, idx, k > 0)) : tpLin;
       const a = pk * vol(f);
       if (a > 0) rest[f] += Math.pow(a, PNORM);
     }
@@ -593,7 +597,7 @@ function planCore(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: number, 
       const f = from + k;
       if (f >= N) break;
       const idx = offset + k;
-      const pk = env ? (loop ? env[idx % cycle] : env[idx] ?? 0) : tpLin;
+      const pk = env ? (loop ? env[idx % cycle] : oneShotPk(env, idx, k > 0)) : tpLin;
       const a = pk * vol(f);
       if (a > 0) rest[f] += Math.pow(a, PNORM);
     }
@@ -637,48 +641,52 @@ export function voGuardDb(plan: AudioPlan, sceneId?: string): number {
 
 /**
  * Satu bagian pemutaran musik file dengan offset (frame video). `from` = frame mulai Audio, `trim` = awal file yang dilewati (boleh
- * pecahan → akurat sampel), `dur` = panjang Audio. `inAt` / `outAt` = frame (pecahan) awal crossfade masuk / keluar (null = tidak ada).
+ * pecahan → akurat sampel), `dur` = panjang Audio. `fadeIn` / `fadeOut` = [awal, akhir] crossfade (frame pecahan; null = tidak ada).
  */
-export type MusicPart = { from: number; trim: number; dur: number; inAt: number | null; outAt: number | null };
+export type MusicPart = { from: number; trim: number; dur: number; fadeIn: [number, number] | null; fadeOut: [number, number] | null };
 /** lagu sangat pendek + video panjang → bagian sebanyak ini atau lebih diputar dengan loop biasa (tanpa crossfade) */
 const MAX_MUSIC_PARTS = 64;
 /**
  * Bagian-bagian musik file dengan offset: [0] = sisa lagu dari detik ke-offset sampai file habis; [k ≥ 1] = lagu dari awal, detik 0
- * file tepat di frame head + (k−1)·cycle. Tiap bagian mulai `xf` frame sebelum bagian sebelumnya habis (file = cycle + xf frame)
- * dan disilang-pudar linear (jumlah gain = 1, puncak tidak naik) — menutup hening encoder mp3 (±25–50 ms awal + ujung file) yang
- * tidak dibuang decoder render. null = bukan musik offset / bagian terlalu banyak (StudioAudio memakai loop biasa).
+ * file tepat di frame s0 = head + (k−1)·cycle (pecahan, lewat trim). Tiap bagian mulai ±`xf` frame sebelum file bagian sebelumnya
+ * habis (file = cycle + xf frame) dan disilang-pudar linear dari frame pertama bagian baru sampai file lama habis (keduanya
+ * berbunyi, jumlah gain = 1, puncak tidak naik) — menutup hening encoder mp3 (±25–50 ms awal + ujung file) yang tidak dibuang
+ * decoder render. null = bukan musik offset / bagian terlalu banyak (StudioAudio memakai loop biasa).
  */
 export function musicParts(l: Pick<Loop, "end" | "trim" | "head" | "cycle" | "xf">): MusicPart[] | null {
   const head = l.head ?? 0;
   const cycle = l.cycle ?? 0;
   const xf = Math.max(0, l.xf ?? 0);
   if (!((l.trim ?? 0) > 0) || !(head > 0) || !(cycle > 0) || !(l.end > 0)) return null;
-  const parts: MusicPart[] = [{ from: 0, trim: l.trim ?? 0, dur: Math.max(1, Math.min(l.end, Math.ceil(head + xf - 1e-6))), inAt: null, outAt: head < l.end ? head : null }];
+  const parts: MusicPart[] = [{ from: 0, trim: l.trim ?? 0, dur: Math.max(1, Math.min(l.end, Math.ceil(head + xf - 1e-6))), fadeIn: null, fadeOut: null }];
+  /** frame (pecahan) tempat file bagian sebelumnya habis */
+  let prevEnd = head + xf;
   for (let k = 0; ; k++) {
     const s0 = head + k * cycle;
     if (s0 >= l.end) break;
     if (k >= MAX_MUSIC_PARTS) return null;
     const from = Math.ceil(s0 - 1e-6);
-    const end = Math.min(l.end, Math.ceil(s0 + cycle + xf - 1e-6));
-    if (end <= from) continue;
-    const next = s0 + cycle;
-    parts.push({ from, trim: Math.max(0, from - s0), dur: end - from, inAt: s0, outAt: next < l.end ? next : null });
+    const fileEnd = s0 + cycle + xf;
+    const end = Math.min(l.end, Math.ceil(fileEnd - 1e-6));
+    if (end <= from) break;
+    // crossfade: dari frame pertama bagian baru sampai file bagian lama habis (minimal 1 frame)
+    const fade: [number, number] = [from, Math.max(from + 1, prevEnd)];
+    parts[parts.length - 1].fadeOut = fade;
+    parts.push({ from, trim: Math.max(0, from - s0), dur: end - from, fadeIn: fade, fadeOut: null });
+    prevEnd = fileEnd;
   }
   return parts;
 }
 /** gain crossfade bagian musik di frame video f (diukur di tengah frame) */
-export function musicPartGain(p: Pick<MusicPart, "inAt" | "outAt">, f: number, xf: number): number {
+export function musicPartGain(p: Pick<MusicPart, "fadeIn" | "fadeOut">, f: number): number {
   const c = f + 0.5;
-  const w = Math.max(1e-6, xf);
-  const fin = p.inAt === null ? 1 : clamp01((c - p.inAt) / w);
-  const fout = p.outAt === null ? 1 : 1 - clamp01((c - p.outAt) / w);
-  return fin * fout;
+  const ramp = (w: [number, number]) => clamp01((c - w[0]) / Math.max(1e-6, w[1] - w[0]));
+  return (p.fadeIn ? ramp(p.fadeIn) : 1) * (p.fadeOut ? 1 - ramp(p.fadeOut) : 1);
 }
 
 /** musik file dengan offset: sisa lagu dari detik ke-offset, lalu diulang dari awal (bukan potongan sisa yang diulang terus) */
 function MusicOffset({ l, src, pre }: { l: Loop; src: string; pre: number }) {
   const parts = musicParts(l);
-  const xf = l.xf ?? 0;
   if (!parts) {
     // cadangan (lagu sangat pendek): loop biasa sesudah putaran pertama, tanpa crossfade
     const head = Math.max(1, Math.round(l.head ?? 1));
@@ -699,7 +707,7 @@ function MusicOffset({ l, src, pre }: { l: Loop; src: string; pre: number }) {
           durationInFrames={p.dur}
           trimBefore={p.trim > 1e-9 ? p.trim : undefined}
           premountFor={k ? pre : undefined}
-          volume={(f) => at(l.vol, p.from + f) * musicPartGain(p, p.from + f, xf)}
+          volume={(f) => at(l.vol, p.from + f) * musicPartGain(p, p.from + f)}
           name={k ? `${l.name} · diulang ${k}` : l.name}
         />
       ))}

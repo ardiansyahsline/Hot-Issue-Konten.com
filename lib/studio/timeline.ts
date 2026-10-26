@@ -875,7 +875,7 @@ export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset"
   // putaran ulang: lagu dari awal (maks 400 putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
   for (let st = head, k = 0; st <= until + 1e-6 && k < 400; st += cycle, k++) {
     for (const b of song) {
-      if (st + b > until + 1e-6 || b >= cycle - 1e-6) break;
+      if (st + b > until + 1e-6 || (off > 0 && b >= cycle - 1e-6)) break;
       out.push(r3(st + b));
     }
   }

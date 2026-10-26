@@ -674,11 +674,11 @@ export default function TimelineEditor(p: {
   const restNote = (k?: "musicDb" | "sfxDb") => {
     const low = (k ? [k] : (["musicDb", "sfxDb"] as const)).flatMap((key) => {
       const r = restLow(key);
-      return r ? [`${key === "musicDb" ? "Musik" : "SFX"} dinaikkan ${fmtDb(r.want)}, terdengar ±${fmtDb(r.got)}`] : [];
+      return r ? [`${key === "musicDb" ? "Musik" : "SFX"} diminta ${fmtDb(r.want)}, rata-rata terdengar ${fmtDb(r.got)}`] : [];
     });
     return low.length ? (
       <p className="text-[11px] leading-snug text-sky-300" data-rest-guard>
-        ℹ️ {low.join(" · ")}: {voHeard ? "saat VO bicara dan " : ""}di bagian yang sudah hampir paling keras (mis. drop) tidak bisa lebih keras supaya tidak pecah — di situ yang lain dikecilkan supaya tetap menonjol.
+        ℹ️ {low.join(" · ")}. Bagian yang sudah hampir paling keras ({voHeard ? "saat VO bicara, " : ""}mis. drop) tidak bisa lebih keras supaya tidak pecah — di situ yang lain dikecilkan supaya tetap menonjol.
       </p>
     ) : null;
   };
