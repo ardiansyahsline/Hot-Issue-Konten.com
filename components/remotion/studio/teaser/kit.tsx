@@ -228,7 +228,7 @@ export function Caption({
               const isE = emph.has(w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""));
               return (
                 <span key={k} style={{ display: "inline-block", overflow: "hidden", paddingBottom: fs * 0.08 }}>
-                  <span style={{ display: "inline-block", transform: `translateY(${((1 - p) * fs * 1.05).toFixed(1)}px) rotate(${((1 - p) * 4).toFixed(2)}deg)`, opacity: clamp01(p * 1.6), color: isE ? brand.primary : undefined, textShadow: `0 6px 34px ${rgba("#000000", 0.45)}` }}>{w}</span>
+                  <span style={{ display: "inline-block", transform: `translateY(${((1 - p) * fs * 1.05).toFixed(1)}px) rotate(${((1 - p) * 4).toFixed(2)}deg)`, opacity: clamp01(p * 1.6), color: isE ? brand.primary : undefined, textShadow: p * 1.6 >= 0.99 && leave < 0.01 ? `0 6px 34px ${rgba("#000000", 0.45)}` : undefined /* teks transparan + bayangan = isi digambar dobel di render browser */ }}>{w}</span>
                 </span>
               );
             })}

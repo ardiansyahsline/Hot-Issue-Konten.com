@@ -763,8 +763,8 @@ function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, bk = 1, busy, ord
     st.opacity = busy ? 0.6 : 1;
   } else {
     // fokus ke tombol hero: tombol lain redup & sedikit buram (DOF); saat ⏳ tetap ≤ 0,5 seperti disabled
-    st.opacity = Math.min(busy ? 0.5 : 1, 1 - 0.62 * dim);
-    st.filter = blurCss(dim * 0.7 * bk);
+    // redup lewat opacity saja: filter milik anak lolos dari blur kamera/kartu di render browser (tombol jadi tajam di atas panel buram)
+    st.opacity = Math.min(busy ? 0.5 : 1, 1 - 0.68 * dim);
   }
   return (
     <span style={st}>

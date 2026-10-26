@@ -194,7 +194,7 @@ function BeatCaption({ words, size = 92 }: { words: [string, number, boolean?][]
         const col = lit ? (em ? brand.primary : brand.text) : rgba(brand.text, 0.22);
         return (
           <span key={w} style={{ display: "inline-block", overflow: rise < 0.985 ? "hidden" : "visible", paddingBottom: size * 0.08 }}>
-            <span style={{ display: "inline-block", transform: `translateY(${((1 - rise) * size * 1.05).toFixed(1)}px) scale(${k.toFixed(4)})`, transformOrigin: "50% 70%", color: col, textShadow: `0 6px 34px rgba(0,0,0,0.45)${glow > 0 ? `, 0 0 ${(44 * glow).toFixed(0)}px ${rgba(em ? brand.primary : "#ffffff", 0.6 * glow)}` : ""}` }}>{w}</span>
+            <span style={{ display: "inline-block", transform: `translateY(${((1 - rise) * size * 1.05).toFixed(1)}px) scale(${k.toFixed(4)})`, transformOrigin: "50% 70%", color: col, textShadow: lit ? `0 6px 34px rgba(0,0,0,0.45)${glow > 0 ? `, 0 0 ${(44 * glow).toFixed(0)}px ${rgba(em ? brand.primary : "#ffffff", 0.6 * glow)}` : ""}` : undefined /* kata redup transparan tanpa bayangan (render browser menggambar isinya dobel) */ }}>{w}</span>
           </span>
         );
       })}

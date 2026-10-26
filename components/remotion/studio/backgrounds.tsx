@@ -97,7 +97,9 @@ export function GradientBg({ base, cols, strength = 1 }: { base: string; cols: s
       <Glow x={W * (0.9 + 0.06 * Math.cos(f / 77))} y={H * (0.78 + 0.06 * Math.sin(f / 64))} r={big * 0.5} color={cols[1]} opacity={0.3 * strength} />
       <Glow x={W * (0.55 + 0.18 * Math.sin(f / 120))} y={H * (0.5 + 0.1 * Math.cos(f / 101))} r={big * 0.32} color={cols[2]} opacity={0.16 * strength} />
       {/* garis halus diagonal biar tidak "datar" */}
-      <AbsoluteFill style={{ background: `linear-gradient(180deg, ${rgba("#ffffff", 0.035)} 0%, rgba(255,255,255,0) 30%, rgba(0,0,0,0) 70%, ${rgba("#000000", 0.35)} 100%)` }} />
+      {/* dua lapisan terpisah: render browser salah mencampur stop putih-transparan & hitam-transparan dalam satu gradien */}
+      <AbsoluteFill style={{ background: `linear-gradient(180deg, ${rgba("#ffffff", 0.035)} 0%, rgba(255,255,255,0) 30%)` }} />
+      <AbsoluteFill style={{ background: `linear-gradient(180deg, rgba(0,0,0,0) 70%, ${rgba("#000000", 0.35)} 100%)` }} />
     </AbsoluteFill>
   );
 }
