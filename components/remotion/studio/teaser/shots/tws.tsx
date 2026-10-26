@@ -97,6 +97,8 @@ const NUM_CY = 258;
 const LP_W = 300;
 /** panjang nama file maks. di baris # Layers (sisanya "…"): muat di lebar panel 300 px, sama dengan potongan ellipsis di laptop */
 const FILE_MAX = 40;
+/** mask jalur pudar bawah kartu (render browser): opak di atas → transparan di bawah, setara mask kartu asli */
+const STRIP_MASK = "linear-gradient(180deg, #000 0%, rgba(0,0,0,0) 100%)";
 const LP_H = 222;
 const TOAST_H = 38;
 
@@ -290,73 +292,19 @@ export function TwsShot() {
   // ---- angka hero (level kanvas, di dalam kamera) ----
   const hn = heroNumAt(s, kH, kC, heroY, slotY);
 
-  return (
-    // ROOT_CLASS (border-box) + lineHeight normal: CSS global situs (Tailwind preflight: html line-height 1.5) tidak
-    // mengubah tata letak adegan saat dirender di browser (render web berjalan di dalam halaman website)
-    <AbsoluteFill className={ROOT_CLASS} style={{ overflow: "hidden", lineHeight: "normal" }}>
-      <TwsStyle css={baseCss} anim={anim} web={web} />
-
-      {/* cahaya latar: biru TWS + rona merah saat angka jatuh */}
-      <Glow x={PCX} y={PCY} r={box.w * 0.95} color={C.twsBlue} opacity={0.2 + 0.08 * Math.sin(f / 23)} />
-      <Glow x={PCX} y={hn ? hn.y : slotY} r={box.w * 0.85} color={C.red} opacity={s >= DROP ? 0.5 * Math.exp(-(s - DROP) * 2.2) + 0.08 * (act === 0 ? 1 : 0) : 0} />
-      <Glow x={PCX} y={PCY + PHc * 0.55} r={box.w * 0.7} color={brand.primary} opacity={0.12} />
-
-      {/* motion blur kamera di pembungkus TANPA transform, sebesar camBlur × zoom: di laptop identik dengan blur di dalam Cam
-          (blur lokal ikut di-scale zoom), dan di render browser (blur web-renderer tidak ikut scale transform) besarnya sama */}
-      <AbsoluteFill style={{ filter: blurCss(camBlur * camNow.z) }}>
-        <Cam keys={keys} blur={false}>
-        <AbsoluteFill style={{ transform: `translate(${sh.x.toFixed(2)}px, ${sh.y.toFixed(2)}px) rotate(${sh.r.toFixed(3)}deg)` }}>
-          {/* ---------- kolom ketik AI (AiChat composer) ---------- */}
-          {showComposer && (
-            <div
-              style={{
-                position: "absolute",
-                left: PCX - (CW * UC) / 2,
-                top: PCY - 124 * UC,
-                width: CW,
-                transform: `translateY(${(composerOut * 90 * UC).toFixed(1)}px) scale(${(UC * (1 - composerOut * 0.12)).toFixed(4)})`,
-                transformOrigin: "0 0",
-                opacity: 1 - composerOut,
-                filter: blurCss(composerOut * 8),
-              }}
-            >
-              <ChatBits f={f} fps={fps} />
-              <Composer text={sent ? "" : typed} typing={s < 0.8 && s > 0.08} f={f} fps={fps} s={s} t={t} />
-            </div>
-          )}
-
-          {/* ---------- DesignCard Viewer ---------- */}
-          {cardOp > 0 && (
-            <div
-              style={{
-                position: "absolute",
-                // titik pusat skala = pusat preview → kartu berpusat di (PCX, PCY)
-                left: PCX - CW / 2,
-                top: PCY - (PREV_Y + PH / 2),
-                width: CW,
-                transform: `translateY(${((1 - cardIn) * 140 + cardBounce).toFixed(1)}px) scale(${(U * cardScale).toFixed(4)})`,
-                transformOrigin: `${CW / 2}px ${PREV_Y + PH / 2}px`,
-                opacity: cardOp,
-                filter: blurCss((1 - cardIn) * 9),
-                fontFamily: FONT,
-              }}
-            >
-              <div
-                style={{
-                  position: "relative",
-                  height: cardH,
-                  overflow: "hidden",
-                  borderRadius: 12,
-                  border: `1px solid ${Z[800]}`,
-                  background: "rgba(9,9,11,0.94)",
-                  padding: PAD,
-                  boxShadow: `0 40px 90px -30px rgba(0,0,0,0.9), 0 0 0 1px ${rgba("#ffffff", 0.03)}`,
-                  // dipotong pudar (masih ada isi di bawahnya) selama fase carousel
-                  maskImage: cardMask,
-                  WebkitMaskImage: cardMask,
-                }}
-              >
-                {/* preview besar (carousel) */}
+  // ---- isi kartu DesignCard (dipakai 1× di laptop, 2× di render browser: lihat jalur pudar) ----
+  const cardBox: CSSProperties = {
+    position: "relative",
+    height: cardH,
+    overflow: "hidden",
+    borderRadius: 12,
+    border: `1px solid ${Z[800]}`,
+    background: "rgba(9,9,11,0.94)",
+    padding: PAD,
+    boxShadow: `0 40px 90px -30px rgba(0,0,0,0.9), 0 0 0 1px ${rgba("#ffffff", 0.03)}`,
+  };
+  // preview besar (carousel)
+  const cardPreview = (
                 <div
                   style={{
                     position: "relative",
@@ -395,7 +343,9 @@ export function TwsShot() {
                   <PreviewSweeps f={f} fps={fps} />
                   {(dof > 0 || slamDof > 0) && <div style={{ position: "absolute", inset: 0, background: `rgba(0,0,0,${(dof * 0.35 + slamDof * 0.5).toFixed(3)})` }} />}
                 </div>
-
+  );
+  const cardRest = (
+    <>
                 {/* ‹ Slide n/3 Nama › */}
                 <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, padding: "0 2px", height: 28 }}>
                   <MiniBtn disabled={act === 0}>‹</MiniBtn>
@@ -455,7 +405,87 @@ export function TwsShot() {
                     </div>
                   )}
                 </div>
-              </div>
+    </>
+  );
+
+  return (
+    // ROOT_CLASS (border-box) + lineHeight normal: CSS global situs (Tailwind preflight: html line-height 1.5) tidak
+    // mengubah tata letak adegan saat dirender di browser (render web berjalan di dalam halaman website)
+    <AbsoluteFill className={ROOT_CLASS} style={{ overflow: "hidden", lineHeight: "normal" }}>
+      <TwsStyle css={baseCss} anim={anim} web={web} />
+
+      {/* cahaya latar: biru TWS + rona merah saat angka jatuh */}
+      <Glow x={PCX} y={PCY} r={box.w * 0.95} color={C.twsBlue} opacity={0.2 + 0.08 * Math.sin(f / 23)} />
+      <Glow x={PCX} y={hn ? hn.y : slotY} r={box.w * 0.85} color={C.red} opacity={s >= DROP ? 0.5 * Math.exp(-(s - DROP) * 2.2) + 0.08 * (act === 0 ? 1 : 0) : 0} />
+      <Glow x={PCX} y={PCY + PHc * 0.55} r={box.w * 0.7} color={brand.primary} opacity={0.12} />
+
+      {/* motion blur kamera di pembungkus TANPA transform, sebesar camBlur × zoom: di laptop identik dengan blur di dalam Cam
+          (blur lokal ikut di-scale zoom), dan di render browser (blur web-renderer tidak ikut scale transform) besarnya sama */}
+      <AbsoluteFill style={{ filter: blurCss(camBlur * camNow.z) }}>
+        <Cam keys={keys} blur={false}>
+        <AbsoluteFill style={{ transform: `translate(${sh.x.toFixed(2)}px, ${sh.y.toFixed(2)}px) rotate(${sh.r.toFixed(3)}deg)` }}>
+          {/* ---------- kolom ketik AI (AiChat composer) ---------- */}
+          {showComposer && (
+            <div
+              style={{
+                position: "absolute",
+                left: PCX - (CW * UC) / 2,
+                top: PCY - 124 * UC,
+                width: CW,
+                transform: `translateY(${(composerOut * 90 * UC).toFixed(1)}px) scale(${(UC * (1 - composerOut * 0.12)).toFixed(4)})`,
+                transformOrigin: "0 0",
+                opacity: 1 - composerOut,
+                filter: blurCss(composerOut * 8),
+              }}
+            >
+              <ChatBits f={f} fps={fps} />
+              <Composer text={sent ? "" : typed} typing={s < 0.8 && s > 0.08} f={f} fps={fps} s={s} t={t} />
+            </div>
+          )}
+
+          {/* ---------- DesignCard Viewer ---------- */}
+          {cardOp > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                // titik pusat skala = pusat preview → kartu berpusat di (PCX, PCY)
+                left: PCX - CW / 2,
+                top: PCY - (PREV_Y + PH / 2),
+                width: CW,
+                transform: `translateY(${((1 - cardIn) * 140 + cardBounce).toFixed(1)}px) scale(${(U * cardScale).toFixed(4)})`,
+                transformOrigin: `${CW / 2}px ${PREV_Y + PH / 2}px`,
+                opacity: cardOp,
+                filter: blurCss((1 - cardIn) * 9),
+                fontFamily: FONT,
+              }}
+            >
+              {web && cardMask ? (
+                // render browser: mask-image memaksa web-renderer "precompose" elemen di ukuran CSS aslinya (kartu 400 px) lalu
+                // memperbesarnya ×U×zoom → seluruh kartu buram. Jadi kartu dibagi: bagian atas TANPA mask (dipotong overflow,
+                // tetap tajam) + jalur pudar setinggi fadeLen (salinan kartu, satu-satunya yang ber-mask). Hasilnya sama dengan
+                // mask asli (opak sampai cardH − fadeLen, lalu linear ke transparan di cardH).
+                <div style={{ position: "relative", height: cardH }}>
+                  {/* +2 px tumpang tindih dengan jalur pudar: menutup garis sambungan (tepi jalur yang di-precompose ikut diperhalus) */}
+                  <div style={{ height: Math.min(cardH, cardH - fadeLen + 2), overflow: "hidden" }}>
+                    <div style={cardBox}>
+                      {cardPreview}
+                      {cardRest}
+                    </div>
+                  </div>
+                  <div style={{ position: "absolute", left: 0, right: 0, top: cardH - fadeLen, height: fadeLen, overflow: "hidden", maskImage: STRIP_MASK, WebkitMaskImage: STRIP_MASK }}>
+                    <div style={{ ...cardBox, marginTop: -(cardH - fadeLen) }}>
+                      {/* preview tidak pernah masuk jalur pudar (selalu di atas baris nav) → cukup ruang kosong */}
+                      <div style={{ width: PW, height: PH }} />
+                      {cardRest}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ ...cardBox, maskImage: cardMask, WebkitMaskImage: cardMask }}>
+                  {cardPreview}
+                  {cardRest}
+                </div>
+              )}
             </div>
           )}
 
