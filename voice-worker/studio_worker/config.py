@@ -25,6 +25,7 @@ def clean_supabase_url(raw: str) -> str:
     """rapikan SUPABASE_URL yang ditempel manual: buang spasi/kutip/karakter tak terlihat, format link markdown
     `[teks](url)` / `<url>`, lalu tambah https:// kalau lupa. Kosong tetap kosong (dilaporkan oleh missing())."""
     s = "".join(ch for ch in (raw or "") if ch not in _INVISIBLE).strip().strip("'\"").strip()
+    s = re.sub(r"^(NEXT_PUBLIC_)?SUPABASE_URL\s*=\s*", "", s, flags=re.I)  # nama variabel tertulis dua kali
     m = re.search(r"\]\((https?://[^)\s]+)\)", s)  # [https://x.supabase.co](https://x.supabase.co)
     if m:
         s = m.group(1)
@@ -42,6 +43,10 @@ def url_problem(url: str) -> str | None:
         return f"SUPABASE_URL tidak valid ({url[:60]!r}). Isi persis seperti: SUPABASE_URL=https://xxxxxxxx.supabase.co"
     if url.lower().startswith("https://eyj") or url.lower().startswith("https://sb_"):
         return "SUPABASE_URL berisi kunci, bukan alamat. Sepertinya baris SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY tertukar."
+    host = re.sub(r"^https?://", "", url, flags=re.I).split("/")[0].split(":")[0]
+    labels = host.split(".")
+    if len(host) > 253 or any(not lb or len(lb) > 63 for lb in labels) or "http" in host.lower():
+        return f"SUPABASE_URL tidak valid ({url[:60]!r}…). Isi persis seperti: SUPABASE_URL=https://xxxxxxxx.supabase.co (satu alamat saja, tanpa kunci)"
     return None
 
 
