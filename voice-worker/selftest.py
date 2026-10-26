@@ -238,6 +238,12 @@ def t_angka_wer_cer():
     w = T.wer("kerjaan numpuk banget", "kerjaan menumpuk banget")
     near(w, 1 / 3, 0.01, "WER")
     assert T.cer("abc", "abc") == 0
+    # bunyi luncur ejaan mesin suara (sowal / diya / Indonesiya) vs tulisan ASR (soal / dia / Indonesia) → tidak dianggap salah ucap
+    assert T.wer("Sowal duwit, diya biyar siyap. Suwara Indonesiya!", "soal duit dia biar siap suara Indonesia") == 0
+    assert T.cer("buwat kuwat mediya", "buat kuat media") == 0
+    # beda bunyi sungguhan tetap dihitung; huruf w/y di awal / antar konsonan tidak disentuh
+    assert T.wer("sowal", "su ul") >= 1.0 and T.wer("wayang yakin", "ayang akin") == 1.0
+    assert T.wer("pantai pulau survei", "pantai pulau survei") == 0
 
 
 @test

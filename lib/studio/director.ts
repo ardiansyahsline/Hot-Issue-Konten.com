@@ -32,6 +32,7 @@ import {
   type VoTrack,
 } from "./timeline";
 import { keepTeaserVisual } from "./teaserLock";
+import { applyStyle, isTeaserTimeline } from "./voiceStyle";
 
 export const DIRECTOR_HERO = "Harley";
 /** sama dengan batas normalizeTimeline (lib/studio/timeline.ts, `.slice(0, 8)`) & MAX_SFX di SceneCard */
@@ -49,7 +50,7 @@ const EXAMPLE = {
   goal: "Kenalkan CS Tracker ke tim",
   mood: "energik, sinematik",
   brand: { id: "konten" },
-  voice: { mode: "bank", voiceName: "Alif - Energik", exaggeration: 0.65, cfg: 0.35 },
+  voice: { mode: "bank", voiceName: "Alif - Energik", preset: "promo" },
   music: { src: "bed" },
   grain: true,
   vignette: true,
@@ -162,7 +163,7 @@ export const DIRECTOR_RULES = [
   '  "title": "judul proyek singkat", "ratio": "9:16|16:9|1:1|4:5",',
   '  "concept": "konsep 1–2 kalimat", "hook": "isi hook 1,5 dtk pertama", "platform": "TikTok / Reels", "goal": "tujuan video", "mood": "energik, sinematik",',
   '  "brand": {"id": "konten|tws|custom", "name": "…", "primary": "#hex", "accent": "#hex", "bg": "#hex", "text": "#hex", "font": "jakarta|inter|interTight", "logo": "src lampiran logo"},',
-  '  "voice": {"mode": "bank|edge|elevenlabs|none", "voiceId": "id dari BANK SUARA", "voiceName": "…", "exaggeration": 0.6, "cfg": 0.4},',
+  '  "voice": {"mode": "bank|edge|elevenlabs|none", "voiceId": "id dari BANK SUARA", "voiceName": "…", "preset": "natural|promo|tenang"},',
   '  "music": {"src": "bed|none|src dari MUSIK TERSEDIA", "name": "…"},',
   '  "grain": true, "vignette": true,',
   '  "scenes": [{',
@@ -185,7 +186,7 @@ export const DIRECTOR_RULES = [
   `- sfx.at = detik dari awal adegan saat "pukulan" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks ${MAX_SFX_PER_SCENE} SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.`,
   "- music.src: \"bed\" = trailer bed bebas hak cipta (bawaan kalau tidak ada musik), \"none\" = tanpa musik, atau src dari MUSIK TERSEDIA / lampiran audio user. JANGAN pakai lagu berhak cipta (lagu artis, sound viral) — kalau diminta, jelaskan singkat & tawarkan trailer bed atau upload musik bebas hak cipta.",
   "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca — tulis seperti diucapkan orang Indonesia, TANPA tanda hubung/strip (strip dibaca aneh / jadi jeda). Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"si es treker\", \"AI\" → \"ei ai\", \"review\" → \"riviu\", \"real-time\" → \"ril taim\", \"download\" → \"daunlod\", \"PPT\" → \"pepete\", \"ranking\" → \"rengking\". Website juga punya kamus ejaan bawaan untuk istilah umum (PPT, AI, CS, download, review, TikTok, IHSG, dll.) dan membaca angka sebagai kata, jadi spell cukup untuk kata lain yang tidak umum. Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
-  "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). exaggeration 0.25–1 (makin tinggi makin ekspresif), cfg 0.1–1 (makin rendah makin santai).",
+  "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). voice.preset = gaya bicara bank suara supaya tidak kedengeran AI: \"natural\" = santai kayak ngobrol (bawaan), \"promo\" = energik & cepat untuk iklan / teaser, \"tenang\" = pelan & meyakinkan untuk penjelasan. Cukup isi preset; exaggeration (0.25–1, ekspresi) / cfg (0.1–1, tempo) / temperature (0.5–1, variasi) hanya kalau user minta atur angka sendiri. Revisi: salin voice dari TIMELINE SEKARANG apa adanya kecuali user minta ganti gaya bicara.",
   "- subtitles true kalau ada VO (false kalau teks layarnya sudah sama persis dengan VO).",
   "- bg.media, layout.src, brand.logo hanya boleh src dari LAMPIRAN USER (alamat /api/studio/…). Jangan menulis URL luar.",
   '- ADEGAN PREMIUM (layout.kind "teaser", mis. di proyek Teaser CS Tracker) = animasi buatan tangan yang sinkron dengan ketukan musik. Saat revisi, salin PERSIS dari TIMELINE SEKARANG: id, layout (kind + shot), bg, camera, visual, dur, dan vo.at. Yang boleh diubah HANYA teks VO (vo.text & vo.spell — VO mulai di detik vo.at, jadi harus muat di dur − vo.at − 0,25 dtk, ±2,5 kata per detik; mis. dur 5,4 & vo.at 1,2 → maks ±3,9 dtk ≈ 9 kata. Kepanjangan → pendekkan kalimatnya, dur tidak bisa ditambah), SFX (nyala/mati, tambah, hapus; detik SFX bawaannya jangan digeser), transition, dan level musik (scene.music). Teks layar (text) hanya tampil di shot chat & montage (1 baris) dan trainAi (maks 2 baris), maks 6 kata per baris; shot lain teks layarnya bagian dari animasi, jadi biarkan. Jangan membuat adegan "teaser" baru dan jangan mengubah adegan lain menjadi "teaser".',
@@ -598,17 +599,21 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   if (!has(o, "voice")) out.voice = prev.voice;
   else if (out.voice.mode === prev.voice.mode) {
     const v = o.voice;
+    const ai = out.voice;
     out.voice = {
       ...out.voice,
       voiceId: has(v, "voiceId") ? out.voice.voiceId : prev.voice.voiceId,
       voiceName: has(v, "voiceName") ? out.voice.voiceName : prev.voice.voiceName,
       edgeVoice: has(v, "edgeVoice") ? out.voice.edgeVoice : prev.voice.edgeVoice,
-      exaggeration: has(v, "exaggeration") ? out.voice.exaggeration : prev.voice.exaggeration,
-      cfg: has(v, "cfg") ? out.voice.cfg : prev.voice.cfg,
-      // gaya bicara pilihan user (panel Suara VO) tidak hilang kalau AI menulis ulang objek voice tanpa field ini
-      preset: has(v, "preset") ? out.voice.preset : prev.voice.preset,
-      temperature: has(v, "temperature") ? out.voice.temperature : prev.voice.temperature,
+      exaggeration: prev.voice.exaggeration,
+      cfg: prev.voice.cfg,
+      preset: prev.voice.preset,
+      temperature: prev.voice.temperature,
     };
+    // gaya bicara pilihan user (panel Suara VO) tetap, kecuali AI benar-benar mengubahnya: hanya kolom yang beda dari versi lama
+    // yang dipakai (salinan apa adanya tidak mengubah apa-apa); preset tanpa angka → angka preset itu (bukan jadi Kustom)
+    const changed = (k: "preset" | "exaggeration" | "cfg" | "temperature") => (has(v, k) && ai[k] !== prev.voice[k] ? ai[k] : undefined);
+    out.voice = applyStyle(out.voice, { preset: changed("preset"), exaggeration: changed("exaggeration"), cfg: changed("cfg"), temperature: changed("temperature") }, isTeaserTimeline(prev));
   }
   // kamus ejaan proyek (diisi user di panel Suara VO) tidak boleh hilang gara-gara AI menulis ulang objek voice tanpa kamus
   if (!has(o.voice, "lexicon")) out.voice = { ...out.voice, lexicon: prev.voice.lexicon?.length ? prev.voice.lexicon : undefined };

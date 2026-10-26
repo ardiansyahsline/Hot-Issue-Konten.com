@@ -102,10 +102,39 @@ export const voicePatch = (s: VoiceStyle): Pick<Voice, "preset" | "exaggeration"
   temperature: round2(s.temperature),
 });
 
-/** setelan job bank suara (laptop) — sama persis untuk "Generate ulang VO", 🔊 Dengar & buat ulang satu kalimat (cache laptop) */
-export function bankSettings(t: Pick<Timeline, "voice" | "scenes">): { exaggeration: number; cfg_weight: number; temperature: number; takes: number } {
+/** kolom gaya bicara yang dikirim dari luar (skill / AI sutradara); kolom kosong = tidak diubah */
+export type StylePatch = { preset?: unknown; exaggeration?: unknown; cfg?: unknown; temperature?: unknown };
+
+/**
+ * Gaya bicara sesudah diubah dari luar panel Suara VO (Skill Studio / AI sutradara) — hanya kolom yang ikut dikirim:
+ * - preset bernama tanpa angka → angka preset itu (angka lama di proyek tidak membuat pilihan itu terbaca Kustom)
+ * - preset bernama / tanpa preset + angka → gaya sekarang (atau preset itu) diganti angkanya; angka cocok persis preset bernama
+ *   → preset itu, selain itu Kustom. "kustom" = Kustom dengan angka itu (yang kosong: angka yang sedang dipakai)
+ * - tanpa preset dengan angka lama bawaan (0,65/0,35 · 0,6/0,4 tanpa variasi) = bukan pilihan user → tidak diubah
+ * - tidak ada kolom gaya → voice tidak berubah (objek yang sama)
+ * Hasil selalu lengkap (preset + 3 angka) supaya ekspor, skill & job laptop membaca angka yang sama.
+ */
+export function applyStyle<V extends Voice>(v: V, patch: StylePatch | null | undefined, teaser = false): V {
+  if (!patch) return v;
+  const preset = normPreset(patch.preset);
+  const exg = clampNum(patch.exaggeration, EXG_MIN, EXG_MAX);
+  const cfg = clampNum(patch.cfg, CFG_MIN, CFG_MAX);
+  const temp = normTemperature(patch.temperature);
+  if (!preset && exg === undefined && cfg === undefined && temp === undefined) return v;
+  if (!preset && temp === undefined && exg !== undefined && cfg !== undefined && LEGACY.some(([e, c]) => near(e, exg) && near(c, cfg))) return v;
+  const base = preset && preset !== "kustom" ? styleOf(preset) : voiceStyle(v, teaser);
+  const s = { exaggeration: exg ?? base.exaggeration, cfg: cfg ?? base.cfg, temperature: temp ?? base.temperature };
+  const named = preset === "kustom" ? undefined : matchPreset(s);
+  return { ...v, ...voicePatch({ preset: named ?? "kustom", ...s }) };
+}
+
+/**
+ * setelan job bank suara (laptop) — sama persis untuk "Generate ulang VO", 🔊 Dengar & buat ulang satu kalimat (cache laptop).
+ * `preset` hanya keterangan (tersimpan di antrian, worker memakai angkanya) — tidak memengaruhi kunci cache laptop.
+ */
+export function bankSettings(t: Pick<Timeline, "voice" | "scenes">): { exaggeration: number; cfg_weight: number; temperature: number; takes: number; preset: VoicePreset } {
   const s = voiceStyle(t.voice, isTeaserTimeline(t));
-  return { exaggeration: s.exaggeration, cfg_weight: s.cfg, temperature: s.temperature, takes: BANK_TAKES };
+  return { exaggeration: s.exaggeration, cfg_weight: s.cfg, temperature: s.temperature, takes: BANK_TAKES, preset: s.preset };
 }
 
 /** label singkat: "Promo energik" / "Kustom (ekspresi 0,7 · tempo 0,4 · variasi 0,9)" */

@@ -180,6 +180,17 @@ def norm_words(s: str) -> list[str]:
     return s.split()
 
 
+# bunyi luncur dari ejaan mesin suara website (lib/studio/pronounce.ts: soal → sowal, buat → buwat, dia → diya, Indonesia →
+# Indonesiya): ASR bahasa Indonesia menulis "soal" / "dia" → saat menghitung WER/CER kedua sisi disamakan supaya take yang
+# diucapkan benar tidak dianggap salah ucap (tidak memicu versi tambahan / cadangan per kalimat)
+_GLIDE_W = re.compile(r"([uo])w(?=[aeiou])")
+_GLIDE_Y = re.compile(r"iy(?=[aeiou])")
+
+
+def _sound_words(s: str) -> list[str]:
+    return [_GLIDE_Y.sub("i", _GLIDE_W.sub(r"\1", w)) for w in norm_words(s)]
+
+
 def _lev(a: list, b: list) -> int:
     if not a:
         return len(b)
@@ -193,14 +204,14 @@ def _lev(a: list, b: list) -> int:
 
 
 def wer(ref: str, hyp: str) -> float:
-    r, h = norm_words(ref), norm_words(hyp)
+    r, h = _sound_words(ref), _sound_words(hyp)
     if not r:
         return 0.0 if not h else 1.0
     return _lev(r, h) / len(r)
 
 
 def cer(ref: str, hyp: str) -> float:
-    r, h = list("".join(norm_words(ref))), list("".join(norm_words(hyp)))
+    r, h = list("".join(_sound_words(ref))), list("".join(_sound_words(hyp)))
     if not r:
         return 0.0 if not h else 1.0
     return _lev(r, h) / len(r)

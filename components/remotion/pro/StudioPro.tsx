@@ -586,7 +586,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
           </div>
           {timeline && (
             <div className="order-4 min-w-0 space-y-4">
-              <VoPanel timeline={timeline} onChange={change} projectId={projectId} />
+              <VoPanel timeline={timeline} onChange={change} projectId={projectId} director={dirName} />
               <ExportPanel timeline={timeline} projectId={projectId} sfxExtra={sfxExtra} />
             </div>
           )}

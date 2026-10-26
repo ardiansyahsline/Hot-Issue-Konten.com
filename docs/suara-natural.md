@@ -26,7 +26,8 @@ bersih lama tetap dipakai.
 1. **Satu tarikan**: satu baris naskah (≤ 260 huruf) dibaca sekali jalan, jadi intonasi tidak "reset" tiap kalimat. Baris yang
    lebih panjang dipotong di akhir kalimat.
 2. **Beberapa versi per baris**: bawaan 3 bila website tidak menentukan (`TAKES` di `.env`, 1–4).
-   Website yang mengirim jumlah versi sendiri (mis. preset gaya bicara) tetap dihormati. Versi yang paling jelas menang; kalau ada beberapa yang sama jelasnya, dipilih
+   Website mengirim 3 versi + angka **gaya bicara** (Natural ngobrol / Promo energik / Tenang meyakinkan / Kustom: ekspresi,
+   tempo, variasi) yang sama untuk "Generate ulang VO", 🔊 Dengar, dan kecepatan per kalimat di Timeline. Versi yang paling jelas menang; kalau ada beberapa yang sama jelasnya, dipilih
    yang **paling natural**.
 3. **Jeda alami**: jeda antar kalimat dijaga 0,25–0,6 detik (sesudah "…" 0,45–0,7 detik) dan diisi **suara ruangan** dari rekaman
    referensi, bukan hening mati. Ujung kalimat (napas, nada turun) tidak terpotong. Jeda hanya dipanjangkan kalau mesin memang
@@ -45,6 +46,11 @@ Dipakai untuk memilih versi terbaik, dan ditampilkan per baris di hasil job (`na
 | **MOS** (`mos`) | Perkiraan "seberapa alami" 1–5 dari model UTMOS (gratis, MIT). 4 ke atas = bagus. Kosong = tidak dipakai. |
 | **Dipercepat** (`native` / `atempo`) | Persen dipercepat lewat tempo bicara asli vs. dipercepat mesin (atempo). Atempo makin kecil makin natural. |
 | **Mode** (`mode`) | `satu-tarikan` (normal) atau `per-kalimat` (cadangan kalau satu tarikan salah ucap terus). |
+
+Tiap baris hasil job juga membawa `heard`: teks yang terdengar oleh pengecek ucapan (ASR) dari versi yang dipakai (maks 400 huruf;
+kosong kalau ASR tidak ada). Website menampilkannya di kartu adegan sebagai **👂 Terdengar** dan menyorot kata yang salah ucap
+(mis. "soal" terdengar "su ul") supaya ejaannya bisa diperbaiki lewat kamus. Bunyi luncur dari ejaan mesin suara (soal → sowal,
+dia → diya) tidak dihitung salah ucap saat memilih versi.
 
 ## 4. Mematikan skor MOS
 

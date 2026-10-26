@@ -62,6 +62,7 @@ import {
   type VoiceStyle,
 } from "@/lib/studio/voiceStyle";
 import { isTeaserScene } from "./teaserLock";
+import { DEFAULT_DIRECTOR } from "./DirectorPicker";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
 const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis Pocket TTS dari Kyutai";
@@ -72,7 +73,8 @@ const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis
  */
 const TAIL = 0.25;
 export const DEFAULT_VOICE = "Alif - Energik";
-const NO_SCRIPT = "Belum ada naskah VO di adegan. Minta Harley tuliskan naskahnya dulu.";
+/** naskah VO kosong — ditulis oleh sutradara yang sedang dipakai proyek ini (bawaan Harley) */
+const noScript = (who: string) => `Belum ada naskah VO di adegan. Minta ${who} tuliskan naskahnya dulu.`;
 const STALE = 'Naskah VO atau kamus ejaan berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
 
 type Run =
@@ -268,7 +270,19 @@ export function fitVo(
  * Panel suara VO: pilih suara (bank suara di laptop / cadangan Edge / premium ElevenLabs / tanpa VO),
  * atur ekspresi, lalu bikin VO. Worker mati / gagal -> otomatis pakai cadangan (label "VO sementara").
  */
-export default function VoPanel({ timeline: tl, onChange, projectId }: { timeline: Timeline; onChange: (tl: Timeline) => void; projectId: string | null }) {
+export default function VoPanel({
+  timeline: tl,
+  onChange,
+  projectId,
+  director,
+}: {
+  timeline: Timeline;
+  onChange: (tl: Timeline) => void;
+  projectId: string | null;
+  /** nama sutradara aktif (activeDirector di DirectorPicker); kosong = Harley */
+  director?: string;
+}) {
+  const who = director?.trim() || DEFAULT_DIRECTOR;
   const uid = useId();
   const status = useStudioStatus();
   const { voices, loaded, error: voiceErr } = useVoices();
@@ -510,7 +524,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const genTts = async (engine: "edge" | "elevenlabs", why?: string) => {
     const t0 = tlRef.current;
     const items = t0.scenes.filter((s) => s.vo?.text);
-    if (!items.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!items.length) return setRun({ s: "error", msg: noScript(who) });
     const edgeVoice: EdgeVoice = t0.voice.edgeVoice ?? "id-ID-ArdiNeural";
     // teks ucapan akhir per adegan (ejaan adegan + kamus ejaan + angka jadi kata); subtitle tetap vo.text
     const lex0 = t0.voice.lexicon;
@@ -616,7 +630,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         },
       ];
     });
-    if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!lines.length) return setRun({ s: "error", msg: noScript(who) });
     onChange(t);
     setNote(null);
     setRun({ s: "start" });
@@ -635,7 +649,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
 
   const generate = (preferBank = false) => {
     setNote(null);
-    if (!voScenes.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!voScenes.length) return setRun({ s: "error", msg: noScript(who) });
     const m = preferBank ? "bank" : mode;
     if (m === "bank") {
       if (workerOn && bankVoice) return void genBank(bankVoice);
@@ -948,7 +962,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
           <button type="button" className="btn-primary w-full" disabled={!voScenes.length} onClick={() => generate()}>
             {tl.vo?.lines.length ? "🔁 Generate ulang VO" : "🎙️ Bikin suara VO"}
           </button>
-          {!voScenes.length && <p className="text-[11px] text-zinc-500">Belum ada naskah VO — minta Harley tuliskan dulu.</p>}
+          {!voScenes.length && <p className="text-[11px] text-zinc-500">Belum ada naskah VO — minta {who} tuliskan dulu.</p>}
         </>
       )}
 
