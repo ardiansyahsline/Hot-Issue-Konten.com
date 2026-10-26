@@ -38,11 +38,8 @@ export function isTeaserBeatCue(s: Pick<Scene, "layout">, c: Pick<SfxCue, "id" |
   return canonCues(s.layout.shot ?? "hook").some((x) => x.id === c.id && Math.abs(x.at - c.at) < 0.005);
 }
 
-/** detik mulai VO (`vo.at`, dari naskah) kalau timeline menyimpannya — ikut dikunci, tanpa bergantung pada bentuk tipe Scene */
-const voAtOf = (vo: Scene["vo"]): number | undefined => {
-  const at = (vo as { at?: unknown } | null)?.at;
-  return typeof at === "number" ? at : undefined;
-};
+/** detik mulai VO (`vo.at`, dari naskah) — ikut dikunci */
+const voAtOf = (vo: Scene["vo"]): number | undefined => (typeof vo?.at === "number" ? vo.at : undefined);
 
 /**
  * Adegan premium teaser: batasnya di ketukan musik (0,6 dtk) & visualnya buatan tangan, jadi durasi, jenis tampilan (kind + shot),
@@ -74,7 +71,7 @@ export function keepTeaserVisual(prev: Timeline | null, next: Timeline): Timelin
     const id = byId.has(s.id) ? s.id : o.id;
     const textLocked = !TEASER_TEXT_LINES[o.layout.shot ?? "hook"];
     const oldAt = voAtOf(o.vo);
-    const vo = s.vo && oldAt !== undefined && voAtOf(s.vo) !== oldAt ? ({ ...s.vo, at: oldAt } as Scene["vo"]) : s.vo;
+    const vo = s.vo && oldAt !== undefined && voAtOf(s.vo) !== oldAt ? { ...s.vo, at: oldAt } : s.vo;
     const text = textLocked ? o.text : s.text;
     if (id === s.id && s.dur === o.dur && s.layout === o.layout && s.bg === o.bg && s.camera === o.camera && s.visual === o.visual && vo === s.vo && text === s.text) return s;
     changed = true;
@@ -136,10 +133,19 @@ export function snapAroundTeaser<T extends Pick<Timeline, "scenes" | "fps">>(tl:
     }
     const hi = fr(cap - restMin[i]);
     const ok = (t: number) => t - prev >= MIN_DUR - 1e-6 && t - prev <= MAX_DUR + 1e-6 && t <= hi + 1e-6;
+    const cand = grid.filter(ok);
+    // ketukan terdekat dari `t` yang sah & tidak lebih jauh dari maxShift (null kalau tidak ada — jangan pakai nearestBeat([]) = t)
+    const pick = (t: number) => {
+      if (!cand.length) return null;
+      const b = nearestBeat(t, cand);
+      return Math.abs(b - t) <= maxShift + 1e-6 ? b : null;
+    };
+    // 1) posisi semula (digeser adegan teaser sebelumnya) — total & susunan tetap; 2) awal sebenarnya + durasi semula — kalau
+    // batas sebelumnya sudah ditempel ke ketukan lain, ini sering masih bisa pas tanpa memanjangkan total
     const target = acc + shift;
     const a = fr(target);
-    const b = nearestBeat(a, grid.filter(ok));
-    bounds.push(ok(b) && Math.abs(b - target) <= maxShift + 1e-6 ? b : ok(a) ? a : Math.min(hi, fr(prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur)))));
+    const b = pick(target) ?? pick(prev + s.dur);
+    bounds.push(b ?? (ok(a) ? a : Math.min(hi, fr(prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur))))));
   });
   const scenes = tl.scenes.map((s, i) => (isTeaserScene(s) ? s : { ...s, dur: fr(bounds[i + 1] - bounds[i]) }));
   if (scenes.some((s) => s.dur < MIN_DUR - 1e-6) || totalSec({ scenes }) > MAX_TOTAL + 1e-6) return tl;

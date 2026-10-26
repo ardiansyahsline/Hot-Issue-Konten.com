@@ -81,6 +81,39 @@ function replaceAir(html: string): string {
   });
 }
 
+/**
+ * Latar grafis di slide isi = <div class="latar" style="top:auto;height:Hpx;…"> berisi SVG width=1080 height=1350
+ * (preserveAspectRatio slice; di laptop CSS `.latar svg{width:100%;height:100%}` membuatnya memenuhi kotak 1080×H).
+ * @remotion/web-renderer menggambar <svg> menurut atribut width/height lalu MEMASUKKANNYA (contain) ke kotak → grafik
+ * (bola dunia dsb.) tergambar kecil di tengah. Atribut height diselaraskan dengan tinggi kotak: di laptop tidak berubah
+ * (CSS tetap menang), di browser hasilnya sama-sama "slice".
+ */
+function fitLatarSvg(html: string): string {
+  return html.replace(
+    /(<div data-layer="Latar" class="latar[^"]*" style="(?:[^"]*?;)?height:(\d+(?:\.\d+)?)px;[^"]*">\s*<svg\b[^>]*?\swidth="1080") height="1350"/g,
+    (_m, head: string, h: string) => `${head} height="${h}"`,
+  );
+}
+
+/**
+ * Pudar atas latar slide isi = mask-image linear-gradient(180deg,transparent A%,#000 B%) di div.latar. Di render browser
+ * mask itu tidak terpakai dengan benar pada slide yang di-scale (pudar hilang → tepi atas grafik/foto terlihat sebagai garis
+ * keras di bawah baris data). Karena latar slide (.art) hitam pekat, mask diganti lapisan gradien hitam → transparan
+ * di atas latar: hasilnya identik secara matematis (latar·α + hitam·(1−α)) dan tergambar sama di laptop maupun browser.
+ */
+function latarFadeOverlay(html: string): string {
+  return html.replace(/(<div data-layer="Latar" class="latar[^"]*" style=")([^"]*)(">)([\s\S]*?)(<\/div>)/g, (m, open: string, st: string, gt: string, body: string, close: string) => {
+    const g = /linear-gradient\(180deg,transparent (\d+(?:\.\d+)?)%,#000 (\d+(?:\.\d+)?)%\)/.exec(st);
+    if (!g || /<\/?div\b/.test(body)) return m;
+    const rest = st
+      .replace(/(?:-webkit-)?mask-image:linear-gradient\(180deg,transparent [\d.]+%,#000 [\d.]+%\);?/g, "")
+      .replace(/;$/, "");
+    if (/mask/.test(rest)) return m;
+    const fade = `<div style="position:absolute;left:0;top:0;width:100%;height:100%;background:linear-gradient(180deg,#000 ${g[1]}%,rgba(0,0,0,0) ${g[2]}%)"></div>`;
+    return `${open}${rest}${gt}${body}${fade}${close}`;
+  });
+}
+
 /** CSS tambahan (setara buildDoc DesignCard: #cs-art, box-sizing, img max-width) */
 const EXTRA_CSS = [
   `.${SCOPE}{position:relative;width:${SLIDE_W}px;height:${SLIDE_H}px;overflow:hidden;font-family:'Inter Variable','Plus Jakarta Sans Variable',system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased;text-align:left;line-height:normal}`,
@@ -88,6 +121,13 @@ const EXTRA_CSS = [
   `.${SCOPE}>.art{width:100%;height:100%}`,
   `.${SCOPE} img{max-width:100%}`,
 ].join("\n");
+/**
+ * Akar adegan (kelas ROOT_CLASS). Ukuran UI adegan ini dirancang dengan border-box (render laptop & Player: CSS bawaan
+ * Remotion `*{box-sizing:border-box}`; website: Tailwind preflight). Dikunci eksplisit supaya render browser tetap sama
+ * walau dijalankan di halaman/harness tanpa salah satu CSS global itu.
+ */
+export const ROOT_CLASS = "twsroot";
+const ROOT_CSS = `.${ROOT_CLASS},.${ROOT_CLASS} *{box-sizing:border-box}`;
 /**
  * "Color Grading" asli = mix-blend-mode soft-light. Hanya saat render di browser (@remotion/web-renderer, tidak mendukung blend)
  * diganti lapisan biasa beropasitas rendah; di preview & render laptop (Chromium) tetap soft-light asli → identik dengan produk.
@@ -104,13 +144,15 @@ export function prepareSlide(sl: TwsSlide, n: number, logoSrc: string, key: stri
   // logoSrc kosong = logo gagal dimuat (useTwsReady) → <img> dibuang, bukan gambar rusak
   html = logoSrc ? html.split(`src="${TWS_LOGO}"`).join(`src="${escAttr(logoSrc)}"`) : html.replace(/<img data-layer="Logo"[^>]*>/g, "");
   html = replaceAir(html);
+  html = fitLatarSvg(html);
+  html = latarFadeOverlay(html);
   html = uniqIds(html, key);
   return { html, css: m ? scopeCss(m[1]) : "" };
 }
 
 /** stylesheet TWS ter-scope (sekali untuk semua slide di adegan); `web` = sedang dirender @remotion/web-renderer */
 export function TwsStyle({ css, anim, web }: { css: string; anim?: string; web?: boolean }) {
-  return <style>{`${css}\n${EXTRA_CSS}\n${web ? GRADE_WEB : ""}\n${anim ?? ""}`}</style>;
+  return <style>{`${ROOT_CSS}\n${css}\n${EXTRA_CSS}\n${web ? GRADE_WEB : ""}\n${anim ?? ""}`}</style>;
 }
 
 /** lapisan "Angka 3D" (div.big3d berisi SVG angka) dari HTML slide yang sudah disiapkan — untuk angka slam di level kanvas */

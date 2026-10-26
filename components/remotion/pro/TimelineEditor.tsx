@@ -57,7 +57,7 @@ function snapNote(r: BeatReport, changed: boolean, locked: boolean): string {
   if (r.onBeat === r.cuts) return changed ? "🎯 Semua potongan adegan sudah nempel ke ketukan musik" : locked ? "🔒 Adegan premium teaser dikunci · semua potongan sudah pas di ketukan" : "Potongan sudah pas di ketukan";
   const why = [
     r.offLocked ? `${r.offLocked} di akhir adegan premium (durasinya dikunci, tidak ikut digeser)` : "",
-    r.offFree ? `${r.offFree} terlalu jauh dari ketukan (maks geser 0,35 dtk)` : "",
+    r.offFree ? `${r.offFree} di adegan biasa (ketukan terdekat lebih dari 0,35 dtk atau membuat video lebih panjang)` : "",
   ].filter(Boolean);
   return `${changed ? "🎯" : "⚠️"} ${r.onBeat} dari ${r.cuts} potongan pas di ketukan · ${r.cuts - r.onBeat} tidak: ${why.join(", ")}`;
 }

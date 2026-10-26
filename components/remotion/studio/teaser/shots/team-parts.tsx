@@ -397,7 +397,11 @@ function msgH(m: ChatMsg) {
 }
 
 /** room "Tim CS": header (ChatPage), thread (ChatThread), composer — `w`×`h` CSS px */
-export function ChatPanel({ s, w, h }: { s: number; w: number; h: number }) {
+/**
+ * `shadow=false`: bayangan besar panel digambar pemanggil di luar subtree yang di-scale (div terpisah, skala ±1) —
+ * di @remotion/web-renderer bayangan blur besar pada elemen ber-scale 2,2× terpotong kotak keras (latar belang).
+ */
+export function ChatPanel({ s, w, h, shadow = true }: { s: number; w: number; h: number; shadow?: boolean }) {
   const online = 3 + (s >= 1.2 - PRE ? 1 : 0) + (s >= 2.1 - PRE ? 1 : 0);
   const onlineFlash = Math.max(s >= 1.2 - PRE ? 1 - pr(s, 1.2 - PRE, 1.7) : 0, s >= 2.1 - PRE ? 1 - pr(s, 2.1 - PRE, 2.6) : 0);
   const onlineBump = 1 + 0.12 * Math.max(s >= 1.2 - PRE ? Math.max(0, 1 - (s - 1.2 + PRE) / 0.25) : 0, s >= 2.1 - PRE ? Math.max(0, 1 - (s - 2.1 + PRE) / 0.25) : 0);
@@ -406,7 +410,7 @@ export function ChatPanel({ s, w, h }: { s: number; w: number; h: number }) {
   const seen = s < 0.9 ? 0 : s < 1.2 ? 1 : s < 2.1 ? 2 : s < 3.0 ? 3 : 4;
   const tw = w - 24;
   return (
-    <div style={{ position: "relative", width: w, height: h, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 22, border: `1px solid ${rgba(ZN[800], 0.9)}`, background: ZN[900], boxShadow: `${SHADOW_POP}, 0 40px 90px -30px rgba(0,0,0,0.85)` }}>
+    <div style={{ position: "relative", width: w, height: h, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 22, border: `1px solid ${rgba(ZN[800], 0.9)}`, background: ZN[900], boxShadow: shadow ? `${SHADOW_POP}, 0 40px 90px -30px rgba(0,0,0,0.85)` : SHADOW_POP }}>
       {/* header room */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px", borderBottom: `1px solid ${rgba(ZN[800], 0.8)}`, flex: "none" }}>
         <span style={{ color: ZN[400], fontSize: 16 }}>←</span>
@@ -797,6 +801,8 @@ export function MiniSlide({ kind, i, count = 1 }: { kind: MiniKind; i: number; c
  * `p` 0..1 (0,5 = tegak lurus = puncak suara kertas). Tanpa preserve-3d / backface-visibility / properti CSS `perspective`
  * (web-renderer hanya membaca `transform`): perspective() ada DI DALAM string transform, sisi depan (0–90°) dan sisi
  * belakang kertas (90–180°, melayang di kiri engsel) digambar sebagai dua elemen terpisah.
+ * Saat diam (p = 0) sisi depan TANPA transform 3D: web-renderer hanya menggambar elemen 3D bila kotak layout-nya
+ * (tanpa transform leluhur) menyentuh kanvas — lihat pergeseran dunia di MusicReportShot (team.tsx).
  */
 export function PageFlip({ p, w, h, front, back, radius = 8 }: { p: number; w: number; h: number; front: ReactNode; back: ReactNode; radius?: number }) {
   const th = 180 * clamp01(p);
@@ -829,7 +835,7 @@ export function PageFlip({ p, w, h, front, back, radius = 8 }: { p: number; w: n
       </div>
       {/* sisi depan: 0 → 90°, tepi kanan terangkat ke arah penonton */}
       {th < 90 && (
-        <div style={{ position: "absolute", inset: 0, transformOrigin: "0 50%", transform: `perspective(${PERS}px) rotateY(${(-th).toFixed(2)}deg) translateZ(${(lift * 18).toFixed(1)}px)`, boxShadow: turning ? `${(-24 * lift).toFixed(1)}px 18px 40px rgba(0,0,0,${(0.55 * lift).toFixed(3)})` : undefined, borderRadius: radius }}>
+        <div style={{ position: "absolute", inset: 0, transformOrigin: "0 50%", transform: turning ? `perspective(${PERS}px) rotateY(${(-th).toFixed(2)}deg) translateZ(${(lift * 18).toFixed(1)}px)` : undefined, boxShadow: turning ? `${(-24 * lift).toFixed(1)}px 18px 40px rgba(0,0,0,${(0.55 * lift).toFixed(3)})` : undefined, borderRadius: radius }}>
           {front}
           {turning && <div style={{ position: "absolute", inset: 0, borderRadius: radius, background: `linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,${(0.1 + 0.18 * lift).toFixed(3)}) 62%, rgba(255,255,255,${(0.04 * lift).toFixed(3)}) 80%, rgba(0,0,0,${(0.5 * lift).toFixed(3)}) 100%)` }} />}
         </div>

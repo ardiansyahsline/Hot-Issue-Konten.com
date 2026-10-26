@@ -102,6 +102,12 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const playerRef = useRef<PlayerRef>(null);
 
   const idRef = useRef<string | null>(null);
+  /**
+   * nomor aksi buka/buat proyek terakhir dari USER (pilih proyek, proyek baru, contoh, Buka Teaser). Buka otomatis saat halaman
+   * dimuat tidak menaikkannya dan dilewati kalau user sudah memilih sesuatu; insert teaser/contoh yang selesai belakangan tidak
+   * merebut layar kalau sesudahnya user sudah memilih proyek lain.
+   */
+  const intentRef = useRef(0);
   const tlRef = useRef<Timeline | null>(null);
   const listRef = useRef(projects);
   listRef.current = projects;
@@ -276,12 +282,15 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         return;
       }
       const list = (data ?? []) as ProjectRow[];
-      setProjects(list);
-      listRef.current = list;
+      // proyek yang dibuat selama daftar dimuat (mis. Buka Teaser) tetap ada di daftar
+      const merged = [...listRef.current.filter((p) => !list.some((r) => r.id === p.id)), ...list];
+      setProjects((ps) => [...ps.filter((p) => !list.some((r) => r.id === p.id)), ...list]);
+      listRef.current = merged;
       const last = store.get(LAST_KEY);
       const pick = list.find((p) => p.id === last)?.id ?? list[0]?.id;
-      // open() langsung mengisi projectId sebelum menunggu DB -> chat tidak sempat tampil sebagai "proyek baru"
-      if (pick) void open(pick);
+      // open() langsung mengisi projectId sebelum menunggu DB -> chat tidak sempat tampil sebagai "proyek baru".
+      // User sudah memilih/membuat proyek selama daftar dimuat -> pilihannya tidak ditimpa buka otomatis
+      if (pick && intentRef.current === 0 && idRef.current === null) void open(pick);
       setLoading(false);
     })().catch(() => {
       if (!dead) {
@@ -295,6 +304,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   }, [sb, open]);
 
   const fresh = useCallback(() => {
+    intentRef.current++;
     flushAll();
     setBarErr(null);
     setPid(null);
@@ -307,14 +317,17 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   }, [flushAll, setPid]);
 
   const example = useCallback(async () => {
+    const my = ++intentRef.current;
     setCreating(true);
     const tl = tidyTimeline(defaultTimeline(), catRef.current);
     const { data, error } = await sb.from("studio_projects").insert({ title: "Contoh video", timeline: tl }).select("id, title, updated_at").single();
     setCreating(false);
     if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuat proyek. Coba lagi."));
     const row = data as ProjectRow;
+    setProjects((ps) => [row, ...ps.filter((p) => p.id !== row.id)]);
+    // sementara insert berjalan user sudah membuka proyek lain -> proyek contoh cukup masuk daftar
+    if (intentRef.current !== my) return;
     flushAll();
-    setProjects((ps) => [row, ...ps]);
     setPid(row.id);
     setTitle(row.title);
     tlRef.current = tl;
@@ -327,6 +340,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
 
   /** 🎞️ Teaser CS Tracker: proyek baru dari timeline teaser bawaan (11 adegan premium) lewat jalur simpan proyek yang sama */
   const openTeaser = useCallback(async () => {
+    const my = ++intentRef.current;
     setCreating(true);
     const raw = teaserTimelineRaw();
     const tl = tidyTimeline(raw, catRef.current);
@@ -335,8 +349,11 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setCreating(false);
     if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuka teaser. Coba lagi."));
     const row = data as ProjectRow;
+    setProjects((ps) => [row, ...ps.filter((p) => p.id !== row.id)]);
+    // sementara insert berjalan user sudah membuka proyek lain / proyek baru -> pilihan terakhir user yang menang, teaser cukup
+    // masuk daftar (buka otomatis saat halaman dimuat tidak dihitung: teaser tetap dibuka)
+    if (intentRef.current !== my) return;
     flushAll();
-    setProjects((ps) => [row, ...ps]);
     setPid(row.id);
     setTitle(row.title);
     setBarErr(null);
@@ -434,7 +451,10 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         save={save}
         loading={loading || opening}
         error={barErr}
-        onPick={(id) => void open(id)}
+        onPick={(id) => {
+          intentRef.current++;
+          void open(id);
+        }}
         onNew={fresh}
         onRename={(t) => void rename(t)}
         onDelete={() => void remove()}

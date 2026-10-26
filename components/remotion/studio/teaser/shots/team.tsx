@@ -117,8 +117,11 @@ export function ChatShot() {
         <Cam keys={keys}>
           <Glow x={cx} y={pTop + (pBottom - pTop) * 0.62} r={760} color={brand.primary} opacity={glowK} />
           <div style={{ position: "absolute", left: pLeft, top: pTop, width: pW, height: pBottom - pTop, transformOrigin: "50% 100%", transform: `perspective(1600px) translateY(${((1 - enter) * 160).toFixed(1)}px) rotateX(${((1 - enter) * 14).toFixed(2)}deg) scale(${(0.94 + 0.06 * enter).toFixed(4)})`, opacity: Math.min(1, enter * 1.6) }}>
+            {/* bayangan panel (= "0 40px 90px -30px" CSS px × 2,2) di skala ±1: spread negatif → kotak diperkecil 66 px tiap sisi.
+                Di luar subtree ber-scale supaya render browser tidak memotongnya jadi kotak keras di latar. */}
+            <div style={{ position: "absolute", left: 66, top: 66, right: 66, bottom: 66, boxShadow: "0 88px 198px rgba(0,0,0,0.85)" }} />
             <Scaled x={0} y={0} w={C_PW} h={PH} scale={C_S}>
-              <ChatPanel s={s} w={C_PW} h={PH} />
+              <ChatPanel s={s} w={C_PW} h={PH} shadow={false} />
             </Scaled>
           </div>
         </Cam>
@@ -169,6 +172,7 @@ const M_S = 2.1;
 const D_S = 2.0;
 const PLAY = 0.6; // ui-plucks-happy
 const FLIP = 2.4; // kertas-balik-halaman
+const SHIFT_AT = 2.0; // pergeseran dunia (lihat MusicReportShot) — sesudah popover lepas layar, sebelum halaman dibalik (2,1)
 const PPT = 3.0; // ketukan: kata "PPT" menyala + tombol ⬇ Unduh PowerPoint disorot (adegan berakhir 3,6 → cut ke montage)
 
 /**
@@ -203,7 +207,15 @@ export function MusicReportShot() {
   const capBottom = box.y + 118;
   const hW = 390 * M_S;
   const hX = box.x + (box.w - hW) / 2;
-  const hY = box.y + 170;
+  // Pergeseran dunia untuk render browser: @remotion/web-renderer melewati elemen ber-transform 3D (halaman PageFlip)
+  // bila kotak layout-nya (tanpa transform leluhur) tidak menyentuh kanvas — kartu PPT aslinya ±2100 px di bawah kanvas,
+  // jadi halaman yang dibalik hilang di MP4 browser. Mulai SHIFT_AT (kamera sedang whip, header & popover sudah di luar layar,
+  // sebelum halaman mulai dibalik 2,1) seluruh dunia digeser ke atas `oy` px dan kamera mengimbangi persis (semua keyframe
+  // dihitung aim() dari titik dunia yang sama, zoom linear, r = 0) → gambar CLI identik, kartu PPT berada di dalam kanvas.
+  const hY0 = box.y + 170;
+  const deckY0 = hY0 + 110 * M_S + 640 * M_S + 240;
+  const oy = s >= SHIFT_AT ? Math.max(0, Math.round(deckY0 - 1300)) : 0;
+  const hY = hY0 - oy;
   const navBottom = hY + 102 * M_S; // bawah baris nav (CSS 102)
   const popW = 300 * M_S;
   const popX = hX + hW - 16 * M_S - popW;

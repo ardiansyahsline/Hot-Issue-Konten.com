@@ -629,6 +629,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     let scene = s;
     if (old.layout.src && !s.layout.src && s.layout.kind === old.layout.kind && !has(rs.layout, "src")) scene = { ...scene, layout: { ...scene.layout, src: old.layout.src } };
     if (old.bg.media && !s.bg.media && s.bg.kind === old.bg.kind && !has(rs.bg, "media")) scene = { ...scene, bg: { ...scene.bg, media: old.bg.media } };
+    // adegan biasa tidak boleh diubah jadi adegan premium teaser (animasinya buatan tangan untuk isi teaser, bukan isi adegan ini)
+    if (old.layout.kind !== "teaser" && scene.layout.kind === "teaser") scene = { ...scene, layout: old.layout };
     return scene;
   });
   // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)

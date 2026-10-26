@@ -26,7 +26,7 @@ import { blurCss, Glow, TextShine, useSvgId } from "../../fx";
 import HeroArt from "@/components/ai/HeroArt";
 import { DISPLAY, FONT, HeroAvatar, ME, Z } from "../../screens/ui";
 import { Cam, camAtTime, clamp01, EASE, Flash, prog, rgba, springAt, useShot, type CamKey } from "../kit";
-import { bigNumberHtml, prepareSlide, SLIDE_W, TwsSlideView, TwsStyle, useTwsLogo, useTwsReady } from "./tws-parts";
+import { bigNumberHtml, prepareSlide, ROOT_CLASS, SLIDE_W, TwsSlideView, TwsStyle, useTwsLogo, useTwsReady } from "./tws-parts";
 
 // ---------------------------------------------------------------------------------------------
 // Waktu (detik adegan) — sama dengan sfx adegan "tws" di lib/studio/teaser.ts
@@ -95,6 +95,8 @@ const NUM_CX = 540;
 const NUM_CY = 258;
 // panel Layers & toast (px CSS sebelum diskalakan)
 const LP_W = 300;
+/** panjang nama file maks. di baris # Layers (sisanya "…"): muat di lebar panel 300 px, sama dengan potongan ellipsis di laptop */
+const FILE_MAX = 40;
 const LP_H = 222;
 const TOAST_H = 38;
 
@@ -279,6 +281,9 @@ export function TwsShot() {
   // tepi bawah tetap pudar: kartu asli masih berlanjut (kontrol gambar, chip revisi, caption, sumber data)
   const fadeLen = 44 * (1 - unfold) + TAIL * unfold;
 
+  // pudar bawah kartu (mask-image di kartu sendiri, laptop & browser)
+  const cardMask = fadeLen > 0.5 ? `linear-gradient(180deg, #000 ${(((cardH - fadeLen) / cardH) * 100).toFixed(2)}%, rgba(0,0,0,0) 100%)` : undefined;
+
   // ---- CSS animasi ber-scope (hanya salinan preview: .tws{uid}p0/p1/p2) ----
   const anim = useMemo(() => slideAnim(f, fps, `tws${uid}p`), [f, fps, uid]);
 
@@ -286,7 +291,9 @@ export function TwsShot() {
   const hn = heroNumAt(s, kH, kC, heroY, slotY);
 
   return (
-    <AbsoluteFill style={{ overflow: "hidden" }}>
+    // ROOT_CLASS (border-box) + lineHeight normal: CSS global situs (Tailwind preflight: html line-height 1.5) tidak
+    // mengubah tata letak adegan saat dirender di browser (render web berjalan di dalam halaman website)
+    <AbsoluteFill className={ROOT_CLASS} style={{ overflow: "hidden", lineHeight: "normal" }}>
       <TwsStyle css={baseCss} anim={anim} web={web} />
 
       {/* cahaya latar: biru TWS + rona merah saat angka jatuh */}
@@ -294,7 +301,10 @@ export function TwsShot() {
       <Glow x={PCX} y={hn ? hn.y : slotY} r={box.w * 0.85} color={C.red} opacity={s >= DROP ? 0.5 * Math.exp(-(s - DROP) * 2.2) + 0.08 * (act === 0 ? 1 : 0) : 0} />
       <Glow x={PCX} y={PCY + PHc * 0.55} r={box.w * 0.7} color={brand.primary} opacity={0.12} />
 
-      <Cam keys={keys} blur={false} style={{ filter: blurCss(camBlur) }}>
+      {/* motion blur kamera di pembungkus TANPA transform, sebesar camBlur × zoom: di laptop identik dengan blur di dalam Cam
+          (blur lokal ikut di-scale zoom), dan di render browser (blur web-renderer tidak ikut scale transform) besarnya sama */}
+      <AbsoluteFill style={{ filter: blurCss(camBlur * camNow.z) }}>
+        <Cam keys={keys} blur={false}>
         <AbsoluteFill style={{ transform: `translate(${sh.x.toFixed(2)}px, ${sh.y.toFixed(2)}px) rotate(${sh.r.toFixed(3)}deg)` }}>
           {/* ---------- kolom ketik AI (AiChat composer) ---------- */}
           {showComposer && (
@@ -342,8 +352,8 @@ export function TwsShot() {
                   padding: PAD,
                   boxShadow: `0 40px 90px -30px rgba(0,0,0,0.9), 0 0 0 1px ${rgba("#ffffff", 0.03)}`,
                   // dipotong pudar (masih ada isi di bawahnya) selama fase carousel
-                  maskImage: fadeLen > 0.5 ? `linear-gradient(180deg, #000 ${(((cardH - fadeLen) / cardH) * 100).toFixed(2)}%, rgba(0,0,0,0) 100%)` : undefined,
-                  WebkitMaskImage: fadeLen > 0.5 ? `linear-gradient(180deg, #000 ${(((cardH - fadeLen) / cardH) * 100).toFixed(2)}%, rgba(0,0,0,0) 100%)` : undefined,
+                  maskImage: cardMask,
+                  WebkitMaskImage: cardMask,
                 }}
               >
                 {/* preview besar (carousel) */}
@@ -402,10 +412,12 @@ export function TwsShot() {
                 {/* thumbnail 6 kolom */}
                 <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 6 }}>
                   {thumbs.map((p, i) => (
-                    <div key={i} style={{ borderRadius: 6, padding: 2, boxShadow: i === act ? `0 0 0 2px ${C.orange}` : undefined, opacity: i === act ? 1 : 0.7 }}>
+                    <div key={i} style={{ position: "relative", borderRadius: 6, padding: 2, opacity: i === act ? 1 : 0.7 }}>
                       <div style={{ borderRadius: 8, overflow: "hidden", background: Z[950] }}>
                         <TwsSlideView html={p.html} scale={THUMB_W / SLIDE_W} />
                       </div>
+                      {/* ring-2 ring-orange (thumbnail aktif) */}
+                      {i === act && <Ring w={2} r={6} color={C.orange} />}
                     </div>
                   ))}
                 </div>
@@ -451,7 +463,8 @@ export function TwsShot() {
           {hn && <SlamBloom s={s} x={PCX} y={hn.y} w={box.w} />}
           {hn && heroNum && <HeroNumber html={heroNum} x={PCX} st={hn} f={f} fps={fps} />}
         </AbsoluteFill>
-      </Cam>
+        </Cam>
+      </AbsoluteFill>
 
       {/* kilat pukulan (bass-drop + impact): singkat, angka tetap kontras */}
       <Flash at={DROP} len={0.07} max={0.22} />
@@ -695,14 +708,32 @@ function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, busy, order }: { 
     st.zIndex = 2;
     st.background = l > 0.02 ? `rgba(39,39,42,${(0.95 * clamp01(l)).toFixed(3)})` : "transparent";
     st.transform = `translateY(${(-3 * l).toFixed(2)}px) scale(${((1 + 0.24 * l) * press).toFixed(4)})`;
-    st.boxShadow = l > 0.02 ? `0 ${(10 * l).toFixed(1)}px ${(24 * l).toFixed(1)}px -6px rgba(0,0,0,.75), 0 0 0 ${(3 * l).toFixed(2)}px ${rgba(C.orange, 0.2)}, 0 0 ${(22 * l).toFixed(1)}px ${rgba(C.orange, 0.28)}` : undefined;
+    // ring oranye 3px = <Ring> (bukan box-shadow spread: tidak tergambar di render browser)
+    st.boxShadow = l > 0.02 ? `0 ${(10 * l).toFixed(1)}px ${(24 * l).toFixed(1)}px -6px rgba(0,0,0,.75), 0 0 ${(22 * l).toFixed(1)}px ${rgba(C.orange, 0.28)}` : undefined;
     st.opacity = busy ? 0.6 : 1;
   } else {
     // fokus ke tombol hero: tombol lain redup & sedikit buram (DOF); saat ⏳ tetap ≤ 0,5 seperti disabled
     st.opacity = Math.min(busy ? 0.5 : 1, 1 - 0.62 * dim);
     st.filter = blurCss(dim * 0.7);
   }
-  return <span style={st}>{children}</span>;
+  return (
+    <span style={st}>
+      {hero && lift > 0.02 && <Ring w={3 * lift} r={8} b={1} color={rgba(C.orange, 0.2)} />}
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Pengganti box-shadow ring `0 0 0 Npx warna`: garis luar sebagai elemen sendiri (border), karena @remotion/web-renderer
+ * (tombol Download MP4) tidak menggambar spread box-shadow. Hasil di laptop sama dengan ring box-shadow.
+ * w = tebal ring, r = radius sudut elemen induk, b = tebal border induk (ring dimulai di tepi luar border).
+ * Induk wajib position:relative dan tidak overflow:hidden.
+ */
+function Ring({ w, r, b = 0, color }: { w: number; r: number; b?: number; color: string }) {
+  if (w < 0.05) return null;
+  const o = -(w + b);
+  return <span style={{ position: "absolute", left: o, top: o, right: o, bottom: o, borderRadius: r + w, border: `${w.toFixed(2)}px solid ${color}`, pointerEvents: "none" }} />;
 }
 
 function MiniBtn({ children, disabled }: { children: ReactNode; disabled?: boolean }) {
@@ -821,7 +852,8 @@ function Composer({ text, typing, f, fps, s, t }: { text: string; typing: boolea
   const ready = text.length > 0;
   const caretOn = typing || Math.floor(s * 2.4) % 2 === 0;
   return (
-    <div style={{ position: "relative", borderRadius: 16, border: `1px solid ${ready ? rgba(C.orange, 0.45) : Z[800]}`, background: Z[900], padding: 10, boxShadow: `0 30px 70px -28px rgba(0,0,0,.9), 0 0 0 ${ready ? 4 : 0}px ${rgba(C.orange, 0.08)}` }}>
+    <div style={{ position: "relative", borderRadius: 16, border: `1px solid ${ready ? rgba(C.orange, 0.45) : Z[800]}`, background: Z[900], padding: 10, boxShadow: "0 30px 70px -28px rgba(0,0,0,.9)" }}>
+      {ready && <Ring w={4} r={16} b={1} color={rgba(C.orange, 0.08)} />}
       <div style={{ padding: "6px 8px", fontSize: 14, lineHeight: "21px", minHeight: 33, color: text ? Z[100] : Z[500], whiteSpace: "nowrap", overflow: "hidden" }}>
         {text || PLACEHOLDER}
         {text && caretOn && <span style={{ display: "inline-block", width: 1.5, height: 17, marginLeft: 1, verticalAlign: "-3px", background: Z[100] }} />}
@@ -929,8 +961,9 @@ function SavedToast({ f, fps, x, y, scale }: { f: number; fps: number; x: number
           borderRadius: 14,
           padding: "0 14px",
           background: "rgba(24,24,27,0.97)",
+          position: "relative",
           border: `1px solid ${rgba(C.emerald, 0.5)}`,
-          boxShadow: `0 16px 40px -12px rgba(0,0,0,0.8), 0 0 0 4px ${rgba(C.emerald, 0.12)}`,
+          boxShadow: "0 16px 40px -12px rgba(0,0,0,0.8)",
           fontFamily: FONT,
           fontSize: 13,
           fontWeight: 650,
@@ -938,6 +971,7 @@ function SavedToast({ f, fps, x, y, scale }: { f: number; fps: number; x: number
           whiteSpace: "nowrap",
         }}
       >
+        <Ring w={4} r={14} b={1} color={rgba(C.emerald, 0.12)} />
         <span style={{ width: 18, height: 18, borderRadius: 999, background: C.emerald, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2.5 6.3l2.3 2.2 4.7-5" />
@@ -1074,7 +1108,8 @@ function LayersPanel({ f, fps, x, y, scale, layers, file }: { f: number; fps: nu
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", fontSize: 11, color: "#ffffff", fontWeight: 600 }}>
         <span style={{ width: 14, textAlign: "center", color: "#b3b3b3", fontWeight: 700 }}>#</span>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file}</span>
+        {/* dipendekkan di sini (text-overflow:ellipsis tidak didukung render browser → teks terpotong tanpa "…") */}
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.length > FILE_MAX ? `${file.slice(0, FILE_MAX)}…` : file}</span>
       </div>
       {rows.map((l, i) => {
         const q = prog(f, fps, a + 0.1 + i * 0.035, a + 0.22 + i * 0.035, EASE.out);

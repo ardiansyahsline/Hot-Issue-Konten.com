@@ -225,7 +225,10 @@ export default function SceneCard({
             label="🔤 Teks di layar (satu baris per baris)"
             hint={
               teaser && !long.length && shown.length <= MAX_LINES ? (
-                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks 6 kata per baris. Kosongkan untuk teks bawaan animasi.`
+                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks 6 kata per baris. ${
+                  // chat & montage: `text[0] ?? teks bawaan`; trainAi: `lines={text}` → kosong = tanpa teks layar
+                  s.layout.shot === "trainAi" ? "Kosongkan = tanpa teks layar." : "Kosongkan untuk teks bawaan animasi."
+                }`
               ) : long.length || shown.length > MAX_LINES ? (
                 <span className="text-amber-400">
                   {long.map((x) => `Baris ${x.i + 1}: ${x.n} kata`).join(" · ")}
