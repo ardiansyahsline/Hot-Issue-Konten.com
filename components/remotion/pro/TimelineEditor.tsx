@@ -1,7 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { planAudio, voGuardDb } from "@/components/remotion/studio/audio";
+import { planAudioLift, voGuardDb } from "@/components/remotion/studio/audio";
 import { extraSfxOf, reloadStudioCatalog, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
 import {
@@ -14,7 +14,9 @@ import {
   dbOf,
   isLoudSfx,
   maxMusicOffset,
+  musicCycleSec,
   musicFileBeats,
+  musicHeadSec,
   musicOffsetOf,
   musicVolDb,
   MAX_DUR,
@@ -646,26 +648,40 @@ export default function TimelineEditor(p: {
 
   // ---------------- 🎚️ volume (mixer) ----------------
   const musicVol = musicVolDb(tl);
-  // VO dinaikkan → cek pengaman puncak (dihitung dari timeline tertunda supaya slider tetap ringan): VO yang sudah hampir puncak
-  // tidak bisa lebih keras, yang terjadi musik & SFX ikut turun saat VO bicara → diberi keterangan
+  // VO / musik / SFX dinaikkan → cek pengaman puncak (dihitung dari timeline tertunda supaya slider tetap ringan): VO yang sudah
+  // hampir puncak tidak bisa lebih keras (musik & SFX ikut turun saat VO bicara); musik / SFX tidak dibuat lebih keras di bagian yang
+  // sudah dekat puncak (mis. drop, saat VO bicara) → keterangan + kenaikan yang benar-benar terdengar
   const tlLazy = useDeferredValue(tl);
-  const voUp = tlLazy.scenes.some((s) => s.vo?.text && voDbOf(tlLazy, s) > 0);
-  const guardPlan = useMemo(() => {
-    if (!voUp || tlLazy.voice?.mode === "none" || tlLazy.muteVo || !tlLazy.vo?.lines.length) return null;
+  const voOnLazy = tlLazy.voice?.mode !== "none" && !tlLazy.muteVo && !!tlLazy.vo?.lines.length;
+  const voUp = voOnLazy && tlLazy.scenes.some((s) => s.vo?.text && voDbOf(tlLazy, s) > 0);
+  const upLazy = (k: "musicDb" | "sfxDb") => (k === "musicDb" ? tlLazy.music.src !== "none" && musicVolDb(tlLazy) > 0 : dbOf(tlLazy.mix?.sfxDb) > 0) || tlLazy.scenes.some((s) => dbOf(s.gain?.[k]) > 0);
+  const restUpLazy = upLazy("musicDb") || upLazy("sfxDb");
+  const mixInfo = useMemo(() => {
+    if (!voUp && !restUpLazy) return null;
     const f = tlLazy.fps || 30;
-    return planAudio(tlLazy, "all", extra, f, Math.max(1, totalFrames({ scenes: tlLazy.scenes, fps: f }) + Math.round(TAIL_SEC * f)));
-  }, [voUp, tlLazy, extra]);
+    return planAudioLift(tlLazy, "all", extra, f, Math.max(1, totalFrames({ scenes: tlLazy.scenes, fps: f }) + Math.round(TAIL_SEC * f)));
+  }, [voUp, restUpLazy, tlLazy, extra]);
+  const guardPlan = voUp ? (mixInfo?.plan ?? null) : null;
   const guardAll = guardPlan ? voGuardDb(guardPlan) : 0;
   const guardNote = (db: number) => `🛡️ VO sudah hampir paling keras — pengaman puncak menahannya ${fmtDb(db)} supaya tidak pecah; musik & SFX ikut turun saat VO bicara (VO tetap lebih menonjol).`;
-  // musik / SFX dinaikkan + ada VO: saat VO bicara keduanya tidak dibuat lebih keras dari bawaan (VO tidak pernah diturunkan)
   const voHeard = tl.voice?.mode !== "none" && !tl.muteVo && !!tl.vo?.lines.length;
   const restUp = (k: "musicDb" | "sfxDb") => (k === "musicDb" ? tl.music.src !== "none" && musicVol > 0 : dbOf(tl.mix?.sfxDb) > 0) || tl.scenes.some((s) => dbOf(s.gain?.[k]) > 0);
-  const restNote = (k?: "musicDb" | "sfxDb") =>
-    voHeard && (k ? restUp(k) : restUp("musicDb") || restUp("sfxDb")) ? (
+  /** jalur yang dinaikkan tapi terdengar naik ≥ 1 dB lebih kecil dari yang diminta (kenaikan nyata dari rencana audio) */
+  const restLow = (k: "musicDb" | "sfxDb") => {
+    const r = k === "musicDb" ? mixInfo?.music : mixInfo?.sfx;
+    return restUp(k) && r && r.want > 0.5 && r.got < r.want - 1 ? r : null;
+  };
+  const restNote = (k?: "musicDb" | "sfxDb") => {
+    const low = (k ? [k] : (["musicDb", "sfxDb"] as const)).flatMap((key) => {
+      const r = restLow(key);
+      return r ? [`${key === "musicDb" ? "Musik" : "SFX"} dinaikkan ${fmtDb(r.want)}, terdengar ±${fmtDb(r.got)}`] : [];
+    });
+    return low.length ? (
       <p className="text-[11px] leading-snug text-sky-300" data-rest-guard>
-        ℹ️ Saat VO bicara, {k === "musicDb" ? "musik" : k === "sfxDb" ? "SFX" : "musik & SFX"} tidak dibuat lebih keras dari bawaan supaya VO tetap jelas — yang lain dikecilkan, jadi tetap lebih menonjol. Di luar VO terdengar penuh.
+        ℹ️ {low.join(" · ")}: {voHeard ? "saat VO bicara dan " : ""}di bagian yang sudah hampir paling keras (mis. drop) tidak bisa lebih keras supaya tidak pecah — di situ yang lain dikecilkan supaya tetap menonjol.
       </p>
     ) : null;
+  };
   const laneDb: Record<MixKey, number> = { musicDb: musicVol, voDb: dbOf(tl.mix?.voDb), sfxDb: dbOf(tl.mix?.sfxDb) };
   const setMix = (k: MixKey, db: number) => {
     const t = tlRef.current;
@@ -757,13 +773,16 @@ export default function TimelineEditor(p: {
   };
   const musicName = tl.music.src === "none" ? "Tanpa musik" : tl.music.src === "bed" ? "Trailer bed (cadangan)" : tl.music.name || "Musik";
   const musicOff = musicDraft ?? offNow;
-  /** detik video tempat lagu habis lalu diulang dari awal (sisa lagu sesudah offset, lalu tiap panjang lagu) */
+  /** detik video tempat lagu diulang dari awal (sisa lagu sesudah offset, lalu tiap panjang lagu; dengan offset: crossfade, musicHeadSec) */
   const musicSeams = useMemo(() => {
     if (!fileMusic || !mDur || mDur < 1) return [] as number[];
+    const m = { src: tl.music.src, offset: musicOff, dur: mDur };
+    const head = musicHeadSec(m) || mDur - Math.min(musicOff, mDur);
+    const step = musicCycleSec(m) || mDur;
     const out: number[] = [];
-    for (let t = mDur - Math.min(musicOff, mDur); t < total - 0.05 && out.length < 50; t += mDur) if (t > 0.05) out.push(t);
+    for (let t = head; t < total - 0.05 && out.length < 50; t += step) if (t > 0.05) out.push(t);
     return out;
-  }, [fileMusic, mDur, musicOff, total]);
+  }, [fileMusic, mDur, musicOff, total, tl.music.src]);
   /** keadaan ketukan musik (deteksi di laptop lewat useBeats) */
   const beatState: { text: string; busy: boolean } | null = !fileMusic
     ? tl.music.src === "bed"
