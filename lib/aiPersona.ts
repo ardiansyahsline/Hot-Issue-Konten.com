@@ -230,6 +230,8 @@ const LOOKS: Record<string, Look> = {
   Johnson: { type: "ESTP", hair: 0, skin: "#d6a07a", hc: "#111827", prop: "shield" },
   Fanny: { type: "ESTP", hair: 4, skin: "#f6d3b8", hc: "#0c4a6e", prop: "dagger" },
 };
+/** hero bawaan yang punya tampilan & tipe tetap (dipakai pilihan sutradara Studio Pro) */
+export const HERO_NAMES: readonly string[] = Object.keys(LOOKS);
 
 /**
  * Julukan, keterangan & sifat KHAS tiap hero (tidak ada yang kembar walau tipe MBTI-nya sama).

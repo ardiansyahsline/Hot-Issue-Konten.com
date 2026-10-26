@@ -249,7 +249,20 @@ export type Timeline = {
   vignette?: boolean;
   /** tanpa VO sama sekali (versi musik + SFX + teks) */
   muteVo?: boolean;
+  /** sutradara AI proyek ini (kosong = Harley) — lihat `Director` */
+  director?: Director;
+  /** volume campuran (dB) — lihat `Mix` */
+  mix?: Mix;
 };
+
+/**
+ * Sutradara AI proyek: `hero` = nama hero bawaan (mis. "Harley") atau karakter buatan user "char:<uuid>".
+ * `name` = nama tampilan (untuk karakter buatan). `notes` = catatan gaya dari user (maks 20 × 300 huruf, teks biasa) —
+ * dikirim ke AI sebagai CATATAN, bukan perintah sistem. Server memeriksa hero sebelum dipakai (route chat).
+ */
+export type Director = { hero: string; name?: string; notes?: string[] };
+/** volume campuran per jalur (dB, -24..+6). Data saja — dipakai mixer audio nanti. */
+export type Mix = { musicDb?: number; voDb?: number; sfxDb?: number };
 
 // ---------------------------------------------------------------------------------------------
 // Aturan & batas
@@ -578,7 +591,68 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     grain: o.grain === undefined ? true : !!o.grain,
     vignette: o.vignette === undefined ? true : !!o.vignette,
     muteVo: !!o.muteVo,
+    ...normDirectorMix(o),
   };
+}
+
+// ---------- sutradara & volume campuran (opsional; field kosong / rusak tidak disimpan) ----------
+export const DIRECTOR_NOTES_MAX = 20;
+export const DIRECTOR_NOTE_LEN = 300;
+export const MIX_MIN_DB = -24;
+export const MIX_MAX_DB = 6;
+const CHAR_HERO = /^char:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HERO_NAME = /^[A-Za-z][A-Za-z .'-]{0,39}$/;
+/** teks biasa satu baris: tag HTML, tanda < > `, karakter kontrol dibuang */
+export const plainText = (v: unknown, max: number) =>
+  (typeof v === "string" ? v : typeof v === "number" ? String(v) : "")
+    .replace(/<\/?[a-z!?][^>]*>/gi, " ")
+    .replace(/[<>`\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+/** catatan gaya: maks 20 × 300 huruf, teks biasa, tanpa dobel */
+export function normNotes(v: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of Array.isArray(v) ? v : []) {
+    const t = plainText(x, DIRECTOR_NOTE_LEN);
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push(t);
+    if (out.length >= DIRECTOR_NOTES_MAX) break;
+  }
+  return out;
+}
+/** hero sah secara bentuk: "char:<uuid>" atau nama hero (huruf). Cek hero benar-benar ada dilakukan server chat */
+export const isDirectorHero = (v: unknown): v is string => typeof v === "string" && (CHAR_HERO.test(v.trim()) || HERO_NAME.test(v.trim()));
+export function normDirector(v: unknown): Director | undefined {
+  const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
+  if (!o || !isDirectorHero(o.hero)) return undefined;
+  const hero = o.hero.trim();
+  const name = plainText(o.name, 40);
+  const notes = normNotes(o.notes);
+  return { hero: CHAR_HERO.test(hero) ? hero.toLowerCase() : hero, ...(name ? { name } : {}), ...(notes.length ? { notes } : {}) };
+}
+/** dB volume campuran: angka → -24..+6 (0,1 dB); bukan angka → undefined */
+export const mixDb = (v: unknown): number | undefined => {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? parseFloat(v.replace(",", ".")) : NaN;
+  return Number.isFinite(n) ? Math.round(Math.min(MIX_MAX_DB, Math.max(MIX_MIN_DB, n)) * 10) / 10 : undefined;
+};
+export function normMix(v: unknown): Mix | undefined {
+  const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
+  if (!o) return undefined;
+  const out: Mix = {};
+  for (const k of ["musicDb", "voDb", "sfxDb"] as const) {
+    const d = mixDb(o[k]);
+    if (d !== undefined) out[k] = d;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+function normDirectorMix(o: Record<string, unknown>): Pick<Timeline, "director" | "mix"> {
+  const director = normDirector(o.director);
+  const mix = normMix(o.mix);
+  return { ...(director ? { director } : {}), ...(mix ? { mix } : {}) };
 }
 
 /** VO cadangan tanpa penyimpanan server (service role kosong) dikirim sebagai data URL mp3/wav — dibatasi ±1,5 MB per baris */

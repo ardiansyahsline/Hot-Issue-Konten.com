@@ -4,8 +4,8 @@ import path from "node:path";
 import { studioGuard, type StudioCtx } from "@/lib/studio/access.server";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth } from "@/lib/ai.server";
 import { heavyModelFrom, isChatModel, isVisionModel, providerOf, rankTextModels, setVisionCatalog } from "@/lib/aiModels";
-import { personaPrompt } from "@/lib/aiPersona";
 import { isAiOwner } from "@/lib/aiOwner";
+import type { CustomChar, MemoryItem } from "@/lib/customChar";
 import {
   DIRECTOR_HERO,
   DIRECTOR_RULES,
@@ -22,7 +22,8 @@ import {
   type DirectorMusic,
   type DirectorVoice,
 } from "@/lib/studio/director";
-import { normalizeTimeline, type Timeline } from "@/lib/studio/timeline";
+import { resolveDirector, type CharLoader } from "@/lib/studio/directorResolve";
+import { normDirector, normalizeTimeline, type Timeline } from "@/lib/studio/timeline";
 import { SFX_BUILTIN, type SfxMeta } from "@/lib/studio/sfxMeta";
 import { STUDIO_BUCKET, musicSrc, storageSrc } from "@/lib/studio/urls";
 
@@ -43,7 +44,7 @@ const NEW_TITLE = "Video baru";
 
 type Kind = DirectorAttachment["kind"];
 type Attach = { path: string; kind: Kind; name: string };
-type Body = { projectId?: string | null; content?: string; attachments?: unknown; timeline?: unknown };
+type Body = { projectId?: string | null; content?: string; attachments?: unknown; timeline?: unknown; director?: unknown };
 type Row = { role: "user" | "assistant"; content: string | null; attachments: Attach[] | null; error: boolean | null };
 type Part = { type: string; text?: string; image_url?: { url: string }; cache_control?: { type: "ephemeral" } };
 type Msg = { role: string; content: string | Part[] };
@@ -66,8 +67,8 @@ function dbText(e: { code?: string; message?: string } | null | undefined, fallb
 }
 
 /**
- * Chat dengan AI Sutradara Studio (Harley). Jawaban dialirkan sebagai teks (prosa saja — blok ```studio / ```ask ditahan),
- * diselingi bingkai kontrol "\u001e{json}\n": project (selalu pertama), step, meta, ask, plan, error, done.
+ * Chat dengan AI Sutradara Studio (bawaan Harley; bisa diganti hero bawaan lain / karakter buatan user lewat `director`). Jawaban dialirkan sebagai teks (prosa saja — blok ```studio / ```ask ditahan),
+ * diselingi bingkai kontrol "\u001e{json}\n": project (selalu pertama), step, director, meta, ask, plan, error, done.
  */
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
@@ -157,8 +158,10 @@ export async function POST(req: NextRequest) {
 
   async function pipeline(emit: (o: Record<string, unknown>) => void, write: (t: string) => void) {
     const step = (k: "understand" | "plan" | "write" | "check", s: "run" | "done") => emit({ t: "step", k, s });
+    // nama sutradara yang dipakai (persona di studio_messages); diganti setelah pilihan user diperiksa
+    let dirName = DIRECTOR_HERO;
     const saveAssistant = async (text: string, model: string | null, error = false) => {
-      const { error: e } = await supabase.from("studio_messages").insert({ project_id: project.id, role: "assistant", content: text.slice(0, 100_000), persona: DIRECTOR_HERO, model, error });
+      const { error: e } = await supabase.from("studio_messages").insert({ project_id: project.id, role: "assistant", content: text.slice(0, 100_000), persona: dirName, model, error });
       if (e) console.log("[studio] gagal simpan jawaban:", e.message);
       await supabase.from("studio_projects").update({ updated_at: new Date().toISOString() }).eq("id", project.id);
     };
@@ -173,17 +176,22 @@ export async function POST(req: NextRequest) {
 
     // timeline terbaru: editan user di body (belum tentu sudah tersimpan) atau dari database
     const tlRaw = body.timeline && typeof body.timeline === "object" ? body.timeline : project.timeline && typeof project.timeline === "object" ? project.timeline : null;
+    // sutradara pilihan user: dari permintaan (pilihan terbaru di UI) atau dari timeline proyek; kosong = Harley
+    const wantDirector = normDirector(body.director) ?? normDirector((tlRaw as { director?: unknown } | null)?.director);
 
-    // 3) konteks: riwayat, SFX tambahan, bank suara, musik, katalog model — diambil bersamaan
-    const [histRes, sfx, voices, music, catalog, health] = await Promise.all([
+    // 3) konteks: riwayat, SFX tambahan, bank suara, musik, katalog model, sutradara — diambil bersamaan
+    const [histRes, sfx, voices, music, catalog, health, director] = await Promise.all([
       supabase.from("studio_messages").select("role, content, attachments, error").eq("project_id", project.id).order("id", { ascending: false }).limit(HISTORY + 1),
       loadExtraSfx(supabase, usedSfxIds(tlRaw)),
       loadVoices(supabase),
       loadMusic(supabase, user.id),
       listCatalog(),
       loadHealth(supabase),
+      resolveDirector(wantDirector, charLoader(supabase), content),
     ]);
     setVisionCatalog(catalog.vision);
+    dirName = director.name;
+    emit({ t: "director", hero: director.hero, name: director.name, ...(director.fallback ? { note: director.fallback } : {}) });
 
     const current: Timeline | null = tlRaw ? normalizeTimeline(tlRaw, { extraSfx: sfx.allow }) : null;
 
@@ -249,7 +257,7 @@ export async function POST(req: NextRequest) {
     const userName = profile?.full_name || user.email.split("@")[0] || "anggota tim";
     const dAttach: DirectorAttachment[] = attachments.map((a) => ({ kind: a.kind, name: a.name, src: storageSrc(a.path) }));
     const session = directorSession({ name: userName, timeline: current, attachments: dAttach, extraSfx: sfx.list, voices, music, notes });
-    const fixed = [DIRECTOR_RULES, directorCatalog(), personaPrompt(DIRECTOR_HERO)].join("\n\n");
+    const fixed = [DIRECTOR_RULES, directorCatalog(), director.persona].join("\n\n");
     const attachNote = (list: Attach[] | null | undefined) => (list?.length ? `\n[lampiran: ${list.map((a) => `${a.name} (${a.kind})`).join(", ")}]` : "");
     const hist: Msg[] = prevRows.map((m) => ({ role: m.role, content: (m.role === "assistant" ? historyText(m.content ?? "") : (m.content ?? "").slice(0, 3000)) + attachNote(m.attachments) }));
     const turnText = (content || "Ini lampiranku.") + attachNote(attachments);
@@ -267,7 +275,8 @@ export async function POST(req: NextRequest) {
         ? { role: "user", content: [{ type: "text", text: turnText }, ...urls.map((url) => ({ type: "image_url", image_url: { url } }))] }
         : { role: "user", content: imgAttach.length ? `${turnText}\n(Kamu tidak bisa melihat isi gambarnya — pakai nama & src-nya saja.)` : turnText };
       const h = lite ? hist.slice(-4) : hist;
-      return [sys(fixed, useCache && isClaudeModel(model)), sys(session, false), ...tidy([...h, turn])];
+      // otak karakter & catatan gaya berubah per giliran -> pesan sistem terpisah supaya bagian tetap di depan tetap ter-cache
+      return [sys(fixed, useCache && isClaudeModel(model)), ...(director.extra ? [sys(director.extra, false)] : []), sys(session, false), ...tidy([...h, turn])];
     };
 
     // 6) panggil server AI; gagal sebelum menjawab -> coba mesin berikutnya
@@ -319,14 +328,14 @@ export async function POST(req: NextRequest) {
       return void (await saveError(
         owner && failures.length
           ? `Semua mesin AI yang dicoba belum bisa menjawab. Coba lagi sebentar.\n\nDicoba:\n${failures.map((f) => `- ${f}`).join("\n")}`
-          : `${DIRECTOR_HERO} lagi kewalahan — server AI sedang sibuk. Coba kirim lagi sebentar ya 🙏`
+          : `${dirName} lagi kewalahan — server AI sedang sibuk. Coba kirim lagi sebentar ya 🙏`
       ));
     }
 
     // 7) alirkan prosa (blok rencana/kartu ditahan), lalu baca & simpan hasilnya
     const usedModel = opened.model;
     step("plan", "done");
-    emit({ t: "meta", persona: DIRECTOR_HERO, model: usedModel, heavy: heavyOn && usedModel === candidates[0] });
+    emit({ t: "meta", persona: dirName, model: usedModel, heavy: heavyOn && usedModel === candidates[0] });
     step("write", "run");
     let full = "";
     let sent = 0;
@@ -360,7 +369,7 @@ export async function POST(req: NextRequest) {
     }
     push(true);
     step("write", "done");
-    if (!full.trim()) return void (await saveError(`${DIRECTOR_HERO} belum sempat menjawab. Coba kirim lagi ya.`, usedModel));
+    if (!full.trim()) return void (await saveError(`${dirName} belum sempat menjawab. Coba kirim lagi ya.`, usedModel));
 
     step("check", "run");
     let parsed = parseDirector(full, { extraSfx: sfx.allow });
@@ -384,7 +393,11 @@ export async function POST(req: NextRequest) {
     }
     let planSent = false;
     if (parsed.timeline) {
+      // sutradara pilihan user ikut tersimpan di timeline (AI tidak boleh menggantinya)
       const tl = mergeRevision(current, parsed.timeline, parsed.raw);
+      // (nama karakter buatan user ikut nama terbarunya; pilihan yang tidak bisa dipakai tetap disimpan apa adanya)
+      if (wantDirector) tl.director = director.custom ? { ...wantDirector, name: director.name } : wantDirector;
+      else delete tl.director;
       const patch: Record<string, unknown> = { timeline: tl };
       const title = tl.title && tl.title !== NEW_TITLE ? tl.title.slice(0, 120) : "";
       if (project.title === NEW_TITLE && title) patch.title = title;
@@ -402,7 +415,7 @@ export async function POST(req: NextRequest) {
           : "Rencananya rusak waktu ditulis. Coba minta lagi ya, mis. \"ulang rencananya\".",
       });
     else if (cut && !planSent && !parsed.choice) emit({ t: "error", message: "Jawabannya terpotong. Coba kirim lagi ya." });
-    else if (!planSent && !parsed.choice && !parsed.prose) emit({ t: "error", message: `${DIRECTOR_HERO} belum sempat menjawab. Coba kirim lagi ya.` });
+    else if (!planSent && !parsed.choice && !parsed.prose) emit({ t: "error", message: `${dirName} belum sempat menjawab. Coba kirim lagi ya.` });
     // rencana yang dipakai selalu disimpan di pagar ```studio (apa pun pagar yang ditulis AI: ```timeline / ```json / tanpa pagar)
     // → hitungan kuota mesin berat (heavyQuotaOk) mencakup semua rencana yang benar-benar diterapkan
     await saveAssistant(planSent ? withStudioFence(full) : full, usedModel);
@@ -682,6 +695,27 @@ function sfxRows(data: unknown): SfxMeta[] {
     use: String(r.use_for ?? ""),
     src: storageSrc(String(r.path ?? "")),
   }));
+}
+
+/**
+ * karakter buatan user + otaknya, dibaca dengan client Supabase milik user (RLS: hanya karakter miliknya sendiri).
+ * Tabel belum ada / error / bukan miliknya -> char null (route memakai Harley).
+ */
+function charLoader(db: Db): CharLoader {
+  return async (id) => {
+    if (!UUID.test(id)) return { char: null, memory: [] };
+    try {
+      const [c, m] = await Promise.all([
+        db.from("ai_characters").select("id, name, mbti, profile").eq("id", id).maybeSingle(),
+        db.from("ai_character_memory").select("id, character_id, kind, title, content, created_at").eq("character_id", id).order("created_at", { ascending: false }).limit(200),
+      ]);
+      const row = !c.error && c.data ? (c.data as Omit<CustomChar, "avatar">) : null;
+      const char: CustomChar | null = row ? { ...row, avatar: { kind: "chibi", hair: 1, skin: "#f5c9a8", hc: "#3b2a1e", prop: "orb" } } : null;
+      return { char, memory: !m.error && Array.isArray(m.data) ? (m.data as MemoryItem[]) : [] };
+    } catch {
+      return { char: null, memory: [] };
+    }
+  };
 }
 
 /** bank suara yang sudah siap dipakai */

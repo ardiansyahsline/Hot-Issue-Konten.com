@@ -396,6 +396,9 @@ export function compactTimeline(tl: Timeline): string {
   delete rest.vo;
   delete rest.v;
   delete rest.fps;
+  // sutradara (catatan gayanya dikirim terpisah) & volume campuran diatur user, bukan bagian rencana AI
+  delete rest.director;
+  delete rest.mix;
   const { beats, ...music } = tl.music;
   const grid = beatGridOf(tl.music);
   return JSON.stringify(
@@ -621,6 +624,11 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     };
   }
   for (const k of ["grain", "vignette", "muteVo"] as const) if (!has(o, k)) out[k] = prev[k];
+  // sutradara & volume campuran diatur user (bukan AI): selalu dari versi lama
+  out.director = prev.director;
+  out.mix = prev.mix;
+  if (!out.director) delete out.director;
+  if (!out.mix) delete out.mix;
   // adegan dengan id yang sama: media lampiran yang tidak ditulis ulang AI tetap dipakai
   const rawScenes = Array.isArray(o.scenes) ? (o.scenes as unknown[]) : [];
   const prevById = new Map(prev.scenes.map((s) => [s.id, s]));
