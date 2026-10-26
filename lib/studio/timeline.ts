@@ -661,4 +661,32 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
   return cues;
 }
 
-export const toSrt = (cues: { s: number; e: number; text: string }[]) => cues.map((c, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`).join("\n");
+/** SRT diurutkan menurut waktu (VO adegan yang lewat batas bisa mulai setelah VO adegan berikutnya); urutan adegan dipakai kalau waktunya sama */
+export const toSrt = (cues: { s: number; e: number; text: string }[]) =>
+  cues
+    .map((c, k) => ({ c, k }))
+    .sort((a, b) => a.c.s - b.c.s || a.k - b.k)
+    .map(({ c }, i) => `${i + 1}\n${srtTime(c.s)} --> ${srtTime(Math.max(c.e, c.s + 0.3))}\n${c.text}\n`)
+    .join("\n");
+
+/**
+ * VO adegan yang masih bunyi saat VO adegan sesudahnya mulai (dua suara bersamaan) — terjadi kalau VO lebih panjang dari
+ * adegannya dan adegan itu tidak diperpanjang (adegan premium teaser dikunci di ketukan). Aturan baris yang diputar sama dengan
+ * planAudio (baris punya src & adegannya masih punya teks VO). `sec` = lama tumpang tindih (detik), `next` = adegan yang VO-nya
+ * pertama kali tertabrak. Dipakai VoPanel (peringatan) & ExportPanel; pemanggil yang mengecek VO dimatikan / tidak.
+ */
+export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene: number; next: number; sec: number }[] {
+  const starts = sceneStartSecs(tl);
+  const spans = tl.scenes.flatMap((sc, i) => {
+    const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
+    if (!l?.src || !sc.vo?.text) return [];
+    const s = starts[i] + voStartOf(sc, l);
+    return [{ i, s, e: s + (l.dur || 0) }];
+  });
+  const out: { scene: number; next: number; sec: number }[] = [];
+  for (const a of spans) {
+    const hit = spans.filter((b) => b.i > a.i && a.e > b.s + 1e-3).sort((x, y) => x.s - y.s)[0];
+    if (hit) out.push({ scene: a.i, next: hit.i, sec: Math.min(a.e, hit.e) - hit.s });
+  }
+  return out;
+}

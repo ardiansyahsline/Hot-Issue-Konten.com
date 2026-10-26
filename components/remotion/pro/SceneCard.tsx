@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
+import { FONTS } from "@/components/remotion/studio/theme";
 import { captionLineWidth, captionMaxChars, isTeaserBeatCue, roughWordWidth, teaserCaptionFit, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
   PLAN_LAYOUTS,
@@ -24,6 +25,7 @@ import {
   type ScreenKind,
   type Side,
   type TransitionKind,
+  voStartOf,
 } from "@/lib/studio/timeline";
 import { sfxSrc, storagePathOf } from "@/lib/studio/urls";
 import FreesoundPanel from "./FreesoundPanel";
@@ -35,6 +37,63 @@ export type ScenePatch = Partial<Scene> | ((s: Scene) => Partial<Scene>);
 
 /** perkiraan lama bicara (detik) dari jumlah kata */
 const speakSec = (text: string) => wordCount(text) * 0.34;
+/** jeda minimal sesudah VO sampai adegan habis (sama dengan VoPanel) */
+const VO_TAIL = 0.25;
+
+/**
+ * Pengukur lebar kata Caption teaser: canvas measureText dengan font Caption sungguhan (kit.tsx: fontFamily display brand
+ * Konten = Plus Jakarta Sans Variable, tebal 800) begitu font-nya termuat — sama dengan lebar di DOM. Sebelum termuat / tanpa
+ * canvas: perkiraan kasar roughWordWidth (cadangan).
+ */
+const CAPTION_FONT = FONTS.jakarta;
+const CAPTION_FAMILY = '"Plus Jakarta Sans Variable"';
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+let fontReady = false;
+let fontWait: Promise<void> | null = null;
+function captionFontReady(): boolean {
+  if (fontReady) return true;
+  try {
+    // check() = wajah latin font Caption sudah termuat (@fontsource mendaftarkannya, jadi false sampai file-nya terunduh)
+    fontReady = typeof document !== "undefined" && !!document.fonts && document.fonts.check(`800 78px ${CAPTION_FAMILY}`);
+  } catch {
+    fontReady = false;
+  }
+  return fontReady;
+}
+function useCaptionMeasure(size: number | null): (word: string) => number {
+  const [ready, setReady] = useState(captionFontReady);
+  useEffect(() => {
+    if (ready || size === null || typeof document === "undefined" || !document.fonts) return;
+    let live = true;
+    fontWait ??= document.fonts
+      .load(`800 ${size}px ${CAPTION_FAMILY}`)
+      .then(() => document.fonts.ready)
+      .then(() => undefined)
+      .catch(() => undefined);
+    void fontWait.then(() => live && setReady(captionFontReady()));
+    return () => {
+      live = false;
+    };
+  }, [ready, size]);
+  return useMemo(() => {
+    const rough = roughWordWidth(size ?? 78);
+    if (!ready || size === null) return rough;
+    if (measureCtx === undefined) {
+      try {
+        measureCtx = document.createElement("canvas").getContext("2d");
+      } catch {
+        measureCtx = null;
+      }
+    }
+    const ctx = measureCtx;
+    if (!ctx) return rough;
+    const font = `800 ${size}px ${CAPTION_FONT}`;
+    return (w: string) => {
+      ctx.font = font;
+      return ctx.measureText(w).width;
+    };
+  }, [ready, size]);
+}
 const MAX_SFX = 8; // sama dengan batas normalizeTimeline (lib/studio/timeline.ts)
 
 // satu SFX diputar dalam satu waktu (tombol ▶ di daftar SFX)
@@ -88,6 +147,9 @@ export default function SceneCard({
   const shown = draftLines ?? s.text;
   const long = shown.map((l, i) => ({ i, n: wordCount(l) })).filter((x) => x.n > MAX_WORDS_PER_LINE);
   const voSec = s.vo ? speakSec(s.vo.text) : 0;
+  // ruang VO = dari detik mulai VO (vo.at / bawaan 0,15) sampai 0,25 dtk sebelum adegan habis
+  const voAt = voStartOf(s);
+  const voRoom = Math.max(0, s.dur - voAt - VO_TAIL);
   const peek = s.text[0] || s.vo?.text || s.layout.title || s.visual;
   // adegan premium teaser (buatan tangan): VO, SFX, transisi & musik boleh diubah; visual (jenis tampilan, latar, kamera,
   // durasi) dikunci. Teks layar hanya bisa diubah di shot yang memang membacanya (chat, trainAi, montage — lihat teaserLock)
@@ -96,7 +158,8 @@ export default function SceneCard({
   const textLocked = textLines === 0;
   // teaser selalu 9:16; baris yang lebih lebar dari kotak aman turun ke baris berikut dan menabrak UI animasi
   const fit = teaser && !textLocked ? teaserCaptionFit(s, "9:16") : null;
-  const tooWide = fit ? shown.slice(0, fit.lines).map((l, i) => ({ i, w: captionLineWidth(l, fit.size, roughWordWidth(fit.size)) })).filter((x) => x.w > fit.maxW) : [];
+  const measure = useCaptionMeasure(fit?.size ?? null);
+  const tooWide = fit ? shown.slice(0, fit.lines).map((l, i) => ({ i, w: captionLineWidth(l, fit.size, measure) })).filter((x) => x.w > fit.maxW) : [];
   const headId = `scene-${s.id}`;
 
   return (
@@ -187,9 +250,11 @@ export default function SceneCard({
             <Field
               label="🎙️ Teks VO (tampil di subtitle)"
               hint={
-                s.vo && voSec > s.dur - 0.2 ? (
-                  <span className="text-amber-400">
-                    VO ±{fmtSec(voSec)} — lebih panjang dari adegan. Pendekkan teks atau tambah durasi.
+                s.vo && voSec > voRoom ? (
+                  <span className="text-amber-400" data-vo-long>
+                    {teaser
+                      ? `VO ±${fmtSec(voSec)} — tidak muat: VO mulai di ${fmtSec(voAt, 2)}, ruangnya ±${fmtSec(voRoom, 2)} sampai adegan habis. Durasi dikunci di ketukan musik, jadi pendekkan teks VO.`
+                      : `VO ±${fmtSec(voSec)} — lebih panjang dari ruang adegan (±${fmtSec(voRoom, 2)} sesudah VO mulai di ${fmtSec(voAt, 2)}). Pendekkan teks atau tambah durasi.`}
                   </span>
                 ) : s.vo ? (
                   `±${wordCount(s.vo.text)} kata · ±${fmtSec(voSec)}`
@@ -198,7 +263,7 @@ export default function SceneCard({
                 )
               }
             >
-              {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? { text: v, spell: x.vo?.spell } : null }))} />}
+              {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? (x.vo ? { ...x.vo, text: v } : { text: v }) : null }))} />}
             </Field>
             <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin salah baca, mis. “Si-es Treker”, “E-ai”. Subtitle tetap pakai teks asli.">
               {(id) => (
@@ -209,7 +274,7 @@ export default function SceneCard({
                   maxLength={400}
                   placeholder={s.vo ? "Sama dengan teks VO" : "Isi teks VO dulu"}
                   disabled={!s.vo}
-                  onCommit={(v) => patch((x) => (x.vo ? { vo: { text: x.vo.text, spell: v || undefined } } : {}))}
+                  onCommit={(v) => patch((x) => (x.vo ? { vo: { ...x.vo, spell: v || undefined } } : {}))}
                 />
               )}
             </Field>

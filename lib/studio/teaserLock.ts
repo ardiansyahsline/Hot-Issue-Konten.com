@@ -47,8 +47,11 @@ export function captionLineWidth(line: string, size: number, measure: (word: str
   if (!words.length) return 0;
   return words.reduce((a, w) => a + measure(w) - 0.035 * size * [...w].length, 0) + (words.length - 1) * size * 0.24;
 }
-/** cadangan tanpa canvas / font belum termuat: rata-rata huruf Jakarta/Inter tebal ±0,57em */
-export const roughWordWidth = (size: number) => (w: string) => [...w].length * size * 0.57;
+/**
+ * cadangan tanpa canvas / font belum termuat (pengukur utama = canvas measureText di SceneCard): rata-rata huruf Plus Jakarta
+ * Sans 800 ±0,55em (teks bawaan chat "Satu tempat, real-time" 78px: asli 837 px, perkiraan 841 px, kotak 866 px)
+ */
+export const roughWordWidth = (size: number) => (w: string) => [...w].length * size * 0.55;
 /** perkiraan huruf maks per baris untuk petunjuk (rata-rata ±0,5em per huruf termasuk spasi; ukuran sebenarnya dicek lewat lebar) */
 export const captionMaxChars = (fit: CaptionFit) => Math.floor(fit.maxW / (fit.size * 0.5));
 
@@ -104,6 +107,17 @@ export function isTeaserBeatCue(s: Pick<Scene, "layout">, c: Pick<SfxCue, "id" |
 /** detik mulai VO (`vo.at`, dari naskah) — ikut dikunci */
 const voAtOf = (vo: Scene["vo"]): number | undefined => (typeof vo?.at === "number" ? vo.at : undefined);
 
+/** detik mulai VO bawaan tiap shot (kolom voAt naskah di lib/studio/teaser.ts) */
+let canonAt: Map<TeaserShot, number> | null = null;
+export function teaserVoAt(shot: TeaserShot | undefined): number | undefined {
+  if (!canonAt) {
+    canonAt = new Map();
+    const scenes = (teaserTimelineRaw().scenes ?? []) as { layout: { shot: TeaserShot }; vo?: { at?: unknown } | null }[];
+    for (const s of scenes) if (typeof s.vo?.at === "number") canonAt.set(s.layout.shot, s.vo.at);
+  }
+  return canonAt.get(shot ?? "hook");
+}
+
 /**
  * Adegan premium teaser: batasnya di ketukan musik (0,6 dtk) & visualnya buatan tangan, jadi durasi, jenis tampilan (kind + shot),
  * latar, kamera, catatan visual, detik mulai VO, dan teks layar shot yang teksnya bagian dari animasi TIDAK boleh berubah — baik
@@ -125,7 +139,8 @@ export function keepTeaserVisual(prev: Timeline | null, next: Timeline): Timelin
     if (!o) return s;
     const id = o.id;
     const textLocked = !TEASER_TEXT_LINES[o.layout.shot ?? "hook"];
-    const oldAt = voAtOf(o.vo);
+    // adegan lama tanpa vo.at (proyek tersimpan sebelum ada offset naskah, atau teks VO sempat dikosongkan) → detik naskah shot itu
+    const oldAt = voAtOf(o.vo) ?? teaserVoAt(o.layout.shot);
     const vo = s.vo && oldAt !== undefined && voAtOf(s.vo) !== oldAt ? { ...s.vo, at: oldAt } : s.vo;
     const text = textLocked ? o.text : s.text;
     if (id === s.id && s.dur === o.dur && s.layout === o.layout && s.bg === o.bg && s.camera === o.camera && s.visual === o.visual && vo === s.vo && text === s.text) return s;
