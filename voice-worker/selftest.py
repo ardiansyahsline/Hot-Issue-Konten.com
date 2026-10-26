@@ -527,6 +527,89 @@ def _tts_flow(sb: FakeSupa, v: dict, rt: Runtime, eng: FakeEngine, lines: list[d
 
 
 
+def _f0(y: np.ndarray, sr: int) -> float:
+    """frekuensi dominan (Hz) bagian tengah sinyal — untuk cek nada tidak berubah setelah dipercepat"""
+    mid = y[len(y) // 4 : len(y) * 3 // 4]
+    spec = np.abs(np.fft.rfft(mid * np.hanning(len(mid))))
+    return float(np.fft.rfftfreq(len(mid), 1 / sr)[int(np.argmax(spec))])
+
+
+@test
+def t_percepat_vo_jendela_teaser():
+    sr = 48000
+    # nada harmonik 200 Hz 3 dtk (mirip vokal panjang), kata-kata sampai 2,88 dtk → ucapan 3,0 dtk
+    t = np.arange(int(3.0 * sr)) / sr
+    y = (sum((0.25 / k) * np.sin(2 * np.pi * 200 * k * t) for k in range(1, 5)) * 0.8).astype(np.float32)
+    src = ff.write_wav(TMP / "fit-src.wav", y, sr)
+    words = [{"w": f"k{i}", "s": round(i * 0.48, 3), "e": round(i * 0.48 + 0.4, 3)} for i in range(6)]  # e terakhir 2,8
+    meta = {"dur": 3.0, "words": words}
+    near(jobs_tts.speech_end(meta), 2.92, 1e-6, "ucapan = kata terakhir + 0,12")
+    # tanpa max / sudah muat → apa adanya
+    assert jobs_tts.fit_to_max(src, meta, None, TMP, "a") == (src, meta)
+    assert jobs_tts.fit_to_max(src, meta, 2.95, TMP, "b") == (src, meta)
+    # hening di ujung tidak dihitung: kata selesai 2,0 dtk dari file 3,0 dtk, jendela 2,3 → tidak dipercepat
+    quiet = {"dur": 3.0, "words": [{"w": "a", "s": 0.1, "e": 1.0}, {"w": "b", "s": 1.1, "e": 2.0}]}
+    assert jobs_tts.fit_to_max(src, quiet, 2.3, TMP, "c")[1] is quiet
+    # jendela 2,6 → kata terakhir 2,8 harus selesai di 2,6 − 0,12 → faktor 2,8/2,48 = 1,129: durasi & kata terskala, nada tetap ±2%
+    w2, m2 = jobs_tts.fit_to_max(src, meta, 2.6, TMP, "d")
+    f = 2.8 / 2.48
+    y2, sr2 = ff.read_wav(w2)
+    near(m2["dur"], 3.0 / f, 0.03, "durasi setelah dipercepat")
+    near(len(y2) / sr2, m2["dur"], 0.002, "dur meta = panjang file")
+    assert m2["speed"] == 13 and m2["fit"] and m2["max"] == 2.6, m2
+    assert jobs_tts.speech_end(m2) <= 2.6 + 0.01, jobs_tts.speech_end(m2)
+    k = m2["dur"] / 3.0
+    for a, b in zip(meta["words"], m2["words"]):
+        near(b["s"], a["s"] * k, 0.002, f"awal kata {a['w']}")
+        near(b["e"], a["e"] * k, 0.002, f"akhir kata {a['w']}")
+    f0a, f0b = _f0(y, sr), _f0(y2, sr2)
+    assert abs(f0b - f0a) / f0a < 0.02, f"nada berubah: {f0a:.1f} → {f0b:.1f} Hz"
+    # jendela jauh lebih pendek → mentok 1,3× (30%), jujur: belum muat
+    w3, m3 = jobs_tts.fit_to_max(src, meta, 1.8, TMP, "e")
+    near(m3["dur"], 3.0 / 1.3, 0.03, "durasi maks 1,3×")
+    assert m3["speed"] == 30 and m3["fit"] is False, m3
+    near(_f0(ff.read_wav(w3)[0], sr), f0a, f0a * 0.02, "nada di 1,3×")
+    # parse_lines: max ikut dibaca; job lama tanpa max → None, kunci job sama seperti sebelum ada max
+    ls = jobs_tts.parse_lines([{"id": "a", "scene_id": "a", "text": "Halo.", "start": 0.3, "max": "2,5"}, {"id": "b", "scene_id": "b", "text": "Hai.", "start": 3}])
+    assert ls[0]["max"] == 2.5 and ls[1]["max"] is None, ls
+    st = jobs_tts.norm_settings({})
+    old_key = jobs_tts._sha([jobs_tts.CACHE_V, "chatterbox", "v", st, [[x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] for x in ls[1:]]])
+    assert jobs_tts.job_key("chatterbox", "v", ls[1:], st) == old_key, "kunci job tanpa max harus sama dengan versi lama"
+    assert jobs_tts.job_key("chatterbox", "v", ls, st) != jobs_tts.job_key("chatterbox", "v", [{**ls[0], "max": 2.0}, ls[1]], st), "kunci job ikut max"
+    return f"3,0 dtk → {m2['dur']:.2f} dtk (+{m2['speed']}%), nada {f0a:.0f}→{f0b:.0f} Hz, mentok 30% → {m3['dur']:.2f} dtk"
+
+
+@test
+def t_job_tts_max_jendela():
+    sb, v = _bank_supa()
+    eng = FakeEngine()
+    rt = Runtime(cfg=fake_cfg(), supa=sb, engines=FakeEngines(eng), asr=FakeAsr({"_line": "satu dua tiga empat lima enam tujuh delapan"}))  # type: ignore[arg-type]
+    text = "Satu dua tiga empat lima enam tujuh delapan."
+    lines = [{"id": "m1", "scene_id": "m1", "text": text, "spell": None, "start": 0.3}, {"id": "m2", "scene_id": "m2", "text": text, "spell": None, "start": 9.0}]
+    base = {"kind": "tts", "voice_id": v["id"], "engine": "auto", "settings": {"takes": 1}, "status": "proses"}
+    job = {**base, "id": "job-max-0", "lines": lines}
+    sb.tables["studio_voice_jobs"] = [job]
+    jobs_tts.run(JobCtx(rt, "studio_voice_jobs", job, min_gap=0))
+    assert job["status"] == "selesai", job.get("message")
+    d0 = job["result"]["lines"][0]["dur"]
+    assert "speed" not in job["result"]["lines"][0], "tanpa max tidak dipercepat"
+    # baris 1 diberi jendela 85% dari ucapannya → dipercepat ±18%, baris 2 jendela longgar → apa adanya
+    mx = round(d0 * 0.85, 3)
+    job2 = {**base, "id": "job-max-1", "lines": [{**lines[0], "max": mx}, {**lines[1], "max": d0 + 1}]}
+    sb.tables["studio_voice_jobs"].append(job2)
+    calls = eng.calls
+    jobs_tts.run(JobCtx(rt, "studio_voice_jobs", job2, min_gap=0))
+    assert job2["status"] == "selesai", job2.get("message")
+    assert eng.calls == calls, "suara mentah diambil dari cache laptop (max tidak memicu bikin suara ulang)"
+    assert job2["cache_key"] != job["cache_key"], "kunci job ikut max"
+    l1, l2 = job2["result"]["lines"]
+    assert 15 <= l1["speed"] <= 19 and "speed" not in l2, (l1.get("speed"), l2.get("speed"))
+    assert l1["dur"] <= mx + 0.01 and abs(l2["dur"] - d0) < 1e-6, (l1["dur"], mx, l2["dur"], d0)
+    assert l1["words"][-1]["e"] <= l1["dur"] + 1e-6 and [w["w"] for w in l1["words"]] == text.split()
+    near(ff.duration(Path(_save(sb, l1["path"]))), l1["dur"], 0.08, "mp3 baris dipercepat")
+    return f"{d0:.2f} dtk → {l1['dur']:.2f} dtk (+{l1['speed']}%) di jendela {mx:.2f} dtk"
+
+
 @test
 def t_semua_mesin_gagal_pesan_cadangan():
     from studio_worker.engines import EngineDown

@@ -3,8 +3,11 @@ Job kind 'tts': VO dari bank suara.
   per baris → pecah kalimat → tiap kalimat dibuat 2 versi (takes) → pilih yang paling jelas (cek ASR: WER/CER + cek durasi/hening)
   → sambung dengan jeda alami (0,18–0,4 dtk; lebih panjang setelah "…") → post-processing ffmpeg (-16 LUFS / TP -1,5)
   → timestamp per kata (faster-whisper) dipetakan ke kata TEKS ASLI (kolom spell hanya untuk mesin suara)
+  → baris adegan teaser punya `max` (jendela ucapan, detik): ucapan lebih panjang → dipercepat ffmpeg atempo (nada tetap,
+    maks 1,3×), waktu kata & durasi diskalakan ulang (fit_to_max)
   → upload vo/<job>/<baris>.mp3, vo/<job>/full.mp3 (tiap baris di detik `start`), vo/<job>/full.srt
-Cache: hasil job selesai dengan cache_key sama dipakai ulang; per baris juga di-cache di laptop (data/cache/tts).
+Cache: hasil job selesai dengan cache_key sama (ikut `max`) dipakai ulang; suara mentah per baris juga di-cache di laptop
+(data/cache/tts, tanpa `max` — ganti jendela cukup percepat ulang, tidak perlu bikin suara lagi).
 """
 from __future__ import annotations
 
@@ -27,6 +30,10 @@ log = vlog.get("tts")
 
 FAIL_MSG = "Mesin suara laptop gagal — website otomatis pakai cadangan Edge-TTS"
 CACHE_V = "tts-v1"
+# percepatan maksimal (atempo) supaya VO adegan teaser muat di jendelanya — sama dengan MAX_SPEEDUP 30% di website
+MAX_SPEED = 1.30
+# ekor napas sesudah kata terakhir yang masih dihitung ucapan — sama dengan VO_SPEECH_PAD di lib/studio/timeline.ts
+SPEECH_PAD = 0.12
 
 
 # ---------------------------------------------------------------- input
@@ -63,7 +70,10 @@ def parse_lines(raw) -> list[dict]:
         spell = T.clean_text(str(x.get("spell") or ""))[:1200] or None
         st = x.get("start")
         start = _num(st, -1, 0, 3600) if st is not None else -1
-        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None})
+        # `max` (opsional) = jendela ucapan maksimal (detik) untuk adegan teaser; kosong / ≤ 0 = tidak dibatasi (job lama)
+        mx = x.get("max")
+        mx = round(_num(mx, 0, 0, 3600), 3) if mx is not None else 0
+        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None, "max": mx if mx > 0 else None})
     return out
 
 
@@ -102,7 +112,8 @@ def line_key(engine: str, vhash: str, ln: dict, st: dict) -> str:
 
 
 def job_key(engine: str, vhash: str, lines: list[dict], st: dict) -> str:
-    return _sha([CACHE_V, engine, vhash, st, [[x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] for x in lines]])
+    # `max` hanya ikut kalau ada → kunci job lama (tanpa max) tetap sama
+    return _sha([CACHE_V, engine, vhash, st, [[x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] + ([x["max"]] if x.get("max") else []) for x in lines]])
 
 
 class LineCache:
@@ -231,6 +242,57 @@ def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=No
     return final, meta
 
 
+# ---------------------------------------------------------------- muat di jendela adegan teaser
+def speech_end(meta: dict) -> float:
+    """panjang ucapan asli: kata terakhir + 0,12 dtk (maks dur); tanpa timestamp kata = dur (sama dengan voSpeechEnd di website)"""
+    dur = float(meta.get("dur") or 0)
+    last = 0.0
+    for w in meta.get("words") or []:
+        try:
+            last = max(last, float(w.get("e") or 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return min(dur, last + SPEECH_PAD) if last > 0 else dur
+
+
+def fit_to_max(wav: Path, meta: dict, mx: float | None, work: Path, lid: str) -> tuple[Path, dict]:
+    """
+    Ucapan lebih panjang dari `mx` detik → time-stretch ffmpeg atempo (tempo naik, nada tetap), faktor ≈ min(1,3, ucapan/mx).
+    Waktu kata & dur diskalakan ulang, loudness disamakan lagi (-16 LUFS / TP -1,5). Tanpa `mx` / sudah muat → apa adanya.
+    Balikan meta tambahan: speed (persen dipercepat), fit (muat atau belum walau sudah maks).
+    """
+    if not mx or mx <= 0:
+        return wav, meta
+    sp = speech_end(meta)
+    if sp <= mx + 1e-3:
+        return wav, meta
+    # ucapan baru = min(dur/f, kata_terakhir/f + 0,12) — ekor 0,12 dtk tidak ikut terskala, jadi faktor dari kata terakhir
+    # dihitung terhadap (mx − 0,12); pilih faktor terkecil yang cukup
+    dur = float(meta.get("dur") or 0)
+    last = sp - SPEECH_PAD if sp < dur else 0.0
+    need = dur / mx
+    if last > 0 and mx > SPEECH_PAD:
+        need = min(need, last / (mx - SPEECH_PAD))
+    f = min(MAX_SPEED, need)
+    if f < 1.005:  # selisih < 0,5% — tidak terdengar, tidak perlu diproses
+        return wav, meta
+    y = ff.decode(wav, post.SR, mono=True, af=f"atempo={f:.5f}")
+    if y.size < int(0.05 * post.SR):
+        log.warning("Baris %s: hasil percepatan kosong — dipakai versi asli.", lid)
+        return wav, meta
+    y = post.fade(y, post.SR, 0.003, 0.02)
+    y, _ = meter.normalize(y, post.SR, post.VO_LUFS, post.VO_TP)
+    dst = ff.write_wav(work / f"{lid}-fit.wav", y, post.SR)
+    old = float(meta.get("dur") or 0)
+    new = len(y) / post.SR
+    k = new / old if old > 0 else 1 / f
+    words = [{**w, "s": round(float(w.get("s") or 0) * k, 3), "e": round(float(w.get("e") or 0) * k, 3)} for w in meta.get("words") or [] if isinstance(w, dict)]
+    out = {**meta, "dur": round(new, 3), "words": words, "speed": int(round((f - 1) * 100)), "max": mx}
+    out["fit"] = speech_end(out) <= mx + 0.01
+    log.info("Baris %s: ucapan %.2f dtk > jendela %.2f dtk → dipercepat %.0f%% (%s)", lid, sp, mx, (f - 1) * 100, "muat" if out["fit"] else "masih belum muat")
+    return dst, out
+
+
 # ---------------------------------------------------------------- job
 def run(ctx: JobCtx) -> None:
     rt = ctx.rt
@@ -297,6 +359,8 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
                     engine = rt.engines.get(name)
                 wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"))
                 wav = cache.put(k, wav, meta)
+            # adegan teaser: ucapan lebih panjang dari jendelanya → dipercepat (maks 1,3×) — cache baris tetap suara mentah
+            wav, meta = fit_to_max(wav, meta, ln.get("max"), work, ln["id"])
             mp3 = ff.encode_mp3(wav, work / f"{ln['id']}.mp3", 48000, "160k", mono=True)
             path = rt.supa.upload(f"vo/{ctx.id}/{ln['id']}.mp3", mp3, "audio/mpeg")
             start = ln["start"] if ln["start"] is not None else t_next
@@ -304,7 +368,10 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             y, sr = ff.read_wav(wav)
             clips.append((y if sr == 48000 else ff.decode(wav, 48000), start))
             cues.extend(T.group_cues(meta["words"], start))
-            out_lines.append({"id": ln["id"], "scene_id": ln["scene_id"], "path": path, "dur": meta["dur"], "words": meta["words"], "start": start})
+            row = {"id": ln["id"], "scene_id": ln["scene_id"], "path": path, "dur": meta["dur"], "words": meta["words"], "start": start}
+            if meta.get("speed"):
+                row["speed"] = meta["speed"]
+            out_lines.append(row)
         ctx.progress(0.92, "Menyusun VO lengkap…", force=True)
         full = mix.place_clips(clips, 48000, tail=0.5, ceiling_db=-1.0)
         full_wav = ff.write_wav(work / "full.wav", full, 48000)

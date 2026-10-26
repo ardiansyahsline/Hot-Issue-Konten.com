@@ -14,7 +14,7 @@ import { Component, createContext, useMemo, type ComponentType, type CSSProperti
 import { AbsoluteFill, Freeze, random } from "remotion";
 import { sfxById } from "@/lib/studio/sfxMeta";
 import { teaserTimeline } from "@/lib/studio/teaser";
-import { FORMATS, sceneStartSecs, secToFrames, totalSec, type Scene, type TeaserShot, type Timeline } from "@/lib/studio/timeline";
+import { FORMATS, sceneStartSecs, secToFrames, totalSec, voSpeechEnd, type Scene, type TeaserShot, type Timeline } from "@/lib/studio/timeline";
 import { DISPLAY, FONT, Z } from "../../screens/ui";
 import { clamp, rgba, SceneCtx, useScene, useStudio, type SceneCtxValue } from "../../theme";
 import { AiShot } from "./ai";
@@ -212,7 +212,8 @@ function voBlocks(tl: Timeline): VoBlock[] {
   return tl.scenes
     .map((s, i): VoBlock | null => {
       const l = lines.find((x) => x.sceneId === s.id);
-      if (l) return { i, at: l.at ?? s.vo?.at ?? 0.15, dur: l.dur };
+      // lebar blok = ucapan asli (sama dengan TimelineEditor; hening di ujung file tidak digambar)
+      if (l) return { i, at: l.at ?? s.vo?.at ?? 0.15, dur: voSpeechEnd(l) };
       const words = (s.vo?.text ?? "").split(/\s+/).filter(Boolean).length;
       if (!words) return null;
       const at = s.vo?.at ?? 0.15;

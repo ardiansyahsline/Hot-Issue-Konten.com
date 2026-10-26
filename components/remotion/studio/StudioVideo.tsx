@@ -11,7 +11,7 @@
 import { useMemo, type FC } from "react";
 import { AbsoluteFill, Sequence, useVideoConfig } from "remotion";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
-import { FORMATS, FPS, normalizeTimeline, sceneStarts, secToFrames, totalFrames, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { FORMATS, FPS, normalizeTimeline, sceneStarts, secToFrames, TAIL_SEC, totalFrames, type Scene, type Timeline } from "@/lib/studio/timeline";
 import { StudioAudio } from "./audio";
 import { SceneBg } from "./backgrounds";
 import { Grain, SafeZoneOverlay, Vignette } from "./fx";
@@ -29,8 +29,8 @@ export type StudioVideoProps = {
   sfxExtra?: SfxMeta[];
 };
 
-/** ekor hening di akhir video (detik) */
-export const TAIL_SEC = 0.5;
+/** ekor hening di akhir video (detik) — konstanta di lib/studio/timeline (juga dipakai jendela VO di panel suara) */
+export { TAIL_SEC };
 
 /** timeline yang aman dipakai: kalau strukturnya rusak (mis. props.json dari luar), dinormalisasi dulu */
 export function safeTimeline(t: unknown): Timeline {
