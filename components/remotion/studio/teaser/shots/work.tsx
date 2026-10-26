@@ -4,12 +4,16 @@
  * Adegan 3 (Dashboard + Hot Issue) & adegan 4 (Video Review) teaser CS Tracker.
  * UI = halaman asli yang dibuat ulang (lihat work-parts.tsx), kamera virtual keyframe di ketukan, gerak pegas,
  * momen visual tepat di detik SFX lib/studio/teaser.ts:
- *  - Dashboard: swoosh-readout 0,1 (kartu angka masuk + hitung naik) · koin-ting 1,2 (laporan ke-3 → topik naik ke #1)
- *    · ui-scifi-ping 2,4 (badge 🔥 HOT menyala di #1 + light sweep, kamera dorong ke baris #1)
+ *  - Dashboard (5,4 dtk; 0–0,3 tertutup whip dari Reveal): swoosh-readout 0,3 (angka mulai berjalan) → semua angka mendarat di
+ *    ketukan 0,6 · koin-ting 1,2 (laporan ke-3 → topik naik ke #1) · ui-scifi-ping 2,4 (badge 🔥 HOT menyala di #1 + light sweep,
+ *    kamera dorong ke baris #1) · 2,95–5,8 kamera tetap hidup: dorong pelan + kick di tiap ketukan, lalu orbit/geser menyamping
+ *    (4,45–5,05) dan naik searah transisi slide-up berikutnya
+ *  - Data clipper (kontak, link) = placeholder tersamar + balok skeleton solid (lihat Redacted di work-parts.tsx).
+ *  - Render browser: radius CSS blur di dalam World dikali skala dunia S (canvas blur tidak ikut transform; CLI sudah ikut).
  *  - Video Review: whoosh 0,6 (kartu kasus mendarat) · ui-accept 1,8 (status → Diproses) · whoosh 2,4 (kartu berikut)
  *    · ui-accept 3,6 (status → Disetujui, centang hijau + sweep)
  */
-import { AbsoluteFill, random } from "remotion";
+import { AbsoluteFill, random, useRemotionEnvironment } from "remotion";
 import { TextShine } from "../../fx";
 import { DISPLAY, Z, rgba, useSid } from "../../screens/ui";
 import type { ReactNode } from "react";
@@ -213,12 +217,13 @@ const LIST_TOTAL = 35;
 
 /** urutan awal sesuai aturan ranking asli: HOT → jumlah laporan → prioritas → update terbaru */
 const ROWS: RankIssue[] = [
-  { title: "Saldo withdraw tertahan lebih dari 3 hari", status: "in_progress", priority: "urgent", category: "Withdraw / Payout", reports: 2, contact: ["WA", "0812-7781-2290", 1], pic: "Nengok", ago: "8 mnt lalu", by: "Alif" },
-  { title: "Views tidak update sejak kemarin", status: "in_progress", priority: "high", category: "Views tidak update", reports: 2, contact: ["IG", "@clipper.daily", 1], pic: "Irsyad", ago: "12 mnt lalu", by: "Natasha" },
-  { title: "Kode OTP verifikasi akun tidak masuk", status: "open", priority: "high", category: "Akun / Verifikasi / OTP", reports: 2, contact: ["Email", "clipper@gmail.com", 1], pic: "Derencalibur", ago: "31 mnt lalu", by: "Irsyad" },
+  { title: "Saldo withdraw tertahan lebih dari 3 hari", status: "in_progress", priority: "urgent", category: "Withdraw / Payout", reports: 2, contact: ["WA", "0812-••••-••••", 1], pic: "Nengok", ago: "8 mnt lalu", by: "Alif" },
+  { title: "Views tidak update sejak kemarin", status: "in_progress", priority: "high", category: "Views tidak update", reports: 2, contact: ["IG", "@••••••••", 1], pic: "Irsyad", ago: "12 mnt lalu", by: "Natasha" },
+  { title: "Kode OTP verifikasi akun tidak masuk", status: "open", priority: "high", category: "Akun / Verifikasi / OTP", reports: 2, contact: ["Email", "•••••••@gmail.com", 1], pic: "Derencalibur", ago: "31 mnt lalu", by: "Irsyad" },
 ];
+// PRIVASI: kontak clipper di atas sudah tersamar di sumbernya ('0812-••••-••••', '@••••') dan digambar sebagai balok skeleton.
 /** topik yang naik: laporan ke-3 masuk → otomatis HOT (REPORT_HOT_THRESHOLD = 3) → ranking #1 */
-const FEAT: RankIssue = { title: "Video ditolak padahal sesuai brief", status: "open", priority: "high", category: "Banding / Reject", reports: 2, contact: ["DC", "clipper_88", 1], pic: "Natasha", ago: "1 jam lalu", by: "Derencalibur" };
+const FEAT: RankIssue = { title: "Video ditolak padahal sesuai brief", status: "open", priority: "high", category: "Banding / Reject", reports: 2, contact: ["DC", "••••••••", 1], pic: "Natasha", ago: "1 jam lalu", by: "Derencalibur" };
 
 // tata letak dunia (px CSS halaman)
 const D = {
@@ -233,16 +238,20 @@ const D = {
 };
 
 // detik SFX (lib/studio/teaser.ts) + ketukan
-const D_READ = 0.1; // swoosh-readout: angka mulai berjalan
+const D_READ = 0.3; // swoosh-readout: angka mulai berjalan (whip masuk dari Reveal selesai di 0,3)
 const D_SLAM = 0.6; // ketukan: semua angka mendarat
 const D_TING = 1.2; // koin-ting: laporan ke-3 → naik ke #1
 const D_PING = 2.4; // ui-scifi-ping: badge HOT menyala
 /** jendela kamera mengikuti baris yang naik (blur gerak dihitung manual per baris) */
 const FOLLOW: [number, number] = [1.12, 2.05];
+/** ketukan sesudah ping: kick zoom + percikan bara (adegan 5,4 dtk → ketukan terakhir yang utuh 4,8) */
+const AFTER_BEATS = [3.0, 3.6, 4.2, 4.8];
 
 export function DashboardShot() {
   const { f, fps, s, box, W, H } = useShot();
   const S = box.w / PAGE_W;
+  // render browser: ctx.filter blur dalam px kanvas (tidak ikut scale(S) World) → radius dikali S supaya DOF sama dengan CLI
+  const bk = useRemotionEnvironment().isClientSideRendering ? S : 1;
   const bx = box.x + box.w / 2;
   const by = box.y + box.h / 2;
   const ox = bx - (PAGE_W / 2) * S;
@@ -272,8 +281,9 @@ export function DashboardShot() {
     { t: 2.28, wx: 178, wy: row0 + 2, z: 1.085, ty: tyHero, ease: EASE.soft }, // antisipasi: mundur sedikit
     { t: 2.47, wx: 168, wy: row0 - 4, z: 1.19, ease: EASE.out }, // dorong ke baris #1 tepat di ping
     { t: 2.95, wx: 166, wy: row0 - 6, z: 1.18, ease: EASE.soft },
-    { t: 4.45, wx: 160, wy: row0 - 8, z: 1.26, ease: EASE.inOut }, // dorong pelan terus ke badge HOT
-    { t: 5.3, wx: 160, wy: row0 + 110, z: 1.28, ease: EASE.in }, // isi naik searah transisi slide-up berikutnya
+    { t: 4.45, wx: 160, wy: row0 - 8, z: 1.26, ease: EASE.inOut }, // dorong pelan terus ke badge HOT (montage membekukan 3,5)
+    { t: 5.05, wx: 184, wy: row0 - 1, z: 1.235, r: -1.1, ease: EASE.inOut }, // orbit: geser menyamping + miring, judul & PIC ikut terbaca
+    { t: 5.8, wx: 186, wy: row0 + 118, z: 1.27, r: -0.4, ease: EASE.in }, // isi naik searah transisi slide-up berikutnya (5,4–5,8)
   ];
   const baseKeys = wkeys.map((k) => ({ t: k.t, x: k.wx, y: k.wy, z: k.z, r: k.r, ease: k.ease }));
   const tyKeys = wkeys.map((k) => ({ t: k.t, x: k.ty, ease: k.ease }));
@@ -285,8 +295,8 @@ export function DashboardShot() {
       const fy = rowC(camSlot(fr));
       wy = fy + (v.y - fy) * prog(fr, fps, 1.85, FOLLOW[1], (x) => x);
     }
-    // "kick" zoom kecil di tiap ketukan musik sesudah ping (3,0 · 3,6 · 4,2) — seirama denyut badge HOT
-    const kick = 0.01 * beatPulse(fr, fps) * prog(fr, fps, 2.85, 2.95) * (1 - prog(fr, fps, 4.4, 4.5));
+    // "kick" zoom kecil di tiap ketukan musik sesudah ping (3,0 · 3,6 · 4,2 · 4,8) — seirama denyut badge HOT
+    const kick = 0.01 * beatPulse(fr, fps) * prog(fr, fps, 2.85, 2.95) * (1 - prog(fr, fps, 5.0, 5.15));
     return { wx: v.x, wy, z: v.z + kick, r: v.r, ty: camAtTime(tyKeys, t).x };
   };
   const toCam = (fr: number): CamKey => {
@@ -311,7 +321,9 @@ export function DashboardShot() {
       { t: FOLLOW[0], rx: 9, ry: 5, ease: EASE.whip },
       { t: 1.9, rx: 4, ry: 2, ease: EASE.soft },
       { t: 2.4, rx: 0.5, ry: 0, ease: EASE.inOut },
-      { t: 4.8, rx: -1.5, ry: -3, ease: EASE.soft },
+      { t: 4.45, rx: -1.5, ry: -3, ease: EASE.soft },
+      { t: 5.05, rx: 1.2, ry: 3.4, ease: EASE.inOut }, // orbit bersama geser menyamping
+      { t: 5.8, rx: 3, ry: 2, ease: EASE.soft },
     ],
     s,
   );
@@ -320,7 +332,7 @@ export function DashboardShot() {
   const count = (v: number, i: number) => Math.round(v * prog(f, fps, D_READ + i * 0.03, D_SLAM, EASE.out));
   const slam = s >= D_SLAM ? Math.exp(-(s - D_SLAM) * 9) : 0;
   const cardGlow = 0.7 * prog(f, fps, D_SLAM - 0.12, D_SLAM, EASE.in) * (1 - prog(f, fps, D_SLAM + 0.05, D_SLAM + 0.55));
-  const statsBlur = Math.max(3.2 * prog(f, fps, 0.92, 1.12), vblur(camV));
+  const statsBlur = Math.max(3.2 * prog(f, fps, 0.92, 1.12), vblur(camV)) * bk;
   const statsFade = Math.max(0, 1 - 0.35 * prog(f, fps, 0.9, 1.2) - 0.65 * prog(f, fps, 1.9, 2.3));
 
   // --- topik naik ke #1 (koin-ting) ---
@@ -359,7 +371,8 @@ export function DashboardShot() {
               <PageTitle title="Dashboard Hot Issues" sub="Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang." />
             </div>
             {STATS.map((st, i) => {
-              const p = springFrom(f, fps, i * 0.05 - 0.02, { damping: 13, stiffness: 170, mass: 0.7 });
+              // masuk bertingkat saat whip dari Reveal mereda (0,1–0,3) → sudah diam & terbaca waktu angka mulai berjalan di 0,3
+              const p = springFrom(f, fps, 0.06 + i * 0.045, { damping: 13, stiffness: 170, mass: 0.7 });
               const col = i % 2;
               const r = Math.floor(i / 2);
               const wide = i === 4;
@@ -397,7 +410,7 @@ export function DashboardShot() {
               opacity: clamp01(springFrom(f, fps, 0.35) * 1.3),
             }}
           >
-            <div style={{ height: D.headH, boxSizing: "border-box", padding: "12px 20px", borderBottom: "1px solid rgba(39,39,42,0.8)", fontSize: 12, lineHeight: "16px", color: Z[500], whiteSpace: "nowrap", filter: blurCss(Math.max(restBlur * 0.5, vblur(camV))) }}>
+            <div style={{ height: D.headH, boxSizing: "border-box", padding: "12px 20px", borderBottom: "1px solid rgba(39,39,42,0.8)", fontSize: 12, lineHeight: "16px", color: Z[500], whiteSpace: "nowrap", filter: blurCss(Math.max(restBlur * 0.5, vblur(camV)) * bk) }}>
               {LIST_TOTAL} issue · paling HOT & paling banyak laporan di atas
             </div>
             {rows
@@ -408,7 +421,7 @@ export function DashboardShot() {
                 const y = D.headH + r.slot * D.rowH + (r.feat ? antic * 5 : 0);
                 const sc = r.feat ? 1 + 0.025 * lift : 1;
                 // baris utama tetap terbaca (blur gerak dibatasi), baris lain lewat dengan blur penuh
-                const bl = r.feat ? Math.min(1.2, vblur(r.v) * 0.4) : Math.max(restBlur, vblur(r.v));
+                const bl = (r.feat ? Math.min(1.2, vblur(r.v) * 0.4) : Math.max(restBlur, vblur(r.v))) * bk;
                 return (
                   <div
                     key={r.it.title}
@@ -437,11 +450,12 @@ export function DashboardShot() {
                       sweep={r.feat ? sweep : -1}
                       twoLine={r.feat}
                       hotSlot={r.feat ? hotSlot : 0}
+                      bk={bk}
                     />
                     {r.feat && (
                       <>
                         <Embers f={f} fps={fps} at={D_PING} x={84} y={28} />
-                        {[3.0, 3.6, 4.2].map((b) => (
+                        {AFTER_BEATS.map((b) => (
                           <Embers key={b} f={f} fps={fps} at={b} x={84} y={28} n={5} k={0.7} seed={`b${b}`} />
                         ))}
                       </>
@@ -487,8 +501,8 @@ const CASES: VrCase[] = [
     explanation: "Video sudah 3 hari belum direview, minta dicek",
     category: "Review/rilis melewati estimasi waktu",
     links: [
-      ["TikTok", "tiktok.com/@clipper/video/7429"],
-      ["Email", "clipper@gmail.com"],
+      ["TikTok", "tiktok.com/@•••••/video/••••"],
+      ["Email", "•••••••@gmail.com"],
     ],
     notes: "sudah upload sesuai jadwal",
   },
@@ -498,8 +512,8 @@ const CASES: VrCase[] = [
     explanation: "Banding: video ditolak karena dianggap reupload",
     category: "Pengajuan banding",
     links: [
-      ["TikTok", "tiktok.com/@clipper/video/7431"],
-      ["Email", "clipper.id@gmail.com"],
+      ["TikTok", "tiktok.com/@•••••/video/••••"],
+      ["Email", "••••••••••@gmail.com"],
     ],
     notes: "video hasil edit sendiri",
   },
@@ -622,6 +636,8 @@ function ActiveCase({ c, land, tapAt, ok, from, to, hoverAt, outAt, resolution, 
 export function VideoReviewShot() {
   const { f, fps, s, box, W, H } = useShot();
   const S = box.w / PAGE_W;
+  // render browser: blur canvas tidak ikut scale(S) World → radius dikali S (blur di dalam kartu 3D sudah ikut skala, tidak dikali)
+  const bk = useRemotionEnvironment().isClientSideRendering ? S : 1;
   const bx = box.x + box.w / 2;
   const capTop = box.y + box.h * 0.88 - 196;
   const zoneCy = (box.y + capTop) / 2;
@@ -675,7 +691,7 @@ export function VideoReviewShot() {
   const backP = springFrom(f, fps, 0.15, { damping: 18 });
   // depth of field: kepala halaman buram saat kamera mendorong ke kartu
   const zNow = Math.max(prog(f, fps, 0.55, 0.85) * 0.6, prog(f, fps, 1.05, 1.5) * (1 - prog(f, fps, 2.0, 2.3)), prog(f, fps, 2.85, 3.3));
-  const headBlur = 2.4 * zNow;
+  const headBlur = 2.4 * zNow * bk;
 
   return (
     <AbsoluteFill>
@@ -695,7 +711,7 @@ export function VideoReviewShot() {
           </div>
 
           {/* daftar kasus di belakang kartu aktif (buram) */}
-          <div style={{ position: "absolute", left: 0, top: V.stageY + 26, width: PAGE_W, transform: `scale(0.93)`, transformOrigin: "50% 0%", filter: "blur(2.6px)", opacity: 0.5 * clamp01(backP * 1.2) }}>
+          <div style={{ position: "absolute", left: 0, top: V.stageY + 26, width: PAGE_W, transform: `scale(0.93)`, transformOrigin: "50% 0%", filter: `blur(${(2.6 * bk).toFixed(2)}px)`, opacity: 0.5 * clamp01(backP * 1.2) }}>
             <BackList />
           </div>
 

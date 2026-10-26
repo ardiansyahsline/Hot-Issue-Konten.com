@@ -17,14 +17,17 @@ import {
   type VoiceJob,
   type VoiceJobLine,
 } from "@/lib/studio/client";
-import { MAX_DUR, MAX_TOTAL, sceneStartSecs, type EdgeVoice, type Scene, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
+import { MAX_DUR, MAX_TOTAL, sceneStartSecs, VO_AT, voStartOf, type EdgeVoice, type Scene, type Timeline, type VoiceMode, type VoLine, type VoTrack, type Word } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
+import { isTeaserScene } from "./teaserLock";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
 const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis Pocket TTS dari Kyutai";
 
-/** VO mulai 0,15 dtk setelah adegan mulai; adegan minimal selesai 0,25 dtk setelah VO */
-const VO_AT = 0.15;
+/**
+ * VO mulai di offset adegan (`scene.vo.at`, mis. waktu target naskah teaser) atau bawaan 0,15 dtk (voStartOf);
+ * adegan minimal selesai 0,25 dtk setelah VO
+ */
 const TAIL = 0.25;
 const DEF_EXG = 0.65;
 const DEF_CFG = 0.35;
@@ -49,18 +52,30 @@ const cleanWords = (w: unknown): Word[] =>
 const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined) =>
   !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
 
-/** perpanjang adegan yang VO-nya lebih panjang (at + dur + 0,25), tetap dalam batas 20 dtk/adegan & 180 dtk total */
-function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[] } {
+/** detik VO adegan `s` melewati batas aman adegan (mulai + panjang suara + 0,25 dtk − durasi); ≤ 0 = muat */
+const voOverflow = (s: Scene, l: VoLine) => voStartOf(s, l) + l.dur + TAIL - s.dur;
+
+/**
+ * perpanjang adegan yang VO-nya lebih panjang (at + dur + 0,25), tetap dalam batas 20 dtk/adegan & 180 dtk total.
+ * Adegan premium teaser (layout "teaser") TIDAK pernah diperpanjang: batasnya di grid ketukan 0,6 dtk (beat sync semua
+ * adegan sesudahnya), jadi cukup dicatat di `over` (peringatan "VO lebih panjang dari adegan").
+ */
+export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[] } {
   const fps = tl.fps || 30;
   let total = tl.scenes.reduce((a, s) => a + s.dur, 0);
   const grown: string[] = [];
   const tooLong: string[] = [];
+  const over: string[] = [];
   let shifted = false;
   const scenes = tl.scenes.map((s, i) => {
     const l = vo.lines.find((x) => x.sceneId === s.id);
     if (!l) return s;
-    const need = (l.at ?? VO_AT) + l.dur + TAIL;
+    const need = s.dur + voOverflow(s, l);
     if (need <= s.dur + 1e-3) return s;
+    if (isTeaserScene(s)) {
+      over.push(s.name);
+      return s;
+    }
     const want = Math.ceil(Math.min(need, MAX_DUR) * fps) / fps;
     const dur = Math.round(Math.min(want, s.dur + Math.max(0, MAX_TOTAL - total)) * fps) / fps;
     if (need > MAX_DUR + 1e-3 || dur < want) tooLong.push(s.name);
@@ -71,7 +86,7 @@ function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooL
     return { ...s, dur };
   });
   // adegan bergeser -> VO lengkap (.mp3) dari worker tidak sinkron lagi
-  return { tl: { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo }, grown, tooLong };
+  return { tl: { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo }, grown, tooLong, over };
 }
 
 /**
@@ -103,6 +118,18 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const bankVoice: StudioVoice | null = ready.find((x) => x.id === v.voiceId) ?? ready.find((x) => x.name === DEFAULT_VOICE) ?? ready[0] ?? null;
   const voScenes = tl.scenes.filter((s) => s.vo?.text);
   const busy = run.s === "start" || run.s === "tts" || run.s === "job";
+  // adegan teaser yang VO-nya lewat batas adegan (tidak diperpanjang — durasi dikunci di ketukan) -> peringatan tetap terlihat
+  const overNow = useMemo(
+    () =>
+      tl.scenes.flatMap((s) => {
+        const l = tl.vo?.lines.find((x) => x.sceneId === s.id);
+        const o = l && s.vo?.text && isTeaserScene(s) ? voOverflow(s, l) : 0;
+        return o > 1e-3 ? [`${s.name} (+${fmt(o)} dtk)`] : [];
+      }),
+    [tl.scenes, tl.vo],
+  );
+  // offset mulai VO per adegan (mis. teaser: waktu target naskah) -> sebutkan contoh yang paling jauh
+  const lateVo = voScenes.reduce<Scene | null>((a, s) => (s.vo?.at !== undefined && s.vo.at > (a?.vo?.at ?? VO_AT) + 1e-3 ? s : a), null);
 
   // ekspresi: digeser lokal, disimpan ke timeline saat dilepas
   const [exg, setExg] = useState(v.exaggeration ?? DEF_EXG);
@@ -130,6 +157,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const msgs = extra.filter(Boolean);
     if (r.grown.length) msgs.push(`Adegan ${names(r.grown)} diperpanjang otomatis supaya VO-nya muat.`);
     if (r.tooLong.length) msgs.push(`VO adegan ${names(r.tooLong)} masih kepanjangan — pendekkan naskahnya.`);
+    if (r.over.length) msgs.push(`⚠️ VO lebih panjang dari adegan ${names(r.over)}. Durasi adegan teaser dikunci di ketukan musik (tidak diperpanjang), jadi suaranya nyambung ke adegan berikutnya — pendekkan naskah atau naikkan Tempo kalau mengganggu.`);
     const miss = r.tl.scenes.filter((s) => s.vo?.text && !vo.lines.some((l) => l.sceneId === s.id)).length;
     if (miss) msgs.push(`${miss} adegan belum ada suaranya — klik "Generate ulang VO".`);
     setNote(msgs.length ? msgs.join(" ") : "✅ VO siap. Putar preview untuk dengar.");
@@ -144,7 +172,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const sent = Array.isArray(j.lines) && j.lines.length ? new Map(j.lines.map((l) => [l.scene_id, l])) : null;
     const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
     const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
-    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: VO_AT, words: cleanWords(l.words) }));
+    // mulai VO = offset adegan (scene.vo.at) / bawaan — sama dengan `start` yang dikirim ke laptop (VO lengkap .mp3)
+    const lines: VoLine[] = ok.map((l) => ({ sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: voStartOf(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words) }));
     if (!lines.length) {
       setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
       return;
@@ -153,7 +182,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const fullOk =
       !!sent &&
       ok.length === sent.size &&
-      ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + VO_AT)) < 2e-3);
+      ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + voStartOf(t.scenes[at.get(l.scene_id)!]))) < 2e-3);
     const name = voicesRef.current.find((x) => x.id === j.voice_id)?.name ?? t.voice.voiceName ?? "Bank suara";
     finish(t, {
       jobId: j.id,
@@ -221,7 +250,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         const s = items[k++];
         try {
           const r = await requestTts({ text: s.vo!.text, spell: s.vo!.spell || undefined, engine, voice: edgeVoice }, ctrl.signal);
-          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: VO_AT, words: r.words });
+          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: voStartOf(s), words: r.words });
           results.push(r);
         } catch (e) {
           if (ctrl.signal.aborted) return;
@@ -259,7 +288,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const t: Timeline = { ...t0, voice: { ...t0.voice, mode: "bank", voiceId: voice.id, voiceName: voice.name, exaggeration: exg, cfg } };
     const starts = sceneStartSecs(t);
     const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) =>
-      s.vo?.text ? [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + VO_AT) * 1000) / 1000 }] : [],
+      s.vo?.text ? [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + voStartOf(s)) * 1000) / 1000 }] : [],
     );
     if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
     onChange(t);
@@ -472,6 +501,11 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
             {tl.vo.lines.length}/{voScenes.length || tl.vo.lines.length} adegan bersuara
           </div>
           {tl.vo.engine === "pocket" && <div className="mt-0.5 text-zinc-500">Kredit suara: {POCKET_CREDIT}</div>}
+          {overNow.length > 0 && (
+            <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-over>
+              ⚠️ VO lebih panjang dari adegan: {names(overNow)}. Durasi adegan teaser tidak diubah (dikunci di ketukan musik) — pendekkan naskah atau naikkan Tempo.
+            </div>
+          )}
           {tl.vo.temp && workerOn && bankVoice && !busy && (
             <div className="mt-2 rounded-lg bg-emerald-500/10 px-2.5 py-2 text-emerald-300">
               Mesin suara laptop sudah nyala. Ganti ke suara asli dari bank biar lebih natural.
@@ -518,6 +552,11 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         </div>
       ) : (
         <>
+          {lateVo?.vo?.at !== undefined && (
+            <p className="text-[11px] text-zinc-500" data-vo-offset>
+              ⏱️ VO tiap adegan mulai sesuai waktu naskah (mis. {lateVo.name}: {fmt(lateVo.vo.at)} dtk setelah adegan mulai).
+            </p>
+          )}
           <button type="button" className="btn-primary w-full" disabled={!voScenes.length} onClick={() => generate()}>
             {tl.vo?.lines.length ? "🔁 Generate ulang VO" : "🎙️ Bikin suara VO"}
           </button>

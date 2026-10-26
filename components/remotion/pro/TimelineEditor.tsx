@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { extraSfxOf, useStudioCatalog } from "@/lib/studio/client";
 import { sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, snapScenesToBeats, totalFrames, totalSec, type Scene, type Timeline } from "@/lib/studio/timeline";
-import { isTeaserScene } from "./teaserLock";
+import { beatGrid, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, totalFrames, totalSec, type Scene, type Timeline } from "@/lib/studio/timeline";
+import { beatReport, isTeaserScene, snapAroundTeaser, type BeatReport } from "@/lib/studio/teaserLock";
 
 /** warna titik SFX per kategori (palet yang otomatis ikut mode terang) */
 const CAT: Record<string, { dot: string; label: string }> = {
@@ -52,6 +52,16 @@ function withScenes(tl: Timeline, scenes: Scene[]): Timeline {
   return { ...tl, scenes, vo: moved && tl.vo?.full ? { ...tl.vo, full: null } : tl.vo };
 }
 
+/** laporan jujur tombol "Tempel ke ketukan": berapa potongan yang benar-benar di ketukan, dan kenapa sisanya tidak */
+function snapNote(r: BeatReport, changed: boolean, locked: boolean): string {
+  if (r.onBeat === r.cuts) return changed ? "🎯 Semua potongan adegan sudah nempel ke ketukan musik" : locked ? "🔒 Adegan premium teaser dikunci · semua potongan sudah pas di ketukan" : "Potongan sudah pas di ketukan";
+  const why = [
+    r.offLocked ? `${r.offLocked} di akhir adegan premium (durasinya dikunci, tidak ikut digeser)` : "",
+    r.offFree ? `${r.offFree} terlalu jauh dari ketukan (maks geser 0,35 dtk)` : "",
+  ].filter(Boolean);
+  return `${changed ? "🎯" : "⚠️"} ${r.onBeat} dari ${r.cuts} potongan pas di ketukan · ${r.cuts - r.onBeat} tidak: ${why.join(", ")}`;
+}
+
 type Drag = { id: string; x0: number; d0: number; dur: number; start: number; others: number; moved: boolean };
 
 /**
@@ -82,7 +92,8 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
 
   useEffect(() => {
     if (!note) return;
-    const t = setTimeout(() => setNote(null), 3500);
+    // catatan panjang (laporan tempel ketukan) dibiarkan lebih lama supaya sempat dibaca
+    const t = setTimeout(() => setNote(null), note.length > 60 ? 7000 : 3500);
     return () => clearTimeout(t);
   }, [note]);
 
@@ -201,15 +212,14 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
   };
 
   const snapAll = () => {
-    const snapped = snapScenesToBeats(tl, beats);
-    // adegan premium teaser tidak ikut digeser (sudah di ketukan 0,6 dtk; animasinya sinkron dengan batas itu)
-    const next = snapped === tl ? tl : { ...snapped, scenes: snapped.scenes.map((s, i) => (isTeaserScene(tl.scenes[i]) ? { ...s, dur: tl.scenes[i].dur } : s)) };
+    // adegan premium teaser tidak ikut digeser (durasinya dikunci; animasinya sinkron dengan batas itu). Adegan biasa ditempel
+    // dari awal yang sebenarnya (sesudah adegan teaser), jadi hasilnya benar-benar di ketukan
+    const next = snapAroundTeaser(tl, beats);
     const changed = next.scenes.some((s, i) => Math.abs(s.dur - tl.scenes[i].dur) > 1e-6);
     // total lewat 3 menit -> adegan terakhir nanti dibuang diam-diam saat dirapikan, jadi ditolak
     if (changed && totalSec(next) > MAX_TOTAL + 1e-6) return setNote(`Tidak ditempel: total video jadi lewat ${MAX_TOTAL} dtk. Pendekkan adegan dulu.`);
     if (changed) onChange(withScenes(tl, next.scenes));
-    const locked = tl.scenes.some(isTeaserScene);
-    setNote(changed ? "🎯 Potongan adegan sudah nempel ke ketukan musik" : locked ? "🔒 Adegan premium teaser sudah dikunci di ketukan" : "Potongan sudah pas di ketukan");
+    setNote(snapNote(beatReport(next, beats), changed, tl.scenes.some(isTeaserScene)));
   };
 
   // penggaris: label tiap 1/2/5/10/… dtk, minimal 44 px antarlabel
@@ -409,7 +419,9 @@ export default function TimelineEditor(p: { timeline: Timeline; onChange: (tl: T
 
       <div className="mt-2 flex min-h-[18px] flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
         {note ? (
-          <span className="font-semibold text-orange-400">{note}</span>
+          <span role="status" className="font-semibold text-orange-400">
+            {note}
+          </span>
         ) : (
           <>
             {cats.map((c) => (

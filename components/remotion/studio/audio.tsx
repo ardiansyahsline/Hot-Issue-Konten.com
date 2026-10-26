@@ -17,7 +17,7 @@ import { Audio } from "@remotion/media";
 import { useMemo } from "react";
 import { Sequence, useVideoConfig } from "remotion";
 import { SFX_BUILTIN, sfxById, type SfxMeta } from "@/lib/studio/sfxMeta";
-import { beatGrid, dbToGain, DUCK_DB, isLoudSfx, MUSIC_LEVEL_DB, sceneStarts, secToFrames, sfxGain, TARGET_LUFS, totalFrames, type MusicLevel, type Timeline, type VoTrack } from "@/lib/studio/timeline";
+import { beatGrid, dbToGain, DUCK_DB, isLoudSfx, MUSIC_LEVEL_DB, sceneStarts, secToFrames, sfxGain, TARGET_LUFS, totalFrames, voStartOf, type MusicLevel, type Timeline, type VoTrack } from "@/lib/studio/timeline";
 import { SFX_ENV_FPS, sfxEnv } from "@/lib/studio/sfxEnv";
 import { sfxSrc } from "@/lib/studio/urls";
 import { clamp, clamp01, useSrc } from "./theme";
@@ -132,7 +132,8 @@ export function planAudio(tl: Timeline, mode: AudioMode, extra: SfxMeta[], fps: 
     for (const line of tl.vo.lines ?? []) {
       const i = scenes.findIndex((s) => s.id === line.sceneId);
       if (i < 0 || !line.src || !scenes[i].vo?.text) continue;
-      const from = starts[i] + Math.round((line.at ?? 0.15) * fps);
+      // mulai VO: posisi baris hasil generate → offset adegan (scene.vo.at, mis. waktu target naskah teaser) → 0,15 dtk
+      const from = starts[i] + Math.round(voStartOf(scenes[i], line) * fps);
       if (from >= N) continue;
       const dur = Math.max(1, Math.min(N - from, Math.ceil((line.dur || 1) * fps) + 2));
       clips.push({ key: `vo-${line.sceneId}`, src: line.src, from, trim: 0, dur, vol: g, gate: false, name: `VO · ${scenes[i].name}` });

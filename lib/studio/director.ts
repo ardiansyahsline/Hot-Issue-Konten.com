@@ -31,8 +31,11 @@ import {
   type TransitionKind,
   type VoTrack,
 } from "./timeline";
+import { keepTeaserVisual } from "./teaserLock";
 
 export const DIRECTOR_HERO = "Harley";
+/** sama dengan batas normalizeTimeline (lib/studio/timeline.ts, `.slice(0, 8)`) & MAX_SFX di SceneCard */
+const MAX_SFX_PER_SCENE = 8;
 
 // ---------------------------------------------------------------------------------------------
 // Contoh rencana nyata: 3 adegan pertama teaser CS Tracker (assets/audio/teaser/cue-sheet.md + naskah-vo.md)
@@ -179,12 +182,14 @@ export const DIRECTOR_RULES = [
   "- brand: Konten.com = {\"id\":\"konten\"} (oranye #f97316, latar #09090b), TWS = {\"id\":\"tws\"} (biru #2f5ff0, latar hitam) — cukup id-nya, warna terisi otomatis. Brand lain = \"custom\" + nama & warna dari user. Logo HANYA milik Konten.com, TWS, atau logo yang diupload user (pakai src lampirannya). Logo bawaan Konten.com/TWS terisi otomatis dari id — jangan ditulis, dan saat ganti brand jangan salin logo brand lama.",
   `- id adegan: rencana baru pakai s1, s2, …; revisi pertahankan id lama, adegan baru pakai id yang belum dipakai. dur ${MIN_DUR}–${MAX_DUR} dtk per adegan, maks ${MAX_SCENES} adegan, total maks ${MAX_TOTAL} dtk. Jumlahkan dur supaya total sesuai durasi yang diminta (±1 dtk).`,
   "- transition = cara MASUK ke adegan itu; adegan pertama \"cut\". Variasikan tapi tetap satu bahasa visual (energik: slide + whip + zoom; premium: fade + mask; berita: cut + slide; teknologi: glitch secukupnya).",
-  "- sfx.at = detik dari awal adegan saat \"pukulan\" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks 6 SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.",
+  `- sfx.at = detik dari awal adegan saat "pukulan" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks ${MAX_SFX_PER_SCENE} SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.`,
   "- music.src: \"bed\" = trailer bed bebas hak cipta (bawaan kalau tidak ada musik), \"none\" = tanpa musik, atau src dari MUSIK TERSEDIA / lampiran audio user. JANGAN pakai lagu berhak cipta (lagu artis, sound viral) — kalau diminta, jelaskan singkat & tawarkan trailer bed atau upload musik bebas hak cipta.",
   "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca. Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"Si-es Treker\", \"AI\" → \"E-ai\", \"review\" → \"riviu\", \"real-time\" → \"ril-taim\", \"download\" → \"daun-lod\", \"PPT\" → \"pe-pe-te\", \"ranking\" → \"renking\". Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
   "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). exaggeration 0.25–1 (makin tinggi makin ekspresif), cfg 0.1–1 (makin rendah makin santai).",
   "- subtitles true kalau ada VO (false kalau teks layarnya sudah sama persis dengan VO).",
   "- bg.media, layout.src, brand.logo hanya boleh src dari LAMPIRAN USER (alamat /api/studio/…). Jangan menulis URL luar.",
+  '- ADEGAN PREMIUM (layout.kind "teaser", mis. di proyek Teaser CS Tracker) = animasi buatan tangan yang sinkron dengan ketukan musik. Saat revisi, salin PERSIS dari TIMELINE SEKARANG: id, layout (kind + shot), bg, camera, visual, dur, dan vo.at. Yang boleh diubah HANYA teks VO (vo.text & vo.spell — harus tetap muat di dur-nya), SFX (nyala/mati, tambah, hapus; detik SFX bawaannya jangan digeser), transition, dan level musik (scene.music). Teks layar (text) hanya tampil di shot chat & montage (1 baris) dan trainAi (maks 2 baris), maks 6 kata per baris; shot lain teks layarnya bagian dari animasi, jadi biarkan. Jangan membuat adegan "teaser" baru dan jangan mengubah adegan lain menjadi "teaser".',
+  "- Kalau user minta durasi total berubah (mis. \"pendekin jadi 45 detik\") di proyek yang punya adegan premium: ubah, hapus, atau tambah adegan NON-teaser; kalau tetap tidak cukup, jelaskan singkat bahwa durasi adegan premium dikunci & tawarkan menghapus adegan premium tertentu (hanya kalau user setuju).",
   "",
   "CONTOH (3 adegan pertama teaser CS Tracker 60 dtk — video aslinya lanjut sampai outro; jangan disalin mentah untuk brief lain):",
   "```studio",
@@ -626,6 +631,8 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     if (old.bg.media && !s.bg.media && s.bg.kind === old.bg.kind && !has(rs.bg, "media")) scene = { ...scene, bg: { ...scene.bg, media: old.bg.media } };
     return scene;
   });
+  // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
+  out.scenes = keepTeaserVisual(prev, out).scenes;
   out.vo = keepVo(prev, out);
   return out;
 }

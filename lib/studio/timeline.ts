@@ -129,8 +129,12 @@ export type Scene = {
   name: string;
   /** durasi detik (0,5–20) */
   dur: number;
-  /** voice over adegan ini. `spell` = ejaan khusus untuk mesin suara (subtitle tetap pakai `text`) */
-  vo: { text: string; spell?: string } | null;
+  /**
+   * voice over adegan ini. `spell` = ejaan khusus untuk mesin suara (subtitle tetap pakai `text`).
+   * `at` = detik mulai VO dihitung dari awal adegan (opsional, 0..dur; kosong = VO_AT bawaan 0,15 dtk) — mis. teaser
+   * memakai waktu target naskah per adegan. Dipakai saat VO dibuat (VoLine.at) & sebagai cadangan subtitle/audio.
+   */
+  vo: { text: string; spell?: string; at?: number } | null;
   /** teks di layar, maks ±6–7 kata per baris */
   text: string[];
   /** catatan storyboard (apa yang terlihat) */
@@ -159,6 +163,14 @@ export type Music = { src: string; name?: string; bpm?: number | null; beats?: n
 export type Word = { w: string; s: number; e: number };
 /** VO hasil generate per adegan. `src` URL yang bisa diputar. `at` = detik mulai dihitung dari awal adegan. */
 export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[] };
+
+/** detik mulai VO bawaan dari awal adegan (adegan tanpa `vo.at`) */
+export const VO_AT = 0.15;
+/**
+ * detik mulai VO dari awal adegan: posisi baris VO hasil generate (`line.at`, yang dipakai saat suara & VO lengkap dibuat),
+ * lalu offset adegan (`scene.vo.at`), lalu bawaan 0,15 dtk. Timeline lama tanpa keduanya tetap 0,15.
+ */
+export const voStartOf = (sc: Pick<Scene, "vo"> | null | undefined, line?: Pick<VoLine, "at"> | null): number => line?.at ?? sc?.vo?.at ?? VO_AT;
 export type VoTrack = { jobId?: string | null; engine: "chatterbox" | "pocket" | "edge" | "elevenlabs"; temp: boolean; label?: string; lines: VoLine[]; full?: string | null };
 
 export type Timeline = {
@@ -422,6 +434,10 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     const text = splitScreenText(strs(s.text, 8, 160));
     const voRaw = (s.vo && typeof s.vo === "object" ? s.vo : typeof s.vo === "string" ? { text: s.vo } : null) as Record<string, unknown> | null;
     const voText = voRaw ? str(voRaw.text, 400) : "";
+    // offset mulai VO (opsional): angka 0..dur, kosong / bukan angka = bawaan (field tidak disimpan)
+    const voAtRaw = voRaw?.at;
+    const voAt = voAtRaw === undefined || voAtRaw === null || voAtRaw === "" ? NaN : num(voAtRaw, NaN, 0, dur);
+    const vo: Scene["vo"] = voText ? { text: voText, spell: str(voRaw?.spell, 400) || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}) } : null;
     const tr = (s.transition && typeof s.transition === "object" ? s.transition : { kind: s.transition }) as Record<string, unknown>;
     const bg = (s.bg && typeof s.bg === "object" ? s.bg : {}) as Record<string, unknown>;
     // SFX: hanya dari katalog, maks 8 per adegan, urut waktu, maks 2 SFX keras berdekatan
@@ -445,7 +461,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       id,
       name: str(s.name, 40) || `Adegan ${scenes.length + 1}`,
       dur,
-      vo: voText ? { text: voText, spell: str(voRaw?.spell, 400) || undefined } : null,
+      vo,
       text,
       visual: str(s.visual, 400),
       layout: normLayout(s.layout, text),
@@ -462,7 +478,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const v = (o.voice && typeof o.voice === "object" ? o.voice : {}) as Record<string, unknown>;
   const m = (o.music && typeof o.music === "object" ? o.music : {}) as Record<string, unknown>;
   const mSrc = str(m.src, 600);
-  const vo = normVo(o.vo, new Set(scenes.map((s) => s.id)));
+  // baris VO tanpa `at` (data lama) mulai di offset adegannya (vo.at) atau bawaan 0,15
+  const vo = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
   return {
     v: 1,
     title: str(o.title, 80) || "Video baru",
@@ -504,7 +521,7 @@ const MAX_DATA_VO = 2_000_000;
 const safeVoSrc = (v: unknown): string | null =>
   typeof v === "string" && /^data:audio\/(mpeg|mp3|wav|x-wav);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length <= MAX_DATA_VO ? v : safeMediaSrc(v);
 
-function normVo(v: unknown, sceneIds: Set<string>): VoTrack | null {
+function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
   const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
   if (!o) return null;
   const lines = arr(o.lines)
@@ -518,7 +535,8 @@ function normVo(v: unknown, sceneIds: Set<string>): VoTrack | null {
         })
         .filter((w) => w.w)
         .slice(0, 400);
-      const line: VoLine | null = src && sceneIds.has(str(x.sceneId, 40)) ? { sceneId: str(x.sceneId, 40), src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, 0.15, 0, MAX_DUR), words } : null;
+      const sid = str(x.sceneId, 40);
+      const line: VoLine | null = src && sceneAt.has(sid) ? { sceneId: sid, src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR), words } : null;
       return line;
     })
     .filter((l): l is VoLine => !!l);
@@ -618,13 +636,14 @@ export function subtitleCues(tl: Timeline): { s: number; e: number; text: string
   tl.scenes.forEach((sc, i) => {
     if (!sc.vo?.text || tl.muteVo) return;
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
-    const t0 = starts[i] + (line?.at ?? 0.15);
+    const t0 = starts[i] + voStartOf(sc, line);
     const textWords = sc.vo.text.split(/\s+/).filter(Boolean);
     // timestamp per kata dari mesin suara memakai ejaan mesin -> teks subtitle tetap kata asli (alignWords)
     const ws = line?.words?.length
       ? alignWords(line.words, textWords).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e }))
       : (() => {
-          const dur = line?.dur ?? Math.min(sc.dur - 0.2, Math.max(0.6, textWords.length * 0.34));
+          // perkiraan (VO belum dibuat): selesai paling lambat 0,2 dtk sebelum adegan habis, dihitung dari offset adegan kalau ada
+          const dur = line?.dur ?? Math.min(Math.max(0.1, sc.dur - (sc.vo.at ?? 0) - 0.2), Math.max(0.6, textWords.length * 0.34));
           return textWords.map((w, k) => ({ w, s: t0 + (k * dur) / textWords.length, e: t0 + ((k + 1) * dur) / textWords.length }));
         })();
     // kelompokkan maks 6 kata / potongan, putus di tanda baca

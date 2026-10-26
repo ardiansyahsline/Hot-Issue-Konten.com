@@ -6,7 +6,7 @@
  */
 import { useMemo, type CSSProperties } from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
-import { alignWords, sceneStartSecs, subtitleCues, type Ease, type Timeline } from "@/lib/studio/timeline";
+import { alignWords, sceneStartSecs, subtitleCues, voStartOf, type Ease, type Timeline } from "@/lib/studio/timeline";
 import { splitShadow, useSplit } from "./fx";
 import { clamp, clamp01, ease, ink, rgba, textEm, useScene, useStudio } from "./theme";
 
@@ -290,7 +290,7 @@ export function buildSubs(tl: Timeline): SubCue[] {
   tl.scenes.forEach((sc, i) => {
     const line = tl.vo?.lines.find((l) => l.sceneId === sc.id);
     if (!sc.vo?.text || !line?.words?.length) return;
-    const t0 = starts[i] + (line.at ?? 0.15);
+    const t0 = starts[i] + voStartOf(sc, line);
     const tw = sc.vo.text.split(/\s+/).filter(Boolean);
     // sama dengan pemetaan di subtitleCues: kata mesin → kata asli (alignWords)
     timed.set(i, alignWords(line.words, tw).map((w) => ({ w: w.w, s: t0 + w.s, e: t0 + w.e })));

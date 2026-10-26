@@ -30,12 +30,29 @@ export type Comp = {
    * Tombolnya hanya tampil kalau filenya benar-benar ada (dicek HEAD dulu), jadi aman kalau file belum diunggah.
    */
   file?: string | ((props: Record<string, unknown>) => string | undefined);
+  /** beberapa file jadi berlabel (mis. teaser: Dengan VO / Tanpa VO) — tiap tombol download tampil kalau filenya ada */
+  files?: { url: string; label: string }[];
   /** catatan kecil di bawah tombol download */
   note?: string;
+  /** catatan pengganti kotak "Ubah teks" untuk template tanpa isian (mis. cara bikin versi dengan VO) */
+  guide?: { title: string; text: string };
+  /**
+   * render di browser BERSUARA (musik + SFX dari komposisi, AAC/Opus seperti ExportPanel) + daftarkan font Studio
+   * (teks di <svg> ikut font asli). Kosong = render bisu seperti template lama.
+   */
+  studio?: boolean;
+  /** nama file hasil render browser tanpa ekstensi (bawaan = id) */
+  renderName?: string;
 };
 
 /** alamat file jadi untuk props sekarang */
 export const fileOf = (c: Comp, props: Record<string, unknown>) => (typeof c.file === "function" ? c.file(props) : c.file);
+/** semua file jadi untuk props sekarang (label kosong = satu file "versi teks awal") */
+export const filesOf = (c: Comp, props: Record<string, unknown>): { url: string; label: string }[] => {
+  if (c.files?.length) return c.files;
+  const f = fileOf(c, props);
+  return f ? [{ url: f, label: "" }] : [];
+};
 
 /** Daftar video di menu Remotion. Mau tambah video baru: bikin komponennya lalu daftarkan di sini. */
 export const COMPOSITIONS: Comp[] = [
@@ -49,9 +66,16 @@ export const COMPOSITIONS: Comp[] = [
     fps: TEASER_META.fps,
     durationInFrames: TEASER_META.durationInFrames,
     defaultProps: TEASER_DEFAULTS,
-    file: (p) => (p.vo === false ? TEASER_FILES.novo : TEASER_FILES.vo),
-    note: "Mau suara VO sendiri? Buka Studio Pro → 🎞️ Buka Teaser CS Tracker → Bikin suara VO, lalu Download (Dengan VO / Tanpa VO).",
-    fields: [{ key: "vo", label: "Pakai VO", type: "toggle", variant: true, hint: "Pilih file jadi: dengan VO / tanpa VO. Preview & render di browser selalu tanpa suara VO." }],
+    files: [
+      { url: TEASER_FILES.vo, label: "Dengan VO" },
+      { url: TEASER_FILES.novo, label: "Tanpa VO" },
+    ],
+    studio: true,
+    renderName: "teaser-cs-tracker-tanpa-vo",
+    note: "Hasil render di sini = versi tanpa VO (teaser-cs-tracker-tanpa-vo). Versi dengan VO: Studio Pro > Buka Teaser > Bikin suara VO > Download.",
+    guide: { title: "Suara VO", text: "Preview & render di menu ini tanpa suara VO (musik + SFX + teks). Versi dengan VO: Studio Pro > Buka Teaser > Bikin suara VO > Download." },
+    // tanpa isian: toggle "Pakai VO" lama dihapus (tidak mengubah hasil render — timeline bawaan tidak punya suara VO)
+    fields: [],
   },
   {
     id: "ugc-fitur-cs-tracker",

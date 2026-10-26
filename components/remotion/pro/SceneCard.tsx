@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
+import { isTeaserBeatCue, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
-  LAYOUTS,
   PLAN_LAYOUTS,
   MAX_DUR,
   MAX_LINES,
@@ -89,8 +89,11 @@ export default function SceneCard({
   const long = shown.map((l, i) => ({ i, n: wordCount(l) })).filter((x) => x.n > MAX_WORDS_PER_LINE);
   const voSec = s.vo ? speakSec(s.vo.text) : 0;
   const peek = s.text[0] || s.vo?.text || s.layout.title || s.visual;
-  // adegan premium teaser (buatan tangan): teks/VO/SFX boleh diubah, visual (jenis tampilan, latar, kamera, durasi) dikunci
-  const teaser = s.layout.kind === "teaser";
+  // adegan premium teaser (buatan tangan): VO, SFX, transisi & musik boleh diubah; visual (jenis tampilan, latar, kamera,
+  // durasi) dikunci. Teks layar hanya bisa diubah di shot yang memang membacanya (chat, trainAi, montage — lihat teaserLock)
+  const textLines = teaserTextLines(s);
+  const teaser = textLines !== null;
+  const textLocked = textLines === 0;
   const headId = `scene-${s.id}`;
 
   return (
@@ -146,7 +149,10 @@ export default function SceneCard({
         <div id={`${headId}-body`} className="space-y-3.5 border-t border-zinc-800/70 px-2.5 pb-3 pt-3 sm:px-3">
           {teaser && (
             <p role="note" data-teaser-note className="rounded-xl border border-orange-500/30 bg-orange-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-orange-200">
-              🎞️ Adegan premium buatan tangan — teks/VO/SFX boleh diubah, visual tetap.
+              {textLocked
+                ? "🎞️ Adegan premium buatan tangan: visual, durasi & teks layar tetap (bagian dari animasi); VO, SFX, transisi dan musik boleh diubah."
+                : "🎞️ Adegan premium buatan tangan: visual & durasi tetap; teks layar, VO, SFX, transisi dan musik boleh diubah."}{" "}
+              Detik SFX bawaan dikunci karena sinkron dengan gerakan.
             </p>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -206,10 +212,21 @@ export default function SceneCard({
             </Field>
           </div>
 
+          {textLocked ? (
+            <Field label="🔤 Teks di layar" hint="Dikunci: teks layar adegan ini digambar langsung di animasi premium (ganti pesannya lewat Teks VO).">
+              {(id) => (
+                <div id={id} data-teaser-text-locked className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-3 py-2 text-[13px] text-zinc-400">
+                  🔒 {s.text.length ? s.text.join(" · ") : "Teks bawaan animasi"}
+                </div>
+              )}
+            </Field>
+          ) : (
           <Field
             label="🔤 Teks di layar (satu baris per baris)"
             hint={
-              long.length || shown.length > MAX_LINES ? (
+              teaser && !long.length && shown.length <= MAX_LINES ? (
+                `Yang tampil: ${textLines === 1 ? "baris pertama saja" : `${textLines} baris pertama`}, maks 6 kata per baris. Kosongkan untuk teks bawaan animasi.`
+              ) : long.length || shown.length > MAX_LINES ? (
                 <span className="text-amber-400">
                   {long.map((x) => `Baris ${x.i + 1}: ${x.n} kata`).join(" · ")}
                   {long.length ? " — maks " + MAX_WORDS_PER_LINE + " kata per baris, nanti dipecah otomatis." : ""}
@@ -232,6 +249,7 @@ export default function SceneCard({
               />
             )}
           </Field>
+          )}
 
           {teaser ? (
             <div className="rounded-xl border border-zinc-800/80 px-3 py-2 text-[12px] text-zinc-400">
@@ -250,7 +268,7 @@ export default function SceneCard({
                 <Field label="Jenis tampilan">
                   {(id) => (
                     <select id={id} className={sel} value={s.layout.kind} onChange={(e) => setLayout({ kind: e.target.value as LayoutKind })}>
-                      {(s.layout.kind === "teaser" ? LAYOUTS : PLAN_LAYOUTS).map((k) => (
+                      {PLAN_LAYOUTS.map((k) => (
                         <option key={k} value={k}>
                           {LAYOUT_LABEL[k]}
                         </option>
@@ -340,7 +358,7 @@ export default function SceneCard({
             </div>
           </div>
 
-          <SfxEditor scene={s} sfxList={sfxList} patch={patch} />
+          <SfxEditor scene={s} sfxList={sfxList} patch={patch} lockAt={teaser ? (c) => isTeaserBeatCue(s, c) : undefined} />
         </div>
       )}
     </div>
@@ -362,8 +380,11 @@ function IconBtn({ label, onClick, disabled, children }: { label: string; onClic
   );
 }
 
-/** daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog / Freesound CC0 */
-function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxItem[]; patch: (p: ScenePatch) => void }) {
+/**
+ * daftar SFX adegan: nyala/mati, detik "pukulan", dengar, hapus, tambah dari katalog / Freesound CC0.
+ * `lockAt` = cue yang detiknya dikunci (SFX bawaan adegan premium teaser, sinkron dengan gerakan animasinya).
+ */
+function SfxEditor({ scene: s, sfxList, patch, lockAt }: { scene: Scene; sfxList: SfxItem[]; patch: (p: ScenePatch) => void; lockAt?: (c: Scene["sfx"][number]) => boolean }) {
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState("");
   const [fsOpen, setFsOpen] = useState(false);
@@ -408,11 +429,17 @@ function SfxEditor({ scene: s, sfxList, patch }: { scene: Scene; sfxList: SfxIte
                 <span className="block truncate text-[12.5px] font-semibold text-zinc-200">{c.id}</span>
                 {m?.use && <span className="block truncate text-[11px] text-zinc-500">{m.use}</span>}
               </span>
-              <span className="flex items-center gap-1 text-[11.5px] text-zinc-500">
-                di
-                <Num value={c.at} min={0} max={s.dur} commitOnBlur label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
-                dtk
-              </span>
+              {lockAt?.(c) ? (
+                <span className="flex items-center gap-1 text-[11.5px] tabular-nums text-zinc-500" title="Detik ini sinkron dengan gerakan animasi premium (dikunci)" aria-label={`Detik pukulan SFX ${c.id}: ${fmtSec(c.at, 2)}, dikunci`}>
+                  di 🔒 {fmtSec(c.at, 2)}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[11.5px] text-zinc-500">
+                  di
+                  <Num value={c.at} min={0} max={s.dur} commitOnBlur label={`Detik pukulan SFX ${c.id}`} className="w-16 px-2 py-1 text-center text-[12px]" onCommit={(v) => setCue(i, { at: v ?? 0 })} />
+                  dtk
+                </span>
+              )}
               {m && (
                 <button type="button" aria-label={`Dengar ${c.id}`} title="Dengar" className="rounded-md px-1.5 py-1 text-[12px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100" onClick={() => listen(srcOf(m))}>
                   ▶

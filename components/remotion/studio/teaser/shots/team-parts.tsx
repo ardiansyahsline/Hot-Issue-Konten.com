@@ -82,7 +82,7 @@ export function UAvatar({ name, size = 28, me, online, ring = ZN[900], pulse = 0
         {name.trim().slice(0, 1)}
       </span>
       {online !== undefined && (
-        <span style={{ position: "absolute", right: -2, bottom: -2, width: dot, height: dot, borderRadius: 999, background: online ? EM[500] : ZN[500], boxShadow: `0 0 0 2px ${ring}` }} />
+        <span style={{ position: "absolute", right: -2, bottom: -2, width: dot, height: dot, borderRadius: 999, background: online ? EM[500] : ZN[500], outline: `2px solid ${ring}` }} />
       )}
       {/* aksen gerak "baru masuk" (real-time): cincin emerald membesar lalu pudar — bukan elemen UI permanen */}
       {pulse > 0 && pulse < 1 && (
@@ -282,7 +282,7 @@ function ReactionZone({ s }: { s: number }) {
 export const CLIP_AR = 0.86;
 export function ClipperThumb({ w }: { w: number }) {
   return (
-    <div style={{ width: w, height: w * CLIP_AR, borderRadius: 12, overflow: "hidden", boxShadow: `0 0 0 1px ${ZN[800]}` }}>
+    <div style={{ width: w, height: w * CLIP_AR, borderRadius: 12, overflow: "hidden", outline: `1px solid ${ZN[800]}` }}>
       <div style={{ width: 300, height: 300 * CLIP_AR, transform: `scale(${w / 300})`, transformOrigin: "0 0" }}>
         <ClipperChat w={300} h={300 * CLIP_AR} />
       </div>
@@ -291,8 +291,9 @@ export function ClipperThumb({ w }: { w: number }) {
 }
 
 /**
- * Screenshot chat dari CLIPPER (aplikasi chat umum, tema terang). Nama & foto profil clipper WAJIB tidak terbaca di skala berapa pun:
- * balok abu solid + teks buram di atasnya (tidak bergantung pada skala), foto = lingkaran abu + gradasi buram.
+ * Screenshot chat dari CLIPPER (aplikasi chat umum, tema terang). Nama & foto profil clipper TIDAK PERNAH digambar sebagai data asli:
+ * nama = balok skeleton solid (tanpa teks sama sekali — blur CSS tidak ikut skala di render browser, jadi tidak boleh diandalkan),
+ * foto = lingkaran abu + gradasi warna (tanpa piksel asli).
  */
 export function ClipperChat({ w, h, tag = false }: { w: number; h: number; tag?: boolean }) {
   const inMsg = (t: string, time: string) => (
@@ -309,8 +310,6 @@ export function ClipperChat({ w, h, tag = false }: { w: number; h: number; tag?:
   );
   return (
     <div style={{ position: "relative", width: w, height: h, overflow: "hidden", background: "#efeae2", fontFamily: FONT }}>
-      {/* pola latar halus */}
-      <div style={{ position: "absolute", inset: 0, opacity: 0.35, background: "repeating-linear-gradient(135deg, rgba(0,0,0,0.035) 0 2px, transparent 2px 14px)" }} />
       <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, height: 46, padding: "0 10px", background: "#f7f7f8", borderBottom: "1px solid #e5e7eb" }}>
         <span style={{ fontSize: 16, color: "#374151" }}>←</span>
         {/* foto profil clipper — lingkaran abu + warna buram (tak ada piksel asli) */}
@@ -318,9 +317,11 @@ export function ClipperChat({ w, h, tag = false }: { w: number; h: number; tag?:
           <span style={{ position: "absolute", inset: -4, filter: "blur(6px)", background: "linear-gradient(135deg, #e0a35a 0%, #b07a4a 55%, #8d6a55 100%)", opacity: 0.8 }} />
         </span>
         <span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          {/* nama clipper — balok abu solid + teks buram */}
-          <span style={{ position: "relative", display: "block", width: 112, height: 12, borderRadius: 4, background: "#cfd3d9", overflow: "hidden" }}>
-            <span style={{ position: "absolute", left: 4, top: -2, filter: "blur(5px)", opacity: 0.45, fontSize: 13, fontWeight: 700, color: "#111827", whiteSpace: "nowrap" }}>Rizky Clipper Official</span>
+          {/* nama clipper — balok skeleton solid, TANPA teks (privasi: tidak ada nama asli yang bisa terbaca di renderer mana pun) */}
+          <span style={{ display: "flex", alignItems: "center", gap: 4, width: 112, height: 12, boxSizing: "border-box", padding: "0 4px", borderRadius: 4, background: "#cfd3d9" }}>
+            <span style={{ width: 38, height: 6, borderRadius: 3, background: "#a9afb8" }} />
+            <span style={{ width: 30, height: 6, borderRadius: 3, background: "#a9afb8" }} />
+            <span style={{ width: 22, height: 6, borderRadius: 3, background: "#a9afb8" }} />
           </span>
           <span style={{ fontSize: 10, color: "#16a34a" }}>online</span>
         </span>
@@ -535,7 +536,7 @@ export function MobileNav({ s, playing, press }: { s: number; playing: number; p
         <span key={l} style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, borderRadius: 12, padding: "4px 2px", background: active ? ZN[800] : "transparent", color: active ? "#fafafa" : ZN[400], boxShadow: active ? SHADOW_POP : undefined }}>
           <span style={{ fontSize: 16, lineHeight: 1 }}>{ic}</span>
           <span style={{ fontSize: 10, fontWeight: 600, lineHeight: 1.25 }}>{l}</span>
-          {l === "Video" && <span style={{ position: "absolute", right: 2, top: 0, display: "flex", height: 16, minWidth: 16, alignItems: "center", justifyContent: "center", borderRadius: 999, padding: "0 4px", fontSize: 10, fontWeight: 700, color: "#fff", background: "#ef4444", boxShadow: `0 0 0 2px ${ZN[900]}` }}>3</span>}
+          {l === "Video" && <span style={{ position: "absolute", right: 2, top: 0, display: "flex", height: 16, minWidth: 16, alignItems: "center", justifyContent: "center", borderRadius: 999, padding: "0 4px", fontSize: 10, fontWeight: 700, color: "#fff", background: "#ef4444", outline: `2px solid ${ZN[900]}` }}>3</span>}
         </span>
       ))}
       <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -608,7 +609,9 @@ export function MusicPopover({ s, playAt }: { s: number; playAt: number }) {
                 borderRadius: 12,
                 padding: "8px 10px",
                 background: sel ? rgba(EM[500], 0.1 * (0.4 + 0.6 * on)) : "transparent",
-                boxShadow: sel ? `0 0 0 1px ${rgba(EM[500], 0.4)}${on ? `, 0 0 ${(rowP * (12 + 14 * Math.pow(1 - ((((s - playAt) % 0.6) + 0.6) % 0.6) / 0.6, 2))).toFixed(1)}px -4px ${rgba(EM[500], 0.6)}` : ""}` : undefined,
+                // ring-1 → outline (box-shadow spread tidak digambar web-renderer); kilau ketukan = bayangan blur biasa
+                outline: sel ? `1px solid ${rgba(EM[500], 0.4)}` : undefined,
+                boxShadow: sel && on ? `0 0 ${(rowP * (12 + 14 * Math.pow(1 - ((((s - playAt) % 0.6) + 0.6) % 0.6) / 0.6, 2))).toFixed(1)}px -4px ${rgba(EM[500], 0.6)}` : undefined,
               }}
             >
               <span style={{ fontSize: 18 }}>{p.icon}</span>
@@ -843,8 +846,11 @@ export function PageFlip({ p, w, h, front, back, radius = 8 }: { p: number; w: n
   );
 }
 
-/** kartu PPT (.ai-card navy) — pratinjau slide besar (dibalik), deretan Mini 220px, tombol unduh / simpan */
-export function DeckCardView({ s, flipAt, pressAt, shineAt }: { s: number; flipAt: number; pressAt: number; shineAt: number }) {
+/**
+ * kartu PPT (.ai-card navy) — pratinjau slide besar (dibalik), deretan Mini 220px, tombol unduh / simpan.
+ * `shineAt` = ketukan "PPT": tombol ⬇ Unduh PowerPoint disorot (pop 1,08× tepat di frame ketukan + sapuan cahaya + cincin).
+ */
+export function DeckCardView({ s, flipAt, shineAt }: { s: number; flipAt: number; shineAt: number }) {
   // balik 0,65 dtk: makin cepat menuju ketukan (ease-in), tegak lurus ½ frame setelah flipAt (frame SFX = ±83°), lalu mendarat pelan (ease-out)
   const mid = flipAt + 1 / 60;
   const qa = pr(s, flipAt - 0.3, mid, (x) => x);
@@ -853,7 +859,11 @@ export function DeckCardView({ s, flipAt, pressAt, shineAt }: { s: number; flipA
   const fp = s < mid ? 0.5 * qa * qa : 0.5 + 0.5 * (1 - (1 - qb) * (1 - qb));
   // angka KPI sudah berjalan (±30%) di frame SFX, bukan 0
   const count = pr(s, flipAt - 0.1, flipAt + 0.8, EASE.out);
-  const press = s >= pressAt - 0.08 ? Math.max(0, 1 - Math.abs(s - pressAt) / 0.12) : 0;
+  // pop tombol Unduh: naik 2 frame sebelum ketukan → 1,08 tepat di ketukan → osilasi teredam ke 1
+  const hitA = shineAt - 2 / 30;
+  const dlK = s < hitA ? 1 : s < shineAt ? 1 + 0.08 * EASE.out(clamp01((s - hitA) / (2 / 30))) : 1 + 0.08 * Math.exp(-(s - shineAt) * 9) * Math.cos((s - shineAt) * 22);
+  const dlRing = s >= shineAt - 1 / 30 ? pr(s, shineAt - 1 / 30, shineAt + 0.5, EASE.out) : 0;
+  const dlGlow = pr(s, shineAt - 1 / 30, shineAt + 0.2) * (1 - 0.4 * pr(s, shineAt + 0.35, shineAt + 0.9));
   const bigW = 372;
   const bigS = bigW / 220;
   const big = (kind: MiniKind, i: number, c = 1) => (
@@ -880,22 +890,25 @@ export function DeckCardView({ s, flipAt, pressAt, shineAt }: { s: number; flipA
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 8, overflow: "hidden", paddingBottom: 4 }}>
           {thumbs.map((k, i) => (
-            <div key={k} style={{ flex: "none", width: 110, height: 61.9, overflow: "hidden", borderRadius: 6, boxShadow: i === active ? `0 0 0 2px ${OR[500]}` : undefined }}>
+            <div key={k} style={{ position: "relative", flex: "none", width: 110, height: 61.9, overflow: "hidden", borderRadius: 6 }}>
               <div style={{ transform: "scale(0.5)", transformOrigin: "0 0" }}>
                 <MiniSlide kind={k} i={i} />
               </div>
+              {/* ring-2 slide aktif: border di div penutup (DOM terakhir) — box-shadow spread tidak digambar web-renderer */}
+              {i === active && <div style={{ position: "absolute", inset: 0, borderRadius: 6, border: `2px solid ${OR[500]}` }} />}
             </div>
           ))}
         </div>
         <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-          <span style={{ position: "relative", overflow: "hidden", borderRadius: 8, background: OR[500], padding: "6px 14px", fontSize: 12.5, fontWeight: 700, color: "#fff", boxShadow: `0 0 ${(24 * pr(s, shineAt, shineAt + 0.3) * (1 - pr(s, shineAt + 0.5, shineAt + 1))).toFixed(1)}px ${rgba(OR[500], 0.8)}` }}>
-            ⬇ Unduh PowerPoint
-            <Shine p={pr(s, shineAt, shineAt + 0.5)} alpha={0.55} />
+          <span style={{ position: "relative", display: "inline-flex", transform: `scale(${dlK.toFixed(4)})`, transformOrigin: "50% 50%" }}>
+            <span style={{ position: "relative", overflow: "hidden", borderRadius: 8, background: OR[500], padding: "6px 14px", fontSize: 12.5, fontWeight: 700, color: "#fff", boxShadow: dlGlow > 0 ? `0 0 ${(26 * dlGlow).toFixed(1)}px ${rgba(OR[500], 0.85)}` : undefined }}>
+              ⬇ Unduh PowerPoint
+              <Shine p={pr(s, shineAt, shineAt + 0.45)} alpha={0.55} />
+            </span>
+            {/* cincin sorotan di ketukan "PPT" (border, bukan box-shadow spread) */}
+            {dlRing > 0 && dlRing < 1 && <span style={{ position: "absolute", inset: -(2 + 9 * dlRing), borderRadius: 8 + 9 * dlRing, border: `2px solid ${rgba(OR[400], 0.9 * (1 - dlRing))}` }} />}
           </span>
-          <span style={{ borderRadius: 8, border: `1px solid ${press > 0 ? ZN[500] : ZN[700]}`, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: ZN[300], transform: `scale(${(1 - 0.07 * press).toFixed(3)})`, background: press > 0 ? rgba(ZN[700], 0.4 * press) : "transparent" }}>{s >= pressAt && s < pressAt + 0.22 ? "Menyimpan…" : "💾 Simpan ke folder CS/Laporan"}</span>
-          {s >= pressAt + 0.22 && (
-            <span style={{ flexBasis: "100%", fontSize: 12, fontWeight: 600, color: EM[400], wordBreak: "break-word", opacity: pr(s, pressAt + 0.22, pressAt + 0.36), transform: `translateX(${((1 - spc(s, pressAt + 0.22, 20)) * -10).toFixed(1)}px)` }}>✓ Tersimpan di folder CS/Laporan/Laporan-Mingguan-CS.pptx</span>
-          )}
+          <span style={{ borderRadius: 8, border: `1px solid ${ZN[700]}`, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: ZN[300] }}>💾 Simpan ke folder CS/Laporan</span>
         </div>
         <p style={{ margin: "6px 0 0", fontSize: 11, lineHeight: 1.4, color: ZN[500] }}>Angka diambil dari file di folder (lihat “Sumber” di tiap slide) — cek sekali lagi sebelum dikirim.</p>
       </div>

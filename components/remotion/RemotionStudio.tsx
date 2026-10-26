@@ -1,13 +1,14 @@
 "use client";
 
 import { Player, type PlayerRef } from "@remotion/player";
+import type { WebRendererAudioCodec, WebRendererContainer, WebRendererVideoCodec } from "@remotion/web-renderer";
 import { useEffect, useRef, useState } from "react";
-import { COMPOSITIONS, fileOf, type Comp } from "./compositions";
+import { COMPOSITIONS, filesOf, type Comp } from "./compositions";
 
 type RenderState =
   | { s: "idle" }
   | { s: "rendering"; progress: number }
-  | { s: "done"; url: string; file: File; secs: number }
+  | { s: "done"; url: string; file: File; secs: number; note?: string }
   | { s: "error"; msg: string };
 
 /** simpan file ke perangkat (klik link download secara otomatis) */
@@ -25,22 +26,25 @@ const nameOf = (url: string, fallback: string) => decodeURIComponent(url.split(/
 
 /**
  * Cek file jadi benar-benar ada (HEAD) sebelum tombol download ditampilkan — file teaser disajikan route terlindungi
- * dan bisa saja belum diunggah (404). Hasil: true ada, false tidak ada, undefined masih dicek.
+ * dan bisa saja belum diunggah (404). Hasil per alamat: true ada, false tidak ada, undefined masih dicek.
  */
-function useFileExists(url: string | undefined): boolean | undefined {
+function useFilesExist(urls: string[]): Record<string, boolean | undefined> {
   const [known, setKnown] = useState<Record<string, boolean>>({});
+  const key = urls.join("\n");
   useEffect(() => {
-    if (!url || url in known) return;
+    const todo = key ? key.split("\n").filter((u) => !(u in known)) : [];
+    if (!todo.length) return;
     let live = true;
-    // redirect manual: sesi habis -> middleware 307 ke /login (200 HTML) tidak boleh dianggap "file ada"
-    fetch(url, { method: "HEAD", cache: "no-store", redirect: "manual" })
-      .then((r) => live && setKnown((k) => ({ ...k, [url]: r.status === 200 && (r.headers.get("content-type") ?? "").startsWith("video/") })))
-      .catch(() => live && setKnown((k) => ({ ...k, [url]: false })));
+    for (const url of todo)
+      // redirect manual: sesi habis -> middleware 307 ke /login (200 HTML) tidak boleh dianggap "file ada"
+      fetch(url, { method: "HEAD", cache: "no-store", redirect: "manual" })
+        .then((r) => live && setKnown((k) => ({ ...k, [url]: r.status === 200 && (r.headers.get("content-type") ?? "").startsWith("video/") })))
+        .catch(() => live && setKnown((k) => ({ ...k, [url]: false })));
     return () => {
       live = false;
     };
-  }, [url, known]);
-  return url ? known[url] : false;
+  }, [key, known]);
+  return known;
 }
 
 /** HP (terutama iPhone) sering tidak bisa download langsung -> pakai menu Bagikan / Simpan Video */
@@ -77,12 +81,41 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
     abort.current = ctrl;
     setRender({ s: "rendering", progress: 0 });
     const t0 = performance.now();
+    let note: string | undefined;
     try {
-      const { renderMediaOnWeb, getEncodableVideoCodecs } = await import("@remotion/web-renderer");
-      // MP4 (H.264) kalau browser bisa — paling aman buat diupload ke TikTok/IG; selain itu WebM
-      const mp4 = await getEncodableVideoCodecs("mp4");
-      const container = mp4.includes("h264") ? "mp4" : "webm";
-      const videoCodec = container === "mp4" ? "h264" : ((await getEncodableVideoCodecs("webm"))[0] ?? "vp8");
+      // template Studio (teaser): font Studio didaftarkan dulu supaya teks di <svg> (angka 3D, label chart) ikut font asli
+      const [wr] = await Promise.all([
+        import("@remotion/web-renderer"),
+        comp.studio ? import("@/components/remotion/studio/fonts").then((m) => m.registerStudioFonts()) : null,
+      ]);
+      const { renderMediaOnWeb, getEncodableVideoCodecs, getEncodableAudioCodecs } = wr;
+      let container: WebRendererContainer;
+      let videoCodec: WebRendererVideoCodec;
+      let audioCodec: WebRendererAudioCodec | null = null;
+      let muted = true;
+      if (comp.studio) {
+        // bersuara (musik + SFX) seperti ExportPanel: MP4 (H.264 + AAC), kalau tidak bisa WebM (+ Opus)
+        const [v4, a4] = await Promise.all([getEncodableVideoCodecs("mp4"), getEncodableAudioCodecs("mp4")]);
+        if (v4.includes("h264") && a4.includes("aac")) {
+          container = "mp4";
+          videoCodec = "h264";
+          audioCodec = "aac";
+        } else {
+          const [vw, aw] = await Promise.all([getEncodableVideoCodecs("webm"), getEncodableAudioCodecs("webm")]);
+          container = "webm";
+          videoCodec = vw.includes("vp9") ? "vp9" : (vw[0] ?? "vp8");
+          audioCodec = aw.includes("opus") ? "opus" : (aw[0] ?? null);
+          note = audioCodec
+            ? "Browser ini belum bisa MP4 — file dibikin WebM (tetap bisa diupload ke kebanyakan platform)."
+            : "Browser ini tidak bisa bikin audio — video jadi tanpa suara. Pakai Chrome / Edge untuk versi bersuara.";
+        }
+        muted = !audioCodec;
+      } else {
+        // MP4 (H.264) kalau browser bisa — paling aman buat diupload ke TikTok/IG; selain itu WebM
+        const mp4 = await getEncodableVideoCodecs("mp4");
+        container = mp4.includes("h264") ? "mp4" : "webm";
+        videoCodec = container === "mp4" ? "h264" : ((await getEncodableVideoCodecs("webm"))[0] ?? "vp8");
+      }
       const res = await renderMediaOnWeb({
         composition: {
           id: comp.id,
@@ -97,15 +130,15 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
         container,
         videoCodec,
         videoBitrate: "high",
-        muted: true,
+        ...(muted ? { muted: true } : { muted: false, audioCodec, audioBitrate: "high" as const }),
         signal: ctrl.signal,
         licenseKey: LICENSE,
         onProgress: (p) => setRender({ s: "rendering", progress: p.progress }),
       });
       const blob = await res.getBlob();
-      const file = new File([blob], `${comp.id}.${container}`, { type: blob.type || `video/${container}` });
+      const file = new File([blob], `${comp.renderName ?? comp.id}.${container}`, { type: blob.type || `video/${container}` });
       const url = URL.createObjectURL(file);
-      setRender({ s: "done", url, file, secs: Math.round((performance.now() - t0) / 1000) });
+      setRender({ s: "done", url, file, secs: Math.round((performance.now() - t0) / 1000), note });
       saveUrl(url, file.name); // langsung terdownload begitu jadi
     } catch (e) {
       if (ctrl.signal.aborted) setRender({ s: "idle" });
@@ -119,9 +152,12 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
   // pilihan versi (mis. Pakai VO) bukan editan teks: file jadi versi itu tetap bisa langsung didownload
   const textOnly = (p: Record<string, unknown>) => Object.fromEntries(Object.entries(p).filter(([k]) => !comp.fields.some((f) => f.key === k && f.variant)));
   const edited = JSON.stringify(textOnly(props)) !== JSON.stringify(textOnly(comp.defaultProps));
-  const file = fileOf(comp, props);
-  const fileOk = useFileExists(file);
-  const ready = !!file && fileOk === true;
+  const files = filesOf(comp, props);
+  const known = useFilesExist(files.map((f) => f.url));
+  const okFiles = files.filter((f) => known[f.url] === true);
+  const missing = files.filter((f) => known[f.url] === false);
+  const checking = files.some((f) => known[f.url] === undefined);
+  const ready = okFiles.length > 0;
   const secs = Math.round(comp.durationInFrames / comp.fps);
 
   return (
@@ -165,60 +201,72 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
           </div>
         </div>
 
-        <div className="card space-y-3 p-4">
-          <div className="label mb-0">{comp.fields.some((f) => f.type === "text") ? "Ubah teks" : "Pilihan"}</div>
-          {comp.fields.map((f) =>
-            f.type === "toggle" ? (
-              <label key={f.key} className="flex cursor-pointer items-start gap-2.5 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4 accent-orange-500"
-                  checked={Boolean(props[f.key])}
-                  disabled={busy}
-                  onChange={(e) => setProps((p) => ({ ...p, [f.key]: e.target.checked }))}
-                />
-                <span>
-                  {f.label}
-                  {f.hint && <span className="block text-xs text-zinc-500">{f.hint}</span>}
-                </span>
-              </label>
-            ) : (
-              <div key={f.key}>
-                <label className="mb-1 block text-xs font-semibold text-zinc-400">{f.label}</label>
-                <input
-                  className="input py-2 text-[13px]"
-                  value={String(props[f.key] ?? "")}
-                  disabled={busy}
-                  maxLength={90}
-                  onChange={(e) => setProps((p) => ({ ...p, [f.key]: e.target.value }))}
-                />
-                {f.hint && <p className="mt-1 text-[11px] text-zinc-500">{f.hint}</p>}
-              </div>
-            ),
-          )}
-          <button type="button" className="text-xs font-semibold text-zinc-500 hover:text-zinc-300" disabled={busy} onClick={() => setProps(comp.defaultProps)}>
-            ↺ Balikin ke teks awal
-          </button>
-        </div>
+        {comp.fields.length > 0 ? (
+          <div className="card space-y-3 p-4">
+            <div className="label mb-0">{comp.fields.some((f) => f.type === "text") ? "Ubah teks" : "Pilihan"}</div>
+            {comp.fields.map((f) =>
+              f.type === "toggle" ? (
+                <label key={f.key} className="flex cursor-pointer items-start gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 accent-orange-500"
+                    checked={Boolean(props[f.key])}
+                    disabled={busy}
+                    onChange={(e) => setProps((p) => ({ ...p, [f.key]: e.target.checked }))}
+                  />
+                  <span>
+                    {f.label}
+                    {f.hint && <span className="block text-xs text-zinc-500">{f.hint}</span>}
+                  </span>
+                </label>
+              ) : (
+                <div key={f.key}>
+                  <label className="mb-1 block text-xs font-semibold text-zinc-400">{f.label}</label>
+                  <input
+                    className="input py-2 text-[13px]"
+                    value={String(props[f.key] ?? "")}
+                    disabled={busy}
+                    maxLength={90}
+                    onChange={(e) => setProps((p) => ({ ...p, [f.key]: e.target.value }))}
+                  />
+                  {f.hint && <p className="mt-1 text-[11px] text-zinc-500">{f.hint}</p>}
+                </div>
+              ),
+            )}
+            <button type="button" className="text-xs font-semibold text-zinc-500 hover:text-zinc-300" disabled={busy} onClick={() => setProps(comp.defaultProps)}>
+              ↺ Balikin ke teks awal
+            </button>
+          </div>
+        ) : comp.guide ? (
+          <div className="card space-y-1.5 p-4" data-template-guide>
+            <div className="label mb-0">{comp.guide.title}</div>
+            <p className="text-xs leading-relaxed text-zinc-400">{comp.guide.text}</p>
+          </div>
+        ) : null}
 
         <div className="card space-y-3 p-4">
           <div className="label mb-0">Download video</div>
-          {ready && file && !edited && (
+          {!edited && okFiles.length > 0 && (
             <>
-              <a href={file} download={nameOf(file, `${comp.id}.mp4`)} className="btn-primary w-full">
-                ⬇️ Download MP4 sekarang
-              </a>
+              {okFiles.map((f, i) => (
+                <a key={f.url} href={f.url} download={nameOf(f.url, `${comp.id}.mp4`)} className={i === 0 ? "btn-primary w-full" : "btn-ghost w-full"}>
+                  ⬇️ Download MP4 {f.label ? `— ${f.label}` : "sekarang"}
+                </a>
+              ))}
               <p className="text-[11px] text-zinc-500">
-                Video versi teks awal, langsung download tanpa nunggu.{" "}
-                <a href={file} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
+                {files.some((f) => f.label) ? "File jadi" : "Video versi teks awal"}, langsung download tanpa nunggu.{" "}
+                <a href={okFiles[0].url} target="_blank" rel="noreferrer" className="font-semibold text-orange-400 underline">
                   Buka di tab baru
                 </a>{" "}
                 kalau di HP nggak mau kedownload (tekan lama videonya → Simpan).
               </p>
             </>
           )}
-          {file && !edited && fileOk === undefined && <p className="text-[11px] text-zinc-500">Cek file jadi…</p>}
-          {file && !edited && fileOk === false && <p className="text-[11px] text-zinc-500">File jadi belum tersedia — bikin langsung di browser lewat tombol di bawah.</p>}
+          {files.length > 0 && !edited && checking && !ready && <p className="text-[11px] text-zinc-500">Cek file jadi…</p>}
+          {files.length > 0 && !edited && !checking && !ready && <p className="text-[11px] text-zinc-500">File jadi belum tersedia — bikin langsung di browser lewat tombol di bawah.</p>}
+          {!edited && ready && missing.some((f) => f.label) && (
+            <p className="text-[11px] text-zinc-500">Belum tersedia: {missing.map((f) => f.label).filter(Boolean).join(", ")}.</p>
+          )}
           {ready && edited && render.s === "idle" && (
             <p className="text-[11px] text-amber-400">Teks sudah diubah — klik tombol di bawah buat bikin video versi baru.</p>
           )}
@@ -236,7 +284,7 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
             </>
           ) : (
             <button type="button" className={ready && !edited ? "btn-ghost w-full" : "btn-primary w-full"} onClick={start}>
-              🎬 {ready && !edited ? "Bikin ulang di browser" : `Bikin file video (${secs} detik)`}
+              🎬 {ready && !edited ? "Bikin ulang di browser" : `Bikin file video (${secs} detik)`}{comp.studio ? " — tanpa VO" : ""}
             </button>
           )}
           {render.s === "done" && (
@@ -256,11 +304,12 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
                 </a>{" "}
                 kalau download nggak jalan.
               </p>
+              {render.note && <p className="text-[11px] text-amber-400">{render.note}</p>}
             </>
           )}
           {render.s === "error" && <p className="text-xs text-red-400">Gagal bikin video: {render.msg}</p>}
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop), tanpa suara. {comp.note}
+            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop), {comp.studio ? "dengan musik + SFX" : "tanpa suara"}. {comp.note}
           </p>
         </div>
       </div>

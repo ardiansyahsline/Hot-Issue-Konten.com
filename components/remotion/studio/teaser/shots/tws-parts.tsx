@@ -9,11 +9,11 @@
  *      "Cahaya Angka" (CSS radial-gradient)  → SVG radialGradient dengan elips yang sama
  *      "Color Grading" (mix-blend-mode soft-light) → lapisan biasa beropasitas rendah, HANYA saat render web
  *  - logo TWS lewat preset brand (useSrc → di laptop dipetakan ke <public>/brand/tws-logo.svg)
- *  - font & logo ditunggu (delayRender) sebelum frame diambil
+ *  - font & logo ditunggu (useDelayRender, scope render laptop MAUPUN browser) sebelum frame diambil; logo gagal → dibuang
  * lib/tws.ts TIDAK diubah.
  */
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { continueRender, delayRender } from "remotion";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useDelayRender } from "remotion";
 import { TWS_LOGO, twsSlideHtml, type TwsSlide } from "@/lib/tws";
 import { useSrc } from "../../theme";
 
@@ -24,9 +24,16 @@ const SCOPE = "twsx";
 const escAttr = (t: string) => t.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 const escRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** semua selector BASE_CSS diawali `.twsx ` */
+/**
+ * semua selector BASE_CSS diawali `.twsx `.
+ * `.judul span` (turunan) → `.judul>span` (anak langsung = baris judul): @remotion/web-renderer menyisipkan <span> sementara
+ * di dalam elemen teks (pembungkus text node & pengukur per kata); selector turunan ikut mengenai span itu → tiap kata jadi
+ * display:block dan judul tergambar tumpang tindih di render browser. Baris judul asli selalu anak langsung h1.judul.
+ */
 function scopeCss(css: string): string {
-  return css.replace(/([^{}]+)\{/g, (_m, sel: string) => `${sel.split(",").map((x) => `.${SCOPE} ${x.trim()}`).join(",")}{`);
+  return css
+    .replace(/([^{}]+)\{/g, (_m, sel: string) => `${sel.split(",").map((x) => `.${SCOPE} ${x.trim()}`).join(",")}{`)
+    .replace(/\.judul span\{/g, ".judul>span{");
 }
 
 /** id SVG unik per salinan slide (id tetap di graphicSvg / big3d tidak boleh bentrok antar-slide di satu DOM) */
@@ -94,7 +101,8 @@ export function prepareSlide(sl: TwsSlide, n: number, logoSrc: string, key: stri
   const raw = twsSlideHtml(sl, n, { brand: true });
   const m = /^<style>([\s\S]*?)<\/style>/.exec(raw);
   let html = m ? raw.slice(m[0].length) : raw;
-  html = html.split(`src="${TWS_LOGO}"`).join(`src="${escAttr(logoSrc)}"`);
+  // logoSrc kosong = logo gagal dimuat (useTwsReady) → <img> dibuang, bukan gambar rusak
+  html = logoSrc ? html.split(`src="${TWS_LOGO}"`).join(`src="${escAttr(logoSrc)}"`) : html.replace(/<img data-layer="Logo"[^>]*>/g, "");
   html = replaceAir(html);
   html = uniqIds(html, key);
   return { html, css: m ? scopeCss(m[1]) : "" };
@@ -147,35 +155,78 @@ function waitFonts(): Promise<unknown> {
   return fontsP;
 }
 
-function loadImg(src: string): Promise<void> {
-  if (typeof Image === "undefined" || !src) return Promise.resolve();
-  return new Promise((res) => {
-    const im = new Image();
-    im.onload = () => {
-      // decode supaya gambar benar-benar siap digambar di frame pertama
-      im.decode().then(() => res(), () => res());
-    };
-    im.onerror = () => res(); // gagal muat → logo kosong, render tetap jalan (tidak dibatalkan)
-    im.src = src;
-  });
+/** hasil muat gambar per alamat (sekali per halaman; render browser memasang ulang adegan tiap frame still) */
+const imgP = new Map<string, Promise<boolean>>();
+/** true = gambar termuat & terdekode; false = gagal (404 / rusak) */
+function loadImg(src: string): Promise<boolean> {
+  if (typeof Image === "undefined" || !src) return Promise.resolve(true);
+  let p = imgP.get(src);
+  if (!p) {
+    p = new Promise<boolean>((res) => {
+      const im = new Image();
+      im.onload = () => {
+        // decode supaya gambar benar-benar siap digambar di frame pertama
+        im.decode().then(() => res(true), () => res(true));
+      };
+      im.onerror = () => res(false);
+      im.src = src;
+    });
+    imgP.set(src, p);
+  }
+  return p;
 }
 
-/** tahan frame sampai font Inter Tight & logo TWS siap (maks 8 dtk, lalu lanjut apa adanya) */
-export function useTwsReady(logoSrc: string) {
-  // handle delayRender disimpan sekali per mount (bukan state animasi)
-  const [handle] = useState(() => delayRender("TWS: font & logo", { timeoutInMilliseconds: 25000 }));
-  useEffect(() => {
+/**
+ * Tahan frame sampai font Inter Tight & logo TWS siap (maks 8 dtk, lalu lanjut apa adanya).
+ * Pakai useDelayRender (scope render yang sedang berjalan): delayRender/continueRender global hanya menahan render laptop,
+ * @remotion/web-renderer (tombol Download MP4) punya scope sendiri. Handle dibuat di useLayoutEffect (bukan initializer
+ * useState) dan dilepas di cleanup → aman di StrictMode, tidak ada handle bocor.
+ * Kembalian: false bila logo GAGAL dimuat → pemanggil membuang <img> logo dari slide (img rusak membuat render browser
+ * gagal saat drawImage, dan di laptop memunculkan ikon gambar rusak). Selama logo baik, keluaran render tidak berubah.
+ */
+export function useTwsReady(logoSrc: string): boolean {
+  const { delayRender, continueRender } = useDelayRender();
+  const [badLogo, setBadLogo] = useState<string | null>(null);
+  const [checked, setChecked] = useState<string | null>(null);
+  const handle = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (checked === logoSrc) return;
+    const h = delayRender("TWS: font & logo", { timeoutInMilliseconds: 25000 });
+    handle.current = h;
     let done = false;
-    const finish = () => {
+    const finish = (logoOk: boolean) => {
       if (done) return;
       done = true;
-      continueRender(handle);
-    };
-    Promise.all([waitFonts(), loadImg(logoSrc)]).then(finish, finish);
-    const to = setTimeout(finish, 8000);
-    return () => {
       clearTimeout(to);
-      finish();
+      if (!logoOk) setBadLogo(logoSrc);
+      // handle dilepas di efek di bawah, SETELAH slide (tanpa logo bila gagal) terpasang
+      setChecked(logoSrc);
     };
-  }, [handle, logoSrc]);
+    const to = setTimeout(() => finish(true), 8000);
+    Promise.all([waitFonts(), loadImg(logoSrc)]).then(
+      ([, ok]) => finish(ok),
+      () => finish(true),
+    );
+    return () => {
+      done = true;
+      clearTimeout(to);
+      if (handle.current === h) {
+        handle.current = null;
+        continueRender(h);
+      }
+    };
+    // `checked` sengaja bukan dependensi: efek ini hanya mulai menunggu saat alamat logo berganti
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logoSrc, delayRender, continueRender]);
+
+  useLayoutEffect(() => {
+    if (checked === logoSrc && handle.current !== null) {
+      const h = handle.current;
+      handle.current = null;
+      continueRender(h);
+    }
+  }, [checked, logoSrc, continueRender]);
+
+  return badLogo !== logoSrc;
 }

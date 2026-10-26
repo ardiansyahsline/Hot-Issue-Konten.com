@@ -1,28 +1,41 @@
 "use client";
 
 /**
- * Adegan 5 "Chat tim" (6,0 dtk) & adegan 9 "Musik + laporan/PPT" (4,2 dtk) teaser CS Tracker.
+ * Adegan 5 "Chat tim" (6,0 dtk) & adegan 9 "Musik + laporan/PPT" (3,6 dtk) teaser CS Tracker.
  * UI = komponen website asli yang dibuat ulang (lihat team-parts.tsx), kamera virtual + beat sync ke SFX lib/studio/teaser.ts:
  *  chat  : notif-chat 0,3 / 1,2 / 2,1 / 3,0 (bubble Alif, Derencalibur, Nengok, Irsyad) · ui-accept-boing 3,9 (reaksi 🔥 pop)
  *          · ui-pop 4,8 (Natasha kirim screenshot chat clipper — identitas clipper buram)
  *  musik : ui-plucks-happy 0,6 (popover 🎵 Musik terbuka & memutar, EQ ikut 100 BPM) · kertas-balik-halaman 2,4 (slide PPT dibalik 3D)
+ *          · ketukan 3,0 ("PPT" menyala + tombol ⬇ Unduh PowerPoint disorot) → dorong pelan ke tombol sampai cut ke montage (3,6)
  */
 import { AbsoluteFill } from "remotion";
 import { Glow, Shine } from "../../fx";
-import { Cam, camAtTime, Caption, Depth, EASE, Flash, rgba, sixWords, springAt, useShot, type CamKey } from "../kit";
+import { Cam, camAtTime, Caption, clamp01, Depth, EASE, Flash, rgba, sixWords, springAt, useShot, type CamKey } from "../kit";
 import { ChatPanel, CLIP_AR, ClipperChat, DeckCardView, EM, Emo, MeteorsFx, MusicPopover, OR, PageGhost, PhoneHeader, pr, Scaled, sp, spc, UAvatar, ZN } from "./team-parts";
 
 /** keyframe kamera yang membidik titik dunia (px, y) ke titik layar (sx, sy) pada zoom z (origin = tengah kanvas) */
 const aim = (W: number, H: number, px: number, py: number, z: number, sx: number, sy: number) => ({ z, x: sx - (W / 2 + (px - W / 2) * z), y: sy - (H / 2 + (py - H / 2) * z) });
 
-/** gelapkan area di bawah caption supaya UI yang terdorong kamera tidak bertabrakan dengan teks layar */
+/**
+ * gelapkan area di bawah caption supaya UI yang terdorong kamera tidak bertabrakan dengan teks layar.
+ * Div setinggi y+90 dengan color-stop PERSEN dari tingginya sendiri — @remotion/web-renderer tidak mengerti stop px
+ * (stop px disebar merata 0/50/100% → setengah kanvas tertutup warna latar di MP4 browser).
+ */
 function TopScrim({ y, bg }: { y: number; bg: string }) {
-  return <AbsoluteFill style={{ pointerEvents: "none", background: `linear-gradient(180deg, ${rgba(bg, 0.985)} 0px, ${rgba(bg, 0.96)} ${Math.round(y - 30)}px, ${rgba(bg, 0)} ${Math.round(y + 90)}px)` }} />;
+  const h = Math.max(2, Math.round(y + 90));
+  const mid = clamp01((y - 30) / h) * 100;
+  return <div style={{ position: "absolute", left: 0, top: 0, width: "100%", height: h, pointerEvents: "none", background: `linear-gradient(180deg, ${rgba(bg, 0.985)} 0%, ${rgba(bg, 0.96)} ${mid.toFixed(2)}%, ${rgba(bg, 0)} 100%)` }} />;
 }
 
-/** pudarkan UI yang menjulur ke bawah box (ekor popover / catatan kaki) supaya subtitle VO & area UI TikTok tetap bersih */
-function BottomScrim({ y, bg }: { y: number; bg: string }) {
-  return <AbsoluteFill style={{ pointerEvents: "none", background: `linear-gradient(180deg, ${rgba(bg, 0)} ${Math.round(y)}px, ${rgba(bg, 0.82)} ${Math.round(y + 150)}px, ${rgba(bg, 0.9)} 100%)` }} />;
+/**
+ * pudarkan UI yang menjulur ke bawah box (ekor popover / catatan kaki) supaya subtitle VO & area UI TikTok tetap bersih.
+ * Div dari y sampai bawah kanvas (H), stop dalam persen dari tinggi div (lihat TopScrim).
+ */
+function BottomScrim({ y, H, bg }: { y: number; H: number; bg: string }) {
+  const top = Math.round(y);
+  const h = Math.max(2, Math.round(H) - top);
+  const k = clamp01(150 / h) * 100;
+  return <div style={{ position: "absolute", left: 0, top, width: "100%", height: h, pointerEvents: "none", background: `linear-gradient(180deg, ${rgba(bg, 0)} 0%, ${rgba(bg, 0.82)} ${k.toFixed(2)}%, ${rgba(bg, 0.9)} 100%)` }} />;
 }
 
 // =============================================================================================
@@ -125,7 +138,7 @@ export function ChatShot() {
               <span style={{ borderRadius: 16, background: "rgba(255,255,255,0.15)", padding: "10px 22px", fontSize: 26, fontWeight: 600 }}>Unduh</span>
               <span style={{ fontSize: 36, color: "rgba(255,255,255,0.8)", padding: "0 6px" }}>✕</span>
             </div>
-            <div style={{ position: "absolute", left: ccx, top: ccy + arc, width: cw, height: cw * CLIP_AR, borderRadius: 12 + 10 * q, overflow: "hidden", boxShadow: `0 0 0 ${(1 + q).toFixed(1)}px ${ZN[700]}, 0 50px 120px -30px rgba(0,0,0,0.9), 0 0 ${(80 * q).toFixed(0)}px -20px ${rgba(OR[500], 0.5)}`, transform: `rotate(${((1 - Math.min(1, q)) * -4).toFixed(2)}deg)`, filter: cardBlur > 0.3 ? `blur(${cardBlur.toFixed(2)}px)` : undefined }}>
+            <div style={{ position: "absolute", left: ccx, top: ccy + arc, width: cw, height: cw * CLIP_AR, borderRadius: 12 + 10 * q, overflow: "hidden", outline: `${(1 + q).toFixed(1)}px solid ${ZN[700]}`, boxShadow: `0 50px 120px -30px rgba(0,0,0,0.9), 0 0 ${(80 * q).toFixed(0)}px -20px ${rgba(OR[500], 0.5)}`, transform: `rotate(${((1 - Math.min(1, q)) * -4).toFixed(2)}deg)`, filter: cardBlur > 0.3 ? `blur(${cardBlur.toFixed(2)}px)` : undefined }}>
               <div style={{ width: 300, height: 300 * CLIP_AR, transform: `scale(${(cw / 300).toFixed(4)})`, transformOrigin: "0 0" }}>
                 <ClipperChat w={300} h={300 * CLIP_AR} />
               </div>
@@ -156,7 +169,7 @@ const M_S = 2.1;
 const D_S = 2.0;
 const PLAY = 0.6; // ui-plucks-happy
 const FLIP = 2.4; // kertas-balik-halaman
-const PRESS = 3.6; // ketukan: tombol ⬇ Unduh PowerPoint ditekan
+const PPT = 3.0; // ketukan: kata "PPT" menyala + tombol ⬇ Unduh PowerPoint disorot (adegan berakhir 3,6 → cut ke montage)
 
 /**
  * caption kinetik "karaoke": semua kata naik redup di awal, lalu tiap kata MENYALA tepat di ketukannya
@@ -198,7 +211,7 @@ export function MusicReportShot() {
   const deckW = 400 * D_S;
   const deckX = box.x + (box.w - deckW) / 2;
   const deckY = popY + 640 * M_S + 240;
-  const deckH = 490 * D_S; // termasuk baris "✓ Tersimpan…" + catatan kaki
+  const deckH = 452 * D_S; // header + slide + Mini + tombol + catatan kaki (CSS px ±448)
   const cx = box.x + box.w / 2;
   // layar: tepi atas kartu PPT ≥ 80 px di bawah caption (header kartu tidak tertutup / tidak mengintip)
   const deckTop = capBottom + 84;
@@ -220,12 +233,10 @@ export function MusicReportShot() {
     { t: 2.17, ...dk(0.93, 40), ease: EASE.whip },
     { t: 2.4, ...dk(0.95), ease: EASE.out },
     { t: 3.0, ...dk(0.965), ease: EASE.soft },
-    // diam ±2 frame di ketukan 3,0 ("PPT" + sapuan cahaya tombol Unduh tajam), lalu dorong bertahap
-    { t: 3.07, ...dk(0.967) },
-    { t: 3.3, ...dk(1.0, -4), ease: EASE.inOut },
-    // mendarat 2 frame sebelum tombol Simpan ditekan (3,6)
-    { t: 3.53, ...dk(1.035, -8), ease: EASE.inOut },
-    { t: 4.4, ...dk(1.06, -12), ease: EASE.soft },
+    // diam ±2 frame di ketukan 3,0 ("PPT" + sapuan cahaya tombol Unduh tajam), lalu dorong pelan ke tombol Unduh —
+    // masih bergerak (tanpa berhenti mati) saat cut ke montage di 3,6
+    { t: PPT + 0.07, ...dk(0.967) },
+    { t: 3.75, ...dk(1.03, -10), ease: EASE.inOut },
   ];
   // popover: pegas kaku mulai 2 frame sebelum pluck → ≥0,9 di frame SFX, puncak overshoot +1 frame
   const open = sp(s, PLAY - 2 / 30, 1, 0.45, 32);
@@ -256,17 +267,17 @@ export function MusicReportShot() {
           </Scaled>
         )}
         <Scaled x={deckX} y={deckY} w={400} scale={D_S} style={{ opacity: Math.min(1, 0.25 + deckIn), transform: `translateY(${((1 - deckIn) * 120).toFixed(1)}px) scale(${D_S})` }}>
-          <DeckCardView s={s} flipAt={FLIP} pressAt={PRESS} shineAt={3.0} />
+          <DeckCardView s={s} flipAt={FLIP} shineAt={PPT} />
         </Scaled>
       </Cam>
       <Flash at={FLIP} len={0.14} max={0.08} />
       <TopScrim y={capBottom} bg={brand.bg} />
-      <BottomScrim y={box.y + box.h * 0.93} bg={brand.bg} />
+      <BottomScrim y={box.y + box.h * 0.93} H={H} bg={brand.bg} />
       <BeatCaption
         words={[
           ["Musik,", PLAY],
           ["laporan,", FLIP],
-          ["PPT", 3.0, true],
+          ["PPT", PPT, true],
         ]}
       />
     </AbsoluteFill>

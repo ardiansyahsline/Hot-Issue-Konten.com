@@ -8,8 +8,8 @@ import { musicBeats } from "@/components/remotion/studio/audio";
 import { useStudioCatalog } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { teaserTimelineRaw } from "@/lib/studio/teaser";
-import { keepTeaserVisual } from "./teaserLock";
-import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, snapScenesToBeats, totalSec, type Timeline } from "@/lib/studio/timeline";
+import { keepTeaserVisual, retimesTeaser, snapAroundTeaser } from "@/lib/studio/teaserLock";
+import { FORMATS, MAX_TOTAL, defaultTimeline, sceneStartSecs, sceneStarts, totalSec, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 import DirectorChat from "./DirectorChat";
 import PlanCard from "./PlanCard";
@@ -72,13 +72,13 @@ function dropStaleFullVo(prev: Timeline | null, next: Timeline): Timeline {
 /**
  * rencana baru dari Harley -> batas adegan ditempel ke ketukan musik (sama seperti tombol "Tempel ke ketukan"), hanya kalau
  * ada ketukan, belum ada VO (VO yang sudah dibuat bisa terpotong), durasi adegan memang diubah AI (revisi teks saja tidak
- * menggeser durasi yang diatur user), dan total tetap ≤ MAX_TOTAL.
+ * menggeser durasi yang diatur user), dan total tetap ≤ MAX_TOTAL. Adegan premium teaser tidak digeser (snapAroundTeaser).
  */
 function snapPlan(prev: Timeline | null, tl: Timeline): Timeline {
   if (tl.vo?.lines.length) return tl;
   const timed = !prev || tl.scenes.length !== prev.scenes.length || tl.scenes.some((s, i) => s.id !== prev.scenes[i].id || Math.abs(s.dur - prev.scenes[i].dur) > 1e-6);
   if (!timed) return tl;
-  const next = snapScenesToBeats(tl, musicBeats(tl, totalSec(tl) + 1));
+  const next = snapAroundTeaser(tl, musicBeats(tl, totalSec(tl) + 1));
   return totalSec(next) <= MAX_TOTAL + 1e-6 ? next : tl;
 }
 
@@ -212,8 +212,22 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     [queueSave],
   );
 
-  /** perubahan dari editor rencana & timeline: visual + durasi adegan premium teaser dikunci (VO panjang tetap lewat `change`) */
-  const changeEdit = useCallback((next: Timeline) => change(keepTeaserVisual(tlRef.current, next)), [change]);
+  /**
+   * perubahan dari editor rencana & timeline: visual + durasi adegan premium teaser dikunci (VO panjang tetap lewat `change`).
+   * Tempel ke ketukan versi lama (🥁 di kartu rencana: snapScenesToBeats) ikut menggeser adegan teaser → diulang dengan
+   * snapAroundTeaser dari durasi semula, supaya adegan biasa sesudah adegan teaser benar-benar jatuh di ketukan.
+   */
+  const changeEdit = useCallback(
+    (next: Timeline) => {
+      const prev = tlRef.current;
+      if (prev && retimesTeaser(prev, next)) {
+        const base = { ...next, scenes: prev.scenes };
+        return change(snapAroundTeaser(base, musicBeats(base, totalSec(base) + 1)));
+      }
+      change(keepTeaserVisual(prev, next));
+    },
+    [change],
+  );
 
   // musik upload / katalog tanpa ketukan -> dideteksi di laptop, hasilnya masuk lewat change
   const beatHint = useBeats(timeline, projectId, tlRef, change);
@@ -307,6 +321,8 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setTimeline(tl);
     setSelected(null);
     setSave("saved");
+    // open() yang masih menunggu DB keluar di cek id basi tanpa mematikan `opening` -> dimatikan di sini
+    setOpening(false);
   }, [sb, flushAll, setPid]);
 
   /** 🎞️ Teaser CS Tracker: proyek baru dari timeline teaser bawaan (11 adegan premium) lewat jalur simpan proyek yang sama */
@@ -328,6 +344,9 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     setTimeline(tl);
     setSelected(null);
     setSave("saved");
+    // open() yang masih menunggu DB (buka otomatis / pilih proyek lain saat insert berjalan) keluar di cek id basi tanpa
+    // mematikan `opening` -> dimatikan di sini supaya kartu rencana & preview tidak tertahan skeleton
+    setOpening(false);
     playerRef.current?.seekTo(0);
   }, [sb, flushAll, setPid]);
 
@@ -372,7 +391,9 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
   const onPlan = useCallback(
     (raw: unknown) => {
       const prev = tlRef.current;
-      const tl = snapPlan(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current)));
+      // adegan premium teaser dikunci juga di sini (server sudah menguncinya di mergeRevision; ini jaring untuk VO panjang
+      // yang memanjangkan adegan di laptop), dan tempel ke ketukan tidak menggeser durasinya
+      const tl = snapPlan(prev, keepTeaserVisual(prev, keepDataVo(prev, tidyTimeline(raw, catRef.current))));
       change(tl);
       setSelected(null);
       playerRef.current?.seekTo(0);

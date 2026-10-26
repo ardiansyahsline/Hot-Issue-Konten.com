@@ -37,6 +37,26 @@ type Render =
 
 const fmt = (n: number) => String(Number(n.toFixed(1))).replace(".", ",");
 
+/** akhiran nama file kalau VO-nya masih "VO sementara" (cadangan Edge) — supaya tidak tertukar dengan versi final suara bank */
+const TEMP_SUFFIX = "-vo-sementara";
+/** ingat per job render laptop: VO-nya sementara atau bukan saat diantrikan (RenderJob tidak membawa timeline) */
+const tempKey = (id: string) => `studio-render-vo-temp:${id}`;
+function markJobTemp(id: string, temp: boolean) {
+  try {
+    localStorage.setItem(tempKey(id), temp ? "1" : "0");
+  } catch {
+    /* mode privat: abaikan */
+  }
+}
+function jobWasTemp(id: string): boolean | null {
+  try {
+    const v = localStorage.getItem(tempKey(id));
+    return v === null ? null : v === "1";
+  } catch {
+    return null;
+  }
+}
+
 /** pesan awam untuk error render di browser */
 function renderError(e: unknown): { msg: string; detail?: string } {
   const raw = e instanceof Error ? e.message : String(e);
@@ -62,6 +82,8 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
   const slug = fileSlug(tl.title);
   const voOn = tl.voice.mode !== "none" && !tl.muteVo;
   const hasVo = voOn && !!tl.vo?.lines.length;
+  /** VO yang ada masih cadangan Edge ("VO sementara") */
+  const voTemp = hasVo && !!tl.vo?.temp;
   const hasVoText = tl.scenes.some((s) => s.vo?.text);
   const busy = render.s === "run";
 
@@ -132,7 +154,9 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
         },
       });
       const blob = await res.getBlob();
-      const name = `${slug}${kind === "mp3" ? "-vo" : variant === "novo" ? "-tanpa-vo" : ""}.${container}`;
+      // VO sementara (Edge) -> akhiran "-vo-sementara" (MP4 dengan VO & file VO .mp3), versi tanpa VO tetap "-tanpa-vo"
+      const temp = !!snap.vo?.temp && !!snap.vo.lines.length && snap.voice.mode !== "none" && !snap.muteVo;
+      const name = `${slug}${kind === "mp3" ? (temp ? TEMP_SUFFIX : "-vo") : variant === "novo" ? "-tanpa-vo" : temp ? TEMP_SUFFIX : ""}.${container}`;
       const file = new File([blob], name, { type: blob.type || (kind === "mp3" ? "audio/mpeg" : `video/${container}`) });
       const url = URL.createObjectURL(file);
       setRender({ s: "done", kind, url, file, secs: Math.round((performance.now() - t0) / 1000), note });
@@ -164,6 +188,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     setQueueing(true);
     try {
       const j = await createRenderJob({ project_id: projectId, timeline: tl, variant: variant === "vo" ? "vo" : "tanpa-vo" });
+      markJobTemp(j.id, variant === "vo" && voTemp);
       rememberJob(jobKey, j.id);
       setJobId(j.id);
     } catch (e) {
@@ -190,7 +215,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
     const full = voOn ? tl.vo?.full : null;
     if (full) {
       const ext = fileExt(storagePathOf(full) ?? "") || "mp3";
-      void downloadStudioUrl(full, `${slug}-vo.${ext}`);
+      void downloadStudioUrl(full, `${slug}${voTemp ? TEMP_SUFFIX : "-vo"}.${ext}`);
     } else void renderWeb("mp3");
   };
   const downloadSrt = () => saveBlob(new Blob([toSrt(cues)], { type: "application/x-subrip;charset=utf-8" }), `${slug}.srt`);
@@ -235,7 +260,7 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
       <div className="grid grid-cols-2 gap-2">
         {(
           [
-            ["vo", "Dengan VO", hasVo ? "Suara + musik + SFX" : "VO belum dibuat"],
+            ["vo", "Dengan VO", hasVo ? (voTemp ? "VO sementara + musik + SFX" : "Suara + musik + SFX") : "VO belum dibuat"],
             ["novo", "Tanpa VO", "Musik + SFX + teks"],
           ] as [Variant, string, string][]
         ).map(([id, title, sub]) => (
@@ -306,6 +331,11 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
             )}
           </div>
         )}
+        {variant === "vo" && voTemp && (
+          <p className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-300" data-vo-temp>
+            ⚠️ VO masih <b>VO sementara</b> (suara cadangan Edge) — nama file diberi akhiran <b>{TEMP_SUFFIX}</b>. Versi final: nyalakan laptop, &quot;Generate ulang VO&quot; pakai bank suara, lalu download lagi.
+          </p>
+        )}
         <p className="text-[11px] text-zinc-500">Dibikin langsung di browser — paling lancar di Chrome / Edge laptop. Di HP bisa lama.</p>
       </div>
 
@@ -332,9 +362,18 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
         {job?.status === "selesai" && job.result_path && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
             <span>✅ Video dari laptop siap.</span>
-            <button type="button" className="font-semibold underline" onClick={() => downloadStudioUrl(storageSrc(job.result_path!), `${slug}${job.variant === "tanpa-vo" ? "-tanpa-vo" : ""}.${fileExt(job.result_path!) || "mp4"}`)}>
-              ⬇️ Download
-            </button>
+            {(() => {
+              // VO sementara saat job diantrikan (cadangan: VO timeline sekarang)
+              const temp = job.variant !== "tanpa-vo" && (jobWasTemp(job.id) ?? voTemp);
+              return (
+                <>
+                  {temp && <span className="text-amber-300">(VO sementara)</span>}
+                  <button type="button" className="font-semibold underline" onClick={() => downloadStudioUrl(storageSrc(job.result_path!), `${slug}${job.variant === "tanpa-vo" ? "-tanpa-vo" : temp ? TEMP_SUFFIX : ""}.${fileExt(job.result_path!) || "mp4"}`)}>
+                    ⬇️ Download
+                  </button>
+                </>
+              );
+            })()}
             <button type="button" className="ml-auto text-emerald-400/70 hover:text-emerald-300" onClick={() => setJobId(null)}>
               Tutup
             </button>

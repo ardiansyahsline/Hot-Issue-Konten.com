@@ -145,8 +145,9 @@ function shake(s: number, at: number, amp: number): { x: number; y: number; r: n
 export function TwsShot() {
   const { f, fps, s, t, box, W, H, display, brand } = useShot();
   const web = useRemotionEnvironment().isClientSideRendering;
-  const logo = useTwsLogo();
-  useTwsReady(logo);
+  const logoSrc = useTwsLogo();
+  // font & logo ditunggu (render laptop & browser); logo gagal dimuat → slide tanpa logo (bukan gambar rusak)
+  const logo = useTwsReady(logoSrc) ? logoSrc : "";
 
   // id per salinan adegan: kelas animasi & id SVG tidak bentrok kalau ada 2 pemutar di satu halaman (mis. thumbnail Studio)
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
@@ -411,24 +412,27 @@ export function TwsShot() {
 
                 <div style={{ marginTop: 6, padding: "0 2px", fontSize: 11.5, lineHeight: "17px", color: C.emerald }}>✓ Dicek: teks muat, kontras aman</div>
 
-                {/* tombol unduh (Downloads): saat ⏳ semua tombol nonaktif (disabled:opacity-50) */}
+                {/* tombol unduh (Downloads): saat ⏳ semua tombol nonaktif (disabled:opacity-50).
+                    Urutan tampil PNG · SVG Figma · HTML · ZIP PNG · ZIP SVG lewat `order` flex; "⬇ SVG Figma" (hero, terangkat 1,24×)
+                    ditaruh TERAKHIR di DOM supaya tergambar di atas tombol sebelahnya juga di render browser (web-renderer
+                    mengabaikan z-index & menggambar menurut urutan DOM; Chromium/laptop: z-index tetap berlaku). */}
                 <div style={{ marginTop: 8 }}>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    <DlBtn dim={dim} busy={busy}>
+                    <DlBtn dim={dim} busy={busy} order={1}>
                       ⬇ PNG
                     </DlBtn>
-                    <DlBtn hero lift={lift} press={press} busy={busy}>
-                      {busy ? "⏳" : "⬇"} SVG Figma
-                      <Touch f={f} at={popF} x="95%" y="92%" from={[30, 42]} />
-                    </DlBtn>
-                    <DlBtn dim={dim} busy={busy}>
+                    <DlBtn dim={dim} busy={busy} order={3}>
                       ⬇ HTML
                     </DlBtn>
-                    <DlBtn dim={dim} busy={busy}>
+                    <DlBtn dim={dim} busy={busy} order={4}>
                       ⬇ ZIP PNG
                     </DlBtn>
-                    <DlBtn dim={dim} busy={busy}>
+                    <DlBtn dim={dim} busy={busy} order={5}>
                       ⬇ ZIP SVG
+                    </DlBtn>
+                    <DlBtn hero lift={lift} press={press} busy={busy} order={2}>
+                      {busy ? "⏳" : "⬇"} SVG Figma
+                      <Touch f={f} at={popF} x="95%" y="92%" from={[30, 42]} />
                     </DlBtn>
                   </div>
                   {msgOpen > 0 && (
@@ -502,13 +506,15 @@ function heroNumAt(s: number, kH: number, kC: number, heroY: number, slotY: numb
 
 function HeroNumber({ html, x, st, f, fps }: { html: string; x: number; st: HeroNumState; f: number; fps: number }) {
   return (
-    <div style={{ position: "absolute", left: x, top: st.y, width: 0, height: 0, opacity: st.op, pointerEvents: "none" }}>
+    // opacity di div berukuran (bukan wrapper 0×0: web-renderer tidak menerapkan opacity/filter wrapper 0×0 ke anaknya)
+    <div style={{ position: "absolute", left: x, top: st.y, width: 0, height: 0, pointerEvents: "none" }}>
       <div
         className="twsx"
         style={{
           position: "absolute",
           left: -NUM_CX,
           top: -NUM_CY,
+          opacity: st.op,
           background: "transparent",
           transformOrigin: `${NUM_CX}px ${NUM_CY}px`,
           transform: `perspective(1100px) translateY(${st.ty.toFixed(1)}px) rotateX(${st.rx.toFixed(2)}deg) scale(${st.k.toFixed(4)})`,
@@ -593,7 +599,8 @@ function slideAnim(f: number, fps: number, pre: string): string {
   const titleRise = (cls: string, starts: number[]) => {
     starts.forEach((a, k) => {
       const p = sp(a);
-      out.push(`.${cls} .judul span:nth-child(${k + 1}){transform:translateY(${((1 - p) * 80).toFixed(1)}px);opacity:${clamp01(p * 1.5).toFixed(3)}}`);
+      // anak langsung (`>`): span sisipan @remotion/web-renderer (pembungkus teks / pengukur kata) tidak boleh ikut kena
+      out.push(`.${cls} .judul>span:nth-child(${k + 1}){transform:translateY(${((1 - p) * 80).toFixed(1)}px);opacity:${clamp01(p * 1.5).toFixed(3)}}`);
     });
   };
   // sorotan biru disapu dari kiri (clip-path inset: didukung web-renderer, tidak bergantung background-size/repeat)
@@ -667,9 +674,10 @@ function PreviewSweeps({ f, fps }: { f: number; fps: number }) {
 // UI website (dibuat ulang dari AiChat & DesignCard)
 // ---------------------------------------------------------------------------------------------
 /** tombol btn DesignCard: rounded-lg border-zinc-800 px-2.5 py-1 text-[12px] font-semibold (disabled:opacity-50 saat ⏳) */
-function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, busy }: { children: ReactNode; hero?: boolean; lift?: number; press?: number; dim?: number; busy?: boolean }) {
+function DlBtn({ children, hero, lift = 0, press = 1, dim = 0, busy, order }: { children: ReactNode; hero?: boolean; lift?: number; press?: number; dim?: number; busy?: boolean; order?: number }) {
   const st: CSSProperties = {
     position: "relative",
+    order,
     display: "inline-flex",
     alignItems: "center",
     gap: 4,
@@ -714,7 +722,8 @@ function Touch({ f, at, x, y, from = [40, 60] }: { f: number; at: number; x: str
   const press = f >= at - 1 && f <= at + 2 ? 0.8 : 1;
   const ring = f >= at && f < at + 16 ? (f - at) / 16 : -1;
   return (
-    <span style={{ position: "absolute", left: x, top: y, width: 0, height: 0, zIndex: 60, pointerEvents: "none", opacity: op }}>
+    // titik jangkar 0×0 tanpa opacity (web-renderer tidak menerapkan opacity wrapper 0×0 ke anak) → opacity di tiap anak
+    <span style={{ position: "absolute", left: x, top: y, width: 0, height: 0, zIndex: 60, pointerEvents: "none" }}>
       {ring >= 0 && (
         <span
           style={{
@@ -723,6 +732,7 @@ function Touch({ f, at, x, y, from = [40, 60] }: { f: number; at: number; x: str
             top: -16,
             width: 32,
             height: 32,
+            opacity: op,
             borderRadius: 999,
             border: `2.5px solid rgba(255,255,255,${(0.8 * (1 - ring)).toFixed(3)})`,
             transform: `scale(${(1 + ring * 1.5).toFixed(3)})`,
@@ -736,6 +746,7 @@ function Touch({ f, at, x, y, from = [40, 60] }: { f: number; at: number; x: str
           top: from[1] * m - 12,
           width: 24,
           height: 24,
+          opacity: op,
           borderRadius: 999,
           background: "rgba(255,255,255,0.8)",
           border: "2px solid rgba(255,255,255,0.95)",
