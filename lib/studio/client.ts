@@ -404,9 +404,16 @@ export type JobTable = "studio_voice_jobs" | "studio_render_jobs";
  * `max` (opsional, adegan teaser) = jendela ucapan maksimal (detik): suara yang lebih panjang dipercepat di laptop (atempo, maks 1,3×,
  * nada tetap). Worker lama tanpa dukungan `max` mengabaikannya.
  */
-export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number };
-/** `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat supaya muat di `max` */
-export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[]; start?: number; speed?: number };
+/**
+ * `max` = jendela ucapan (detik, adegan teaser): laptop memadatkan jeda lalu mempercepat maks 1,3× supaya muat.
+ * `speed` = kecepatan diatur sendiri (× normal, 0,85–1,3): laptop memakai atempo persis faktor itu (`max` diabaikan).
+ */
+export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number; speed?: number };
+/**
+ * `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat (negatif = diperlambat);
+ * `tempo` = kecepatan diatur sendiri yang dipakai; `squeeze` = detik jeda di dalam baris yang dipadatkan supaya muat di `max`
+ */
+export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[]; start?: number; speed?: number; tempo?: number; squeeze?: number };
 export type VoiceJobResult = {
   lines?: VoiceJobResultLine[];
   full_path?: string | null;

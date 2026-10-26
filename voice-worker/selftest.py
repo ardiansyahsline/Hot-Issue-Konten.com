@@ -579,6 +579,98 @@ def t_percepat_vo_jendela_teaser():
     return f"3,0 dtk → {m2['dur']:.2f} dtk (+{m2['speed']}%), nada {f0a:.0f}→{f0b:.0f} Hz, mentok 30% → {m3['dur']:.2f} dtk"
 
 
+def _sentences_wav(name: str, parts: list[float], gap: float, sr: int = 48000) -> tuple[Path, dict, np.ndarray]:
+    """'kalimat' = nada harmonik 200 Hz sepanjang parts[i] detik, dipisah hening `gap` detik; tiap kalimat 2 kata"""
+    ys, words, t0 = [], [], 0.0
+    for i, d in enumerate(parts):
+        t = np.arange(int(d * sr)) / sr
+        ys.append((sum((0.25 / k) * np.sin(2 * np.pi * 200 * k * t) for k in range(1, 5)) * 0.8).astype(np.float32))
+        words += [{"w": f"k{i}a", "s": round(t0 + 0.02, 3), "e": round(t0 + d / 2, 3)}, {"w": f"k{i}b", "s": round(t0 + d / 2, 3), "e": round(t0 + d - 0.02, 3)}]
+        t0 += d
+        if i < len(parts) - 1:
+            ys.append(np.zeros(int(gap * sr), np.float32))
+            t0 += gap
+    ys.append(np.zeros(int(0.1 * sr), np.float32))
+    y = np.concatenate(ys)
+    return ff.write_wav(TMP / name, y, sr), {"dur": round(len(y) / sr, 3), "words": words}, y
+
+
+@test
+def t_padatkan_jeda_sebelum_percepat():
+    sr = 48000
+    # 3 kalimat 1,0 dtk dengan jeda 0,5 dtk (seperti sesudah "…") → ucapan = 3 + 2·0,5 − 0,02 + 0,12 = 4,1 dtk
+    src, meta, y = _sentences_wav("sq-src.wav", [1.0, 1.0, 1.0], 0.5)
+    sp = jobs_tts.speech_end(meta)
+    near(sp, 4.1, 1e-6, "ucapan awal")
+    ps = jobs_tts.find_pauses(y, sr)
+    assert len(ps) == 2 and all(abs((b - a) - 0.5) <= 0.03 for a, b in ps), ps
+    # suara tanpa jeda (nada utuh) → tidak ada jeda yang bisa dipadatkan
+    t = np.arange(int(2.0 * sr)) / sr
+    assert jobs_tts.find_pauses((0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr) == []
+    # (1) jendela 3,7 → cukup jeda dipadatkan 0,4 dtk (0,2 per jeda), suara TIDAK dipercepat
+    w1, m1 = jobs_tts.fit_to_max(src, meta, 3.7, TMP, "sq1")
+    assert "speed" not in m1 and m1["fit"] is True and m1["max"] == 3.7, m1
+    near(m1["squeeze"], 0.4, 0.01, "detik jeda dibuang")
+    near(jobs_tts.speech_end(m1), 3.7, 0.015, "ucapan setelah dipadatkan")
+    y1, _ = ff.read_wav(w1)
+    near(len(y1) / sr, meta["dur"] - 0.4, 0.01, "panjang file setelah dipadatkan")
+    near(m1["dur"], len(y1) / sr, 0.002, "dur meta = panjang file")
+    # kata kalimat 1 tetap, kalimat 2 maju 0,2 dtk, kalimat 3 maju 0,4 dtk
+    for k, shift in ((0, 0.0), (2, 0.2), (4, 0.4)):
+        near(m1["words"][k]["s"], meta["words"][k]["s"] - shift, 0.012, f"kata {k} digeser")
+    ps1 = jobs_tts.find_pauses(y1[:, 0] if y1.ndim > 1 else y1, sr)
+    assert len(ps1) == 2 and all((b - a) >= jobs_tts.PAUSE_MIN - 0.02 for a, b in ps1), f"jeda tersisa min 0,12: {ps1}"
+    # (2) jendela 3,0 → jeda dipadatkan maksimal dulu (sisa 0,12 per jeda) baru sisanya dipercepat
+    w2, m2 = jobs_tts.fit_to_max(src, meta, 3.0, TMP, "sq2")
+    near(m2["squeeze"], 2 * (0.5 - jobs_tts.PAUSE_MIN), 0.04, "jeda dipadatkan maksimal")
+    only_tempo = 3.98 / (3.0 - 0.12)  # tanpa pemadatan: kata terakhir 3,98 harus selesai di 2,88
+    assert 0 < m2["speed"] < round((only_tempo - 1) * 100), (m2["speed"], only_tempo)
+    assert m2["fit"] and jobs_tts.speech_end(m2) <= 3.0 + 0.01, (m2["fit"], jobs_tts.speech_end(m2))
+    near(_f0(ff.read_wav(w2)[0], sr), 200, 4, "nada tetap")
+    # (3) speed eksplisit: atempo persis, max diabaikan, jeda tidak dipadatkan
+    w3, m3 = jobs_tts.apply_speed(src, meta, 1.2, TMP, "sp1")
+    near(m3["dur"], meta["dur"] / 1.2, 0.03, "durasi 1,2×")
+    assert m3["tempo"] == 1.2 and m3["speed"] == 20 and "squeeze" not in m3, m3
+    w4, m4 = jobs_tts.apply_speed(src, meta, 0.85, TMP, "sp2")
+    near(m4["dur"], meta["dur"] / 0.85, 0.03, "durasi 0,85×")
+    assert m4["speed"] == -15 and m4["tempo"] == 0.85, m4
+    assert jobs_tts.apply_speed(src, meta, 1.0, TMP, "sp3") == (src, {**meta, "tempo": 1.0})
+    # parse_lines & kunci job: speed ikut kalau ada, job lama tanpa speed kuncinya tetap
+    ls = jobs_tts.parse_lines([{"id": "a", "scene_id": "a", "text": "Halo.", "start": 0, "speed": "1,1"}, {"id": "b", "scene_id": "b", "text": "Hai.", "start": 3}, {"id": "c", "scene_id": "c", "text": "Yo.", "speed": 9}])
+    assert ls[0]["speed"] == 1.1 and ls[1]["speed"] is None and ls[2]["speed"] == jobs_tts.SPEED_MAX, ls
+    st = jobs_tts.norm_settings({})
+    old_key = jobs_tts._sha([jobs_tts.CACHE_V, "chatterbox", "v", st, [[x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] for x in ls[1:2]]])
+    assert jobs_tts.job_key("chatterbox", "v", ls[1:2], st) == old_key, "kunci job tanpa speed harus sama dengan versi lama"
+    assert jobs_tts.job_key("chatterbox", "v", ls[:1], st) != jobs_tts.job_key("chatterbox", "v", [{**ls[0], "speed": 1.2}], st)
+    return f"jendela 3,7: jeda −{m1['squeeze']:.2f} dtk tanpa percepat; jendela 3,0: jeda −{m2['squeeze']:.2f} + {m2['speed']}%; 1,2× → {m3['dur']:.2f} dtk"
+
+
+@test
+def t_job_tts_speed_eksplisit():
+    sb, v = _bank_supa()
+    eng = FakeEngine()
+    rt = Runtime(cfg=fake_cfg(), supa=sb, engines=FakeEngines(eng), asr=FakeAsr({"_line": "satu dua tiga empat lima enam"}))  # type: ignore[arg-type]
+    text = "Satu dua tiga empat lima enam."
+    base = {"kind": "tts", "voice_id": v["id"], "engine": "auto", "settings": {"takes": 1}, "status": "proses"}
+    job = {**base, "id": "job-sp-0", "lines": [{"id": "x", "scene_id": "x", "text": text, "spell": None, "start": 0.2}]}
+    sb.tables["studio_voice_jobs"] = [job]
+    jobs_tts.run(JobCtx(rt, "studio_voice_jobs", job, min_gap=0))
+    l0 = job["result"]["lines"][0]
+    assert job["status"] == "selesai" and not ({"speed", "tempo", "squeeze"} & set(l0)), l0
+    # kecepatan 1,25× (max diberi tapi diabaikan) → suara mentah dari cache, durasi /1,25
+    job2 = {**base, "id": "job-sp-1", "lines": [{"id": "x", "scene_id": "x", "text": text, "spell": None, "start": 0.2, "speed": 1.25, "max": 0.5}]}
+    sb.tables["studio_voice_jobs"].append(job2)
+    calls = eng.calls
+    jobs_tts.run(JobCtx(rt, "studio_voice_jobs", job2, min_gap=0))
+    l1 = job2["result"]["lines"][0]
+    assert job2["status"] == "selesai" and eng.calls == calls, "suara mentah dari cache laptop"
+    assert l1["tempo"] == 1.25 and l1["speed"] == 25 and "squeeze" not in l1, l1
+    near(l1["dur"], l0["dur"] / 1.25, 0.04, "durasi 1,25×")
+    assert [w["w"] for w in l1["words"]] == text.split() and l1["words"][-1]["e"] <= l1["dur"] + 1e-6
+    assert job2["cache_key"] != job["cache_key"]
+    return f"{l0['dur']:.2f} dtk → {l1['dur']:.2f} dtk (1,25×)"
+
+
 @test
 def t_job_tts_max_jendela():
     sb, v = _bank_supa()

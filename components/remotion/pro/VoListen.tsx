@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { cancelVoiceJob, createVoiceJob, fetchReadyVoices, requestTts, useStudioJob, useStudioStatus, type VoiceJob, type VoiceJobLine } from "@/lib/studio/client";
 import { voSayKey, voSpeech } from "@/lib/studio/pronounce";
-import type { Scene, Timeline, VoLine, VoTrack } from "@/lib/studio/timeline";
+import { normTempo, tempoRate, type Scene, type Timeline, type VoLine, type VoTrack } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { isTeaserScene } from "./teaserLock";
-import { cleanWords, DEF_CFG, DEF_EXG, DEFAULT_VOICE, fitVo, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
+import { cleanWords, DEF_CFG, DEF_EXG, DEFAULT_VOICE, fitVo, fmtTempo, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
 
 type Ready = { s: "ready"; line: VoLine; label: string; engine: VoTrack["engine"]; temp: boolean; sig: string; used?: boolean };
 type St =
@@ -101,14 +101,16 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
     const p = voSpeech(s.vo, t.voice.lexicon);
     if (!p) return;
     const sig = voSayKey(s.vo, t.voice.lexicon);
-    const win = isTeaserScene(s) ? teaserWindows(t).get(s.id) : undefined;
+    // kecepatan diatur sendiri di timeline → rate persis itu (tanpa percepat otomatis)
+    const tempo = s.vo?.tempo;
+    const win = isTeaserScene(s) && tempo === undefined ? teaserWindows(t).get(s.id) : undefined;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setSt({ s: "tts", engine: eng });
     try {
       const req = { text: p.text, spell: p.spell ?? undefined, voice: t.voice.edgeVoice ?? ("id-ID-ArdiNeural" as const) };
-      const first = await requestTts({ ...req, engine: eng }, ctrl.signal);
+      const first = await requestTts({ ...req, engine: eng, ...(tempo !== undefined ? { rate: tempoRate(tempo) } : {}) }, ctrl.signal);
       // sama dengan VO proyek: adegan teaser dipercepat otomatis (maks 30%) supaya pas di jendelanya
       const { r, speed } =
         first.engine === "edge" && win !== undefined
@@ -122,7 +124,8 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
             })
           : { r: first, speed: 0 };
       if (ctrl.signal.aborted) return;
-      ready({ line: { sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}), say: sig }, label: r.label, engine: r.engine, temp: r.temp, sig });
+      const line: VoLine = { sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}), ...(tempo !== undefined && r.engine === "edge" ? { tempo } : {}), say: sig };
+      ready({ line, label: r.label, engine: r.engine, temp: r.temp, sig });
     } catch (e) {
       if (ctrl.signal.aborted) return;
       setSt({ s: "error", msg: errMsg(e) });
@@ -138,13 +141,14 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
     const p = voSpeech(s.vo, t.voice.lexicon);
     if (!p) return;
     const sig = voSayKey(s.vo, t.voice.lexicon);
-    const win = isTeaserScene(s) ? teaserWindows(t).get(s.id) : undefined;
+    const tempo = s.vo?.tempo;
+    const win = isTeaserScene(s) && tempo === undefined ? teaserWindows(t).get(s.id) : undefined;
     setSt({ s: "start" });
     try {
       const voices = await fetchReadyVoices();
       const voice = voices.find((x) => x.id === t.voice.voiceId) ?? voices.find((x) => x.name === DEFAULT_VOICE) ?? voices[0];
       if (!voice) return void (await viaTts("edge"));
-      const line: VoiceJobLine = { id: s.id, scene_id: s.id, text: p.text, spell: p.spell, start: 0, ...(win !== undefined ? { max: win } : {}) };
+      const line: VoiceJobLine = { id: s.id, scene_id: s.id, text: p.text, spell: p.spell, start: 0, ...(tempo !== undefined ? { speed: tempo } : win !== undefined ? { max: win } : {}) };
       // setelan sama dengan "Generate ulang VO" → suara mentah kalimat ini dipakai ulang dari cache laptop
       const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: { exaggeration: t.voice.exaggeration ?? DEF_EXG, cfg_weight: t.voice.cfg ?? DEF_CFG, takes: 2 } });
       jobRef.current = j.id;
@@ -166,10 +170,20 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
       jobRef.current = null;
       const l = job.result?.lines?.find((x) => x && x.scene_id === scene.id) ?? job.result?.lines?.[0];
       if (!l || typeof l.path !== "string") return setSt({ s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba lagi.", fallback: true });
-      const speed = Math.round(Number(l.speed) || 0);
+      const tempo = normTempo(l.tempo);
+      const speed = tempo === undefined ? Math.round(Number(l.speed) || 0) : 0;
       const s = tlRef.current.scenes.find((x) => x.id === scene.id) ?? scene;
       ready({
-        line: { sceneId: scene.id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(s), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}), say: st.sig },
+        line: {
+          sceneId: scene.id,
+          src: storageSrc(l.path),
+          dur: Math.max(0.05, Number(l.dur) || 0.05),
+          at: sceneVoAt(s),
+          words: cleanWords(l.words),
+          ...(speed > 0 ? { speed } : {}),
+          ...(tempo !== undefined ? { tempo } : {}),
+          say: st.sig,
+        },
         label: `Bank suara · ${st.voice}`,
         engine: /pocket/i.test(job.engine_used ?? "") ? "pocket" : "chatterbox",
         temp: false,
@@ -271,7 +285,11 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
                 {st.used ? "✅ Dipakai di VO proyek" : "✅ Pakai ini"}
               </button>
             )}
-            <span className="min-w-0 text-[11px] text-zinc-500">{st.s === "ready" ? `${st.label}${st.line.speed ? ` · dipercepat ${st.line.speed}%` : ""}` : `Coba 1 kalimat ini · ${engineName}`}</span>
+            <span className="min-w-0 text-[11px] text-zinc-500">
+              {st.s === "ready"
+                ? `${st.label}${st.line.tempo !== undefined ? ` · kecepatan ${fmtTempo(st.line.tempo)}` : st.line.speed ? ` · dipercepat ${st.line.speed}%` : ""}`
+                : `Coba 1 kalimat ini · ${engineName}${scene.vo?.tempo !== undefined ? ` · ${fmtTempo(scene.vo.tempo)}` : ""}`}
+            </span>
           </>
         )}
       </div>
