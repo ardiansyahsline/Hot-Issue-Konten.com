@@ -9,10 +9,11 @@ import Markdown from "@/components/ai/Markdown";
 import { personaOf } from "@/lib/aiPersona";
 import { splitChoice, type Choice } from "@/lib/choiceCard";
 import { reloadStudioCatalog, uploadStudioFile } from "@/lib/studio/client";
+import { DIRECTOR_IDEAS } from "@/lib/studio/directorIdeas";
 import type { Director, Timeline } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { createClient } from "@/lib/supabase/client";
-import DirectorPicker, { DEFAULT_DIRECTOR, activeDirector, charUnavailable, useMyChars } from "./DirectorPicker";
+import DirectorPicker, { DEFAULT_DIRECTOR, DirectorQuickPick, activeDirector, charUnavailable, useMyChars } from "./DirectorPicker";
 import { MAX_UPLOAD } from "./fields";
 import { dbErrorText } from "./planUtils";
 
@@ -20,7 +21,8 @@ const HERO = DEFAULT_DIRECTOR;
 
 export type AttKind = "image" | "video" | "audio" | "logo";
 export type Att = { path: string; kind: AttKind; name: string };
-type Step = { k: string; s: "run" | "done" };
+/** langkah kerja dari server; riset web membawa subjek (q), jumlah sumber (n), dan off / fail (lanjut tanpa riset) */
+type Step = { k: string; s: "run" | "done"; q?: string; n?: number; off?: boolean; fail?: boolean };
 type Msg = {
   id: string | number;
   role: "user" | "assistant";
@@ -41,7 +43,7 @@ type Row = { id: number; role: "user" | "assistant"; content: string | null; att
 type Pending = { key: string; name: string; kind: AttKind; status: "up" | "ok" | "err"; path?: string; preview?: string; err?: string };
 type Mode = "media" | "logo" | "music";
 
-const IDEAS = ["Teaser fitur AI 30 detik buat TikTok", "Explainer Video Review 16:9 buat tim", "Promo campaign Konten.com 15 detik"];
+const IDEAS = DIRECTOR_IDEAS;
 
 /** langkah kerja sutradara (bingkai {t:"step"}) dengan gaya Harley */
 const STEP_TEXT: Record<string, string> = {
@@ -50,6 +52,15 @@ const STEP_TEXT: Record<string, string> = {
   write: "Tulis naskah VO, teks layar & SFX ✍️",
   check: "Cek durasi, kata per layar & zona aman ✅",
 };
+/** teks langkah: riset web dirangkai dari subjek & jumlah sumbernya, langkah lain dari STEP_TEXT */
+function stepText(s: Step): string {
+  if (s.k !== "research") return STEP_TEXT[s.k] ?? s.k;
+  const q = s.q ? `: ${s.q}` : "";
+  if (s.s === "run") return `🔎 Riset${q}…`;
+  if (s.off) return "🔎 Riset internet belum aktif — lanjut tanpa riset";
+  if (s.fail) return `🔎 Riset${q} gagal — lanjut tanpa riset`;
+  return s.n ? `🔎 Riset${q} · 📚 ${s.n} sumber dibaca` : `🔎 Riset${q} — belum ketemu info, lanjut tanpa riset`;
+}
 const KIND_ICON: Record<AttKind, string> = { image: "🖼️", video: "🎞️", audio: "🎵", logo: "🏷️" };
 const ATT_KINDS: AttKind[] = ["image", "video", "audio", "logo"];
 
@@ -86,7 +97,8 @@ type Props = {
   getTimeline: () => Timeline | null;
   hasPlan: boolean;
   onProject: (id: string, title: string) => void;
-  onPlan: (raw: unknown) => void;
+  /** rencana dari server; `title` = judul proyek baru kalau server ikut menggantinya (rencana baru untuk subjek lain) */
+  onPlan: (raw: unknown, title?: string) => void;
   onExample?: () => void;
   exampleBusy?: boolean;
   /** sutradara pilihan proyek ini (kosong = Harley) — dikirim tiap pesan, server memeriksanya */
@@ -168,10 +180,10 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
   // berhenti kalau komponen ditutup
   useEffect(() => () => abort.current?.abort(), []);
 
-  // gulir otomatis ke bawah selama user belum menggulir ke atas
+  // gulir otomatis ke bawah selama user belum menggulir ke atas (chat kosong: dari atas — sapaan & pilih sutradara terlihat utuh)
   useEffect(() => {
     const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (el && stick.current) el.scrollTop = msgs.length ? el.scrollHeight : 0;
   }, [msgs]);
   const onScroll = () => {
     const el = scroller.current;
@@ -223,12 +235,20 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
         } else if (f.t === "step") {
           const k = String(f.k ?? "");
           const s: Step["s"] = f.s === "done" ? "done" : "run";
+          const step: Step = {
+            k,
+            s,
+            ...(typeof f.q === "string" && f.q ? { q: f.q.slice(0, 60) } : {}),
+            ...(typeof f.n === "number" && f.n >= 0 ? { n: Math.min(9, Math.round(f.n)) } : {}),
+            ...(f.off === true ? { off: true } : {}),
+            ...(f.fail === true ? { fail: true } : {}),
+          };
           if (k)
             patch((x) => {
               const steps = [...(x.steps ?? [])];
               const i = steps.findIndex((y) => y.k === k);
-              if (i >= 0) steps[i] = { k, s };
-              else steps.push({ k, s });
+              if (i >= 0) steps[i] = { ...steps[i], ...step };
+              else steps.push(step);
               return { ...x, steps };
             });
         } else if (f.t === "director") {
@@ -250,7 +270,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           }
         } else if (f.t === "plan") {
           got = true;
-          cb.current.onPlan(f.timeline);
+          cb.current.onPlan(f.timeline, typeof f.title === "string" && f.title.trim() ? f.title.trim().slice(0, 120) : undefined);
           patch((x) => ({ ...x, planned: true }));
         } else if (f.t === "error") failMsg = typeof f.message === "string" && f.message ? f.message : `${cb.current.name} lagi error. Coba lagi.`;
       };
@@ -422,11 +442,11 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           <p className="py-10 text-center text-[13px] text-red-400">{loadErr}</p>
         ) : !msgs.length ? (
           <div className="flex flex-col items-center px-2 py-4 text-center">
-            <HeroArt hero={name} size={110} />
+            <HeroArt hero={name} size={onDirector ? 76 : 110} />
             <p className="mt-2 max-w-[420px] text-[13.5px] leading-relaxed text-zinc-300">
-              Halo! Aku <b className="text-zinc-100">{name}</b>, sutradara videomu 🎬 Ceritain idenya — buat apa, tayang di mana, berapa detik. Aku bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
+              Halo! Aku <b className="text-zinc-100">{name}</b>, sutradara videomu 🎬 Ceritain idenya — videonya tentang apa, buat siapa, tayang di mana, berapa detik. Aku riset dulu kalau perlu, lalu bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
             </p>
-            <div className="mt-3 flex max-w-[480px] flex-wrap justify-center gap-1.5">
+            <div className="mt-3 flex max-w-[640px] flex-wrap justify-center gap-1.5">
               {IDEAS.map((t) => (
                 <button
                   key={t}
@@ -439,6 +459,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
                 </button>
               ))}
             </div>
+            {onDirector && <DirectorQuickPick value={director} onChange={onDirector} chars={chars} loaded={charsLoaded} disabled={busy} />}
             {onExample && (
               <button type="button" disabled={exampleBusy || busy} onClick={onExample} className="mt-3 text-[12px] font-semibold text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">
                 {exampleBusy ? "Menyiapkan…" : "atau mulai dari contoh rencana"}
@@ -550,7 +571,7 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           rows={2}
           value={input}
           aria-label="Tulis ide atau revisi video"
-          placeholder={hasPlan ? "Revisi? mis. “adegan 3 lebih cepat”, “hook lebih nendang”…" : "Ceritain ide videomu… mis. teaser fitur AI 30 detik buat TikTok"}
+          placeholder={hasPlan ? "Revisi? mis. “adegan 3 lebih cepat”, “hook lebih nendang”…" : "Ceritain ide videomu… mis. promo Konten.com buat clipper, 30 detik"}
           onChange={(e) => {
             setInput(e.target.value);
             const el = e.target;
@@ -633,7 +654,7 @@ function DirectorSteps({ hero, steps, live, startedAt, doneAt }: { hero: string;
       {steps.map((s) => (
         <li key={s.k} className="flex items-start gap-2 text-[12.5px] text-zinc-300">
           <span className="mt-[1px] w-4 shrink-0 text-center">{s.s === "done" ? <span className="font-bold text-emerald-400">✓</span> : <span className="inline-block animate-spin">⏳</span>}</span>
-          <span className="min-w-0 flex-1">{STEP_TEXT[s.k] ?? s.k}</span>
+          <span className="min-w-0 flex-1 break-words">{stepText(s)}</span>
         </li>
       ))}
       {live && !steps.length && <li className="text-[12.5px] text-zinc-500">⏳ …</li>}

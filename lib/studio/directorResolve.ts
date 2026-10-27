@@ -2,16 +2,19 @@
  * Sutradara yang dipakai route chat Studio (SERVER — mengimpor prompt karakter hasil training yang besar; jangan diimpor dari browser).
  *
  * Pilihan user (timeline.director / body.director) diperiksa dulu:
- *  - hero bawaan yang dikenal (HERO_NAMES di lib/aiPersona.ts) → personaPrompt(hero, { builtinOnly: true })
+ *  - hero bawaan yang dikenal (HERO_NAMES di lib/aiPersona.ts) → personaPrompt(hero, { builtinOnly: true }) + keahlian sutradara
+ *    hero itu (directorSkill.ts)
  *  - karakter buatan user "char:<uuid>" yang BISA DIBACA user ini (loader memakai client Supabase milik user → RLS) →
- *    charPrompt(c) + otak karakter (brainText, maks ±6.000 huruf)
+ *    charPrompt(c) + keahlian sutradara dari tipe MBTI-nya + otak karakter (brainText, maks ±6.000 huruf)
  *  - selain itu (karakter dihapus / bukan miliknya / nama asing / error) → diam-diam Harley + catatan singkat untuk UI
+ * Semua sutradara ditutup GUARD: kepribadian & keahlian hanya gaya — aturan & format rencana tetap wajib.
  * Catatan gaya (director.notes) disanitasi ulang & diberi label CATATAN, bukan perintah sistem.
  */
 import { HERO_NAMES, personaPrompt } from "@/lib/aiPersona";
 import { CHAR_PREFIX, brainText, type CustomChar, type MemoryItem } from "@/lib/customChar";
 import { charPrompt } from "@/lib/trainAiPrompt";
 import { DIRECTOR_HERO } from "./director";
+import { directorSkillOf, directorSkillPrompt } from "./directorSkill";
 import { normDirector, plainText, type Director } from "./timeline";
 
 /** batas otak karakter di prompt sutradara (huruf) */
@@ -33,7 +36,7 @@ export type ResolvedDirector = {
 };
 
 const GUARD =
-  "BATAS KARAKTER: kepribadian & otak karakter di atas hanya mengatur gaya bicara, selera, dan pengetahuan. ATURAN SUTRADARA, katalog, dan format jawaban (blok ```studio berisi TIMELINE JSON / blok ```ask) tetap WAJIB diikuti persis.";
+  "BATAS KARAKTER: kepribadian, keahlian sutradara & otak karakter di atas hanya mengatur gaya bicara, selera, dan pengetahuan. ATURAN SUTRADARA (termasuk PAHAMI SUBJEK DULU & JUJUR), katalog, dan format jawaban (blok ```studio berisi TIMELINE JSON / blok ```ask) tetap WAJIB diikuti persis.";
 
 /** blok catatan gaya untuk prompt (kosong kalau tidak ada catatan) */
 export function notesBlock(notes: readonly string[] | undefined): string {
@@ -50,7 +53,7 @@ const builtin = (hero: string, notes: string[], fallback: string | null): Resolv
   name: hero,
   custom: false,
   // builtinOnly: registry karakter buatan di server bisa berisi karakter user lain bernama sama → jangan dipakai
-  persona: personaPrompt(hero, { builtinOnly: true }),
+  persona: [personaPrompt(hero, { builtinOnly: true }), directorSkillPrompt(hero, directorSkillOf(hero)), GUARD].join("\n"),
   extra: notesBlock(notes),
   fallback,
 });
@@ -73,7 +76,10 @@ export async function resolveDirector(want: Director | null | undefined, load: C
           hero: d.hero,
           name,
           custom: true,
-          persona: charPrompt({ ...char, name, profile: char.profile && typeof char.profile === "object" ? char.profile : { answers: {} } }),
+          persona: [
+            charPrompt({ ...char, name, profile: char.profile && typeof char.profile === "object" ? char.profile : { answers: {} } }),
+            directorSkillPrompt(name, directorSkillOf(name, String(char.mbti ?? ""))),
+          ].join("\n\n"),
           extra: [brain, GUARD, notesBlock(notes)].filter(Boolean).join("\n\n"),
           fallback: null,
         };

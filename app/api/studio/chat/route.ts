@@ -12,9 +12,7 @@ import {
   directorCatalog,
   directorSession,
   historyText,
-  isSmallEdit,
   mergeRevision,
-  needsHeavy,
   parseDirector,
   visibleProse,
   withStudioFence,
@@ -23,6 +21,10 @@ import {
   type DirectorVoice,
 } from "@/lib/studio/director";
 import { resolveDirector, type CharLoader } from "@/lib/studio/directorResolve";
+import { EXAMPLE_PROJECT_TITLE } from "@/lib/studio/directorStarter";
+import { turnKind } from "@/lib/studio/directorTurn";
+import { researchFooter, researchMissNote } from "@/lib/studio/research";
+import { runResearch, type ResearchResult } from "@/lib/studio/research.server";
 import { normDirector, normalizeTimeline, type Timeline } from "@/lib/studio/timeline";
 import { SFX_BUILTIN, type SfxMeta } from "@/lib/studio/sfxMeta";
 import { STUDIO_BUCKET, musicSrc, storageSrc } from "@/lib/studio/urls";
@@ -69,6 +71,9 @@ function dbText(e: { code?: string; message?: string } | null | undefined, fallb
 /**
  * Chat dengan AI Sutradara Studio (bawaan Harley; bisa diganti hero bawaan lain / karakter buatan user lewat `director`). Jawaban dialirkan sebagai teks (prosa saja — blok ```studio / ```ask ditahan),
  * diselingi bingkai kontrol "\u001e{json}\n": project (selalu pertama), step, director, meta, ask, plan, error, done.
+ * Rencana untuk subjek baru (atau user minta riset / kirim link) didahului riset web singkat (research.ts, maks ±13 dtk):
+ * bingkai step k "research" (q = subjek, n = jumlah sumber, off / fail = lanjut tanpa riset), hasilnya masuk prompt sebagai DATA.
+ * Bingkai plan membawa `title` kalau judul proyek ikut diganti (rencana baru untuk subjek lain).
  */
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
@@ -200,23 +205,19 @@ export async function POST(req: NextRequest) {
     if (rows.length && rows[rows.length - 1].role === "user") rows.pop();
     const prevRows = rows.slice(-(HISTORY - 1));
     const lastAssistant = [...prevRows].reverse().find((m) => m.role === "assistant")?.content ?? "";
+    // jawaban kartu → subjek dari brief aslinya (pesan user terakhir sebelum kartu)
+    const brief = [...prevRows].reverse().find((m) => m.role === "user" && !/^📌/.test(m.content ?? ""))?.content ?? "";
 
-    const cardAnswer = /^📌\s*(Jawaban|Lewati)/i.test(content);
-    const small = !cardAnswer && isSmallEdit(content, !!current);
-    const afterAsk = /```ask/i.test(lastAssistant);
-    // mesin berat hanya untuk giliran kreatif (rencana baru / revisi besar / jawaban kartu); sapaan & pertanyaan cara pakai -> mesin cepat
-    const creative = needsHeavy(content, { hasTimeline: !!current, afterAsk });
-    const notes: string[] = [];
-    if (cardAnswer)
-      notes.push(
-        /^📌\s*Lewati/i.test(content)
-          ? "User MELEWATI kartu pertanyaan: langsung buat rencana lengkap pakai asumsi terbaik (sebut asumsinya 1 baris). JANGAN bertanya lagi."
-          : "User SUDAH MENJAWAB kartu pertanyaan: langsung buat rencana lengkap sesuai jawabannya. JANGAN bertanya lagi."
-      );
-    else if (afterAsk) notes.push("Kamu baru saja bertanya. Kalau pesan user ini sudah cukup menjawab, langsung buat rencana — jangan bertanya lagi.");
-    if (current && !cardAnswer)
-      notes.push("Sudah ada TIMELINE SEKARANG: permintaan perubahan = REVISI (kirim timeline LENGKAP hasil revisi, id adegan lama dipertahankan). Kalau user jelas minta video yang benar-benar baru, buat rencana baru.");
-    if (small) notes.push("Ini revisi kecil: ubah hanya bagian yang diminta, sisanya persis sama.");
+    // penilaian giliran (directorTurn.ts): contoh bawaan = seperti belum ada timeline, revisi kecil, mesin berat, subjek baru,
+    // catatan giliran, rencana riset (subjek baru / user minta riset / ada link) — riset jalan bersamaan dengan pemilihan mesin
+    const turn = turnKind({ content, current, lastAssistant, brief });
+    const { starter, creative, newSubject, notes } = turn;
+    const rPlan = turn.research;
+    let researchP: Promise<ResearchResult> | null = null;
+    if (rPlan) {
+      emit({ t: "step", k: "research", s: "run", q: rPlan.subject });
+      researchP = runResearch(rPlan, { signal: upstreamAbort.signal });
+    }
 
     // 4) calon mesin: revisi kecil / obrolan -> mesin teks cepat; rencana baru / revisi besar -> mesin berat (hemat kuota harian)
     const isDead = (m: string) => isDeadModel(health.get(m));
@@ -253,10 +254,27 @@ export async function POST(req: NextRequest) {
     if (!candidates.length) candidates = ["auto"];
     step("understand", "done");
 
+    // hasil riset: kunci kosong / gagal / tidak ada hasil → lanjut tanpa riset (sutradara diberi catatan supaya tidak mengarang)
+    let research = "";
+    let researchLite = "";
+    let footer = "";
+    if (rPlan && researchP) {
+      const r = await researchP;
+      if (upstreamAbort.signal.aborted) return;
+      if (r.status === "ok") {
+        research = r.context;
+        researchLite = r.lite;
+        footer = researchFooter(r.sources);
+      } else research = researchLite = researchMissNote(rPlan, r.status);
+      emit({ t: "step", k: "research", s: "done", q: rPlan.subject, n: r.sources.length, ...(r.status === "off" ? { off: true } : r.status === "fail" ? { fail: true } : {}) });
+      console.log(`[studio] riset "${rPlan.query}" (${rPlan.why}): ${r.status}, ${r.sources.length} sumber, ${r.ms} ms`);
+    }
+
     // 5) susun pesan
     const userName = profile?.full_name || user.email.split("@")[0] || "anggota tim";
     const dAttach: DirectorAttachment[] = attachments.map((a) => ({ kind: a.kind, name: a.name, src: storageSrc(a.path) }));
-    const session = directorSession({ name: userName, timeline: current, attachments: dAttach, extraSfx: sfx.list, voices, music, notes });
+    const sessionOf = (lite: boolean) =>
+      directorSession({ name: userName, timeline: current, attachments: dAttach, extraSfx: sfx.list, voices, music, notes, starter, research: lite ? researchLite : research });
     const fixed = [DIRECTOR_RULES, directorCatalog(), director.persona].join("\n\n");
     const attachNote = (list: Attach[] | null | undefined) => (list?.length ? `\n[lampiran: ${list.map((a) => `${a.name} (${a.kind})`).join(", ")}]` : "");
     const hist: Msg[] = prevRows.map((m) => ({ role: m.role, content: (m.role === "assistant" ? historyText(m.content ?? "") : (m.content ?? "").slice(0, 3000)) + attachNote(m.attachments) }));
@@ -276,7 +294,7 @@ export async function POST(req: NextRequest) {
         : { role: "user", content: imgAttach.length ? `${turnText}\n(Kamu tidak bisa melihat isi gambarnya — pakai nama & src-nya saja.)` : turnText };
       const h = lite ? hist.slice(-4) : hist;
       // otak karakter & catatan gaya berubah per giliran -> pesan sistem terpisah supaya bagian tetap di depan tetap ter-cache
-      return [sys(fixed, useCache && isClaudeModel(model)), ...(director.extra ? [sys(director.extra, false)] : []), sys(session, false), ...tidy([...h, turn])];
+      return [sys(fixed, useCache && isClaudeModel(model)), ...(director.extra ? [sys(director.extra, false)] : []), sys(sessionOf(lite), false), ...tidy([...h, turn])];
     };
 
     // 6) panggil server AI; gagal sebelum menjawab -> coba mesin berikutnya
@@ -368,8 +386,13 @@ export async function POST(req: NextRequest) {
       opened.release();
     }
     push(true);
+    if (!full.trim()) {
+      step("write", "done");
+      return void (await saveError(`${dirName} belum sempat menjawab. Coba kirim lagi ya.`, usedModel));
+    }
+    // sumber riset di akhir jawaban (ikut tersimpan; riwayat untuk AI membuangnya — historyText)
+    write(footer);
     step("write", "done");
-    if (!full.trim()) return void (await saveError(`${dirName} belum sempat menjawab. Coba kirim lagi ya.`, usedModel));
 
     step("check", "run");
     let parsed = parseDirector(full, { extraSfx: sfx.allow });
@@ -403,10 +426,14 @@ export async function POST(req: NextRequest) {
       else delete tl.mix;
       const patch: Record<string, unknown> = { timeline: tl };
       const title = tl.title && tl.title !== NEW_TITLE ? tl.title.slice(0, 120) : "";
-      if (project.title === NEW_TITLE && title) patch.title = title;
+      // proyek berjudul bawaan / proyek contoh yang baru direncanakan untuk subjek user / proyek yang judulnya masih judul rencana
+      // lama dan kini berisi video untuk subjek lain (mis. "Teaser CS Tracker" → promo Konten.com) → ikut judul rencana.
+      // Judul yang diganti user sendiri tidak disentuh.
+      const renamed = newSubject && !!current && project.title === current.title && title !== current.title;
+      if ((project.title === NEW_TITLE || (starter && project.title === EXAMPLE_PROJECT_TITLE) || renamed) && title && title !== project.title) patch.title = title;
       const { error } = await supabase.from("studio_projects").update(patch).eq("id", project.id);
       if (error) console.log("[studio] gagal simpan timeline:", error.message);
-      emit({ t: "plan", timeline: tl });
+      emit({ t: "plan", timeline: tl, ...(!error && typeof patch.title === "string" ? { title: patch.title } : {}) });
       planSent = true;
     }
     if (parsed.choice) emit({ t: "ask", choice: parsed.choice });
@@ -421,7 +448,7 @@ export async function POST(req: NextRequest) {
     else if (!planSent && !parsed.choice && !parsed.prose) emit({ t: "error", message: `${dirName} belum sempat menjawab. Coba kirim lagi ya.` });
     // rencana yang dipakai selalu disimpan di pagar ```studio (apa pun pagar yang ditulis AI: ```timeline / ```json / tanpa pagar)
     // → hitungan kuota mesin berat (heavyQuotaOk) mencakup semua rencana yang benar-benar diterapkan
-    await saveAssistant(planSent ? withStudioFence(full) : full, usedModel);
+    await saveAssistant((planSent ? withStudioFence(full) : full) + footer, usedModel);
     step("check", "done");
   }
 

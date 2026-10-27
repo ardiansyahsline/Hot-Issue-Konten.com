@@ -10,6 +10,7 @@ import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { teaserTimelineRaw } from "@/lib/studio/teaser";
 import { keepTeaserVisual, retimesTeaser, snapAroundTeaser } from "@/lib/studio/teaserLock";
 import { keepUserEdits } from "@/lib/studio/planMerge";
+import { EXAMPLE_PROJECT_TITLE, isStarterTimeline } from "@/lib/studio/directorStarter";
 import type { SkillTarget } from "@/lib/studio/skill";
 import { FORMATS, MAX_TOTAL, clampToScenes, defaultTimeline, normDirector, sceneStartSecs, sceneStarts, totalSec, voStartOf, type Director, type Timeline } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
@@ -355,7 +356,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     const my = ++intentRef.current;
     setCreating(true);
     const tl = tidyTimeline(defaultTimeline(), catRef.current);
-    const { data, error } = await sb.from("studio_projects").insert({ title: "Contoh video", timeline: tl }).select("id, title, updated_at").single();
+    const { data, error } = await sb.from("studio_projects").insert({ title: EXAMPLE_PROJECT_TITLE, timeline: tl }).select("id, title, updated_at").single();
     setCreating(false);
     if (error || !data) return setBarErr(dbErrorText(error, "Gagal membuat proyek. Coba lagi."));
     const row = data as ProjectRow;
@@ -446,7 +447,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     [setPid],
   );
   const onPlan = useCallback(
-    (raw: unknown) => {
+    (raw: unknown, projectTitle?: string) => {
       const prev = tlRef.current;
       // rencana dibuat server dari timeline saat pesan dikirim: semua yang diubah user selama jawaban mengalir (mixer, offset
       // musik, posisi / kecepatan / cek ucapan VO, kamus, gaya bicara, durasi, dll.) dipasang lagi di atas rencana (planMerge.ts)
@@ -469,12 +470,18 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
       change(tl);
       setSelected(null);
       playerRef.current?.seekTo(0);
-      // proyek masih berjudul bawaan -> ikut judul rencana (server melakukan hal yang sama)
+      // proyek masih berjudul bawaan (atau proyek contoh yang baru direncanakan untuk subjek user) -> ikut judul rencana
+      // (server melakukan hal yang sama). Server sudah mengganti judul (rencana baru untuk subjek lain) -> ikut judul dari server
       const id = idRef.current;
-      if (id && tl.title && tl.title !== NEW_TITLE) {
+      if (id && projectTitle) {
+        setTitle(projectTitle);
+        setProjects((ps) => ps.map((p) => (p.id === id ? { ...p, title: projectTitle } : p)));
+      } else if (id && tl.title && tl.title !== NEW_TITLE) {
         const name = tl.title.slice(0, 120);
-        setTitle((cur) => (!cur || cur === NEW_TITLE ? name : cur));
-        setProjects((ps) => ps.map((p) => (p.id === id && (!p.title || p.title === NEW_TITLE) ? { ...p, title: name } : p)));
+        const fromExample = isStarterTimeline(prev);
+        const plain = (t: string | undefined) => !t || t === NEW_TITLE || (fromExample && t === EXAMPLE_PROJECT_TITLE);
+        setTitle((cur) => (plain(cur) ? name : cur));
+        setProjects((ps) => ps.map((p) => (p.id === id && plain(p.title) ? { ...p, title: name } : p)));
       }
     },
     [change],

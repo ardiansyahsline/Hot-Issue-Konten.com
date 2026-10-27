@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import HeroArt from "@/components/ai/HeroArt";
 import { HERO_NAMES, personaOf } from "@/lib/aiPersona";
 import { CHAR_PREFIX, registerChar, type CustomChar } from "@/lib/customChar";
+import { directorSkillOf } from "@/lib/studio/directorSkill";
 import type { Director } from "@/lib/studio/timeline";
 import { createClient } from "@/lib/supabase/client";
 
@@ -145,6 +146,13 @@ export function activeDirector(d: Director | null | undefined, chars: readonly C
   return { name: DEFAULT_DIRECTOR, custom: false, note: `Sutradara “${d.hero}” tidak dikenal — pakai ${DEFAULT_DIRECTOR}.` };
 }
 
+/** keahlian sutradara yang tampil di daftar: hero bawaan = keahlian khasnya, karakter buatan = dari tipe MBTI-nya */
+export const skillLabel = (name: string, custom: boolean, chars: readonly CustomChar[]) =>
+  directorSkillOf(name, custom ? (chars.find((c) => c.name === name)?.mbti ?? null) : null).skill;
+
+/** keterangan karakter buatan: peran yang dilatihkan (Train your AI) atau "Buatanmu" */
+const charSub = (c: CustomChar) => (c.profile?.version === 2 && c.profile.roleLabel ? `Dilatih: ${c.profile.roleLabel}` : "Buatanmu");
+
 /** pilihan baru (catatan gaya tetap ikut). Harley tanpa catatan = kosong (bawaan) */
 function pickDirector(cur: Director | null | undefined, hero: string, name?: string): Director | null {
   const notes = cur?.notes?.length ? cur.notes : undefined;
@@ -181,6 +189,7 @@ export default function DirectorPicker({
   const hero = value?.hero ?? DEFAULT_DIRECTOR;
   const notes = value?.notes?.length ?? 0;
   const shownNote = act.note ?? note ?? null;
+  const skill = skillLabel(act.name, act.custom, chars);
 
   useEffect(() => {
     if (!open) return;
@@ -223,8 +232,9 @@ export default function DirectorPicker({
           <span className="flex min-w-0 items-center gap-1 text-[14px] font-bold">
             <span className="shrink-0 font-semibold text-zinc-500">Sutradara:</span>
             <span className="truncate">{act.name}</span>
-            <span aria-hidden className="shrink-0 text-[11px] font-normal text-zinc-500">
-              ▾
+            {/* tombol ganti yang jelas terlihat (dulu cuma ▾ kecil — banyak yang tidak sadar bisa diklik) */}
+            <span aria-hidden className="ml-1 shrink-0 rounded-full border border-orange-500/50 bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold text-orange-400">
+              Ganti ▾
             </span>
           </span>
           {shownNote ? (
@@ -233,7 +243,7 @@ export default function DirectorPicker({
               ⚠️ {shownNote}
             </span>
           ) : (
-            <span className="block truncate text-[11.5px] text-zinc-500">{notes ? `✍️ ${notes} catatan gaya · ketik ide → cek rencana → preview` : "Ketik ide → cek rencana → preview → download"}</span>
+            <span className="block truncate text-[11.5px] text-zinc-500">{notes ? `✍️ ${notes} catatan gaya · 🎬 ${skill}` : `🎬 ${skill}`}</span>
           )}
         </span>
       </button>
@@ -258,7 +268,8 @@ export default function DirectorPicker({
                   selected={hero === `${CHAR_PREFIX}${c.id.toLowerCase()}`}
                   hero={c.name}
                   title={c.name}
-                  sub={c.profile?.version === 2 && c.profile.roleLabel ? `Dilatih: ${c.profile.roleLabel} · ${c.mbti}` : `Buatanmu · ${c.mbti}`}
+                  sub={`${charSub(c)} · ${c.mbti}`}
+                  skill={directorSkillOf(c.name, c.mbti).skill}
                   onPick={() => choose(`${CHAR_PREFIX}${c.id.toLowerCase()}`, c.name)}
                 />
               ))
@@ -279,6 +290,7 @@ export default function DirectorPicker({
                   hero={h}
                   title={h === DEFAULT_DIRECTOR ? `${h} (bawaan)` : h}
                   sub={`${p.label} · ${p.type}`}
+                  skill={directorSkillOf(h).skill}
                   onPick={() => choose(h)}
                 />
               );
@@ -303,7 +315,7 @@ export default function DirectorPicker({
   );
 }
 
-function Option({ selected, hero, title, sub, onPick }: { selected: boolean; hero: string; title: string; sub: string; onPick: () => void }) {
+function Option({ selected, hero, title, sub, skill, onPick }: { selected: boolean; hero: string; title: string; sub: string; skill?: string; onPick: () => void }) {
   return (
     <li role="option" aria-selected={selected}>
       <button
@@ -317,6 +329,7 @@ function Option({ selected, hero, title, sub, onPick }: { selected: boolean; her
         <span className="min-w-0 flex-1 leading-tight">
           <span className="block truncate text-[13px] font-semibold">{title}</span>
           <span className="block truncate text-[11px] text-zinc-500">{sub}</span>
+          {skill && <span className="block truncate text-[11px] text-zinc-400">🎬 {skill}</span>}
         </span>
         {selected && (
           <span aria-hidden className="shrink-0 text-[13px] font-bold">
@@ -325,5 +338,92 @@ function Option({ selected, hero, title, sub, onPick }: { selected: boolean; her
         )}
       </button>
     </li>
+  );
+}
+
+/**
+ * Baris "Pilih sutradara" saat chat masih kosong: karakter buatanmu (Train your AI) + hero bawaan dengan keahlian masing-masing.
+ * Geser ke samping, ketuk untuk memilih (sama dengan dropdown di header — pilihan disimpan per proyek).
+ */
+export function DirectorQuickPick({
+  value,
+  onChange,
+  chars,
+  loaded,
+  disabled,
+}: {
+  value: Director | null | undefined;
+  onChange: (d: Director | null) => void;
+  chars: readonly CustomChar[];
+  loaded: boolean;
+  disabled?: boolean;
+}) {
+  const hero = value?.hero ?? DEFAULT_DIRECTOR;
+  const act = activeDirector(value, chars, loaded);
+  const list = useRef<HTMLUListElement>(null);
+  // sutradara terpilih (mis. hero di ujung daftar / karakter yang baru dimuat) digeser ke dalam pandangan, tanpa menggulir halaman
+  // (posisi diukur terhadap daftar itu sendiri — offsetLeft diukur dari elemen ber-posisi terdekat, bisa body di layar lebar)
+  useEffect(() => {
+    const ul = list.current;
+    const li = ul?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!ul || !li) return;
+    const left = li.getBoundingClientRect().left - ul.getBoundingClientRect().left + ul.scrollLeft;
+    if (left < ul.scrollLeft || left + li.offsetWidth > ul.scrollLeft + ul.clientWidth) ul.scrollLeft = Math.max(0, left - 8);
+  }, [hero, loaded, chars.length]);
+  /** layar lebar (mouse): tombol ‹ › menggeser daftar */
+  const slide = (dir: 1 | -1) => list.current?.scrollBy({ left: dir * Math.max(180, list.current.clientWidth * 0.8), behavior: "smooth" });
+  const items = [
+    ...chars.map((c) => ({ key: `${CHAR_PREFIX}${c.id.toLowerCase()}`, art: c.name, name: c.name, sub: `🧠 ${charSub(c)}`, custom: c.name })),
+    ...[DEFAULT_DIRECTOR, ...HERO_NAMES.filter((h) => h !== DEFAULT_DIRECTOR)].map((h) => ({ key: h, art: h, name: h, sub: directorSkillOf(h).skill, custom: "" })),
+  ];
+  const pick = (key: string, custom: string) => {
+    if (key !== hero || (custom && custom !== value?.name)) onChange(pickDirector(value, key, custom || undefined));
+  };
+  return (
+    <div className="mt-4 w-full min-w-0 max-w-[520px] text-left">
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <span className="shrink-0 text-[12.5px] font-bold text-zinc-200">🎬 Pilih sutradara</span>
+        <span className="truncate text-[11px] text-zinc-500 sm:hidden">geser · ketuk untuk pilih</span>
+        <span className="hidden shrink-0 items-center gap-1 sm:flex">
+          <button type="button" aria-label="Geser daftar sutradara ke kiri" onClick={() => slide(-1)} className="rounded-md px-2 py-0.5 text-[13px] font-bold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+            ‹
+          </button>
+          <button type="button" aria-label="Geser daftar sutradara ke kanan" onClick={() => slide(1)} className="rounded-md px-2 py-0.5 text-[13px] font-bold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+            ›
+          </button>
+        </span>
+      </div>
+      <ul ref={list} role="listbox" aria-label="Pilih sutradara" className="relative mt-1.5 flex snap-x gap-1.5 overflow-x-auto overscroll-x-contain pb-1.5">
+        {items.map((it) => {
+          const sel = hero === it.key;
+          return (
+            <li key={it.key} role="option" aria-selected={sel} className="shrink-0 snap-start">
+              <button
+                type="button"
+                disabled={disabled}
+                title={`${it.name} — ${it.sub.replace(/^🧠 /, "")}`}
+                onClick={() => pick(it.key, it.custom)}
+                className={`flex w-[84px] flex-col items-center rounded-xl border px-1 pb-1.5 pt-1 text-center transition disabled:opacity-60 ${sel ? "border-orange-500 bg-orange-500/10" : "border-zinc-800 bg-zinc-900 hover:border-zinc-600"}`}
+              >
+                <span className="flex h-11 w-11 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
+                  <HeroArt hero={it.art} size={50} still />
+                </span>
+                <span className={`mt-1 w-full truncate text-[12px] font-semibold ${sel ? "text-orange-400" : "text-zinc-200"}`}>{it.name}</span>
+                <span className="line-clamp-2 w-full break-words text-[10.5px] leading-tight text-zinc-500">{it.sub}</span>
+              </button>
+            </li>
+          );
+        })}
+        {!loaded && (
+          <li role="presentation" className="flex w-[84px] shrink-0 items-center justify-center text-[11px] text-zinc-500">
+            Memuat…
+          </li>
+        )}
+      </ul>
+      <p className="mt-0.5 px-0.5 text-[12px] leading-snug text-zinc-400">
+        <b className="text-zinc-200">{act.name}</b> · {skillLabel(act.name, act.custom, chars)}
+      </p>
+      {loaded && !chars.length && <p className="mt-0.5 px-0.5 text-[11px] leading-snug text-zinc-500">Karakter buatanmu (tab AI → Train your AI) juga bisa jadi sutradara.</p>}
+    </div>
   );
 }
