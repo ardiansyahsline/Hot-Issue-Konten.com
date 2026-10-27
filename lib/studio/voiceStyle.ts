@@ -10,6 +10,9 @@
  */
 import type { Timeline, Voice } from "./timeline";
 
+/** suara bank bawaan kalau proyek belum memilih (nama di tabel studio_voices) */
+export const DEFAULT_BANK_VOICE = "Alif - Energik";
+
 export type VoicePreset = "natural" | "promo" | "tenang" | "kustom";
 export type NamedPreset = Exclude<VoicePreset, "kustom">;
 export type VoiceStyle = { preset: VoicePreset; exaggeration: number; cfg: number; temperature: number };

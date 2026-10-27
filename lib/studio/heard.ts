@@ -6,9 +6,11 @@
  * kembar disatukan, beberapa ragam lisan disamakan: nggak = gak, saja = aja …). Naskah dibaca dalam beberapa bentuk: tulisan asli,
  * hasil kamus ejaan, dan angka sebagai kata — jadi "16.800" vs "enam belas ribu delapan ratus", "PPT" vs "pepete", "soal" vs
  * "sowal" tidak dianggap salah. Satu kata naskah boleh terdengar sebagai beberapa kata (dan sebaliknya).
- * Modul tanpa React; hanya memakai pronounce.ts.
+ * Modul tanpa React; hanya memakai pronounce.ts & pepet.ts. Teks terdengar selalu dari suara bank → kamus dibaca versi bank (termasuk
+ * ejaan khusus bank suara dari 🎧 Coba ejaan); ə dianggap e, dan ejaan yang cuma menandai bunyi e bukan risiko kamus.
  */
 import { applyLexicon, glideWord, lexiconOf, numbersToWords, speakText, type LexEntry } from "./pronounce";
+import { isPepetSpelling } from "./pepet";
 
 /** panjang maksimal teks terdengar yang disimpan di VoLine.heard */
 export const HEARD_MAX = 400;
@@ -56,6 +58,8 @@ const squash = (s: string) => s.replace(/(.)\1+/g, "$1");
 /** kunci bunyi satu kata / frasa (lihat keterangan modul) */
 export function soundKey(s: string): string {
   let t = s
+    // ə (lambang pepet, ejaan dari 🎧 Coba ejaan) = e
+    .replace(/[əǝƏƎ]/g, "e")
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
@@ -133,7 +137,8 @@ type Step = { di: number; dj: number; op: "ok" | "sub" | "del" | "ins" };
  * ikut dipakai: kata yang terdengar persis seperti teks ucapan yang dikirim tidak dianggap salah.
  */
 export function heardDiff(text: string, heard: string, opts: { spell?: string | null; lexicon?: readonly LexEntry[] | null } = {}): HeardDiff {
-  const lex = lexiconOf(opts.lexicon);
+  // teks terdengar selalu dari suara bank → kamus versi bank (termasuk ejaan khusus bank suara)
+  const lex = lexiconOf(opts.lexicon, "bank");
   const R = units(text).slice(0, MAX_UNITS);
   const H = units(heard).slice(0, MAX_UNITS);
   const rk = R.map((u) => {
@@ -196,7 +201,7 @@ export function heardDiff(text: string, heard: string, opts: { spell?: string | 
   // kata yang HANYA ada di teks ucapan yang dikirim (ejaan khusus adegan, mis. "Alip" untuk "Alif") → terdengar begitu = bukan salah.
   // Kata naskah biasa tidak ikut, supaya kata yang diulang / tertukar tempat tetap tersorot.
   const plain = new Set(rk.flat());
-  const sent = new Set(units(speakText(text, opts.spell, opts.lexicon)).map((u) => soundKey(u.raw)).filter((k) => !plain.has(k)));
+  const sent = new Set(units(speakText(text, opts.spell, opts.lexicon, "bank")).map((u) => soundKey(u.raw)).filter((k) => !plain.has(k)));
   const parts: HeardPart[] = [];
   const missing: number[] = [];
   let cursor = 0;
@@ -293,7 +298,7 @@ export function spellSuggestions(word: string, lexicon?: readonly LexEntry[] | n
   const w = word.trim();
   if (!w) return [];
   const lower = w.toLowerCase();
-  const cur = applyLexicon(w, lexiconOf(lexicon)).toLowerCase();
+  const cur = applyLexicon(w, lexiconOf(lexicon, "bank")).toLowerCase();
   const out: string[] = [];
   const add = (s: string) => {
     const t = s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -603,6 +608,8 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
   return riskOf(from, spaced ?? to, known, to);
 }
 function riskOf(from: string, to: string, known: string | null | undefined, shown: string): LexRisk | null {
+  // ejaan yang cuma menandai bunyi huruf e (bareng → barêng / barəng / bar'ng, sekarang → skarang) = kata yang sama
+  if (isPepetSpelling(from, to)) return null;
   const words = from.split(/[\s-]+/).filter(Boolean);
   const target = soundKey(to);
   if (!words.length || !target) return null;

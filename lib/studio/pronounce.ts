@@ -12,7 +12,11 @@
  * Modul ini tanpa import supaya aman dipakai timeline.ts, server, maupun browser.
  */
 
-export type LexEntry = { from: string; to: string };
+/**
+ * satu entri kamus ejaan: `from` (kata / frasa di naskah) → `to` (cara baca). `bank` = khusus bank suara laptop (hasil 🎧 Coba ejaan,
+ * mis. bareng → barêng): suara cadangan Edge / premium tetap membaca tulisan biasanya, jadi perilakunya tidak berubah.
+ */
+export type LexEntry = { from: string; to: string; bank?: true };
 
 /** batas kamus milik proyek (disimpan di timeline.voice.lexicon) */
 export const MAX_LEXICON = 60;
@@ -184,15 +188,22 @@ export function normLexicon(raw: unknown): LexEntry[] {
     const k = keyOf(from);
     if (!from || !to || !tokens(from).length || !tokens(to).length || seen.has(k)) continue;
     seen.add(k);
-    out.push({ from, to });
+    out.push(o.bank === true ? { from, to, bank: true } : { from, to });
     if (out.length >= MAX_LEXICON) break;
   }
   return out;
 }
 
-/** kamus yang dipakai: bawaan + milik proyek (kata yang sama di kamus proyek mengganti ejaan bawaan) */
-export function lexiconOf(user?: readonly LexEntry[] | null): LexEntry[] {
-  const mine = normLexicon(user ?? []);
+/** kunci kata kamus: huruf kecil, spasi & strip diabaikan ("Real time" = "real-time" = "realtime") */
+export const lexKey = (s: string): string => keyOf(s);
+
+/**
+ * kamus yang dipakai: bawaan + milik proyek (kata yang sama di kamus proyek mengganti ejaan bawaan). Entri `bank` (khusus bank suara)
+ * hanya ikut untuk mesin "bank" — atau "semua" (kunci VoLine.say, supaya VO lama ketahuan perlu dibuat ulang).
+ */
+export function lexiconOf(user?: readonly LexEntry[] | null, engine?: SpeechEngine | "semua"): LexEntry[] {
+  const all = normLexicon(user ?? []);
+  const mine = engine === "bank" || engine === "semua" ? all : all.filter((e) => !e.bank);
   const own = new Set(mine.map((e) => keyOf(e.from)));
   return [...DEFAULT_LEXICON.filter((e) => !own.has(keyOf(e.from))), ...mine];
 }
@@ -411,6 +422,11 @@ export type SpeechEngine = "bank" | "edge" | "elevenlabs";
  * `engine` "bank" → ditambah bunyi luncur (glideWord) di kata biasa; hasil kamus, angka & ejaan khusus adegan tidak disentuh.
  */
 export function speakText(text: string, spell?: string | null, lexicon?: readonly LexEntry[] | null, engine?: SpeechEngine): string {
+  return speakWith(text, spell, lexicon, engine, engine === "bank");
+}
+
+/** isi speakText: `lexMode` = entri kamus mana yang ikut (lihat lexiconOf), `glide` = bunyi luncur mesin bank */
+function speakWith(text: string, spell: string | null | undefined, lexicon: readonly LexEntry[] | null | undefined, lexMode: SpeechEngine | "semua" | undefined, glide: boolean): string {
   const t = tidy(text);
   const sp = tidy(spell);
   const base = sp || t;
@@ -420,8 +436,8 @@ export function speakText(text: string, spell?: string | null, lexicon?: readonl
     const inText = new Set(tokens(t));
     keep = new Set(tokens(sp).filter((x) => !inText.has(x)));
   }
-  const bank = engine === "bank";
-  let s = applyLexicon(base, lexiconOf(lexicon), keep, bank);
+  const bank = glide;
+  let s = applyLexicon(base, lexiconOf(lexicon, lexMode), keep, bank);
   s = numbersToWords(s, bank);
   s = s.replace(HYPHEN, "$1 ");
   if (bank) s = glideText(s, keep).replace(MKS, "");
@@ -452,10 +468,15 @@ export function legacySayKey(text: string, spell?: string | null): string {
   return fnv(`${t}\u0001${raw === t ? "" : raw}`);
 }
 
-/** kunci pendek (8 hex) dari teks + teks ucapan akhir — VoLine.say; beda = suara dibuat dari naskah / ejaan lama */
+/**
+ * kunci pendek (8 hex) dari teks + teks ucapan akhir — VoLine.say; beda = suara dibuat dari naskah / ejaan lama. Entri kamus khusus bank
+ * suara ikut dihitung (tanpa bunyi luncur): tambah ejaan dari 🎧 Coba ejaan → VO adegan itu ketahuan perlu dibuat ulang. Tanpa entri
+ * bank, kuncinya sama persis dengan dulu.
+ */
 export function voSayKey(vo: VoLike, lexicon?: readonly LexEntry[] | null): string {
-  const p = voSpeech(vo, lexicon);
-  return p ? fnv(`${p.text}\u0001${p.spell ?? ""}`) : "";
+  if (!vo?.text) return "";
+  const say = speakWith(vo.text, vo.spell, lexicon, "semua", false);
+  return fnv(`${vo.text}\u0001${say && say !== vo.text ? say : ""}`);
 }
 
 /** isi yang dikirim sama persis (teks & teks ucapan) */

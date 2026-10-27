@@ -96,7 +96,10 @@ Pertama kali akan **mengunduh model ±3–5 GB** (sekali saja).
 Kalau muncul **"pindah ke pocket-tts"**: GPU belum bisa dipakai (lihat *Masalah umum*). Worker tetap jalan pakai CPU.
 
 ### 8. Jalankan
-Klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
+**Paling gampang:** klik dua kali **`NYALAKAN-MESIN-SUARA.bat`** di folder utama repo (boleh juga disalin ke Desktop).
+Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → nyalakan worker.
+
+Atau manual: klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
 - `Ctrl+C` sekali = berhenti setelah tugas yang sedang jalan selesai.
 - `Ctrl+C` dua kali = berhenti sekarang (tugas dikembalikan ke antrian).
 
@@ -204,6 +207,8 @@ Panduan lengkap: [`docs/suara-natural.md`](../docs/suara-natural.md). Ringkasnya
 - Worker memilih potongan rekaman yang paling hidup, membaca tiap baris satu tarikan, membuat beberapa versi (bawaan 3), lalu memilih yang paling jelas
   dan paling natural (**skor kealamian**: nada tidak datar + perkiraan MOS 1–5 dari UTMOS).
 - Skor kealamian bisa dimatikan: isi `NATURAL_MOS=0` di `.env` lalu jalankan ulang worker. Suara tetap dibuat, dipilih dari kejelasan + nada.
+- Huruf e salah bunyi ("bareng" jadi "baréng")? Pakai **🎧 Coba ejaan huruf e** di panel Suara VO: satu job berisi kalimat yang sama
+  dengan beberapa ejaan (`settings.purpose = "coba-ejaan"`, 1 versi, benih `seed` sama untuk semua) → dengar, pilih yang pas.
 
 ---
 

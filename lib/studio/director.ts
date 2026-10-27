@@ -35,6 +35,7 @@ import {
   type VoTrack,
 } from "./timeline";
 import { keepTeaserVisual } from "./teaserLock";
+import { lexKey } from "./pronounce";
 import { applyStyle, isTeaserTimeline } from "./voiceStyle";
 
 export const DIRECTOR_HERO = "Harley";
@@ -631,6 +632,11 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   }
   // kamus ejaan proyek (diisi user di panel Suara VO) tidak boleh hilang gara-gara AI menulis ulang objek voice tanpa kamus
   if (!has(o.voice, "lexicon")) out.voice = { ...out.voice, lexicon: prev.voice.lexicon?.length ? prev.voice.lexicon : undefined };
+  else if (out.voice.lexicon?.length && prev.voice.lexicon?.some((e) => e.bank)) {
+    // ejaan khusus bank suara (🎧 Coba ejaan) yang disalin AI tanpa tandanya tetap khusus bank (Edge tidak ikut berubah)
+    const bankTo = new Map(prev.voice.lexicon.filter((e) => e.bank).map((e) => [lexKey(e.from), e.to] as const));
+    out.voice = { ...out.voice, lexicon: out.voice.lexicon.map((e) => (!e.bank && bankTo.get(lexKey(e.from)) === e.to ? { ...e, bank: true as const } : e)) };
+  }
   // musik: hasil deteksi ketukan & level tetap kalau file musiknya sama
   if (!has(o, "music")) out.music = prev.music;
   else if (out.music.src === prev.music.src) {

@@ -408,7 +408,11 @@ export type JobTable = "studio_voice_jobs" | "studio_render_jobs";
  * `max` = jendela ucapan (detik, adegan teaser): laptop memadatkan jeda lalu mempercepat maks 1,3× supaya muat.
  * `speed` = kecepatan diatur sendiri (× normal, 0,85–1,3): laptop memakai atempo persis faktor itu (`max` diabaikan).
  */
-export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number; speed?: number };
+/**
+ * `seed` (opsional) = benih acak dasar untuk semua versi baris ini (🎧 Coba ejaan: semua kandidat memakai benih yang sama supaya bedanya
+ * hanya dari ejaan). Worker lama mengabaikannya.
+ */
+export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number; speed?: number; seed?: number };
 /**
  * `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat (negatif = diperlambat);
  * `tempo` = kecepatan diatur sendiri yang dipakai; `squeeze` = detik jeda di dalam baris yang dipadatkan supaya muat di `max`.
@@ -444,6 +448,8 @@ export type VoiceJob = {
   voice_id: string | null;
   /** naskah yang dikirim (tts) — untuk cek naskah adegan belum berubah saat hasilnya ditempel */
   lines?: VoiceJobLine[];
+  /** setelan job (tts: gaya bicara, takes; `purpose` "coba-ejaan" = job 🎧 Coba ejaan, hasilnya tidak pernah dipasang ke VO — isTryJob) */
+  settings?: Record<string, unknown> | null;
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -462,7 +468,7 @@ export type RenderJob = {
   created_at: string;
 };
 
-const VOICE_JOB_COLS = "id,kind,project_id,voice_id,lines,status,progress,message,engine_used,result,created_at";
+const VOICE_JOB_COLS = "id,kind,project_id,voice_id,lines,settings,status,progress,message,engine_used,result,created_at";
 const RENDER_JOB_COLS = "id,project_id,variant,status,progress,message,result_path,created_at";
 const colsOf = (t: JobTable) => (t === "studio_voice_jobs" ? VOICE_JOB_COLS : RENDER_JOB_COLS);
 

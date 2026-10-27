@@ -45,10 +45,12 @@ import { storageSrc } from "@/lib/studio/urls";
 import { teaserVoAt } from "@/lib/studio/teaserLock";
 import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, legacySayKey, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
 import { heardFromResult } from "@/lib/studio/heard";
+import { isTryJob } from "@/lib/studio/spellTry";
 import {
   bankSettings,
   CFG_MAX,
   CFG_MIN,
+  DEFAULT_BANK_VOICE,
   EXG_MAX,
   EXG_MIN,
   isTeaserTimeline,
@@ -63,6 +65,7 @@ import {
 } from "@/lib/studio/voiceStyle";
 import { isTeaserScene } from "./teaserLock";
 import { DEFAULT_DIRECTOR } from "./DirectorPicker";
+import VoPepet from "./VoPepet";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
 const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis Pocket TTS dari Kyutai";
@@ -72,7 +75,7 @@ const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis
  * adegan minimal selesai 0,25 dtk setelah VO
  */
 const TAIL = 0.25;
-export const DEFAULT_VOICE = "Alif - Energik";
+export const DEFAULT_VOICE = DEFAULT_BANK_VOICE;
 /** naskah VO kosong — ditulis oleh sutradara yang sedang dipakai proyek ini (bawaan Harley) */
 const noScript = (who: string) => `Belum ada naskah VO di adegan. Minta ${who} tuliskan naskahnya dulu.`;
 const STALE = 'Naskah VO atau kamus ejaan berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
@@ -495,7 +498,8 @@ export default function VoPanel({
       return;
     }
     if (!job || job.id !== run.id || handled.current === job.id) return;
-    if (job.kind !== "tts" || job.status === "batal") {
+    // job 🎧 Coba ejaan (kalimat sama, beberapa ejaan) tidak pernah dipasang ke VO adegan — walau id-nya entah bagaimana terpantau di sini
+    if (job.kind !== "tts" || job.status === "batal" || isTryJob(job)) {
       handled.current = job.id;
       rememberJob(jobKey, null);
       setRun({ s: "idle" });
@@ -857,6 +861,7 @@ export default function VoPanel({
       </div>
 
       {mode !== "none" && <LexiconEditor value={v.lexicon} disabled={busy} onChange={(lexicon) => setVoice({ lexicon: lexicon.length ? lexicon : undefined })} />}
+      {(mode === "bank" || mode === "edge") && <VoPepet timeline={tl} disabled={busy} onLexicon={(lexicon) => setVoice({ lexicon: lexicon?.length ? lexicon : undefined })} />}
 
       {/* VO yang sudah ada */}
       {tl.vo?.lines.length && mode !== "none" ? (
@@ -988,7 +993,7 @@ export default function VoPanel({
 // ---------------------------------------------------------------------------------------------
 // 📖 Kamus ejaan proyek (timeline.voice.lexicon)
 // ---------------------------------------------------------------------------------------------
-type LexRow = { id: number; from: string; to: string };
+type LexRow = { id: number; from: string; to: string; bank?: true };
 let lexSeq = 0;
 const lexRows = (v: LexEntry[] | undefined): LexRow[] => (v ?? []).map((e) => ({ id: ++lexSeq, ...e }));
 const lexKey = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
@@ -1071,6 +1076,11 @@ function LexiconEditor({ value, onChange, disabled }: { value: LexEntry[] | unde
                   ✕
                 </button>
               </div>
+              {r.bank && (
+                <p className="text-[10.5px] text-zinc-500" data-lex-bank>
+                  🎙️ Khusus bank suara (dari 🎧 Coba ejaan) — suara cadangan tetap membaca tulisan aslinya.
+                </p>
+              )}
               {dup && <p className="text-[10.5px] text-amber-400">Kata ini sudah ada di atas — yang dipakai baris pertama.</p>}
             </div>
           );
