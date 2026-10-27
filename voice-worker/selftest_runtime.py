@@ -3,8 +3,10 @@ Tes mandiri ALUR WORKER (tanpa GPU / model / internet — Supabase, mesin suara,
   .venv\\Scripts\\python selftest_runtime.py            (semua tes)
   .venv\\Scripts\\python selftest_runtime.py polling    (hanya tes yang namanya mengandung kata itu)
 Yang dites: pengirim progres latar (tidak menahan job, menggabung, jeda min), jalur batal, format perkiraan sisa (· sisa ±N),
-unggah paralel + error, jadwal cek antrian (jam palsu), isi detak jantung, unduh model & pemanasan di latar, job tts dengan ETA +
-unggah paralel + ringkasan log, perkiraan sisa render, decode wav langsung (sampel identik), filter log bersih.
+unggah paralel + error, jadwal cek antrian (jam palsu), isi detak jantung (warm = mesin dimuat, loading, persen unduhan), unduh
+model di PROSES ANAK satu per satu & pemanasan di latar, unduhan selesai tidak memanaskan mesin yang sedang dipakai job (Engines asli),
+model yang selesai langsung dipakai, proses anak (+ cucunya) dihentikan saat worker berhenti & log progres ringkas, job tts dengan
+ETA + unggah paralel + ringkasan log, perkiraan sisa render, decode wav langsung (sampel identik), filter log bersih.
 """
 from __future__ import annotations
 
@@ -384,6 +386,11 @@ def t_format_perkiraan_sisa():
         (37, "Membuat suara kalimat 2 dari 5…"): "Membuat suara kalimat 2 dari 5… · sisa ±40 dtk",
         (3, "x"): "x · sisa ±5 dtk",
         (59.9, "x"): "x · sisa ±60 dtk",
+        # 60–89 dtk tetap detik (dulu "1 mnt" = website salah sampai ±29 dtk); mulai 90 dtk menit bulat
+        (60, "x"): "x · sisa ±60 dtk",
+        (85, "x"): "x · sisa ±85 dtk",
+        (89.5, "x"): "x · sisa ±90 dtk",
+        (90, "x"): "x · sisa ±2 mnt",
         (130, "Merender gambar… 40%"): "Merender gambar… 40% · sisa ±2 mnt",
         (600, "x"): "x · sisa ±10 mnt",
     }
@@ -538,7 +545,7 @@ def t_jadwal_cek_antrian_jam_palsu():
 
 
 class FakeModels(types.ModuleType):
-    """studio_worker.models palsu (kontrak agen UNDUH)"""
+    """studio_worker.models palsu (kontrak agen UNDUH). Filenya "ditulis" proses anak (anak.py) → worker memanggil note_result"""
 
     def __init__(self, missing: list[str], delay: float = 0.3, fail: tuple[str, ...] = ()):
         super().__init__("studio_worker.models")
@@ -546,27 +553,91 @@ class FakeModels(types.ModuleType):
         self.delay = delay
         self.fail = fail
         self.prepared: list = []
-        self.logged: list[str] = []
+        self.noted: list[tuple[str, str]] = []
 
     def missing(self, cfg):
         return list(self._missing)
 
-    def prepare(self, cfg, names=None, log=None):
-        names = list(names or self._missing)
-        if log is not None:
-            log("mulai unduh %d model" % len(names))
-            log.info("info juga bisa")
-        time.sleep(self.delay)
-        self.prepared.append(names)
-        out = {n: ("gagal: tes" if n in self.fail else "siap") for n in names}
-        self._missing = [n for n in self._missing if out.get(n) != "siap"]
-        return out
+    def is_ready(self, cfg, name):
+        return name not in self._missing
+
+    def note_result(self, name, res):
+        self.noted.append((name, res))
+        if res == "siap":
+            self._missing = [n for n in self._missing if n != name]
 
     def status_brief(self, cfg):
         return {n: ("belum diunduh" if n in self._missing else "siap") for n in ("chatterbox", "whisper", "deepfilter", "utmos")}
 
     def utmos_ready(self, cfg):
         return "utmos" not in self._missing
+
+
+# proses anak pengunduh palsu (pengganti `siapkan_model.py --latar --hanya <nama>`): baris progres ber-persen, baris "Model … siap.",
+# lalu "@@hasil {json}". mode "gantung" = tidak pernah selesai + punya cucu proses (untuk tes dihentikan sepohon)
+CHILD = '''
+import json, subprocess, sys, time
+name, mode, delay = sys.argv[1], sys.argv[2], float(sys.argv[3])
+ts = lambda: time.strftime("%H:%M:%S")
+print(ts() + f" {name}: mengunduh ±10 MB dari tes (8 koneksi)…", flush=True)
+if mode == "gantung":
+    g = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    open(sys.argv[4], "w").write(str(g.pid))
+    t0 = time.time()
+    while time.time() - t0 < 120:
+        print(ts() + f" {name}  {int((time.time() - t0) * 40) % 100}% · 1/10 MB · 1,0 MB/s · sisa ±9 dtk", flush=True)
+        time.sleep(0.05)
+    sys.exit(0)
+n = max(1, int(delay / 0.05))
+for i in range(n):
+    print(ts() + f" {name}  {int(100 * i / n)}% · {i}/{n} MB · 1,0 MB/s · sisa ±{n - i} dtk", flush=True)
+    time.sleep(delay / n)
+res = "siap" if mode == "siap" else "gagal: tes gagal"
+print(ts() + (f" Model {name} siap." if res == "siap" else f" Model {name} belum siap — {res}"), flush=True)
+print("@@hasil " + json.dumps({name: res}, ensure_ascii=False), flush=True)
+sys.exit(0 if res == "siap" else 1)
+'''
+
+
+class FakeChild:
+    """w.dl_cmd palsu: catat model yang diminta & jalankan anak.py dengan jeda / hasil per model"""
+
+    def __init__(self, delays: dict | None = None, fail: tuple[str, ...] = (), hang: tuple[str, ...] = ()):
+        self.script = TMP / "anak.py"
+        self.script.write_text(CHILD, encoding="utf-8")
+        self.delays = delays or {}
+        self.fail, self.hang = fail, hang
+        self.calls: list[tuple[float, str]] = []
+        self.pidfile = TMP / "cucu.pid"
+
+    def __call__(self, name: str) -> list[str]:
+        self.calls.append((time.monotonic(), name))
+        mode = "gantung" if name in self.hang else ("gagal" if name in self.fail else "siap")
+        return [sys.executable, str(self.script), name, mode, str(self.delays.get(name, 0.15)), str(self.pidfile)]
+
+
+class ChildCtx:
+    """pasang models palsu + proses anak palsu di worker selama tes, lalu kembalikan"""
+
+    def __init__(self, w, fm, child):
+        self.w, self.fm, self.child = w, fm, child
+
+    def __enter__(self):
+        self.old = (self.w.dl_cmd, sys.modules.get("studio_worker.models"))
+        sys.modules["studio_worker.models"] = self.fm
+        self.w.dl_cmd = self.child
+        return self
+
+    def __exit__(self, *a):
+        self.w.dl_cmd = self.old[0]
+        if self.old[1] is None:
+            sys.modules.pop("studio_worker.models", None)
+        else:
+            sys.modules["studio_worker.models"] = self.old[1]
+        wait_until(lambda: not self.w.DL["active"] and not any(t.name.startswith(("pemanasan", "unduh-model")) for t in threading.enumerate()), 10)
+        self.w.stop.clear()
+        self.w.BUSY.clear()
+        self.w._MB["v"] = None
 
 
 class WarmEngines(FakeEngines):
@@ -603,8 +674,8 @@ def t_unduh_dan_pemanasan_di_latar():
     w = worker_mod()
     from studio_worker import clean, natural
 
-    fm = FakeModels(["whisper", "deepfilter", "utmos"], delay=0.4)
-    sys.modules["studio_worker.models"] = fm
+    fm = FakeModels(["whisper", "deepfilter", "utmos"])
+    child = FakeChild({"whisper": 0.4, "deepfilter": 0.15, "utmos": 0.15})
     old = (w.CFG.preload, w.CFG.engine_order, getattr(w.CFG, "natural_mos", True))
     old_auto = getattr(w.CFG, "auto_download", None)
     natural.reset()
@@ -612,61 +683,65 @@ def t_unduh_dan_pemanasan_di_latar():
     utmos_loads: list[int] = []
     natural.preload = lambda: utmos_loads.append(1)  # type: ignore[attr-defined]  (UTMOS asli butuh torch)
     try:
-        w.CFG.preload, w.CFG.engine_order = True, ["chatterbox", "pocket"]
-        sp = Speed(TMP / "speed-rt.json")
-        rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine(), load_sec=0.3), asr=FakeAsr(), speed=sp)  # type: ignore[arg-type]
-        hb = SimpleNamespace(wake=threading.Event())
-        t0 = time.perf_counter()
-        missing = w.prepare_bg(rt, hb)
-        spent = time.perf_counter() - t0
-        assert spent < 0.15, f"persiapan tidak boleh menahan antrian ({spent:.2f} dtk)"
-        assert missing == ["whisper", "deepfilter", "utmos"], missing
-        # yang belum diunduh langsung dilewati (job yang datang tidak menunggu / tidak mengunduh)
-        assert rt.asr.error and "belum diunduh" in rt.asr.error, rt.asr.error
-        assert clean._DF_ERR and "belum diunduh" in clean._DF_ERR
-        assert natural.mos_status().startswith("tidak dipakai"), natural.mos_status()
-        assert wait_until(lambda: w.DL["active"], 2)
-        info_dl = w.models_brief(w.CFG, max_age=0)
-        assert info_dl["whisper"] == "sedang diunduh" and info_dl["chatterbox"] == "siap", info_dl
-        # job yang datang saat pemanasan menunggu kunci mesin (bukan memuat model kedua kali)
-        assert wait_until(lambda: rt.loading, 2)
-        time.sleep(0.02)
-        tj = time.perf_counter()
-        rt.engines.get("chatterbox")
-        waited = time.perf_counter() - tj
-        assert rt.engines.gets >= 2 and rt.engines.loaded() == ["chatterbox"]
-        assert wait_until(lambda: rt.warm and not w.DL["active"] and rt.asr.model is not None, 5), (rt.warm, w.DL, rt.asr.error)
-        assert rt.engines.warmed[0] == "chatterbox"
-        assert sp.load_sec("chatterbox") and sp.measured("chatterbox"), sp.data
-        assert abs(sp.ratio("chatterbox", 3) - 0.5) < 1e-6, sp.data
-        # selesai unduh → tanda dihapus, komponen dipakai lagi
-        assert fm.prepared == [["whisper", "deepfilter", "utmos"]]
-        assert rt.asr.error is None and rt.asr.loads == 1
-        assert clean._DF_ERR is None
-        assert natural._mos["off"] is None, natural._mos
-        assert wait_until(lambda: utmos_loads == [1], 3), "UTMOS dimuat sekali sesudah filenya ada"
-        assert w.models_brief(w.CFG, max_age=0)["utmos"] == "siap"
+        with ChildCtx(w, fm, child):
+            w.CFG.preload, w.CFG.engine_order = True, ["chatterbox", "pocket"]
+            sp = Speed(TMP / "speed-rt.json")
+            rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine(), load_sec=0.3), asr=FakeAsr(), speed=sp)  # type: ignore[arg-type]
+            hb = SimpleNamespace(wake=threading.Event())
+            t0 = time.perf_counter()
+            missing = w.prepare_bg(rt, hb)
+            spent = time.perf_counter() - t0
+            assert spent < 0.15, f"persiapan tidak boleh menahan antrian ({spent:.2f} dtk)"
+            assert missing == ["whisper", "deepfilter", "utmos"], missing
+            # yang belum diunduh langsung dilewati (job yang datang tidak menunggu / tidak mengunduh)
+            assert rt.asr.error and "belum diunduh" in rt.asr.error, rt.asr.error
+            assert clean._DF_ERR and "belum diunduh" in clean._DF_ERR
+            assert natural.mos_status().startswith("tidak dipakai"), natural.mos_status()
+            assert wait_until(lambda: w.DL["active"], 2)
+            assert wait_until(lambda: (w.models_brief(w.CFG, max_age=0) or {}).get("whisper", "").startswith("mengunduh "), 3), w.models_brief(w.CFG, max_age=0)
+            info_dl = w.models_brief(w.CFG, max_age=0)
+            assert info_dl["chatterbox"] == "siap" and info_dl["utmos"] == "sedang diunduh", info_dl  # utmos menunggu giliran
+            # job yang datang saat pemanasan menunggu kunci mesin (bukan memuat model kedua kali)
+            assert wait_until(lambda: rt.loading, 2)
+            time.sleep(0.02)
+            tj = time.perf_counter()
+            rt.engines.get("chatterbox")
+            waited = time.perf_counter() - tj
+            assert rt.engines.gets >= 2 and rt.engines.loaded() == ["chatterbox"]
+            assert wait_until(lambda: rt.warm and not w.DL["active"] and rt.asr.model is not None, 8), (rt.warm, w.DL, rt.asr.error)
+            assert rt.engines.warmed == ["chatterbox"], rt.engines.warmed  # sesudah unduhan: mesin yang sudah dimuat TIDAK dipanaskan lagi
+            assert sp.load_sec("chatterbox") and sp.measured("chatterbox"), sp.data
+            assert abs(sp.ratio("chatterbox", 3) - 0.5) < 1e-6, sp.data
+            # tiap model diunduh proses anaknya sendiri, satu per satu; hasilnya dicatat ke models (status_brief proses worker)
+            assert [n for _, n in child.calls] == ["whisper", "deepfilter", "utmos"], child.calls
+            assert fm.noted == [("whisper", "siap"), ("deepfilter", "siap"), ("utmos", "siap")], fm.noted
+            # selesai unduh → tanda dihapus, komponen dipakai lagi
+            assert rt.asr.error is None and rt.asr.loads == 1
+            assert clean._DF_ERR is None
+            assert natural._mos["off"] is None, natural._mos
+            assert wait_until(lambda: utmos_loads == [1], 3), "UTMOS dimuat sekali sesudah filenya ada"
+            assert w.models_brief(w.CFG, max_age=0)["utmos"] == "siap"
         # mesin yang modelnya belum ada → ditandai mati (website pakai cadangan), lalu hidup lagi setelah unduhan selesai
-        w.CFG.engine_order = ["chatterbox"]
-        fm2 = FakeModels(["chatterbox"], delay=0.3)
-        sys.modules["studio_worker.models"] = fm2
-        rt2 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine(), load_sec=0.05), asr=FakeAsr(), speed=Speed(None))  # type: ignore[arg-type]
-        w.prepare_bg(rt2, hb)
-        assert rt2.engines.is_down("chatterbox"), rt2.engines.status()
-        assert wait_until(lambda: not w.DL["active"] and rt2.engines.loaded() == ["chatterbox"], 5), rt2.engines.status()
-        assert not rt2.engines.is_down("chatterbox") and rt2.warm
-        # AUTO_DOWNLOAD=0 → tidak mengunduh, hanya dilewati
-        fm3 = FakeModels(["utmos"], delay=0.1)
-        sys.modules["studio_worker.models"] = fm3
-        w.CFG.auto_download = False
-        natural.reset()
-        w.CFG.preload = False
-        rt3 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine()), asr=FakeAsr(), speed=None)  # type: ignore[arg-type]
-        w.prepare_bg(rt3, hb)
-        time.sleep(0.3)
-        assert fm3.prepared == [] and natural.mos_status().startswith("tidak dipakai") and rt3.engines.loaded() == []
+        fm2 = FakeModels(["chatterbox"])
+        with ChildCtx(w, fm2, FakeChild({"chatterbox": 0.3})):
+            w.CFG.engine_order = ["chatterbox"]
+            rt2 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine(), load_sec=0.05), asr=FakeAsr(), speed=Speed(None))  # type: ignore[arg-type]
+            w.prepare_bg(rt2, hb)
+            assert rt2.engines.is_down("chatterbox"), rt2.engines.status()
+            assert wait_until(lambda: not w.DL["active"] and rt2.engines.loaded() == ["chatterbox"], 5), rt2.engines.status()
+            assert not rt2.engines.is_down("chatterbox") and rt2.warm
+        # AUTO_DOWNLOAD=0 → tidak mengunduh (tidak ada proses anak), hanya dilewati
+        fm3 = FakeModels(["utmos"])
+        child3 = FakeChild()
+        with ChildCtx(w, fm3, child3):
+            w.CFG.auto_download = False
+            natural.reset()
+            w.CFG.preload = False
+            rt3 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=WarmEngines(SlowEngine()), asr=FakeAsr(), speed=None)  # type: ignore[arg-type]
+            w.prepare_bg(rt3, hb)
+            time.sleep(0.3)
+            assert child3.calls == [] and natural.mos_status().startswith("tidak dipakai") and rt3.engines.loaded() == []
     finally:
-        sys.modules.pop("studio_worker.models", None)
         w.CFG.preload, w.CFG.engine_order, w.CFG.natural_mos = old
         if old_auto is None:
             w.CFG.__dict__.pop("auto_download", None)
@@ -676,7 +751,253 @@ def t_unduh_dan_pemanasan_di_latar():
         clean._DF, clean._DF_ERR = clean_old
         natural.reset()
         w._MB["v"] = None
-    return f"persiapan {spent * 1000:.0f} ms di thread utama; job menunggu kunci mesin {waited:.2f} dtk; unduh selesai → ASR/DF/UTMOS aktif lagi"
+    return f"persiapan {spent * 1000:.0f} ms di thread utama; job menunggu kunci mesin {waited:.2f} dtk; 3 proses anak berurutan → ASR/DF/UTMOS aktif lagi"
+
+
+# ---------------------------------------------------------------- mesin asli (Engines) + mesin palsu yang mencatat tumpang tindih
+class RaceEngine:
+    """mesin palsu: synth_batch (job) & warmup (pemanasan) mencatat berapa yang sedang berjalan BERSAMAAN di objek ini"""
+
+    sr = 24000
+    label = "x"
+    credit = None
+    lock = threading.Lock()
+    events: list[tuple[float, str, str, int]] = []
+    busy = 0
+    max_busy = 0
+    synth_sec = 0.8
+
+    def __init__(self, name: str):
+        self.name = name
+        self.warms = 0
+
+    def _enter(self, who):
+        with RaceEngine.lock:
+            RaceEngine.busy += 1
+            RaceEngine.max_busy = max(RaceEngine.max_busy, RaceEngine.busy)
+            RaceEngine.events.append((time.monotonic(), f"{self.name}.{who}", "masuk", RaceEngine.busy))
+
+    def _exit(self, who):
+        with RaceEngine.lock:
+            RaceEngine.busy -= 1
+            RaceEngine.events.append((time.monotonic(), f"{self.name}.{who}", "keluar", RaceEngine.busy))
+
+    def synth_batch(self, text, ref, st, seeds, max_sec=None):
+        self._enter("synth_batch")
+        time.sleep(RaceEngine.synth_sec)
+        self._exit("synth_batch")
+        return []
+
+    def warmup(self):
+        self.warms += 1
+        self._enter("warmup")
+        time.sleep(0.2)
+        self._exit("warmup")
+        return {"sec": 0.2, "ratio": 1.0, "audio": 2.0, "n": 3}
+
+    def close(self):
+        pass
+
+    @classmethod
+    def reset(cls, synth_sec: float = 0.8):
+        cls.events, cls.busy, cls.max_busy, cls.synth_sec = [], 0, 0, synth_sec
+
+
+def real_engines(cfg, load_sec: float = 0.1):
+    """studio_worker.engines.Engines ASLI (kunci, warmup, is_down, planned) — hanya muat model yang dipalsukan"""
+    from studio_worker.engines import EngineDown, Engines
+
+    class TEngines(Engines):
+        def get(self, name):
+            with self.lock:
+                self.last_used = time.time()
+                if name in self._eng:
+                    return self._eng[name]
+                if self.is_down(name):
+                    raise EngineDown(self.down_reason(name) or "mati")
+                time.sleep(load_sec)
+                self._eng[name] = RaceEngine(name)  # type: ignore[assignment]
+                self._down.pop(name, None)
+                return self._eng[name]
+
+    return TEngines(cfg)
+
+
+def fake_job(w, eng, name: str, sec: float = 0.8) -> threading.Thread:
+    """job TTS palsu: handle() memegang kunci 'sedang membuat suara' (BUSY), mesin diambil lewat Engines.get lalu synth di LUAR kunci
+    mesin — persis jobs_tts (rt.engines.get → make_line → synth_batch)"""
+
+    def run():
+        w.BUSY.set()
+        try:
+            e = eng.get(name)
+            e.synth_batch("halo", None, {}, [1, 2, 3])
+        finally:
+            w.BUSY.clear()
+
+    t = threading.Thread(target=run, daemon=True, name="job-palsu")
+    t.start()
+    return t
+
+
+@test
+def t_unduhan_selesai_tidak_memanaskan_mesin_yang_sedang_dipakai():
+    """race GPU (verifikasi PR #25): pocket selesai diunduh saat job memakai Chatterbox → Chatterbox TIDAK dipanaskan ulang di thread
+    lain; mesin yang baru diunduh (belum dimuat) dipanaskan SESUDAH job selesai"""
+    w = worker_mod()
+    old = (w.CFG.preload, w.CFG.engine_order)
+    try:
+        w.CFG.engine_order = ["chatterbox", "pocket"]
+        w.CFG.preload = True
+        # (1) Chatterbox sudah dimuat & sedang membuat suara; unduhan pocket selesai di tengah job
+        RaceEngine.reset()
+        eng = real_engines(w.CFG)
+        eng.get("chatterbox")
+        rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=eng, asr=None, speed=Speed(None))  # type: ignore[arg-type]
+        hb = SimpleNamespace(wake=threading.Event())
+        with ChildCtx(w, FakeModels(["pocket"]), FakeChild({"pocket": 0.1})):
+            job = fake_job(w, eng, "chatterbox")
+            assert wait_until(lambda: RaceEngine.busy == 1, 2)
+            w.download_bg(rt, hb, ["pocket"], True)
+            job.join(5)
+            assert wait_until(lambda: not any(t.name.startswith("pemanasan") for t in threading.enumerate()), 5)
+        cb = eng._eng["chatterbox"]
+        assert cb.warms == 0, f"Chatterbox yang sedang dipakai job dipanaskan ulang {cb.warms}× (race GPU)"
+        assert RaceEngine.max_busy == 1, RaceEngine.events
+        assert eng.loaded() == ["chatterbox"], "pocket (cadangan) tidak perlu dimuat selagi Chatterbox jalan"
+        assert w.engine_warm(rt) and not w.engine_loading(rt)
+        # (2) Chatterbox belum ada (job jalan di pocket); Chatterbox selesai diunduh di tengah job → dipanaskan SESUDAH job selesai
+        RaceEngine.reset(synth_sec=1.5)
+        eng2 = real_engines(w.CFG)
+        rt2 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=eng2, asr=None, speed=Speed(None))  # type: ignore[arg-type]
+        w.set_absent(rt2, ["chatterbox"], True)
+        assert eng2.is_down("chatterbox") and eng2.planned() == "pocket"
+        with ChildCtx(w, FakeModels(["chatterbox"]), FakeChild({"chatterbox": 0.1})):
+            job2 = fake_job(w, eng2, "pocket")
+            assert wait_until(lambda: RaceEngine.busy == 1, 2)
+            w.download_bg(rt2, hb, ["chatterbox"], True)
+            assert not eng2.is_down("chatterbox"), "selesai diunduh → langsung boleh dipakai job berikutnya"
+            assert "chatterbox" not in eng2.loaded(), "tidak dimuat di tengah job yang sedang jalan"
+            job2.join(5)
+            t_end = time.monotonic()
+            assert wait_until(lambda: "chatterbox" in eng2.loaded() and not any(t.name.startswith("pemanasan") for t in threading.enumerate()), 5), eng2.status()
+        warm_ev = [e for e in RaceEngine.events if e[1] == "chatterbox.warmup" and e[2] == "masuk"]
+        assert len(warm_ev) == 1 and warm_ev[0][0] >= t_end - 0.05, (warm_ev, t_end)
+        assert RaceEngine.max_busy == 1, RaceEngine.events
+        assert w.engine_warm(rt2), "mesin berikutnya (chatterbox) sudah dimuat → info.warm true"
+        # (3) pemanasan memegang kunci mesin: cek 'sudah dimuat' tidak bisa diselip job yang sedang memuat mesin yang sama
+        RaceEngine.reset()
+        eng3 = real_engines(w.CFG, load_sec=0.4)
+        rt3 = Runtime(cfg=w.CFG, supa=MemSupa(), engines=eng3, asr=None, speed=Speed(None))  # type: ignore[arg-type]
+        job3 = fake_job(w, eng3, "chatterbox")  # job memuat chatterbox sendiri (0,4 dtk) lalu synth
+        time.sleep(0.1)
+        w.BUSY.clear()  # anggap pemanasan tidak menunggu (jalur terburuk): tetap tidak boleh memanaskan mesin yang dipakai job
+        w.warm_up(rt3, skip=set(), engines=True, only={"chatterbox"}, extras=())
+        job3.join(5)
+        assert eng3._eng["chatterbox"].warms == 0 and RaceEngine.max_busy == 1, RaceEngine.events
+    finally:
+        w.CFG.preload, w.CFG.engine_order = old
+        w.BUSY.clear()
+    return "mesin yang sudah dimuat tidak pernah dipanaskan ulang; mesin baru dipanaskan sesudah job selesai; maks 1 generate bersamaan"
+
+
+@test
+def t_unduh_per_model_langsung_dipakai():
+    """Chatterbox selesai duluan → langsung hidup & dipanaskan, tidak menunggu model lain yang lambat (di laptop: UTMOS dari GitHub)"""
+    w = worker_mod()
+    old = (w.CFG.preload, w.CFG.engine_order)
+    from studio_worker import clean
+    from studio_worker.engines import DOWN_RETRY_SEC
+
+    clean_old = (clean._DF, clean._DF_ERR, dict(clean._DF_MISSING))
+    try:
+        w.CFG.engine_order = ["chatterbox", "pocket"]
+        w.CFG.preload = True
+        RaceEngine.reset()
+        eng = real_engines(w.CFG)
+        rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=eng, asr=None, speed=Speed(None))  # type: ignore[arg-type]
+        hb = SimpleNamespace(wake=threading.Event())
+        fm = FakeModels(["chatterbox", "deepfilter"])
+        child = FakeChild({"chatterbox": 0.2, "deepfilter": 2.5})
+        with ChildCtx(w, fm, child):
+            w.set_absent(rt, ["chatterbox", "deepfilter"], True)
+            th = threading.Thread(target=w.download_bg, args=(rt, hb, ["chatterbox", "deepfilter"], True), daemon=True, name="unduh-model")
+            t0 = time.monotonic()
+            th.start()
+            assert wait_until(lambda: "chatterbox" in eng.loaded() and not any(t.name.startswith("pemanasan") for t in threading.enumerate()), 3), (eng.status(), w.DL)
+            t_cb = time.monotonic() - t0
+            assert eng._eng["chatterbox"].warms == 1, "mesin yang baru diunduh dipanaskan sekali"
+            assert w.DL["active"] and w.DL["names"] == ["deepfilter"] and w.DL["now"] == "deepfilter", w.DL
+            assert not eng.is_down("chatterbox") and eng.planned() == "chatterbox"
+            # tanda 30 menit kedaluwarsa + job masuk: keep_absent tidak menandai Chatterbox mati lagi (sudah selesai diunduh)
+            eng._down["chatterbox"] = (time.time() - DOWN_RETRY_SEC - 1, "lama")
+            w.keep_absent(rt)
+            assert not eng.is_down("chatterbox") and eng.get("chatterbox") is eng._eng["chatterbox"]
+            assert wait_until(lambda: (w.models_brief(w.CFG, max_age=0) or {}).get("deepfilter", "").startswith("mengunduh "), 2), w.models_brief(w.CFG, max_age=0)
+            hbi = w.Heartbeat(rt, {"id": "tes"})
+            info = hbi.info()
+            hbi.supa.close()
+            assert info["warm"] is True and info["loading"] is False, (info["warm"], info["loading"])  # tinggal DeepFilterNet yang diunduh
+            th.join(10)
+            t_all = time.monotonic() - t0
+        assert t_cb < t_all - 1.5, (t_cb, t_all)
+        assert w.DL["done"] == {"chatterbox": "siap", "deepfilter": "siap"}, w.DL
+        assert clean._DF_ERR is None
+    finally:
+        w.CFG.preload, w.CFG.engine_order = old
+        clean._DF, clean._DF_ERR = clean_old[:2]
+        clean._DF_MISSING.update(clean_old[2])
+    return f"Chatterbox hidup {t_cb:.1f} dtk sesudah unduhan mulai (semua selesai {t_all:.1f} dtk); keep_absent tidak mematikannya lagi"
+
+
+@test
+def t_unduh_proses_anak_dihentikan_dan_log_ringkas():
+    """worker berhenti di tengah unduhan → proses anak (+ cucunya) dihentikan dalam hitungan detik; baris progres di log ≤ 1 per 15 dtk"""
+    w = worker_mod()
+    cap = _Cap()
+    lg = vlog.get("unduh")
+    lg.addHandler(cap)
+    child = FakeChild(hang=("utmos",))
+    child.pidfile.unlink(missing_ok=True)
+    out: dict = {}
+    try:
+        with ChildCtx(w, FakeModels(["utmos"]), child):
+            th = threading.Thread(target=lambda: out.update(res=w.download_one("utmos", w._LogFn(lg))), daemon=True)
+            th.start()
+            assert wait_until(lambda: child.pidfile.is_file() and child.pidfile.read_text().strip(), 5)
+            gpid = int(child.pidfile.read_text())
+            assert wait_until(lambda: w.DL["proc"] is not None and w.DL["pct"].get("utmos") is not None, 3), w.DL
+            pid = w.DL["proc"].pid
+            time.sleep(1.0)  # ±20 baris progres dari proses anak
+            t0 = time.monotonic()
+            w.stop.set()
+            th.join(10)
+            took = time.monotonic() - t0
+            assert not th.is_alive() and took < 3.0, took
+            assert out.get("res", "").startswith("gagal: dihentikan"), out
+
+            def dead(p: int) -> bool:
+                try:
+                    os.kill(p, 0)
+                except ProcessLookupError:
+                    return True
+                except PermissionError:
+                    return False
+                try:  # zombie (belum di-wait induknya) = sudah mati
+                    return Path(f"/proc/{p}/stat").read_text().split()[2] == "Z"
+                except OSError:
+                    return True
+
+            assert wait_until(lambda: dead(pid) and dead(gpid), 3), (pid, gpid)
+            assert w.DL["proc"] is None
+    finally:
+        lg.removeHandler(cap)
+        w.stop.clear()
+    prog = [m for m in cap.msgs if "%" in m]
+    assert len(prog) == 1, prog  # baris progres pertama saja (berikutnya paling cepat 15 dtk lagi)
+    assert not any(re.match(r"^\d\d:\d\d:\d\d", m) for m in cap.msgs), cap.msgs  # jam proses anak dibuang
+    assert any("mengunduh ±10 MB" in m for m in cap.msgs) and any("dihentikan" in m for m in cap.msgs), cap.msgs
+    return f"dihentikan {took:.2f} dtk sesudah worker berhenti (proses anak & cucunya mati); log: {len(cap.msgs)} baris, progres {len(prog)}"
 
 
 @test
@@ -685,27 +1006,51 @@ def t_isi_detak_jantung():
     sp = Speed(TMP / "speed-hb.json")
     sp.record("chatterbox", 6.5, 13.0, 3)
     sp.record_load("chatterbox", 21.0)
-    rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=FakeEngines(SlowEngine()), asr=FakeAsr(), speed=sp, warm=True)  # type: ignore[arg-type]
+    eng = FakeEngines(SlowEngine())
+    rt = Runtime(cfg=w.CFG, supa=MemSupa(), engines=eng, asr=FakeAsr(), speed=sp, warm=True)  # type: ignore[arg-type]
     hb = w.Heartbeat(rt, {"id": "tes", "gpu": None})
+    info = hb.info()
+    # warm = keadaan NYATA (mesin berikutnya sudah dimuat), bukan "pernah dipanaskan" (rt.warm)
+    assert info["warm"] is False and info["loading"] is False, (info["warm"], info["loading"])
+    eng.get("chatterbox")  # dimuat job sendiri (PRELOAD=mati / sesudah lepas model menganggur)
     info = hb.info()
     assert info["warm"] is True and info["speed"]["engines"]["chatterbox"]["ratio"]["3"] == 2.0, info["speed"]
     assert info["speed"]["engines"]["chatterbox"]["load"] == 21.0 and info["speed"]["chars_per_sec"] == 14.5
     # models.py asli: status per model (cek file saja); cabang lama tanpa models.py → None (website menganggap tidak diketahui)
     assert info["models"] is None or (isinstance(info["models"], dict) and "chatterbox" in info["models"]), info["models"]
     assert info["status"] == "siap" and info["engine"] == "chatterbox"
+    # loading: pemanasan sedang memuat mesin / model MESIN SUARA masih diunduh di latar; unduhan UTMOS saja → False
+    eng._loaded.clear()
+    w.WARMING.set()
+    try:
+        assert hb.info()["loading"] is True and hb.info()["warm"] is False
+    finally:
+        w.WARMING.clear()
+    w.DL.update(active=True, names=["utmos"])
+    try:
+        assert hb.info()["loading"] is False
+        w.DL["names"] = ["chatterbox", "utmos"]
+        assert hb.info()["loading"] is True
+    finally:
+        w.DL.update(active=False, names=[])
     sys.modules["studio_worker.models"] = FakeModels(["utmos"])
     try:
         w._MB["v"] = None
         info2 = hb.info()
         assert info2["models"] == {"chatterbox": "siap", "whisper": "siap", "deepfilter": "siap", "utmos": "belum diunduh"}, info2["models"]
+        w.DL.update(active=True, names=["utmos"], now="utmos", pct={"utmos": 42})
+        assert hb.info()["models"]["utmos"] == "mengunduh 42%"
+        w.DL.update(now=None)
+        assert hb.info()["models"]["utmos"] == "sedang diunduh"
     finally:
         sys.modules.pop("studio_worker.models", None)
+        w.DL.update(active=False, names=[], now=None, pct={})
         w._MB["v"] = None
     import json
 
     json.dumps(info2)  # harus bisa dikirim sebagai JSON
     hb.supa.close()
-    return f"speed {info['speed']['engines']['chatterbox']['ratio']}, models {info2['models']}, warm {info['warm']}"
+    return f"speed {info['speed']['engines']['chatterbox']['ratio']}, models {info2['models']}, warm = mesin dimuat, loading = sedang disiapkan"
 
 
 def _tts_job(sb, v, jid, lines, takes=2):

@@ -13,7 +13,7 @@ import {
   type StudioVoice,
 } from "@/lib/studio/client";
 import { STUDIO_BUCKET, storageSrc } from "@/lib/studio/urls";
-import { ModelsHint, WarmBadge, warmOf } from "./JobEta";
+import { ModelsHint, WarmBadge, loadingOf, warmOf } from "./JobEta";
 
 const MAX_MB = 50;
 const AUDIO_EXT = new Set(["wav", "mp3", "m4a"]);
@@ -200,7 +200,7 @@ export default function VoiceBank({ active = true }: { active?: boolean }) {
                   ? `Mesin suara laptop${warmOf(status) === undefined ? ": nyala" : ""}${status.worker.gpu ? ` (GPU ${status.worker.gpu})` : ""}`
                   : "Mesin suara laptop: mati"}
             </span>
-            <WarmBadge warm={warmOf(status)} />
+            <WarmBadge warm={warmOf(status)} loading={loadingOf(status)} />
           </div>
           <ModelsHint status={status} className="text-xs" />
           <p className="text-xs text-zinc-500">

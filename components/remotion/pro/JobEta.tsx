@@ -1,56 +1,95 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type { StudioStatus } from "@/lib/studio/client";
-import { etaLeft, etaSpoken, fmtEta, modelsHint, serverNow, type EtaJob } from "@/lib/studio/eta";
+import { ETA_ORPHAN_MS, etaView, modelsHint, serverNow, trackEta, type EtaJob, type EtaTrack } from "@/lib/studio/eta";
 
 /**
  * Perkiraan waktu selesai job laptop di Studio (lib/studio/eta.ts):
- * - EtaChip: "⏱ ±40 dtk lagi" yang menghitung mundur tiap detik dari updated_at + " · sisa ±… " di pesan job, berhenti di
- *   "sebentar lagi". Angka per detik tidak dibacakan pembaca layar (aria-hidden); yang dibacakan teks kasar (per menit / 30 dtk).
- * - WarmBadge: "Laptop siap" / "Laptop menyiapkan mesin suara…" dari info.warm (worker lama tanpa info.warm → tidak tampil).
+ * - EtaChip: "⏱ ±40 dtk lagi" yang menghitung mundur dari TENGGAT per job (trackEta: pesan baru " · sisa ±… " hanya menggeser tenggat
+ *   kalau keluar dari pita ketidakpastiannya → tidak naik-turun tiap patch), berhenti di "sebentar lagi"; job yatim (updated_at > 5 menit)
+ *   → disembunyikan. Angka per detik tidak dibacakan pembaca layar (aria-hidden); yang dibacakan teks kasar yang hanya berubah saat
+ *   satuan / kelompoknya berubah.
+ * - WarmBadge: "Laptop siap" (mesin sudah dimuat) / "Laptop menyiapkan mesin suara…" (info.loading) / netral "mesin dimuat saat job
+ *   pertama" (belum dimuat & tidak sedang disiapkan); worker lama tanpa info.warm → tidak tampil.
  * - ModelsHint: petunjuk kecil kalau ada model laptop yang belum diunduh (info.models), mis. penilai kealamian (UTMOS).
  */
-export function EtaChip({ job, className = "" }: { job: EtaJob | null | undefined; className?: string }) {
+
+/** tenggat per id job — bertahan walau chip dilepas & dipasang lagi (popover dibuka ulang, panel dirender ulang) */
+const TRACKS = new Map<string, EtaTrack>();
+const TRACKS_MAX = 64;
+
+function remember(key: string, t: EtaTrack | null): void {
+  TRACKS.delete(key);
+  if (!t) return;
+  TRACKS.set(key, t);
+  while (TRACKS.size > TRACKS_MAX) {
+    const first = TRACKS.keys().next().value;
+    if (first === undefined) break;
+    TRACKS.delete(first);
+  }
+}
+
+/**
+ * `live` false = chip berada di dalam wilayah role="status" lain (wilayah itu sudah membacakan isinya) → teks pembaca layar chip
+ * tidak dijadikan wilayah aria-live sendiri (tidak dibacakan dua kali).
+ */
+export function EtaChip({ job, className = "", live = true }: { job: EtaJob | null | undefined; className?: string; live?: boolean }) {
+  const id = typeof job?.id === "string" && job.id ? job.id : null;
   const status = job?.status ?? null;
   const message = job?.message ?? null;
   const updatedAt = job?.updated_at ?? null;
-  const [now, setNow] = useState(() => serverNow());
+  const inst = useId();
+  const key = id ?? `chip${inst}`; // job tanpa id: tenggat milik chip ini saja
 
+  // tenggat baru dihitung HANYA saat pesan / updated_at / status berubah (dihitung ulang dengan masukan sama → tenggat sama)
+  const track = useMemo(() => {
+    const t = trackEta(TRACKS.get(key) ?? null, { id, status, message, updated_at: updatedAt }, serverNow());
+    remember(key, t);
+    return t;
+  }, [key, id, status, message, updatedAt]);
+
+  const [now, setNow] = useState(() => serverNow());
   useEffect(() => {
-    const j = { status, message, updated_at: updatedAt };
-    const t0 = serverNow();
-    setNow(t0);
-    const left0 = etaLeft(j, t0);
-    if (left0 === null || left0 <= 0) return;
-    const t = setInterval(() => {
+    if (!track) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
       const n = serverNow();
       setNow(n);
-      if ((etaLeft(j, n) ?? 0) <= 0) clearInterval(t); // "sebentar lagi" → berhenti menghitung
-    }, 1000);
-    return () => clearInterval(t);
-  }, [status, message, updatedAt]);
+      const v = etaView(track, n);
+      if (!v) return; // disembunyikan (yatim) → berhenti
+      // menghitung mundur → tiap detik; sudah "sebentar lagi" → cukup satu kali lagi saat job dianggap yatim (chip disembunyikan)
+      timer = setTimeout(tick, v.done ? Math.max(1000, track.at + ETA_ORPHAN_MS - n + 50) : 1000);
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [track]);
 
-  const left = etaLeft({ status, message, updated_at: updatedAt }, now);
-  if (left === null) return null;
-  const done = left <= 0;
+  const v = etaView(track, now);
+  if (!v) return null;
   return (
     <span
-      className={`inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ring-1 ring-inset ${done ? "bg-zinc-800/70 text-zinc-300 ring-zinc-700" : "bg-orange-500/10 text-orange-300 ring-orange-500/30"} ${className}`}
-      data-job-eta={done ? 0 : Math.ceil(left)}
+      className={`inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ring-1 ring-inset ${v.done ? "bg-zinc-800/70 text-zinc-300 ring-zinc-700" : "bg-orange-500/10 text-orange-300 ring-orange-500/30"} ${className}`}
+      data-job-eta={v.done ? 0 : Math.ceil(v.left)}
     >
-      <span aria-hidden="true">⏱ {fmtEta(left)}</span>
-      <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {etaSpoken(left)}
-      </span>
+      <span aria-hidden="true">⏱ {v.text}</span>
+      {live ? (
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {v.spoken}
+        </span>
+      ) : (
+        <span className="sr-only">{v.spoken}</span>
+      )}
     </span>
   );
 }
 
-/** info.warm dari detak worker: true = mesin suara utama sudah dimuat & dipanaskan, false = masih menyiapkan, undefined = worker lama */
+/** info.warm dari detak worker: true = mesin suara berikutnya sudah dimuat, false = belum, undefined = worker lama / laptop mati */
 export const warmOf = (s: StudioStatus | null | undefined): boolean | undefined => (s?.worker.online && typeof s.worker.warm === "boolean" ? s.worker.warm : undefined);
+/** info.loading: mesin suara sedang disiapkan (dimuat / dipanaskan / modelnya diunduh di latar) */
+export const loadingOf = (s: StudioStatus | null | undefined): boolean => !!(s?.worker.online && s.worker.loading === true);
 
-export function WarmBadge({ warm }: { warm: boolean | null | undefined }) {
+export function WarmBadge({ warm, loading = false }: { warm: boolean | null | undefined; loading?: boolean | null }) {
   if (warm === true)
     return (
       <span className="badge bg-emerald-500/10 text-emerald-400 ring-emerald-500/30" data-laptop-warm="1">
@@ -58,11 +97,18 @@ export function WarmBadge({ warm }: { warm: boolean | null | undefined }) {
         Laptop siap
       </span>
     );
-  if (warm === false)
+  if (warm === false && loading)
     return (
       <span className="badge bg-amber-500/10 text-amber-400 ring-amber-500/30" data-laptop-warm="0">
         <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
         Laptop menyiapkan mesin suara…
+      </span>
+    );
+  if (warm === false)
+    return (
+      <span className="badge bg-zinc-800/70 text-zinc-400 ring-zinc-700" data-laptop-warm="dingin">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
+        Laptop siap · mesin dimuat saat job pertama
       </span>
     );
   return null;

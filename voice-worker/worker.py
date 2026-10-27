@@ -5,19 +5,24 @@ Jalankan: jalankan.bat (atau `.venv\\Scripts\\python worker.py`). Ctrl+C = berhe
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import platform
+import re
 import signal
+import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 # pythonw.exe (Task Scheduler / pasang-otomatis.ps1, tanpa jendela): sys.stdout & sys.stderr = None → progress bar tqdm
 # (unduh model HuggingFace, "Sampling" Chatterbox) crash "'NoneType' object has no attribute 'write'".
 # Arahkan ke os.devnull & matikan progress bar SEBELUM library berat di-import.
-if sys.stdout is None or sys.stderr is None:
+NO_CONSOLE = sys.stdout is None or sys.stderr is None  # tanpa jendela konsol → proses anak unduhan juga tanpa jendela
+if NO_CONSOLE:
     os.environ.setdefault("TQDM_DISABLE", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     if sys.stdout is None:
@@ -59,8 +64,16 @@ _hits = {"n": 0}
 # lalu POLL_SEC, dan sesudah 30 menit menganggur cukup tiap max(POLL_SEC, 10) dtk
 FAST_POLL_SEC, FAST_POLL_FOR = 1.0, 60.0
 SLOW_POLL_SEC, SLOW_POLL_AFTER = 10.0, 30 * 60.0
-# status unduhan model di latar (detak jantung info.models)
-DL: dict = {"active": False, "names": [], "done": {}}
+# unduhan model di latar (detak jantung info.models / info.loading): `names` = yang BELUM selesai (urut), `now` = yang sedang diunduh
+# proses anak, `pct` = persen terakhir dari baris progresnya, `proc` = proses anak itu (dihentikan saat worker berhenti)
+DL: dict = {"active": False, "names": [], "done": {}, "now": None, "pct": {}, "proc": None}
+DL_LOG_SEC = 15.0  # baris progres unduhan latar di log worker paling sering tiap 15 dtk
+SIAPKAN = Path(__file__).resolve().parent / "siapkan_model.py"
+ENGINE_NAMES = ("chatterbox", "pocket")
+# "sedang membuat suara": dipegang handle() selama job berjalan — pemanasan sesudah unduhan latar menunggu job selesai dulu
+BUSY = threading.Event()
+# pemanasan sedang MEMUAT / memanaskan mesin suara (bagian mesin saja, bukan whisper / UTMOS) → detak info.loading
+WARMING = threading.Event()
 
 
 def on_sigint(signum, frame) -> None:  # noqa: ARG001
@@ -135,10 +148,13 @@ class Heartbeat(threading.Thread):
             "asr": self.rt.asr.device if self.rt.asr and self.rt.asr.model is not None else None,
             "render": bool(self.rt.render_ok),
             "versi": VERSION,
-            # kecepatan mesin suara (website memperkirakan lama job yang masih antri), status model, mesin sudah dipanaskan
+            # kecepatan mesin suara (website memperkirakan lama job yang masih antri), status model, keadaan NYATA mesin suara:
+            # warm = mesin yang akan dipakai job berikutnya sudah dimuat; loading = mesin suara sedang disiapkan (dimuat /
+            # dipanaskan di latar, atau modelnya masih diunduh di latar) — website: "menyiapkan…" hanya kalau loading
             "speed": speed_summary(self.rt),
             "models": models_brief(CFG),
-            "warm": bool(getattr(self.rt, "warm", False)),
+            "warm": engine_warm(self.rt),
+            "loading": engine_loading(self.rt),
             # GPU yang benar-benar dipakai Chrome render (hasil cek sekali per sesi: NVIDIA / Intel / SwiftShader)
             "render_gpu": jobs_render.render_gpu_info(),
             **self.rt.status,
@@ -249,10 +265,33 @@ def models_brief(cfg, max_age: float = 60.0) -> dict | None:
         _MB.update(t=now, v=v)
     v = dict(_MB["v"]) if isinstance(_MB["v"], dict) else None
     if v is not None and DL["active"]:
-        for n in DL["names"]:
-            if v.get(n) != "siap":
-                v[n] = "sedang diunduh"
+        for n in list(DL["names"]):
+            if v.get(n) != "siap":  # yang sedang diunduh proses anak: persennya (dari baris progres); yang menunggu giliran: "sedang diunduh"
+                pct = DL["pct"].get(n) if n == DL["now"] else None
+                v[n] = f"mengunduh {pct}%" if pct is not None else "sedang diunduh"
     return v
+
+
+def engine_warm(rt: Runtime) -> bool:
+    """keadaan NYATA untuk detak info.warm: mesin suara yang akan dipakai job berikutnya (planned) sudah dimuat — juga kalau yang
+    memuatnya job sendiri (PRELOAD=mati / sesudah lepas model menganggur), bukan hanya pemanasan latar"""
+    eng = rt.engines
+    if eng is None:
+        return False
+    try:
+        p = eng.planned()
+        return bool(p) and p in eng.loaded()
+    except Exception:  # pengelola mesin lama / palsu
+        return bool(getattr(rt, "warm", False))
+
+
+def engine_loading(rt: Runtime) -> bool:
+    """detak info.loading: mesin suara sedang disiapkan — pemanasan latar sedang memuat / memanaskan mesin, atau model mesin
+    suara (chatterbox / pocket di ENGINE_ORDER) masih diunduh di latar. Unduhan UTMOS / whisper / DeepFilterNet saja = False"""
+    if WARMING.is_set():
+        return True
+    order = list(getattr(CFG, "engine_order", []) or [])
+    return bool(DL["active"]) and any(n in ENGINE_NAMES and n in order for n in list(DL["names"]))
 
 
 def speed_summary(rt: Runtime) -> dict | None:
@@ -362,17 +401,32 @@ def _num(d: dict, *keys: str) -> float | None:
     return None
 
 
-def warm_engine(rt: Runtime, skip: set[str]) -> str | None:
-    """muat mesin suara pertama yang bisa (+ pemanasan Engines.warmup bila ada) & catat waktu muat / kecepatannya. Balikan nama mesin."""
+def _loaded(eng, name: str) -> bool:
+    try:
+        return name in eng.loaded()
+    except Exception:
+        return False
+
+
+def warm_engine(rt: Runtime, skip: set[str], only: set[str] | None = None) -> str | None:
+    """
+    muat + panaskan mesin suara yang akan dipakai job berikutnya (urutan ENGINE_ORDER, lewati yang mati / `skip`) & catat waktu muat /
+    kecepatannya — HANYA kalau mesin itu BELUM dimuat. Mesin yang sudah dimuat bisa sedang dipakai job (membuat suara berjalan di
+    luar kunci mesin), jadi memanaskannya lagi dari thread lain = dua generate bersamaan di objek & GPU yang sama (race). Pemanggil
+    (warm_up) memegang kunci mesin, jadi cek "sudah dimuat" + muatnya tidak bisa diselip job (job memuat lewat Engines.get yang
+    memakai kunci yang sama). `only` = hanya kalau mesin berikutnya termasuk di sini (mis. yang baru selesai diunduh di latar).
+    Balikan nama mesin yang sudah dimuat, atau None.
+    """
     eng = rt.engines
     for name in CFG.engine_order:
         if name in skip or eng.is_down(name):
             continue
-        try:
-            was = name in eng.loaded()
-        except Exception:
-            was = False
+        if _loaded(eng, name):
+            return name  # sudah dimuat (oleh job / pemanasan sebelumnya) → TIDAK dipanaskan ulang
+        if only is not None and name not in only:
+            return None  # mesin berikutnya bukan yang baru diunduh → biarkan (dimuat saat job pertama / pemanasan lain)
         t0 = time.monotonic()
+        WARMING.set()
         try:
             w = getattr(eng, "warmup", None)
             info = w(name) if callable(w) else None
@@ -381,6 +435,8 @@ def warm_engine(rt: Runtime, skip: set[str]) -> str | None:
         except Exception as e:  # EngineDown sudah dicatat pengelola mesin → coba mesin berikutnya
             log.warning("Pemanasan mesin %s gagal: %s", name, str(e)[:200])
             continue
+        finally:
+            WARMING.clear()
         took = time.monotonic() - t0
         sp = getattr(rt, "speed", None)
         if sp is not None:
@@ -390,9 +446,9 @@ def warm_engine(rt: Runtime, skip: set[str]) -> str | None:
             if gen is None and audio0 and ratio:  # mesin cepat: ratio = detik proses per detik suara (n versi sekaligus)
                 gen = audio0 * ratio
             load = _num(d, "load_sec", "load")
-            if load is None and not was and _num(d, "sec"):  # waktu pemanasan sendiri bukan waktu muat model
+            if load is None and _num(d, "sec"):  # waktu pemanasan sendiri bukan waktu muat model
                 load = max(0.0, took - float(d["sec"]))
-            if load is None and not was:
+            if load is None:
                 load = max(0.0, took - (gen or 0.0))
             if load:
                 sp.record_load(name, load)
@@ -426,58 +482,316 @@ def warm_utmos(rt: Runtime) -> None:
         log.warning("Penilai kealamian UTMOS belum bisa dimuat (%s) — versi dipilih dari kejelasan + nada.", str(e)[:200])
 
 
-def warm_up(rt: Runtime, skip: set[str], engines: bool = True) -> None:
-    """pemanasan sekali: mesin suara → faster-whisper → UTMOS. Kunci mesin dipegang selama pemanasan: job yang datang menunggu
-    (pesannya "Menyiapkan mesin suara…") dan tidak memuat model yang sama dua kali."""
+def warm_up(rt: Runtime, skip: set[str], engines: bool = True, only: set[str] | None = None, extras: tuple[str, ...] = ("whisper", "utmos")) -> None:
+    """pemanasan sekali: mesin suara (warm_engine: hanya yang belum dimuat) → faster-whisper → UTMOS (`extras`). Kunci mesin
+    dipegang selama pemanasan: job yang datang menunggu (pesannya "Menyiapkan mesin suara…") dan tidak memuat model yang sama dua kali."""
     lock = getattr(rt.engines, "lock", None)
-    rt.loading = True
+    _loading(rt, +1)
     try:
         if lock is not None:
             lock.acquire()
         try:
             if engines:
-                rt.warm = (warm_engine(rt, skip) is not None) or bool(rt.warm)
-            if "whisper" not in skip and rt.asr is not None:
+                rt.warm = (warm_engine(rt, skip, only) is not None) or bool(rt.warm)
+            if "whisper" in extras and "whisper" not in skip and rt.asr is not None:
                 try:
                     _ = rt.asr.available
                 except Exception as e:
                     log.warning("faster-whisper belum bisa dimuat: %s", str(e)[:200])
-            if "utmos" not in skip:
+            if "utmos" in extras and "utmos" not in skip:
                 warm_utmos(rt)
         finally:
             if lock is not None:
                 lock.release()
     finally:
-        rt.loading = False
+        _loading(rt, -1)
+
+
+_LOADING_LOCK = threading.Lock()
+
+
+def _loading(rt: Runtime, delta: int) -> None:
+    """rt.loading = ada pemanasan yang sedang jalan / menunggu kunci mesin (bisa lebih dari satu: pemanasan awal + sesudah unduhan
+    latar) — dihitung, supaya yang selesai duluan tidak mematikan tandanya selagi yang lain masih jalan"""
+    with _LOADING_LOCK:
+        n = max(0, int(getattr(rt, "_loading_n", 0) or 0) + delta)
+        rt._loading_n = n  # type: ignore[attr-defined]
+        rt.loading = n > 0
+
+
+def warm_after_download(rt: Runtime, hb: "Heartbeat", name: str) -> None:
+    """
+    model `name` baru selesai diunduh di latar → mesinnya dipanaskan / whisper & UTMOS dimuat, TAPI tidak pernah di tengah job:
+    menunggu kunci "sedang membuat suara" (BUSY, dipegang handle) lepas dulu. Mesin yang sudah dimuat tidak pernah dipanaskan ulang
+    (warm_engine), dan hanya mesin yang baru diunduh itu yang boleh dimuat (`only`).
+    """
+    while BUSY.is_set() and not stop.is_set():
+        stop.wait(0.5)
+    if stop.is_set():
+        return
+    pending = set(DL["names"]) if DL["active"] else set()
+    try:
+        if name in ENGINE_NAMES:
+            warm_up(rt, skip=pending, engines=True, only={name}, extras=())
+        elif name in ("whisper", "utmos"):
+            warm_up(rt, skip=set(), engines=False, extras=(name,))
+    except Exception as e:  # thread latar tidak boleh menjatuhkan worker
+        log.warning("Pemanasan %s sesudah diunduh gagal: %s", name, str(e)[:200])
+    hb.wake.set()
+
+
+# ---------------------------------------------------------------- unduhan latar di PROSES ANAK (bisa dihentikan kapan saja)
+# Thread unduhan huggingface_hub (hf_xet / ThreadPoolExecutor) tidak bisa dihentikan dari thread lain dan menahan proses keluar
+# sampai seluruh snapshot selesai → unduhan latar dijalankan `siapkan_model.py --latar --hanya <nama>` per model; worker berhenti →
+# proses anak (sepohon) dihentikan, bagian yang sudah terunduh (.incomplete / .part) dilanjutkan lain kali.
+_TS = re.compile(r"^\d{1,2}:\d{2}:\d{2}\s+")  # jam di awal baris log proses anak (log worker punya jam sendiri)
+_PCT = re.compile(r"\s(\d{1,3})%")  # baris progres unduhan: "UTMOS  42% · 165/392 MB · …"
+_JOB: dict = {"h": None}  # Windows: Job Object "ikut mati" untuk proses anak
+
+
+def dl_cmd(name: str) -> list[str]:
+    """perintah proses anak yang mengunduh SATU model (tes boleh mengganti fungsi ini)"""
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").is_file():
+        exe = exe.with_name("python.exe")  # pythonw tanpa stdout; jendelanya tetap disembunyikan (CREATE_NO_WINDOW)
+    return [str(exe), "-u", str(SIAPKAN), "--latar", "--hanya", name]
+
+
+def _kill_on_close(p: subprocess.Popen) -> None:
+    """Windows: proses anak ikut mati kalau worker mati mendadak (jendela ditutup paksa / Task Scheduler stop / crash) — Job Object
+    KILL_ON_JOB_CLOSE (pegangannya ditutup Windows saat worker mati). Gagal → tidak apa-apa (worker tetap menghentikannya saat
+    berhenti normal)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        if _JOB["h"] is None:
+
+            class Basic(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64), ("LimitFlags", wintypes.DWORD),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t), ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+            class Io(ctypes.Structure):
+                _fields_ = [(f, ctypes.c_uint64) for f in ("ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes", "OtherBytes")]
+
+            class Ext(ctypes.Structure):
+                _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", Io), ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+            h = k32.CreateJobObjectW(None, None)
+            if not h:
+                return
+            info = Ext()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(h, 9, ctypes.byref(info), ctypes.sizeof(info)):  # JobObjectExtendedLimitInformation
+                k32.CloseHandle(h)
+                return
+            _JOB["h"] = h
+        k32.AssignProcessToJobObject(_JOB["h"], int(p._handle))  # type: ignore[attr-defined]
+    except Exception as e:
+        log.debug("Job Object proses unduh tidak dipasang: %s", e)
+
+
+def spawn_download(name: str) -> subprocess.Popen:
+    """jalankan proses anak pengunduh SATU model: keluarannya lewat pipa (dibaca _ChildLog), grup proses sendiri (Ctrl+C di jendela
+    worker tidak ikut ke sana — worker yang menghentikannya), tanpa jendela kalau worker sendiri tanpa konsol"""
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "TQDM_DISABLE": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"}
+    kw: dict = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(SIAPKAN.parent), env=env,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000200 | (0x08000000 if NO_CONSOLE else 0)  # CREATE_NEW_PROCESS_GROUP (+ CREATE_NO_WINDOW)
+    else:
+        kw["start_new_session"] = True  # grup proses sendiri → dihentikan sepohon lewat killpg; Ctrl+C terminal tidak ikut
+    p = subprocess.Popen(dl_cmd(name), **kw)
+    _kill_on_close(p)
+    return p
+
+
+def kill_tree(p: subprocess.Popen, wait: float = 5.0) -> None:
+    """hentikan proses anak BESERTA turunannya (Windows: taskkill /T /F, cadangan TerminateProcess; Linux/mac: sinyal ke grup
+    prosesnya, SIGTERM lalu SIGKILL)"""
+    if p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, creationflags=0x08000000)
+        else:
+            os.killpg(p.pid, signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=wait)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name != "nt":
+            os.killpg(p.pid, signal.SIGKILL)
+        p.kill()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=wait)
+    except Exception:
+        pass
+
+
+def stop_downloads() -> None:
+    """worker berhenti → proses anak unduhan yang masih jalan dihentikan (dipanggil main() & atexit)"""
+    p = DL.get("proc")
+    if p is not None:
+        kill_tree(p)
+
+
+atexit.register(stop_downloads)
+
+
+class _ChildLog:
+    """keluaran proses anak → log worker, ringkas: baris progres (ada persennya) paling sering tiap DL_LOG_SEC dtk (yang terbaru
+    ditahan lalu ditulis saat jatahnya tiba — flush_due dipanggil berkala), baris lain (mulai / selesai / gagal) langsung;
+    "@@hasil {json}" disimpan sebagai hasil; persen terakhir → DL["pct"] (detak info.models)"""
+
+    def __init__(self, name: str, lg):
+        self.name, self.lg = name, lg
+        self.result: dict | None = None
+        self.tail: deque[str] = deque(maxlen=5)
+        self.t_prog = -1e18
+        self.pending: str | None = None
+        self.lock = threading.Lock()
+
+    def feed(self, raw: str) -> None:
+        line = raw.rstrip("\r\n")
+        if not line.strip():
+            return
+        if line.startswith("@@hasil "):
+            try:
+                r = json.loads(line[len("@@hasil "):])
+                self.result = r if isinstance(r, dict) else None
+            except ValueError:
+                pass
+            return
+        msg = _TS.sub("", line).strip()
+        self.tail.append(msg)
+        m = _PCT.search(" " + msg)
+        if m:
+            DL["pct"][self.name] = max(0, min(100, int(m.group(1))))
+            with self.lock:
+                self.pending = msg
+            self.flush_due()
+            return
+        with self.lock:
+            self.pending = None  # baris progres yang tertahan sudah basi (mis. baris "selesai" datang)
+        self.lg.info(msg[:400])
+
+    def flush_due(self) -> None:
+        """tulis baris progres yang tertahan kalau sudah ≥ DL_LOG_SEC dtk sejak baris progres terakhir di log worker"""
+        with self.lock:
+            msg, now = self.pending, time.monotonic()
+            if msg is None or now - self.t_prog < DL_LOG_SEC:
+                return
+            self.pending, self.t_prog = None, now
+        self.lg.info(msg[:400])
+
+    def pump(self, stream) -> None:
+        try:
+            for raw in stream:
+                self.feed(raw)
+        except (OSError, ValueError):
+            pass  # pipa ditutup (proses anak dihentikan)
+
+
+def download_one(name: str, lg) -> str:
+    """unduh SATU model lewat proses anak; balikan "siap" / "gagal: …". Worker berhenti (stop) → proses anak dihentikan sepohon."""
+    try:
+        p = spawn_download(name)
+    except OSError as e:
+        return f"gagal: proses unduh tidak bisa dijalankan ({str(e)[:150]})"
+    DL["proc"] = p
+    cl = _ChildLog(name, lg)
+    rd = threading.Thread(target=cl.pump, args=(p.stdout,), daemon=True, name=f"unduh-{name}-log")
+    rd.start()
+    try:
+        while p.poll() is None:
+            cl.flush_due()
+            if stop.wait(0.5) and p.poll() is None:
+                lg.info("Worker berhenti → unduhan %s dihentikan (dilanjutkan saat worker menyala lagi)." % name)
+                kill_tree(p)
+                break
+    finally:
+        DL["proc"] = None
+    rd.join(timeout=5)
+    try:
+        p.stdout.close()  # type: ignore[union-attr]
+    except Exception:
+        pass
+    res = (cl.result or {}).get(name)
+    if isinstance(res, str):
+        return res
+    if stop.is_set():
+        return "gagal: dihentikan (dilanjutkan lain kali)"
+    why = cl.tail[-1][:150] if cl.tail else ""
+    return f"gagal: proses unduh berhenti (kode {p.returncode})" + (f" — {why}" if why else "")
 
 
 def download_bg(rt: Runtime, hb: "Heartbeat", names: list[str], warm: bool) -> None:
-    """unduh model yang kurang (models.prepare: cepat, bisa dilanjutkan) di thread latar; selesai → komponennya dipakai lagi"""
+    """
+    unduh model yang kurang di latar, SATU PER SATU di proses anak (bisa dihentikan, bisa dilanjutkan). Tiap model yang selesai
+    LANGSUNG dipakai (set_ready) dan — kalau PRELOAD — mesinnya dipanaskan sesudah job yang sedang jalan selesai; tidak menunggu
+    model lain (UTMOS dari GitHub bisa lama sekali).
+    """
     m = models_mod()
     if m is None:
         return
-    DL.update(active=True, names=list(names))
+    lg = _LogFn(vlog.get("unduh"))
+    DL.update(active=True, names=list(names), now=None, pct={}, done={})
     hb.wake.set()
     t0 = time.time()
-    log.info("Model belum lengkap (%s) — diunduh di latar. Job tetap jalan tanpa model itu dulu.", ", ".join(names))
+    log.info("Model belum lengkap (%s) — diunduh di latar satu per satu. Job tetap jalan tanpa model itu dulu.", ", ".join(names))
     try:
-        got = m.prepare(CFG, names=list(names), log=_LogFn(vlog.get("unduh")))
-    except Exception as e:
-        log.warning("Unduh model di latar gagal: %s — dicoba lagi saat worker dinyalakan ulang (atau jalankan siapkan-model).", str(e)[:300])
-        got = {}
+        for n in list(names):
+            if stop.is_set():
+                break
+            DL["now"] = n
+            hb.wake.set()
+            t1 = time.time()
+            try:
+                res = download_one(n, lg)
+            except Exception as e:  # thread latar tidak boleh menjatuhkan worker
+                res = f"gagal: {str(e)[:200]}"
+            DL["done"][n] = res
+            DL["pct"].pop(n, None)
+            DL["now"] = None
+            DL["names"] = [x for x in DL["names"] if x != n]
+            note = getattr(m, "note_result", None)
+            if callable(note):  # status_brief / ready_gen di proses ini ikut tahu (filenya ditulis proses anak)
+                try:
+                    note(n, res)
+                except Exception as e:
+                    log.debug("catat hasil %s gagal: %s", n, e)
+            if res == "siap":
+                log.info("Model %s siap dipakai (%.0f dtk).", n, time.time() - t1)
+                set_ready(rt, [n])
+                if warm and n in (*ENGINE_NAMES, "whisper", "utmos"):
+                    threading.Thread(target=warm_after_download, args=(rt, hb, n), daemon=True, name=f"pemanasan-{n}").start()
+            elif not stop.is_set():
+                log.warning("Model %s belum terunduh: %s — dicoba lagi saat worker dinyalakan ulang (atau jalankan SIAPKAN-MODEL.bat).", n, res[:300])
+            _MB["v"] = None  # status model dibaca ulang di detak berikutnya
+            hb.wake.set()
     finally:
-        DL["active"] = False
-    got = got if isinstance(got, dict) else {}
-    ready = [n for n in names if got.get(n) == "siap"]
-    DL["done"] = dict(got)
-    bad = {n: s for n, s in got.items() if s != "siap"}
-    if bad:
-        log.warning("Sebagian model belum terunduh: %s", "; ".join(f"{n}: {s}" for n, s in bad.items())[:500])
-    if ready:
-        log.info("Model siap dipakai (%s) dalam %.0f dtk.", ", ".join(ready), time.time() - t0)
-        set_ready(rt, ready)
-        if warm:
-            warm_up(rt, skip=set(names) - set(ready), engines=any(n in ready for n in ("chatterbox", "pocket")))
+        DL.update(active=False, now=None)
+        _MB["v"] = None
+    ok = [n for n, r in DL["done"].items() if r == "siap"]
+    if len(names) > 1 and not stop.is_set():
+        log.info("Unduhan latar selesai dalam %.0f dtk: %d dari %d model siap.", time.time() - t0, len(ok), len(names))
     hb.wake.set()
 
 
@@ -523,6 +837,7 @@ def keep_absent(rt: Runtime) -> None:
 def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
     ctx = JobCtx(rt, table, job)
     kind = job.get("kind", "tts") if table == VOICE else "render"
+    BUSY.set()  # "sedang membuat suara": pemanasan sesudah unduhan latar menunggu job ini selesai (tidak berebut GPU / mesin)
     rt.status = {"status": kind, "job": job["id"]}
     hb.wake.set()
     t0 = time.time()
@@ -555,6 +870,7 @@ def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
     finally:
         ctx.close()  # pengirim progres latar berhenti (patch yang belum terkirim dibuang)
         rt.status = {"status": "siap", "job": None}
+        BUSY.clear()
         hb.wake.set()
 
 
@@ -636,6 +952,7 @@ def main() -> int:
         log.info("Dihentikan.")
     finally:
         stop.set()
+        stop_downloads()  # proses anak unduhan latar dihentikan (dilanjutkan saat worker menyala lagi)
         hb.wake.set()
         hb.join(timeout=10)
         rt.engines.unload()

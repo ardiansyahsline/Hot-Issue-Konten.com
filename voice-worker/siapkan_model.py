@@ -5,8 +5,13 @@ Siapkan (unduh) model mesin suara SEKALI di depan — supaya job VO tidak pernah
   SIAPKAN-MODEL.bat --cek            status saja (kode keluar 1 kalau model wajib belum ada)
   SIAPKAN-MODEL.bat --cepat          hanya unduh yang belum ada (tanpa cek ulang ke internet) — dipakai NYALAKAN-MESIN-SUARA.bat
   SIAPKAN-MODEL.bat --tanpa-utmos    lewati penilai kealamian UTMOS (392 MB, opsional)
+  --wajib                            hanya model WAJIB (mesin suara utama = urutan pertama ENGINE_ORDER + faster-whisper) —
+                                     dipakai NYALAKAN-MESIN-SUARA.bat supaya worker cepat menyala; model opsional (UTMOS,
+                                     DeepFilterNet3, pocket-tts) diunduh worker sendiri di latar (AUTO_DOWNLOAD=1)
   --hanya whisper,utmos              hanya model tertentu
   --koneksi 8                        jumlah koneksi paralel per file (bawaan DOWNLOAD_CONNECTIONS di .env)
+  --latar                            dipakai worker (proses anak unduhan latar): tanpa tabel, progres tiap 15 dtk, baris akhir
+                                     "@@hasil {json}" (worker bisa menghentikan proses ini kapan saja; unduhan dilanjutkan lain kali)
 
 Unduhan cepat & bisa dilanjutkan: banyak koneksi sekaligus, lanjut dari bagian terakhir kalau internet putus / jendela ditutup,
 cek ukuran & isi file. Ctrl+C aman — jalankan lagi untuk melanjutkan. Tidak butuh SUPABASE_URL (boleh sebelum .env diisi).
@@ -14,6 +19,8 @@ cek ukuran & isi file. Ctrl+C aman — jalankan lagi untuk melanjutkan. Tidak bu
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -67,8 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cek", action="store_true", help="status saja, tidak mengunduh (kode keluar 1 kalau model wajib belum ada)")
     ap.add_argument("--cepat", action="store_true", help="hanya unduh yang belum ada, tanpa cek ulang model yang sudah ada")
     ap.add_argument("--tanpa-utmos", action="store_true", help="lewati UTMOS (penilai kealamian, opsional)")
+    ap.add_argument("--wajib", action="store_true", help="hanya model wajib (mesin suara utama + faster-whisper); sisanya diunduh worker di latar")
     ap.add_argument("--hanya", default="", help="daftar model dipisah koma, mis. whisper,utmos")
     ap.add_argument("--koneksi", type=int, default=0, help="koneksi paralel per file (bawaan DOWNLOAD_CONNECTIONS)")
+    ap.add_argument("--latar", action="store_true", help=argparse.SUPPRESS)  # proses anak unduhan latar worker
     a = ap.parse_args(argv)
 
     if a.koneksi:
@@ -82,11 +91,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Nama model tidak dikenal: {', '.join(bad)} (pilihan: {', '.join(models.NAMES)})")
             return 2
         names = [n for n in models.NAMES if n in want]
+    req = models.required(CFG)
+    if a.wajib:
+        names = [n for n in names if n in req]
+    if a.latar:
+        return latar(names)
 
     rows, st = table(CFG, skip)
     for r in rows:
         print(r)
-    req = models.required(CFG)
     if a.cek:
         kurang = [n for n in req if not st[n]["ready"]]
         if kurang:
@@ -96,8 +109,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     todo = [n for n in names if not st[n]["ready"]] if a.cepat else names
+    nanti = "Model opsional yang belum ada diunduh otomatis di latar saat mesin suara menyala (job tetap jalan tanpa itu)."
     if not todo:
-        print("\nSemua model sudah siap.")
+        print("\nModel wajib sudah siap. " + nanti if a.wajib else "\nSemua model sudah siap.")
         return 0
     print("")
     say(f"Menyiapkan: {', '.join(todo)} ({CFG.download_connections} koneksi per file). Ctrl+C aman — jalankan lagi untuk melanjutkan.")
@@ -106,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         res = models.prepare(CFG, todo, say, verify=not a.cepat)
     except KeyboardInterrupt:
         print("\nDihentikan. Bagian yang sudah terunduh disimpan — jalankan SIAPKAN-MODEL.bat lagi untuk melanjutkan.")
-        return 130
+        keluar_sekarang(130)
     print("")
     for r in table(CFG, skip)[0]:
         print(r)
@@ -120,9 +134,36 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if gagal:
         print("Model opsional yang gagal akan dicoba lagi otomatis saat mesin suara menyala (job tetap jalan tanpa itu).")
+    elif a.wajib:
+        print("Model wajib siap. " + nanti)
     else:
         print("Semua model siap. Nyalakan mesin suara: NYALAKAN-MESIN-SUARA.bat")
     return 0
+
+
+def keluar_sekarang(code: int) -> None:
+    """keluar SEKARANG: thread unduhan huggingface_hub (bukan daemon) tidak ditunggu selesai — bagian yang sudah terunduh
+    (.incomplete / .part) tetap tersimpan & dilanjutkan lain kali"""
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        import logging
+
+        logging.shutdown()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+def latar(names: list[str]) -> int:
+    """mode proses anak worker: unduh `names` yang belum ada (tanpa tabel), progres tiap 15 dtk, lalu baris "@@hasil {json}"
+    (dibaca worker). Kode keluar 0 = semua siap."""
+    try:
+        res = models.prepare(CFG, names, say, verify=False, every=15.0)
+    except KeyboardInterrupt:
+        keluar_sekarang(130)
+    print("@@hasil " + json.dumps(res, ensure_ascii=False), flush=True)
+    return 0 if all(v == "siap" for v in res.values()) else 1
 
 
 if __name__ == "__main__":

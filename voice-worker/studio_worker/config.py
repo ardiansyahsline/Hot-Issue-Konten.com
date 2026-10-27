@@ -112,8 +112,9 @@ class Config:
     # --- RENDER-GPU ---
     # render MP4 di GPU NVIDIA: auto (ada NVIDIA → Chrome render ke NVIDIA + --gl=angle + encode NVENC) | nvidia (paksa) | off (seperti dulu)
     render_gpu: str = "auto"
-    # bitrate video saat encode NVENC (NVENC tidak memakai CRF), format Remotion: angka + K/M
-    render_bitrate: str = "10M"
+    # bitrate video saat encode NVENC (NVENC tidak memakai CRF), format Remotion: angka + K/M. 5M ≈ ukuran CRF 18 lama (teaser 60 dtk
+    # ±3,4 Mbps): 10M membuat MP4 2–3× lebih besar → video 60 dtk ±77 MB lewat batas upload Supabase gratis 50 MB, >165 dtk lewat MAX_UPLOAD 200 MB
+    render_bitrate: str = "5M"
     # --- CEPAT ---
     # transformer Chatterbox: auto (bf16 kalau GPU mendukung) / bf16 / fp32
     tts_dtype: str = "auto"
@@ -263,7 +264,7 @@ def load(env_file: Path | None = None) -> Config:
     )
     # --- RENDER-GPU ---
     cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))
-    cfg.render_bitrate = render_bitrate(_env("RENDER_BITRATE", "10M"))
+    cfg.render_bitrate = render_bitrate(_env("RENDER_BITRATE", "5M"))
     if _env("RENDER_CONCURRENCY").lower() == "auto":  # _int() di atas memberi 2 untuk "auto" → diganti sesuai jumlah core
         cfg.render_concurrency = auto_render_concurrency()
     cfg.ensure_dirs()
@@ -282,10 +283,10 @@ def render_gpu_mode(raw: str) -> str:
 
 
 def render_bitrate(raw: str) -> str:
-    """RENDER_BITRATE → format yang diterima Remotion (angka + "K"/"k"/"M"): "10m" / "10 Mbps" / "10" → "10M"; salah → "10M" """
+    """RENDER_BITRATE → format yang diterima Remotion (angka + "K"/"k"/"M"): "10m" / "10 Mbps" / "10" → "10M"; salah → "5M" (bawaan)"""
     m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*([kKmM])?\s*(?:b|bps|bit/?s)?\s*", raw or "", re.I)
     if not m or float(m.group(1).replace(",", ".")) <= 0:
-        return "10M"
+        return "5M"
     num = m.group(1).replace(",", ".")
     unit = (m.group(2) or "M").upper()
     return f"{num}{unit}"

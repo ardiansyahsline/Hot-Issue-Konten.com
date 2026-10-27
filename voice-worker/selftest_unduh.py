@@ -9,6 +9,8 @@ ke alamat "bertanda tangan" yang kedaluwarsa + macet di tengah. Yang dicek:
   - models.status / missing / status_brief dengan folder model palsu, prepare UTMOS + DeepFilterNet3 dari server lokal,
     prepare HuggingFace (palsu) diulang saat putus & memakai max_workers = DOWNLOAD_CONNECTIONS;
   - natural (UTMOS) / clean (DeepFilterNet) / asr (whisper) / pocket TIDAK PERNAH menyentuh jaringan (socket ditambal);
+  - _hf_need: model lengkap = 0 byte (tanpa "mengunduh ±3 GB"), Ctrl+C langsung terasa saat unduhan HF, note_result (proses anak),
+    siapkan_model --wajib / --latar, NYALAKAN-MESIN-SUARA.bat & install.ps1 tetap CRLF + ASCII dan langkah unduh tidak menggagalkan instal;
   - kecepatan 1 koneksi vs 8 koneksi pada server yang membatasi 200 KB/s per koneksi.
 """
 from __future__ import annotations
@@ -898,8 +900,149 @@ def t_siapkan_model_cli():
     assert r2.returncode == 0 and "Model wajib sudah siap" in r2.stdout, (r2.returncode, r2.stdout[-600:], r2.stderr[-600:])
     r3 = subprocess.run(py + ["--hanya", "apa"], env=env, capture_output=True, text=True, timeout=60)
     assert r3.returncode == 2
+    # --wajib (NYALAKAN-MESIN-SUARA.bat): model wajib sudah ada → langsung selesai, model opsional TIDAK diunduh di depan
+    r4 = subprocess.run(py + ["--cepat", "--wajib"], env=env, capture_output=True, text=True, timeout=120)
+    assert r4.returncode == 0 and "Model wajib sudah siap" in r4.stdout and "Menyiapkan:" not in r4.stdout, (r4.returncode, r4.stdout[-600:], r4.stderr[-600:])
+    # --latar (proses anak unduhan latar worker): tanpa tabel, baris akhir @@hasil {json}
+    fake_df(d / "xdg" / "DeepFilterNet")
+    r5 = subprocess.run(py + ["--latar", "--hanya", "deepfilter"], env=env, capture_output=True, text=True, timeout=120)
+    last = [x for x in r5.stdout.splitlines() if x.strip()][-1:]
+    assert r5.returncode == 0 and last == ['@@hasil {"deepfilter": "siap"}'] and "Model suara di laptop" not in r5.stdout, (r5.returncode, r5.stdout[-600:], r5.stderr[-600:])
     lines = [x for x in r2.stdout.splitlines() if x.startswith("  ")]
-    return f"tanpa .env Supabase: --cek kode 1 → setelah model wajib ada kode 0; tabel: {lines[1].split()[0:3]}"
+    return f"tanpa .env Supabase: --cek kode 1 → setelah model wajib ada kode 0; --cepat --wajib tidak mengunduh opsional; --latar → @@hasil; tabel: {lines[1].split()[0:3]}"
+
+
+@test
+def t_hf_need_model_lengkap_nol():
+    """_hf_need: model yang sudah lengkap = 0 byte (dulu selalu ukuran penuh → 'mengunduh ±3 GB' + baris 0% palsu); setengah jadi = sisanya"""
+    sha_ = "b" * 40
+    sibs = [SimpleNamespace(rfilename=n, size=sz) for n, sz in (("model.bin", 2048), ("config.json", 2), ("tokenizer.json", 2), ("vocabulary.txt", 1), ("README.md", 900), (".gitattributes", 50))]
+    calls: list[str] = []
+
+    class Api:
+        def model_info(self, repo, files_metadata=False, token=None):
+            return SimpleNamespace(sha=sha_, siblings=list(sibs))
+
+    def snapshot_download(repo_id, allow_patterns=None, token=None, cache_dir=None, max_workers=8, local_files_only=False, **kw):
+        if local_files_only:
+            p = models._hf_local_manual(repo_id, allow_patterns, Path(cache_dir) if cache_dir else None)
+            if p is None:
+                raise FileNotFoundError("tidak ada di cache")
+            return str(p)
+        calls.append(repo_id)
+        return str(fake_hf(repo_id, {"model.bin": b"m" * 2048, "config.json": b"{}", "tokenizer.json": b"{}", "vocabulary.txt": b"a"}, cache=Path(cache_dir) if cache_dir else None, commit=sha_))
+
+    def filter_repo_objects(items, allow_patterns=None, key=None, **k):
+        return [x for x in items if models._match(key(x) if key else x, allow_patterns)]
+
+    hh = types.ModuleType("huggingface_hub")
+    hh.HfApi = Api  # type: ignore[attr-defined]
+    hh.snapshot_download = snapshot_download  # type: ignore[attr-defined]
+    hu = types.ModuleType("huggingface_hub.utils")
+    hu.filter_repo_objects = filter_repo_objects  # type: ignore[attr-defined]
+    hu.disable_progress_bars = lambda: None  # type: ignore[attr-defined]
+    hh.utils = hu  # type: ignore[attr-defined]
+    cache = TMP / "need"
+    repo = "tes/need-whisper"
+    with fake_modules(huggingface_hub=hh, **{"huggingface_hub.utils": hu}):
+        assert models._hf_need(repo, models.WHISPER_FILES, None, cache) == 2048 + 2 + 2 + 1  # belum ada sama sekali (README tidak dihitung)
+        fake_hf(repo, {"model.bin": b"m" * 2048, "config.json": b"{}", "tokenizer.json": b"{}", "vocabulary.txt": b"a"}, cache=cache, commit=sha_)
+        need_full = models._hf_need(repo, models.WHISPER_FILES, None, cache)
+        cap = Cap()
+        p = models._hf_get(repo, models.WHISPER_FILES, None, label="Whisper tes", say=cap, conns=8, cache_dir=cache)
+        (cache / ("models--" + repo.replace("/", "--")) / "snapshots" / sha_ / "model.bin").unlink()
+        need_half = models._hf_need(repo, models.WHISPER_FILES, None, cache)
+        # snapshot lama (revisi lain) di cache → file revisi terbaru tetap dihitung perlu diunduh
+        old_sha = sha_
+        sha_ = "c" * 40
+        need_new_rev = models._hf_need(repo, models.WHISPER_FILES, None, cache)
+        sha_ = old_sha
+    assert need_full == 0, need_full
+    assert p is not None and p.name == sha_ and calls == [], (p, calls)  # lengkap → tidak ke jaringan sama sekali
+    assert not any("mengunduh ±" in x for x in cap.lines), cap.lines
+    assert need_half == 2048, need_half
+    assert need_new_rev == 2048 + 2 + 2 + 1, need_new_rev
+    return f"lengkap → 0 byte, tanpa snapshot_download & tanpa baris 'mengunduh ±'; model.bin hilang → {need_half} byte; revisi baru → penuh"
+
+
+@test
+def t_ctrl_c_saat_unduhan_hf_langsung_terasa():
+    """_interruptible: Ctrl+C sampai di thread utama dalam ±0,2 dtk walau unduhan (di thread lain) masih jalan — dulu menunggu file selesai"""
+    if threading.current_thread() is not threading.main_thread():
+        return "dilewati (bukan thread utama)"
+    blocker = threading.Event()
+    got: dict = {}
+
+    def slow():
+        blocker.wait(10)  # unduhan HF yang macet / lama
+        return "selesai"
+
+    def ctrl_c():
+        time.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=ctrl_c, daemon=True).start()
+    t0 = time.monotonic()
+    try:
+        got["v"] = models._interruptible(slow)
+    except KeyboardInterrupt:
+        got["ki"] = time.monotonic() - t0
+    finally:
+        blocker.set()
+    assert "ki" in got and got["ki"] < 1.5, got
+    # hasil & error tetap diteruskan apa adanya
+    assert models._interruptible(lambda a, b=0: a + b, 2, b=3) == 5
+
+    def boom():
+        raise OSError("koneksi putus")
+
+    try:
+        models._interruptible(boom)
+        raise AssertionError("error harus diteruskan")
+    except OSError as e:
+        assert "putus" in str(e)
+    return f"Ctrl+C terasa {got['ki']:.2f} dtk sesudah ditekan (unduhan masih jalan 10 dtk); hasil & error diteruskan"
+
+
+@test
+def t_note_result_proses_lain():
+    """worker mengunduh lewat proses anak → note_result: ready_gen naik (komponen cek ulang), gagal tercatat di status_brief"""
+    cfg = cfg_("note")
+    g0 = models.ready_gen()
+    models.note_result("utmos", "gagal: koneksi putus")
+    assert models.status_brief(cfg)["utmos"].startswith("gagal unduh: koneksi putus"), models.status_brief(cfg)
+    assert models.ready_gen() == g0
+    models.note_result("utmos", "siap")
+    assert models.ready_gen() == g0 + 1 and "utmos" not in models._state["fail"]
+    assert models.status_brief(cfg)["utmos"] == "belum diunduh"  # file belum ada di folder tes ini → tetap jujur
+    return "gagal → 'gagal unduh: …'; siap → ready_gen +1"
+
+
+@test
+def t_skrip_windows_crlf_ascii_dan_alur():
+    """NYALAKAN-MESIN-SUARA.bat & install.ps1: CRLF + ASCII; NYALAKAN hanya unduh model wajib & memanggil install.ps1 -TanpaModel;
+    langkah unduh model install.ps1 tidak bisa menggagalkan instal (Ctrl+C ditahan untuk PowerShell, kode keluar 0)"""
+    bat = (ROOT.parent / "NYALAKAN-MESIN-SUARA.bat").read_bytes()
+    ps1 = (ROOT / "install.ps1").read_bytes()
+    sm = (ROOT / "SIAPKAN-MODEL.bat").read_bytes()
+    for name, raw in (("NYALAKAN-MESIN-SUARA.bat", bat), ("install.ps1", ps1), ("SIAPKAN-MODEL.bat", sm)):
+        raw.decode("ascii")  # UnicodeDecodeError = ada huruf non-ASCII (cmd.exe / PowerShell 5.1 tanpa BOM salah baca)
+        assert b"\n" in raw and raw.count(b"\n") == raw.count(b"\r\n"), f"{name}: harus CRLF semua"
+    b = bat.decode("ascii")
+    assert "siapkan_model.py --cepat --wajib" in b, "NYALAKAN: hanya model wajib di depan"
+    assert '-File ".\\install.ps1" -TanpaModel' in b, "NYALAKAN: install.ps1 tanpa langkah unduh model"
+    p = ps1.decode("ascii").replace("\r\n", "\n")
+    assert "[switch]$TanpaModel" in p and "CancelKeyPress" in p and "e.Cancel = true" in p
+    lines = p.split("\n")
+    opener = [i for i, x in enumerate(lines) if x.rstrip().endswith("@'")]
+    closer = [i for i, x in enumerate(lines) if x.startswith("'@")]
+    assert len(opener) == 1 and len(closer) == 1 and closer[0] > opener[0], (opener, closer)  # here-string: '@ wajib di kolom 0
+    assert p.count("{") == p.count("}"), "kurung kurawal install.ps1 tidak seimbang"
+    step9 = p[p.index('Langkah "9/9') : p.index('"Selesai dipasang."')]
+    assert "& $py siapkan_model.py\n" in step9 and "$kodeModel = $LASTEXITCODE" in step9
+    assert not re.search(r"\b(Gagal|Cek)\s", step9) and "exit" not in step9, "langkah 9 tidak boleh memanggil Gagal/Cek/exit (instal gagal)"
+    assert p.rstrip().endswith("exit 0"), "install.ps1 harus diakhiri exit 0"
+    return "CRLF + ASCII; NYALAKAN: --cepat --wajib & install.ps1 -TanpaModel; install.ps1 langkah 9 tidak pernah exit 1"
 
 
 # ---------------------------------------------------------------- jalankan

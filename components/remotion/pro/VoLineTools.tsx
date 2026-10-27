@@ -373,7 +373,7 @@ export default function VoLineTools({ scene, timeline, tools }: { scene: Scene; 
                       ? `${etaText(job.message, "Laptop lagi bikin suara…")}${pct ? ` ${pct}%` : ""}`
                       : (queuedMsg ?? "Menunggu giliran di laptop…")}
               </span>
-              {job && <EtaChip job={job} />}
+              {job && <EtaChip job={job} live={false} />}
             </span>
             {st?.s !== "start" && (
               <button type="button" className="text-[12px] font-semibold text-red-400 hover:text-red-300" onClick={() => tools.cancel(scene.id)} data-vo-tempo-cancel>

@@ -344,7 +344,7 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
                       ? `${etaText(job.message, "Laptop lagi bikin suara…")}${pct ? ` ${pct}%` : ""}`
                       : (queuedMsg ?? "Menunggu giliran di laptop…")}
               </span>
-              {jobNow && <EtaChip job={jobNow} />}
+              {jobNow && <EtaChip job={jobNow} live={false} />}
             </span>
             {st.s !== "start" && (
               <button type="button" className="font-semibold text-red-400 hover:text-red-300" onClick={cancel}>

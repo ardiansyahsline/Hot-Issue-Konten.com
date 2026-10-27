@@ -33,10 +33,17 @@ def est_audio_sec(chars: int) -> float:
     return max(0.6, float(chars) / CHARS_PER_SEC)
 
 
+FMT_MIN_FROM = 90.0  # di bawah 90 dtk tetap detik: "1 mnt" dulu berarti 60–89 dtk (salah sampai ±29 dtk di website)
+
+
 def fmt_left(sec: float) -> str:
-    """'40 dtk' / '2 mnt' — dibulatkan supaya tidak berkedip tiap detik (dipakai pesan job; website membaca pola ini)"""
+    """
+    '40 dtk' / '85 dtk' / '2 mnt' — dibulatkan supaya tidak berkedip tiap detik (dipakai pesan job; website membaca pola ini).
+    < 90 dtk: detik, dibulatkan KE ATAS per 5 dtk (min 5) → sisa nyata ada di (N-5, N] dtk. ≥ 90 dtk: menit bulat → sisa nyata
+    ±30 dtk dari N menit. Website (lib/studio/eta.ts) memakai pita ketidakpastian ini untuk menstabilkan hitung mundurnya.
+    """
     s = max(0.0, float(sec))
-    if s < 60:
+    if s < FMT_MIN_FROM:
         return f"{max(5, int(math.ceil(s / 5.0)) * 5)} dtk"
     return f"{int(round(s / 60.0))} mnt"
 
