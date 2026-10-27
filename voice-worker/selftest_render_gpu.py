@@ -195,7 +195,9 @@ def t_pengaturan_env_render_gpu():
         got = config.render_bitrate(raw)
         assert got == want, (raw, got)
         assert got[-1] in "KkM"  # syarat validateBitrate() Remotion
-    assert [config.auto_render_concurrency(n) for n in (1, 4, 6, 8, 16, 32)] == [2, 2, 3, 4, 4, 4]
+    # auto: separuh thread CPU 2..6, dibatasi RAM (selftest_render_cache.py menguji lebih lengkap)
+    assert [config.render_tabs(n, 64.0) for n in (1, 4, 6, 8, 16, 32)] == [2, 2, 3, 4, 6, 6]
+    assert config.render_tabs(12, 8.0) == 2 and config.render_tabs(12, None) == 6
     keys = ("RENDER_GPU", "RENDER_BITRATE", "RENDER_CONCURRENCY", "DATA_DIR")
     old = {k: os.environ.get(k) for k in keys}
     try:
@@ -211,7 +213,8 @@ def t_pengaturan_env_render_gpu():
         assert c.render_concurrency == 3 and c.render_gpu == "auto" and c.render_bitrate == "5M"
         assert config.Config.render_bitrate == "5M"
         os.environ.pop("RENDER_CONCURRENCY")
-        assert config.load(TMP / "tidak-ada.env").render_concurrency == 2  # bawaan tetap 2
+        c = config.load(TMP / "tidak-ada.env")
+        assert c.render_conc_auto and c.render_concurrency == config.auto_render_concurrency()  # bawaan baru: auto
     finally:
         for k, v in old.items():
             if v is None:
@@ -738,13 +741,13 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     assert "Menyiapkan Chrome render…" in msgs and "Merender ulang (encode CPU)…" in msgs, msgs
     assert jobs_render._gpu["nvenc_bad"] and jobs_render.render_gpu_info()["encode"] == "cpu"
     assert any(x.startswith(f"Render memakai GPU: {NV}") for x in logs())
-    # job kedua di sesi yang sama: tanpa ensure, langsung encode CPU (tetap ANGLE), sekali jalan
+    # job kedua di sesi yang sama: tanpa ensure & tanpa bundle (cache komposisi), langsung encode CPU (tetap ANGLE), sekali jalan
     calls.clear()
     job2 = {"id": "r2", "status": "proses", "timeline": {"scenes": [{"id": "s1", "dur": 2}]}, "created_by": None}
     sb2 = MiniSupa(job2)
     jobs_render.run(JobCtx(Runtime(cfg=c, supa=sb2, speed=sp), "studio_render_jobs", job2, min_gap=0))  # type: ignore[arg-type]
     assert job2["status"] == "selesai", job2
-    assert [a[2] for a in calls] == ["bundle", "render"] and "--gl=angle" in calls[1] and not any(a.startswith("--hardware") for a in calls[1]), calls
+    assert [a[2] for a in calls] == ["render"] and "--gl=angle" in calls[0] and not any(a.startswith("--hardware") for a in calls[0]), calls
     assert len(reg.writes) == 1 and sp.data["render"]["n"] == 2
     # job ketiga: error komposisi (bukan GPU) → langsung gagal, tidak dirender dua kali
     calls.clear()
@@ -755,9 +758,9 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
         raise AssertionError("harusnya JobError")
     except jobs_render.JobError as e:
         assert "Render video gagal" in str(e), e
-    assert [a[2] for a in calls] == ["bundle", "render"], calls
+    assert [a[2] for a in calls] == ["render"], calls
     assert sp.data["render"]["n"] == 2  # gagal → tidak dicatat
-    return f"bundle → ensure → registry → NVENC gagal → ulang CPU → selesai (kecepatan render {ratio}× tercatat); job kedua langsung CPU; error komposisi tidak diulang"
+    return f"bundle → ensure → registry → NVENC gagal → ulang CPU → selesai (kecepatan render {ratio}× tercatat); job kedua langsung CPU dari cache komposisi; error komposisi tidak diulang"
 
 
 def main() -> int:

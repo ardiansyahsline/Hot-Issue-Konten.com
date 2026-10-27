@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from studio_worker import config  # noqa: E402  (harus pertama: batas thread & folder cache)
 
+# .env lama (RENDER_CONCURRENCY=2 bawaan lama → auto) dirapikan di main() SESUDAH kunci satu-instance; di-import tes → .env tidak disentuh
 CFG = config.load()
 
 from studio_worker import log as vlog  # noqa: E402
@@ -887,6 +888,7 @@ def main() -> int:
     if lock is None:
         log.error("Worker sudah jalan di laptop ini (cek jendela lain / Task Scheduler). Yang ini berhenti.")
         return 0
+    migrated = config.migrate_env(CFG)  # hanya worker yang memegang kunci: .env ditulis sekali & tercatat di log-nya
     lower_priority()
     signal.signal(signal.SIGINT, on_sigint)
     if hasattr(signal, "SIGBREAK"):
@@ -895,6 +897,8 @@ def main() -> int:
     log.info("voice-worker %s mulai — id %s, %d thread CPU, data di %s", VERSION, CFG.worker_id, CFG.cpu_threads, CFG.data)
     if getattr(CFG, "preload_old_default", False):
         log.info("PRELOAD=0 di .env adalah bawaan lama → sekarang mesin suara dipanaskan di latar saat mulai (matikan: PRELOAD=mati).")
+    if migrated:
+        log.info("%s", migrated)
     rt = Runtime(cfg=CFG, supa=Supa(CFG.supabase_url, CFG.service_key, CFG.worker_id))
     rt.engines = Engines(CFG)
     rt.asr = Asr(CFG)
@@ -906,6 +910,8 @@ def main() -> int:
         rt.speed = None
     rt.render_ok, why = jobs_render.check(CFG)
     log.info("Render MP4 di laptop: %s", "siap" if rt.render_ok else f"tidak aktif ({why})")
+    if rt.render_ok:  # cache komposisi render disiapkan di latar → render pertama tidak menunggu `remotion bundle`
+        jobs_render.prebuild(CFG)
     g = gpu_info()
     log.info("GPU: %s", f"{g['gpu']} ({g['vram_gb']} GB, CUDA {g.get('cuda')})" if g.get("gpu") else f"tidak ada — mesin suara pakai CPU ({g.get('torch')})")
     base = {**g, "os": f"{platform.system()} {platform.release()}", "host": platform.node(), "id": CFG.worker_id}
@@ -943,6 +949,8 @@ def main() -> int:
                 last_sweep = time.time()
             if time.time() - last_check > 600:  # cek ulang kesiapan render & lepas model kalau lama menganggur (IDLE_UNLOAD_MIN)
                 rt.render_ok, _ = jobs_render.check(CFG)
+                if rt.render_ok:  # kode berubah (git pull tanpa restart) → cache komposisi baru disiapkan di latar
+                    jobs_render.prebuild(CFG)
                 rt.engines.maybe_idle_unload()
                 if not rt.engines.loaded():
                     rt.warm = False
@@ -953,6 +961,7 @@ def main() -> int:
     finally:
         stop.set()
         stop_downloads()  # proses anak unduhan latar dihentikan (dilanjutkan saat worker menyala lagi)
+        jobs_render.stop_prebuild()  # bangun cache komposisi di latar dihentikan (dibangun lagi saat worker menyala)
         hb.wake.set()
         hb.join(timeout=10)
         rt.engines.unload()

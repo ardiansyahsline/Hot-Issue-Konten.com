@@ -2,12 +2,15 @@
 Antrian render MP4 di laptop (studio_render_jobs) pakai Remotion CLI (@remotion/cli@4.0.535, dipasang install.ps1 dengan --no-save).
 
 Langkah:
-  1. salin SFX/musik repo & unduh file storage yang dipakai timeline ke folder public sementara;
+  1. unduh file storage yang dipakai timeline ke folder public job (versi tanpa VO: file suara VO tidak diunduh — tidak diputar);
      src "/api/studio/asset/<dir>/<file>" → "/public/<dir>/<file>", "/api/studio/file?p=<path>" → "/public/st/<hash>.<ext>"
      (data:audio/... dari VO cadangan juga ditulis jadi file; SFX tambahan studio_sfx dikirim sebagai props.sfxExtra)
-  2. `remotion bundle remotion/index.ts --public-dir=<tmp>` lalu SFX bawaan juga ditaruh di <bundle>/api/studio/asset/<dir>/
-     (komposisi menghitung alamat SFX bawaan sendiri lewat sfxSrc(), jadi alamat itu harus tetap bisa dibuka server render)
-  3. `remotion render <bundle> StudioVideo out.mp4 --props=props.json --concurrency=2` (progres dibaca dari output CLI)
+  2. bundle komposisi dari CACHE (render_cache.py): `remotion bundle remotion/index.ts --public-dir=<SFX+musik+logo bawaan>` + SFX
+     bawaan di <bundle>/api/studio/asset/<dir>/ (komposisi menghitung alamat SFX bawaan sendiri lewat sfxSrc()) hanya dibangun sekali
+     per versi kode (juga di latar saat worker menyala); per job cache di-hardlink ke folder job lalu file job ditambahkan ke public/
+  3. `remotion render <bundle> StudioVideo out.mp4 --props=props.json --concurrency=N` (N = RENDER_CONCURRENCY, bawaan auto sesuai
+     thread CPU & RAM; progres dibaca dari output CLI). Render gagal karena bundle cache (chunk hilang / rusak) → cache dibuang,
+     dibangun ulang & dirender sekali lagi
      laptop dengan GPU NVIDIA (RENDER_GPU=auto): Chrome render diarahkan ke NVIDIA (gpu_pref.py) + `--gl=angle
      --hardware-acceleration=if-possible --video-bitrate=5M` (encode NVENC); gagal karena GPU → diulang sekali dengan argumen lama
      (encode CPU); error lain (komposisi, file rusak) langsung gagal
@@ -30,7 +33,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import ff, gpu_pref, mix
+from . import ff, gpu_pref, mix, render_cache
 from . import log as vlog
 from .jobctx import Cancelled, JobCtx, JobError
 from .supa import norm_path
@@ -272,11 +275,12 @@ def owner_can_read(supa, owner: str | None) -> Callable[[str], bool]:
     return can
 
 
-def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], None], can_read: Callable[[str], bool] | None = None) -> tuple[object, list[str]]:
+def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], None], can_read: Callable[[str], bool] | None = None, skip_vo: bool = False) -> tuple[object, list[str]]:
     """ganti semua alamat /api/studio/... di timeline dengan /public/... dan siapkan filenya. Balikan (timeline baru, daftar file gagal).
     File storage yang tidak boleh dibaca pemilik job (can_read) dianggap gagal. Media yang gagal disiapkan dibuang dari timeline
     (logo/klip/latar/VO → null, musik → "bed"; proyek teaser → "none" karena teaser sengaja tanpa musik latar) supaya render tidak
-    batal karena file 404."""
+    batal karena file 404. skip_vo (versi tanpa VO): file suara VO di storage (timeline.vo) TIDAK diunduh & alamatnya dibiarkan —
+    komposisi dengan audio "novo" tidak memutar VO sama sekali, baris VO (waktu & kata untuk tampilan) tetap utuh."""
     missing: list[str] = []
     bad: set[str] = set()  # alamat asli yang gagal disiapkan
     done: dict[str, str] = {}
@@ -335,7 +339,8 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
                     name = hashlib.sha1(raw).hexdigest()[:16] + EXT_OF.get(m.group(2).lower(), ".bin")
                     dst = public / "st" / name
                     dst.parent.mkdir(parents=True, exist_ok=True)
-                    dst.write_bytes(raw)
+                    if not dst.exists():  # nama = hash isi: file yang sudah ada isinya sama (tidak pernah menimpa file)
+                        dst.write_bytes(raw)
                     out = f"/public/st/{name}"
                 except (binascii.Error, ValueError):
                     missing.append("data-url")
@@ -343,19 +348,21 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
         done[s] = out
         return out
 
-    def walk(v):
+    def walk(v, net: bool = True):
         if isinstance(v, str):
+            if not net and v.startswith("/api/studio/file"):
+                return v
             return fix(v) if v.startswith(("/api/studio/", "data:")) or v in PRESET_LOGOS else v
         if isinstance(v, list):
-            return [walk(x) for x in v]
+            return [walk(x, net) for x in v]
         if isinstance(v, dict):
-            return {k: walk(x) for k, x in v.items()}
+            return {k: walk(x, net) for k, x in v.items()}
         return v
 
     def gone(v) -> bool:
         return isinstance(v, str) and v in bad
 
-    out = walk(tl)
+    out = {k: walk(x, k != "vo") for k, x in tl.items()} if skip_vo and isinstance(tl, dict) else walk(tl)
     if bad and isinstance(out, dict):  # media yang tidak ada di folder public → buang (komposisi menganggap null = tanpa media)
         brand = out.get("brand")
         if isinstance(brand, dict) and gone(brand.get("logo")):
@@ -546,6 +553,118 @@ def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_s
     return p.wait(), tail
 
 
+# ---------------------------------------------------------------- bundle komposisi (cache, render_cache.py)
+# render gagal yang MUNGKIN karena bundle cache tidak cocok / rusak (chunk JS hilang, isi terpotong, komposisi tidak ada) → cache
+# dibuang & dibangun ulang sekali. Sengaja sempit: error komposisi / media biasa (delayRender, file 404, TypeError — jejaknya juga
+# menyebut bundle.js) tidak cocok → tidak dirender dua kali. Isi cache yang terpotong / tersentuh sudah ketahuan intact() sebelum dipakai.
+BUNDLE_ERR = re.compile(
+    r"ChunkLoadError|Loading (CSS )?chunk \S+ failed|Failed to fetch dynamically imported module|Unexpected end of input"
+    r"|Cannot find module|No composition with the ID|Could not find composition",
+    re.I,
+)
+# gagal = kunci cache yang bundle latarnya gagal → cek berkala tidak mengulang bundle yang sama tiap 10 menit (kode berubah = kunci baru)
+_pre: dict = {"thread": None, "stop": threading.Event(), "gagal": None}
+
+
+def _key_fn(cfg) -> Callable[[], str]:
+    return lambda: render_cache.cache_key(cfg.repo, SAFE_FILE, tuple(PRESET_LOGOS.values()))
+
+
+def build_bundle(cfg, out: Path, on_line: Callable[[str], None], should_stop: Callable[[], bool]) -> None:
+    """`remotion bundle` → out, dengan folder public DASAR saja (SFX, musik, logo preset — file job ditambahkan per job), lalu SFX
+    bawaan juga di alamat aslinya (stage_builtin_assets). Hanya dipanggil render_cache.ensure() (hasilnya disimpan di cache)."""
+    node, cli = node_bin(), cli_js(cfg.repo)
+    if not node or not cli:
+        raise JobError("Laptop belum bisa render: Node.js / @remotion/cli belum terpasang.")
+    base = out.parent / "public-dasar"
+    copy_assets(cfg.repo, base)
+    conf = cfg.repo / "remotion.config.mjs"
+    conf_arg = [f"--config={conf}"] if conf.exists() else []
+    try:
+        code, tail = run_cli([node, str(cli), "bundle", "remotion/index.ts", f"--out-dir={out}", f"--public-dir={base}", "--log=info", *conf_arg], cfg.repo, on_line, should_stop, 15 * 60)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    if code != 0 or not (out / "index.html").exists():
+        log.error("remotion bundle gagal:\n%s", "\n".join(tail))
+        raise JobError("Komposisi video gagal disiapkan di laptop (cek log worker).")
+    stage_builtin_assets(cfg.repo, out)
+
+
+def get_bundle(cfg, dst: Path, on_line: Callable[[str], None], should_stop: Callable[[], bool], rebuild: bool = False) -> bool:
+    """bundle untuk job: cache (dibangun dulu kalau belum ada / rusak / rebuild) → hardlink ke dst. Balikan True kalau baru dibangun."""
+    t0 = time.monotonic()
+    if render_cache.busy():
+        log.info("Komposisi render sedang disiapkan di latar — job menunggu sebentar.")
+    with render_cache.hold(should_stop):
+        key_fn = _key_fn(cfg)
+        if rebuild:
+            render_cache.drop(cfg.tmp, key_fn())
+        src, key, built = render_cache.ensure(cfg.tmp, key_fn, lambda out: build_bundle(cfg, out, on_line, should_stop))
+        shutil.rmtree(dst, ignore_errors=True)
+        linked, copied = render_cache.link_tree(src, dst)
+    how = f"{linked} hardlink" + (f", {copied} disalin" if copied else "")
+    if built:
+        log.info("Komposisi render disiapkan & disimpan ke cache %s (%.1f dtk, %s).", key[:8], time.monotonic() - t0, how)
+    else:
+        log.info("Komposisi render dari cache %s (%.1f dtk, %s) — tanpa bundle ulang.", key[:8], time.monotonic() - t0, how)
+    return built
+
+
+def prebuild(cfg) -> None:
+    """worker menyala / cek berkala (render aktif & check() lolos): siapkan cache bundle di LATAR kalau belum ada → render pertama
+    tidak menunggu `remotion bundle`. Proses node di Windows berprioritas BELOW_NORMAL (ff.CHILD_FLAGS, bot WAHA tetap lancar); job
+    render yang datang menunggu kunci cache lalu langsung memakai hasilnya. Gagal → peringatan saja (job membangun sendiri) & versi kode
+    itu tidak dicoba lagi di latar sampai kodenya berubah / worker dinyalakan ulang."""
+    t = _pre.get("thread")
+    if t is not None and t.is_alive():
+        return
+    stop_ev: threading.Event = _pre["stop"]
+    if stop_ev.is_set():
+        return
+
+    def go() -> None:
+        t0 = time.monotonic()
+        try:
+            with render_cache.hold(stop_ev.is_set):
+                key_fn = _key_fn(cfg)
+                key = key_fn()
+                if render_cache.intact(render_cache.root(cfg.tmp) / key, key):
+                    return
+                if _pre.get("gagal") == key:
+                    log.debug("Bundle latar %s pernah gagal — dilewati (disiapkan saat render).", key[:8])
+                    return
+                log.info("Menyiapkan komposisi render di latar (sekali per versi kode)…")
+                try:
+                    render_cache.ensure(cfg.tmp, key_fn, lambda out: build_bundle(cfg, out, lambda ln: log.debug("remotion: %s", ln), stop_ev.is_set))
+                except Cancelled:
+                    raise
+                except Exception:  # bundle gagal / disk penuh: versi kode ini tidak diulang di latar
+                    _pre["gagal"] = key
+                    raise
+            log.info("Komposisi render siap di cache (%.0f dtk) — render berikutnya langsung mulai.", time.monotonic() - t0)
+        except Cancelled:
+            pass
+        except Exception as e:  # tidak boleh bikin worker crash; job render membangun sendiri
+            log.warning("Komposisi render belum bisa disiapkan di latar (%s) — disiapkan saat render.", str(e)[:200])
+
+    _pre["thread"] = threading.Thread(target=go, daemon=True, name="render-bundle")
+    _pre["thread"].start()
+
+
+def stop_prebuild() -> None:
+    """worker berhenti → bangun latar dihentikan (proses node dimatikan run_cli)"""
+    _pre["stop"].set()
+    t = _pre.get("thread")
+    if t is not None and t.is_alive():
+        t.join(timeout=15)
+
+
+def tabs_note(cfg) -> str:
+    """keterangan jumlah tab untuk log: "auto: 12 thread, 15,7 GB RAM" / "RENDER_CONCURRENCY=3 di .env" """
+    info = getattr(cfg, "render_conc_info", "")
+    return info or f"RENDER_CONCURRENCY={cfg.render_concurrency}"
+
+
 # ---------------------------------------------------------------- job
 def render_left(elapsed: float, frac: float) -> float | None:
     """perkiraan sisa render (detik) untuk pesan "· sisa ±N": linear dari waktu berjalan, baru dipercaya sesudah ≥ 10% progres"""
@@ -566,6 +685,7 @@ def run(ctx: JobCtx) -> None:
         raise JobError("Timeline kosong — tidak ada yang bisa dirender.")
     work = cfg.tmp / f"render-{ctx.id}"
     shutil.rmtree(work, ignore_errors=True)
+    # public = file JOB saja (st/ hasil unduhan, salinan aset yang dirujuk); bundle = hardlink cache + file job (public/st/…)
     public, bundle = work / "public", work / "bundle"
     public.mkdir(parents=True, exist_ok=True)
     node, cli = node_bin(), cli_js(cfg.repo)
@@ -603,25 +723,21 @@ def run(ctx: JobCtx) -> None:
     try:
         ctx.progress(0.02, "Menyiapkan file audio & gambar…", force=True)
         can_read = owner_can_read(rt.supa, job.get("created_by"))  # service role bisa baca semua: batasi ke file yang boleh dibuka pemilik job
-        tl2, missing = rewrite_timeline(tl, public, cfg.repo, lambda p, dst: rt.supa.download(p, dst), can_read)
+        variant = job.get("variant") or "vo"
+        tl2, missing = rewrite_timeline(tl, public, cfg.repo, lambda p, dst: rt.supa.download(p, dst), can_read, skip_vo=variant == "tanpa-vo")
         if missing:
             log.warning("Render %s: %d file tidak ketemu: %s", ctx.id, len(missing), missing[:5])
         assert isinstance(tl2, dict)
-        variant = job.get("variant") or "vo"
         if variant == "tanpa-vo":
             tl2["muteVo"] = True
-        copy_assets(cfg.repo, public)
         extra = extra_sfx(rt.supa, tl2, public, cfg.repo)
         props = work / "props.json"
         body = {"timeline": tl2, "audio": "novo" if variant == "tanpa-vo" else "all", "showSafeZone": False, "sfxExtra": extra}
         props.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
 
         ctx.progress(0.05, "Menyiapkan komposisi…", force=True)
-        code, tail = run_cli([node, str(cli), "bundle", "remotion/index.ts", f"--out-dir={bundle}", f"--public-dir={public}", "--log=info", *conf_arg], cfg.repo, on_line, stop, 15 * 60)
-        if code != 0 or not (bundle / "index.html").exists():
-            log.error("remotion bundle gagal:\n%s", "\n".join(tail))
-            raise JobError("Komposisi video gagal disiapkan di laptop (cek log worker).")
-        stage_builtin_assets(cfg.repo, bundle)
+        built = get_bundle(cfg, bundle, on_line, stop)
+        render_cache.merge_new(public, bundle / "public")  # file job = file BARU (file cache ber-hardlink tidak ditimpa)
 
         def ensure_browser() -> None:  # Chrome render belum ada → unduh dulu supaya preferensi GPU & cek GPU terpasang sebelum render
             ctx.progress(0.19, "Menyiapkan Chrome render…", force=True)
@@ -639,6 +755,7 @@ def run(ctx: JobCtx) -> None:
         raw = work / "raw.mp4"
         eta(0.2)
         ctx.progress(0.2, "Merender gambar…", force=True)
+        log.info("Render: %d tab paralel (%s)", cfg.render_concurrency, tabs_note(cfg))
         args = [node, str(cli), "render", str(bundle), "StudioVideo", str(raw), f"--props={props}", f"--concurrency={cfg.render_concurrency}", "--codec=h264", "--log=info", *conf_arg]
         browser = getattr(cfg, "render_browser", "")
         if browser:  # Chrome headless sendiri (kalau unduhan otomatis Remotion diblokir jaringan)
@@ -646,12 +763,30 @@ def run(ctx: JobCtx) -> None:
         t_render = time.monotonic()
 
         def on_retry() -> None:
-            nonlocal t_start
-            t_start += time.monotonic() - t_render  # waktu percobaan GPU yang gagal tidak dihitung
+            nonlocal t_start, t_render
+            now = time.monotonic()
+            t_start += now - t_render  # waktu percobaan GPU yang gagal tidak dihitung
+            t_render = now
             ctx.eta(None)  # sisa waktu dari percobaan GPU sudah basi — perkiraan baru menyusul dari progres render ulang
             ctx.progress(0.2, "Merender ulang (encode CPU)…", force=True)
 
         code, tail = render_cli(cfg, args, raw, lambda a, limit: run_cli(a, cfg.repo, on_line, stop, limit), on_retry)
+        if (code != 0 or not raw.exists()) and not built and BUNDLE_ERR.search("\n".join(tail)):
+            # bundle dari cache tidak cocok / rusak → buang cache, bangun ulang SEKALI, render lagi
+            log.warning("Render gagal, kemungkinan karena cache komposisi (%s) — cache dibuang, komposisi disiapkan ulang.", fail_reason(tail))
+            ctx.eta(None)
+            ctx.progress(0.05, "Menyiapkan ulang komposisi…", force=True)
+            get_bundle(cfg, bundle, on_line, stop, rebuild=True)
+            render_cache.merge_new(public, bundle / "public")
+            try:
+                raw.unlink()
+            except OSError:
+                pass
+            now = time.monotonic()
+            t_start += now - t_render  # percobaan yang gagal + bangun ulang tidak ikut perkiraan sisa & catatan kecepatan
+            t_render = now
+            ctx.progress(0.2, "Merender gambar…", force=True)
+            code, tail = render_cli(cfg, args, raw, lambda a, limit: run_cli(a, cfg.repo, on_line, stop, limit), on_retry)
         if code != 0 or not raw.exists():
             log.error("remotion render gagal:\n%s", "\n".join(tail))
             raise JobError("Render video gagal di laptop (cek log worker).")

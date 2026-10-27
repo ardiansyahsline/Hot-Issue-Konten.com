@@ -34,7 +34,8 @@ Config.overrideWebpackConfig((current) => ({
 // Worker render boleh menggantinya dengan --public-dir=<folder sementara> yang berisi sfx/, music/, storage/<path>.
 Config.setPublicDir(path.join(root, "assets", "audio"));
 
-// laptop biasa: 2 tab render paralel cukup (lebih banyak sering bikin kehabisan RAM)
+// render CLI manual (tanpa worker): 2 tab render paralel (lebih banyak sering bikin kehabisan RAM di laptop biasa).
+// Worker selalu memberi --concurrency=N (RENDER_CONCURRENCY di voice-worker/.env, bawaan auto) — flag CLI menang atas nilai ini.
 Config.setConcurrency(2);
 Config.setVideoImageFormat("jpeg");
 Config.setCodec("h264");
