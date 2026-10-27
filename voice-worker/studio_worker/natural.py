@@ -5,8 +5,10 @@ Skor kealamian take:
   1. nada: librosa.pyin di 16 kHz (fmin 65, fmax 400 Hz) → simpangan nada (semitone) frame bersuara + rasio bersuara.
      Bicara alami naik-turun ±2–4 semitone; di bawah ±1,8 st terdengar datar/monoton → penalti bertahap (MONO_ST).
   2. UTMOS (opsional): perkiraan MOS 1–5 "seberapa alami" dari tarepan/SpeechMOS (utmos22_strong, MIT, gratis) via torch.hub.
-     Dimuat malas sekali (GPU bila ada), input 16 kHz satu klip per panggilan. Dimatikan lewat NATURAL_MOS=0 di .env.
-     Gagal apa pun (tanpa internet / torch / error) → dimatikan untuk sesi itu + 1 baris peringatan; take tetap dipilih.
+     HANYA dari file lokal (SIAPKAN-MODEL.bat / unduhan latar menaruhnya di data/models/torch-hub) — tidak pernah mengunduh di
+     tengah job. Belum diunduh → dilewati (take dipilih dari kejelasan + nada), dicek ulang murah tiap 60 dtk, otomatis dipakai
+     begitu unduhan selesai. Dimuat sekali (GPU bila ada), input 16 kHz satu klip per panggilan. Dimatikan lewat NATURAL_MOS=0.
+     Gagal muat (torch / file rusak) → dimatikan untuk sesi itu + 1 baris peringatan; take tetap dipilih.
 Aturan pilih (choose): kejelasan (skor WER/CER lama, lebih kecil = lebih jelas) tetap utama; take yang kejelasannya dalam +NEAR dari
 yang terbaik bersaing di kealamian = MOS − penalti monoton.
 
@@ -24,8 +26,8 @@ from __future__ import annotations
 
 import math
 import re
-import socket
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -48,9 +50,12 @@ MIN_VOICED_SEC = 0.3
 MIN_VOICED = 30
 MOS_REPO = "tarepan/SpeechMOS:v1.2.0"
 MOS_MODEL = "utmos22_strong"
+RECHECK_SEC = 60.0  # UTMOS belum diunduh → cek file lagi paling cepat tiap 60 dtk (murah: hanya stat)
+MISSING = "belum diunduh"
 
 _lock = threading.RLock()
-_mos: dict = {"enabled": True, "hub_dir": None, "pred": None, "dev": "cpu", "off": None}
+# off = alasan tidak dipakai; missing = True kalau alasannya file belum ada (boleh dicek ulang), checked = waktu cek terakhir
+_mos: dict = {"enabled": True, "hub_dir": None, "pred": None, "dev": "cpu", "off": None, "missing": False, "checked": 0.0, "gen": -1}
 
 
 # ---------------------------------------------------------------- nada
@@ -131,14 +136,39 @@ def configure(enabled: bool = True, hub_dir: Path | None = None) -> None:
 def reset() -> None:
     """lupakan model & status gagal (untuk tes)"""
     with _lock:
-        _mos.update({"enabled": True, "hub_dir": None, "pred": None, "dev": "cpu", "off": None})
+        _mos.update({"enabled": True, "hub_dir": None, "pred": None, "dev": "cpu", "off": None, "missing": False, "checked": 0.0, "gen": -1})
+
+
+def refresh() -> None:
+    """dipanggil models.prepare setelah UTMOS selesai diunduh: lupakan tanda 'tidak dipakai' supaya langsung dicoba lagi"""
+    with _lock:
+        if _mos["pred"] is None:
+            _mos.update({"off": None, "missing": False, "checked": 0.0})
 
 
 def _disable(why: str) -> None:
-    if _mos["off"] is None:
+    if _mos["off"] is None or _mos["missing"]:
         log.warning("Skor kealamian UTMOS tidak dipakai di sesi ini (%s) — take tetap dipilih dari kejelasan + nada.", why[:200])
     _mos["off"] = why
+    _mos["missing"] = False
     _mos["pred"] = None
+
+
+def _not_downloaded() -> None:
+    first = _mos["off"] is None
+    _mos.update({"off": MISSING, "missing": True, "checked": time.monotonic(), "pred": None, "gen": _models_gen()})
+    if first:  # sekali saja (cek ulang tiap 60 dtk tidak menulis log lagi)
+        log.info("Penilai kealamian UTMOS belum diunduh — take dipilih dari kejelasan + nada dulu; otomatis dipakai setelah "
+                 "unduhan selesai (SIAPKAN-MODEL.bat / unduhan latar).")
+
+
+def _models_gen() -> int:
+    try:
+        from . import models
+
+        return models.ready_gen()
+    except Exception:
+        return 0
 
 
 def unload() -> None:
@@ -151,36 +181,67 @@ def mos_status() -> str:
     if not _mos["enabled"]:
         return "mati (NATURAL_MOS=0)"
     if _mos["off"]:
+        if _mos["missing"]:
+            return f"tidak dipakai: {MISSING} (jalankan SIAPKAN-MODEL.bat)"
         return f"tidak dipakai: {_mos['off'][:120]}"
     return "siap" if _mos["pred"] is not None else "belum dimuat"
 
 
+def _no_download(*a, **k):
+    raise RuntimeError("UTMOS mencoba mengunduh di tengah job — file model belum lengkap, jalankan SIAPKAN-MODEL.bat")
+
+
 def _predictor():
+    """model UTMOS dari file LOKAL saja; belum ada → None (job tidak pernah menunggu unduhan)"""
     with _lock:
-        if not _mos["enabled"] or _mos["off"] is not None:
+        if not _mos["enabled"]:
             return None
         if _mos["pred"] is not None:
             return _mos["pred"]
-        old = socket.getdefaulttimeout()
+        if _mos["off"] is not None:
+            if not _mos["missing"]:
+                return None  # gagal muat (torch / file rusak) → mati untuk sesi ini
+            gen = _models_gen()
+            if gen == _mos["gen"] and time.monotonic() - _mos["checked"] < RECHECK_SEC:
+                return None  # baru dicek & belum ada unduhan baru
+            _mos["gen"] = gen
+        hub = _mos["hub_dir"]
+        from . import models
+
+        if hub is None or not models.utmos_ready(hub):
+            _not_downloaded()
+            return None
+        repo_dir, _ckpt = models.utmos_paths(hub)
         try:
             import torch
 
-            if _mos["hub_dir"] is not None:
-                Path(_mos["hub_dir"]).mkdir(parents=True, exist_ok=True)
-                torch.hub.set_dir(str(_mos["hub_dir"]))
-            log.info("Memuat penilai kealamian UTMOS (sekali; pertama kali mengunduh ±410 MB dari GitHub)…")
-            socket.setdefaulttimeout(60)  # unduhan macet tidak boleh menggantung job selamanya
-            model = torch.hub.load(MOS_REPO, MOS_MODEL, trust_repo=True, verbose=False, skip_validation=True)
+            hubmod = torch.hub
+            old_dir = hubmod.get_dir() if hasattr(hubmod, "get_dir") else None
+            old_dl = getattr(hubmod, "download_url_to_file", None)
+            log.info("Memuat penilai kealamian UTMOS dari file lokal (sekali)…")
+            try:
+                hubmod.set_dir(str(hub))  # checkpoint dicari di <hub>/checkpoints/
+                if old_dl is not None:
+                    hubmod.download_url_to_file = _no_download  # jaring pengaman: dilarang mengunduh di job
+                model = hubmod.load(str(repo_dir), MOS_MODEL, source="local", trust_repo=True)
+            finally:
+                if old_dl is not None:
+                    hubmod.download_url_to_file = old_dl
+                if old_dir is not None:
+                    hubmod.set_dir(old_dir)
             dev = "cuda" if torch.cuda.is_available() else "cpu"
             model = model.to(dev).eval()
-            _mos["pred"], _mos["dev"] = model, dev
+            _mos.update({"pred": model, "dev": dev, "off": None, "missing": False})
             log.info("UTMOS siap (%s).", dev)
             return model
         except (Exception, SystemExit) as e:
             _disable(f"{type(e).__name__}: {e}")
             return None
-        finally:
-            socket.setdefaulttimeout(old)
+
+
+def warm() -> bool:
+    """muat UTMOS sekarang (mis. saat worker mulai) kalau filenya sudah ada; True = siap"""
+    return _predictor() is not None
 
 
 def mos(y: np.ndarray, sr: int) -> float | None:

@@ -1,16 +1,21 @@
 """Cek ucapan dengan faster-whisper (bahasa Indonesia): teks hasil dengar + timestamp per kata.
 
 GPU dicoba dulu (float16); kalau gagal (DLL CUDA / kernel sm_120 belum didukung) otomatis pindah ke CPU int8.
+Model hanya dimuat dari file LOKAL (local_files_only) — unduhannya lewat SIAPKAN-MODEL.bat / unduhan latar, tidak pernah di job.
+Belum diunduh → "model whisper belum diunduh" (take dipilih dari cek audio saja), dicek ulang tiap 60 dtk.
 """
 from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
 from . import log as vlog
 
 log = vlog.get("asr")
+MISSING = "model whisper belum diunduh"
+RECHECK_SEC = 60.0
 
 
 def _win_cuda_dll_paths() -> None:
@@ -35,12 +40,34 @@ class Asr:
         self.device: str | None = None
         self.error: str | None = None
         self.lock = threading.Lock()
+        self._missing_at: float | None = None  # waktu cek terakhir saat model belum diunduh
+        self._gen = -1
+
+    def _recheck_due(self) -> bool:
+        """model belum diunduh: boleh cek lagi kalau sudah 60 dtk atau ada unduhan model yang baru selesai"""
+        if self._missing_at is None:
+            return False
+        try:
+            from . import models
+
+            gen = models.ready_gen()
+        except Exception:
+            gen = self._gen
+        if gen != self._gen or time.monotonic() - self._missing_at >= RECHECK_SEC:
+            self._gen = gen
+            return True
+        return False
 
     @property
     def available(self) -> bool:
-        if self.model is None and self.error is None:
+        if self.model is None and (self.error is None or self._recheck_due()):
             self._load()
         return self.model is not None
+
+    def refresh(self) -> None:
+        """setelah model whisper selesai diunduh di latar: coba muat lagi di pemakaian berikutnya"""
+        if self.model is None and self._missing_at is not None:
+            self.error, self._missing_at = None, None
 
     def _load(self, force_cpu: bool = False) -> None:
         try:
@@ -49,6 +76,15 @@ class Asr:
             self.error = f"faster-whisper tidak terpasang: {e}"
             log.warning("%s — pemilihan take pakai cek audio saja, timestamp kata diperkirakan.", self.error)
             return
+        from . import models
+
+        if not models.whisper_ready(self.cfg):  # cek file saja — tidak pernah mengunduh di tengah job
+            if self._missing_at is None:
+                log.warning("%s — pemilihan take pakai cek audio saja dulu; otomatis dipakai setelah unduhan selesai "
+                            "(SIAPKAN-MODEL.bat / unduhan latar).", MISSING.capitalize())
+            self.error, self._missing_at, self._gen = MISSING, time.monotonic(), models.ready_gen()
+            return
+        self._missing_at = None
         want = "cpu" if force_cpu else self.cfg.whisper_device
         tries = [("cpu", "int8")] if want == "cpu" else [("cuda", "float16"), ("cpu", "int8")] if want == "auto" else [("cuda", "float16")]
         if any(d == "cuda" for d, _ in tries):
@@ -61,7 +97,8 @@ class Asr:
                     device=dev,
                     compute_type=ct,
                     cpu_threads=self.cfg.cpu_threads,
-                    download_root=str(self.cfg.models / "whisper"),
+                    download_root=str(models.whisper_dir(self.cfg)),
+                    local_files_only=True,
                 )
                 import numpy as np
 

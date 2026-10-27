@@ -124,6 +124,12 @@ class Config:
     # batas waktu membuat versi per potongan = max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan detik ucapan)
     line_budget_per_sec: float = 8.0
     line_budget_min: float = 20.0
+    # --- UNDUH ---
+    # model diunduh di depan (SIAPKAN-MODEL.bat / install.ps1 / latar), TIDAK PERNAH di tengah job
+    download_connections: int = 8  # koneksi paralel per file (GitHub ±115 KB/s per koneksi → 8× lebih cepat)
+    utmos_urls: tuple[str, ...] = ()  # mirror checkpoint UTMOS (dicoba sebelum GitHub); boleh hf://pemilik/repo/file.pt
+    auto_download: bool = True  # model yang kurang diunduh di thread latar saat worker hidup (job tidak menunggu)
+    # --- /UNDUH ---
 
     @property
     def cache(self) -> Path:
@@ -199,6 +205,11 @@ def load(env_file: Path | None = None) -> Config:
     hf_token = _env("HF_TOKEN")
     if hf_token:
         os.environ.setdefault("HF_TOKEN", hf_token)
+    # --- UNDUH --- (harus sebelum huggingface_hub di-import: nilainya dibaca sekali saat import)
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")  # unduhan Xet (HF) memakai banyak koneksi sekaligus
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")  # bawaan 10 dtk terlalu pendek untuk internet yang tersendat
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "20")
+    # --- /UNDUH ---
 
     preload, preload_old = _preload(env_file)
     order = [e.strip().lower() for e in _env("ENGINE_ORDER", "chatterbox,pocket").split(",")]
@@ -244,6 +255,11 @@ def load(env_file: Path | None = None) -> Config:
         asr_beam_takes=_int("ASR_BEAM_TAKES", 1, 1, 5),
         line_budget_per_sec=_float("LINE_BUDGET_PER_SEC", 8.0, 1.0, 60.0),
         line_budget_min=_float("LINE_BUDGET_MIN", 20.0, 5.0, 600.0),
+        # --- UNDUH ---
+        download_connections=_int("DOWNLOAD_CONNECTIONS", 8, 1, 32),
+        utmos_urls=tuple(u.strip() for u in re.split(r"[,\s]+", _env("UTMOS_URLS")) if u.strip()),
+        auto_download=_bool("AUTO_DOWNLOAD", True),
+        # --- /UNDUH ---
     )
     # --- RENDER-GPU ---
     cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))

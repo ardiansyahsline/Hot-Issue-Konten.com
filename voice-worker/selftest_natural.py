@@ -562,7 +562,15 @@ def t_utmos_gagal_mati_dengan_anggun():
         y, info = jobs_tts.pick_take(eng, "Halo semuanya ini tes suara.", Path("ref.wav"), st, None, TMP)
         assert y.size and info["mos"] is None and info["take"] in (1, 2), info
         assert natural.mos_status().startswith("tidak dipakai"), natural.mos_status()
-        # (2) torch.hub dipaksa error (mis. tanpa internet) → mati sekali, 1 baris peringatan, tidak dicoba terus
+        # (2) file UTMOS sudah ada (palsu) tapi torch.hub.load error → mati sekali, 1 baris peringatan, tidak dicoba terus.
+        #     UTMOS hanya dimuat dari file lokal (SIAPKAN-MODEL.bat), tidak pernah diunduh di tengah job.
+        from studio_worker import models
+
+        repo_dir, ckpt = models.utmos_paths(TMP / "hub")
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        (repo_dir / "hubconf.py").write_text("URLS = {'utmos22_strong': '" + models.UTMOS_GITHUB + "'}\n", encoding="utf-8")
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        ckpt.write_bytes(b"PK palsu")
         natural.reset()
         cap.msgs.clear()
         calls = []
@@ -603,14 +611,14 @@ def t_utmos_gagal_mati_dengan_anggun():
                 return sys.modules["torch"].FT(np.array([next(mos_seq)]))
 
         def load(repo, model, **kw):
-            loaded.append((repo, model, kw.get("trust_repo")))
+            loaded.append((repo, model, kw.get("source")))
             return Pred()
 
         with _torch(_fake_torch(load)):
             natural.configure(True, TMP / "hub")
             st3 = {**st, "takes": 3}
             _, info4 = jobs_tts.pick_take(eng, "Kalimat keempat yang cukup panjang.", Path("ref.wav"), st3, None, TMP)
-        assert loaded == [("tarepan/SpeechMOS:v1.2.0", "utmos22_strong", True)], loaded
+        assert loaded == [(str(repo_dir), "utmos22_strong", "local")], loaded  # folder lokal, bukan unduh dari GitHub
         assert info4["take"] == 2 and info4["mos"] == 4.4 and info4.get("st") is not None, info4
         assert len(info4["alt"]) == 2 and all("mos" in a for a in info4["alt"]), info4
     finally:

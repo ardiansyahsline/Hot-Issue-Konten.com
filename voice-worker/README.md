@@ -66,7 +66,8 @@ Pemasang otomatis:
 - memasang **PyTorch CUDA 12.8 (cu128)** — wajib untuk RTX 50xx (Blackwell / sm_120),
 - memasang Chatterbox (tanpa dependensi lama yang mengunci PyTorch versi lama), pocket-tts, DeepFilterNet, faster-whisper, librosa, dll.,
 - memasang Remotion untuk render (`npm i --no-save @remotion/cli@4.0.535` di root repo, tidak mengubah package.json),
-- membuat file `.env`.
+- membuat file `.env`,
+- **mengunduh semua model suara sekali** (±4–5 GB, banyak koneksi sekaligus & bisa dilanjutkan — lihat *Siapkan model suara*).
 
 Butuh 10–30 menit tergantung internet. Kalau ada tulisan **GAGAL**, baca pesannya lalu jalankan ulang (aman diulang).
 
@@ -91,13 +92,13 @@ Ambil dari **Supabase Dashboard → Project Settings → API** (`Project URL` da
 ```
 Yang dicek: GPU terbaca PyTorch, versi CUDA cocok untuk RTX 50xx, tes 1 kalimat Chatterbox di GPU,
 ffmpeg, faster-whisper, DeepFilterNet, Node + Remotion. Hasil suara tes disimpan di `data\tes-chatterbox.wav` — dengarkan.
-Pertama kali akan **mengunduh model ±3–5 GB** (sekali saja).
+Model sudah diunduh `install.ps1` / `SIAPKAN-MODEL.bat` (lihat *Siapkan model suara*); belum? jalankan `SIAPKAN-MODEL.bat` dulu.
 
 Kalau muncul **"pindah ke pocket-tts"**: GPU belum bisa dipakai (lihat *Masalah umum*). Worker tetap jalan pakai CPU.
 
 ### 8. Jalankan
 **Paling gampang:** klik dua kali **`NYALAKAN-MESIN-SUARA.bat`** di folder utama repo (boleh juga disalin ke Desktop).
-Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → nyalakan worker.
+Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → unduh model yang belum ada → nyalakan worker.
 
 Atau manual: klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
 - `Ctrl+C` sekali = berhenti setelah tugas yang sedang jalan selesai.
@@ -171,6 +172,56 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 Lalu restart worker (tutup jendela `jalankan.bat` dan buka lagi, atau restart laptop kalau pakai nyala otomatis).
 
+## Siapkan model suara (unduh sekali di depan)
+
+Semua model diunduh **sebelum** membuat suara — tidak pernah lagi di tengah job VO. (Dulu penilai kealamian UTMOS 392 MB baru
+diunduh saat job berjalan, dari GitHub ±115 KB/s → job tertahan ±1 jam.)
+
+| Model | Untuk | Ukuran | Sumber | Disimpan di |
+|---|---|---|---|---|
+| `chatterbox` | mesin suara utama (GPU) — **wajib** | ±3 GB | HuggingFace `grandhigh/Chatterbox-TTS-Indonesian` (+ `ResembleAI/chatterbox`) | `data\hf` |
+| `whisper` | cek ucapan — **wajib** | ±480 MB (`small`) | HuggingFace `Systran/faster-whisper-small` | `data\models\whisper` |
+| `deepfilter` | pembersih rekaman bank suara | ±8 MB | GitHub `Rikorose/DeepFilterNet` | `%LOCALAPPDATA%\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3` |
+| `utmos` | penilai kealamian (opsional) | 392 MB | mirror `UTMOS_URLS` dulu, cadangan GitHub Releases `tarepan/SpeechMOS` | `data\models\torch-hub` |
+| `pocket` | mesin cadangan CPU | ±0,5 GB | HuggingFace `tryzz889/pocket-tts-indonesian` (+ `kyutai/pocket-tts`) | `data\hf` |
+
+Kapan diunduh:
+- **`install.ps1`** langkah 9/9 (lewati dengan `-TanpaModel`).
+- **`NYALAKAN-MESIN-SUARA.bat`** tiap dinyalakan: `siapkan_model.py --cepat` — hanya yang belum ada (kalau semua sudah ada:
+  selesai dalam hitungan detik, tanpa internet). Gagal pun mesin suara tetap dinyalakan.
+- **Manual**: klik dua kali **`SIAPKAN-MODEL.bat`** (atau dari PowerShell, dengan pilihan):
+  ```powershell
+  .\SIAPKAN-MODEL.bat                    # cek semua + unduh yang kurang + lengkapi yang setengah jadi
+  .\SIAPKAN-MODEL.bat --cek              # status saja (kode keluar 1 kalau model wajib belum ada)
+  .\SIAPKAN-MODEL.bat --cepat            # hanya yang belum ada
+  .\SIAPKAN-MODEL.bat --tanpa-utmos      # lewati UTMOS
+  .\SIAPKAN-MODEL.bat --hanya whisper,utmos --koneksi 16
+  ```
+  Tidak butuh `.env` Supabase (boleh dijalankan sebelum `.env` diisi).
+
+Kenapa cepat & aman:
+- **Banyak koneksi sekaligus**: file dibagi bagian 8 MB yang diunduh paralel (`DOWNLOAD_CONNECTIONS`, bawaan 8). GitHub membatasi
+  kecepatan *per koneksi*, jadi 8 koneksi ≈ 8× lebih cepat. HuggingFace memakai mode cepat Xet (`HF_XET_HIGH_PERFORMANCE`) +
+  `max_workers` = jumlah koneksi.
+- **Bisa dilanjutkan**: internet putus / jendela ditutup / Ctrl+C → jalankan lagi, bagian yang sudah ada tidak diulang
+  (`<file>.part` + `<file>.part.json`). Macet 30 dtk tanpa data → disambung ulang otomatis; tiap bagian dicoba ulang dengan jeda.
+- **Dicek dulu**: ukuran, sha256 (UTMOS) atau CRC isi zip (DeepFilterNet, kode SpeechMOS) — file baru dipindah ke nama akhir
+  kalau sudah lengkap & benar. Halaman error / file lain dari mirror ditolak, lalu sumber berikutnya dicoba.
+- Progres jelas tiap ±2 dtk, contoh: `UTMOS  37% · 145/392 MB · 5,2 MB/s · sisa ±48 dtk`.
+
+Kalau ada model yang belum siap saat mesin suara jalan, job **tetap jalan tanpa menunggu**: UTMOS → versi dipilih dari kejelasan
+(ASR) + nada; DeepFilterNet → pembersih ffmpeg; whisper → cek audio saja; Chatterbox → mesin cadangan. Dengan `AUTO_DOWNLOAD=1`
+(bawaan) yang kurang diunduh di latar, dan begitu selesai langsung dipakai (dicek ulang tiap ±60 dtk).
+
+**Mirror UTMOS** (opsional): isi `UTMOS_URLS` di `.env`, mis. `UTMOS_URLS=hf://<pemilik>/<repo>/utmos22_strong_step7459_v1.pt`
+(atau alamat `https://…`, beberapa dipisah koma). Isinya harus persis file resmi (411.179.119 byte, sha256 `38aa51ab…9bff`);
+kalau beda otomatis ditolak lalu GitHub dipakai.
+
+Angka uji (`selftest_unduh.py`, server tes dibatasi 200 KB/s per koneksi): 1 koneksi 0,20 MB/s → 8 koneksi 1,32 MB/s (6,6×).
+Unduhan UTMOS asli dari GitHub Releases di server uji: 1 koneksi 14,3 MB/s → 8 koneksi 67,8 MB/s (392 MB dalam 6 dtk, sha256
+cocok). Di laptop (±115 KB/s per koneksi) perkiraannya ±0,9 MB/s → 392 MB ±7 menit (dulu ±1 jam). Masih lambat?
+Coba `--koneksi 16` atau `DOWNLOAD_CONNECTIONS=16`.
+
 ---
 
 ## Tambah SFX
@@ -200,15 +251,16 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `GPU tidak terdeteksi` / "pindah ke pocket-tts" | Update driver NVIDIA (≥ 570), restart, jalankan `install.ps1` lagi, lalu `cek_gpu.py`. |
 | `butuh PyTorch CUDA 12.8+` | PyTorch terpasang versi lama. Jalankan `install.ps1` lagi (memasang ulang torch cu128). |
 | `VRAM GPU penuh` | Tutup game / aplikasi berat lain. Worker otomatis mencoba sekali lagi lalu pindah ke pocket-tts. |
-| Unduh model gagal / lambat | Cek internet. Kalau sering kena batas unduh HuggingFace, buat token gratis di huggingface.co → isi `HF_TOKEN` di `.env`. |
-| `DeepFilterNet tidak bisa dipakai` | Model pembersih diunduh dari GitHub saat pertama dipakai. Kalau gagal, worker memakai pembersih ffmpeg (hasil sedikit kurang bersih). |
+| Unduh model gagal / lambat | Jalankan `SIAPKAN-MODEL.bat` lagi — unduhan **dilanjutkan**, bukan diulang. Lambat: `--koneksi 16` / `DOWNLOAD_CONNECTIONS=16`. Sering kena batas unduh HuggingFace: buat token gratis di huggingface.co → isi `HF_TOKEN` di `.env`. |
+| `DeepFilterNet3 belum diunduh` / `tidak bisa dipakai` | Jalankan `SIAPKAN-MODEL.bat`. Sementara itu worker memakai pembersih ffmpeg (hasil sedikit kurang bersih), lalu otomatis pindah ke DeepFilterNet begitu modelnya ada. |
+| `Model whisper belum diunduh` | Jalankan `SIAPKAN-MODEL.bat`. Sementara itu versi suara dipilih dari cek audio saja. |
 | Bot WAHA jadi lambat | Turunkan `CPU_THREADS` di `.env` (mis. 2). Worker sudah jalan dengan prioritas rendah & satu tugas sekaligus. |
 | VRAM ingin dilepas saat menganggur | Isi `IDLE_UNLOAD_MIN=30` (model dilepas setelah 30 menit tanpa tugas, dimuat lagi saat ada tugas). |
 | Render gagal | Pastikan Node.js 20 terpasang lalu `install.ps1` lagi. Render pertama mengunduh Chrome khusus render (±100 MB). Kalau unduhan itu diblokir jaringan, unduh *chrome-headless-shell* (Chrome for Testing) sendiri lalu isi path-nya di `REMOTION_BROWSER` (`.env`). |
 | Render lambat / Task Manager menunjukkan GPU Intel | Lihat log: `Render memakai GPU: …`. Kalau bukan NVIDIA, ikuti langkah manual di bagian *Render MP4 pakai GPU NVIDIA*. Pastikan `RENDER_GPU` bukan `off`. |
 | Log `NVENC … tidak bisa dipakai` | Driver NVIDIA lama / ffmpeg Remotion tanpa NVENC. Render tetap jalan (encode CPU). Update driver NVIDIA lalu nyalakan ulang worker. |
 | Upload video gagal (file besar) | Paket gratis Supabase membatasi ukuran file (±50 MB). Render video lebih pendek atau naikkan batas di Supabase. |
-| `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada. Biasanya karena unduhan pertama (±410 MB dari GitHub) gagal / tanpa internet. Coba lagi dengan menyalakan ulang worker, atau matikan dengan `NATURAL_MOS=0`. |
+| `UTMOS belum diunduh` / `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada, job tidak menunggu. Jalankan `SIAPKAN-MODEL.bat` (392 MB, bisa dilanjutkan) — begitu selesai UTMOS otomatis dipakai. Atau matikan dengan `NATURAL_MOS=0`. |
 | `Worker sudah jalan` | Sudah ada worker lain (mis. dari nyala otomatis). Cukup satu. |
 
 **Tes tanpa GPU / model** (memastikan pemasangan benar):
@@ -216,6 +268,9 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 .venv\Scripts\python selftest.py
 .venv\Scripts\python selftest_natural.py
 .venv\Scripts\python selftest_runtime.py
+.venv\Scripts\python selftest_unduh.py      # pengunduh model: paralel, lanjut setelah putus, cek sha, tanpa internet
+.venv\Scripts\python selftest_cepat.py      # jalur cepat Chatterbox (bobot acak di CPU; --ringan = tanpa torch)
+.venv\Scripts\python selftest_render_gpu.py  # render MP4 pakai GPU NVIDIA
 ```
 
 ---
@@ -228,9 +283,10 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `jalankan.bat` / `pasang-otomatis.ps1` | Menjalankan manual / otomatis lewat Task Scheduler |
 | `install.ps1`, `requirements.txt`, `requirements-gpu.txt` | Pemasang (urutan paket penting — pakai `install.ps1`) |
 | `cek_gpu.py` | Cek GPU + tes suara |
-| `selftest.py`, `selftest_natural.py`, `selftest_runtime.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_runtime.py`: alur worker — progres latar, batal, perkiraan sisa, unggah paralel, cek antrian, pemanasan, log bersih) |
+| `SIAPKAN-MODEL.bat` / `siapkan_model.py` | Unduh / cek model suara di depan (cepat, bisa dilanjutkan) |
+| `selftest.py`, `selftest_natural.py`, `selftest_unduh.py`, `selftest_runtime.py`, `selftest_cepat.py`, `selftest_render_gpu.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_unduh.py`: pengunduh model; `selftest_runtime.py`: alur worker; `selftest_cepat.py`: jalur cepat Chatterbox; `selftest_render_gpu.py`: render pakai NVIDIA) |
 | `tambah_sfx.py`, `freesound_cc0.py` | Tambah SFX |
-| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
+| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `models.py` + `unduh.py` (cek & unduh model), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
 | `bank-suara/` | Rekaman referensi suara Alif (jangan diubah) |
 | `data/` | Dibuat otomatis: log, cache suara, model, file sementara (tidak masuk Git) |
 
