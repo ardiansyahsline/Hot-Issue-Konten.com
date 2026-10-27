@@ -542,6 +542,12 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
     if (!active) playerRef.current?.pause();
   }, [active]);
 
+  // HP: urutan DOM (chat → rencana → preview/timeline) beda dengan urutan tampil (chat → preview/timeline → rencana). Jangkar scroll
+  // browser = elemen terlihat pertama di DOM → kartu rencana di bawah timeline; bar timeline dibuka = halaman lompat & klik tiruan
+  // sesudah sentuhan jatuh ke kontrol lain. Jangkar ikut bagian yang terakhir disentuh: preview/timeline disentuh → rencana bukan jangkar
+  const planBox = useRef<HTMLDivElement>(null);
+  const previewBox = useRef<HTMLDivElement>(null);
+
   return (
     <div className="space-y-4">
       <ProjectBar
@@ -564,7 +570,10 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
       />
 
       {/* HP: chat → preview → rencana → suara & export. Layar lebar: kiri chat + rencana, kanan sticky */}
-      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+      <div
+        className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start"
+        onPointerDownCapture={(e) => planBox.current?.toggleAttribute("data-tl-touch", !!previewBox.current?.contains(e.target as Node))}
+      >
         <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-4">
           <div className="order-1 min-w-0">
             {loading ? (
@@ -584,7 +593,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
               />
             )}
           </div>
-          <div className="order-3 min-w-0">
+          <div ref={planBox} className="order-3 min-w-0 max-lg:data-[tl-touch]:[overflow-anchor:none]">
             {opening ? (
               <div className="card h-64 animate-pulse" />
             ) : timeline ? (
@@ -596,7 +605,7 @@ export default function StudioPro({ active = true }: { active?: boolean }) {
         </div>
 
         <div className="contents lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100dvh-6rem)] lg:min-w-0 lg:flex-col lg:gap-4 lg:overflow-y-auto lg:pb-1">
-          <div className="order-2 min-w-0 space-y-4">
+          <div ref={previewBox} className="order-2 min-w-0 space-y-4">
             <PreviewPane timeline={timeline} sfxExtra={sfxExtra} playerRef={playerRef} selected={selected} onSelect={setSelected} onChange={changeEdit} opening={opening} beatHint={beatHint} projectId={projectId} />
           </div>
           {timeline && (

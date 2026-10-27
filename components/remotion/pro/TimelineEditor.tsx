@@ -383,7 +383,7 @@ export default function TimelineEditor(p: {
   const head = frame === undefined ? null : (frame / fps) * pps;
   useEffect(() => {
     const el = scroller.current;
-    if (!el || head === null || drag.current || voDrag.current || sfxDrag.current || scrub.current) return;
+    if (!el || head === null || drag.current || voDrag.current || sfxDrag.current || musicDrag.current || scrub.current) return;
     if (head < el.scrollLeft + 8 || head > el.scrollLeft + el.clientWidth - 24) el.scrollLeft = Math.max(0, head - 48);
   }, [head]);
 
@@ -500,11 +500,9 @@ export default function TimelineEditor(p: {
     const d = voDrag.current;
     voDrag.current = null;
     setVoDraft(null);
-    if (!d || !ok) return;
-    if (!d.moved) {
-      setPick({ kind: "vo", sceneId: d.id });
-      return;
-    }
+    // ketuk tanpa geser → dipilih di onClick (bar dibuka sesudah klik, bukan saat pointerup: klik tiruan sesudah sentuhan
+    // tidak jatuh ke slider / tombol bar yang baru muncul di bawah jari)
+    if (!d || !ok || !d.moved) return;
     setPick({ kind: "vo", sceneId: d.id });
     setVoAt(d.id, d.at);
   };
@@ -593,9 +591,10 @@ export default function TimelineEditor(p: {
     const d = sfxDrag.current;
     sfxDrag.current = null;
     setSfxDraft(null);
-    if (!d || !ok) return;
+    // ketuk tanpa geser → dipilih di onClick (lihat endVo)
+    if (!d || !ok || !d.moved) return;
     pickSfx(d.si, d.ci);
-    if (d.moved) setSfxAt(d.si, d.ci, d.at);
+    setSfxAt(d.si, d.ci, d.at);
   };
   const onSfxKey = (e: KeyboardEvent<HTMLDivElement>, si: number, ci: number) => {
     if (e.key === "Escape") return setPick(null);
@@ -755,9 +754,10 @@ export default function TimelineEditor(p: {
     const d = musicDrag.current;
     musicDrag.current = null;
     setMusicDraft(null);
-    if (!d || !ok) return;
+    // ketuk tanpa geser → dipilih di onClick (lihat endVo)
+    if (!d || !ok || !d.moved) return;
     setPick({ kind: "music" });
-    if (d.moved && Math.abs(d.off - d.off0) > 1e-6) setMusicOffset(d.off);
+    if (Math.abs(d.off - d.off0) > 1e-6) setMusicOffset(d.off);
   };
   const onMusicKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -1341,6 +1341,7 @@ export default function TimelineEditor(p: {
                     onPointerUp={() => endSfx(true)}
                     onPointerCancel={() => endSfx(false)}
                     onLostPointerCapture={() => sfxDrag.current && endSfx(true)}
+                    onClick={() => pickSfx(d.si, d.ci)}
                     onKeyDown={(e) => onSfxKey(e, d.si, d.ci)}
                     className={`absolute flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70 ${d.locked ? "cursor-pointer" : "cursor-grab"} ${picked ? "ring-2 ring-orange-500" : ""}`}
                     style={{ left: d.x, top: 1 + d.lane * 11, touchAction: picked && !d.locked ? "none" : "pan-x" }}
@@ -1388,6 +1389,7 @@ export default function TimelineEditor(p: {
                     onPointerUp={() => endVo(true)}
                     onPointerCancel={() => endVo(false)}
                     onLostPointerCapture={() => voDrag.current && endVo(true)}
+                    onClick={() => setPick({ kind: "vo", sceneId: s.id })}
                     onKeyDown={(e) => onVoKey(e, s, l)}
                     className={`absolute top-1 bottom-1 cursor-grab overflow-hidden rounded border px-1 text-[9px] leading-[18px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70 active:cursor-grabbing ${
                       bad ? "border-red-500/80 bg-red-500/25 text-red-300" : tl.vo?.temp ? "border-amber-400/60 bg-amber-400/20 text-amber-300" : "border-emerald-400/60 bg-emerald-400/20 text-emerald-300"
@@ -1419,6 +1421,7 @@ export default function TimelineEditor(p: {
                   onPointerUp={() => endMusic(true)}
                   onPointerCancel={() => endMusic(false)}
                   onLostPointerCapture={() => musicDrag.current && endMusic(true)}
+                  onClick={() => setPick({ kind: "music" })}
                   onKeyDown={onMusicKey}
                   className={`absolute top-1 bottom-1 overflow-hidden rounded border text-[10px] leading-[20px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70 ${
                     fileMusic && mDur ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
