@@ -7,6 +7,11 @@ import { FORMATS, MAX_DUR, MAX_TOTAL, MIN_DUR, nearestBeat, sceneStartSecs, snap
 
 /** adegan premium teaser (layout "teaser") */
 export const isTeaserScene = (s: Pick<Scene, "layout"> | null | undefined) => s?.layout?.kind === "teaser";
+/**
+ * adegan premium teaser yang durasinya MASIH dikunci di ketukan musik (kunci belum dibuka user lewat "🔓 Buka kunci durasi").
+ * Yang dikunci: durasi & detik SFX bawaan. Visual (jenis tampilan, latar, kamera) tetap dikunci walau kunci durasi dibuka.
+ */
+export const isLockedTeaser = (s: Pick<Scene, "layout" | "unlocked"> | null | undefined) => isTeaserScene(s) && !s?.unlocked;
 
 /**
  * Shot teaser yang teks layarnya benar-benar membaca `scene.text` (Caption dari useShot().text) → berapa baris yang tampil
@@ -98,9 +103,12 @@ function canonCues(shot: TeaserShot): { id: string; at: number }[] {
   return canon.get(shot) ?? [];
 }
 
-/** cue SFX bawaan adegan teaser (id + detik sama dengan cue sheet) → detiknya dikunci di editor (nyala/mati & hapus tetap boleh) */
-export function isTeaserBeatCue(s: Pick<Scene, "layout">, c: Pick<SfxCue, "id" | "at">): boolean {
-  if (!isTeaserScene(s)) return false;
+/**
+ * cue SFX bawaan adegan teaser yang masih dikunci (id + detik sama dengan cue sheet) → detiknya dikunci di editor (nyala/mati & hapus
+ * tetap boleh). Kunci durasi adegan dibuka (scene.unlocked) → semua detik SFX bebas digeser.
+ */
+export function isTeaserBeatCue(s: Pick<Scene, "layout" | "unlocked">, c: Pick<SfxCue, "id" | "at">): boolean {
+  if (!isLockedTeaser(s)) return false;
   return canonCues(s.layout.shot ?? "hook").some((x) => x.id === c.id && Math.abs(x.at - c.at) < 0.005);
 }
 
@@ -118,6 +126,50 @@ export function teaserVoAt(shot: TeaserShot | undefined): number | undefined {
   return canonAt.get(shot ?? "hook");
 }
 
+/** durasi asli tiap shot (cue sheet di lib/studio/teaser.ts) — dipakai tombol "Kembalikan durasi asli" setelah kunci dibuka */
+let canonDur: Map<TeaserShot, number> | null = null;
+export function teaserDur(shot: TeaserShot | undefined): number | undefined {
+  if (!canonDur) {
+    canonDur = new Map();
+    const scenes = (teaserTimelineRaw().scenes ?? []) as { layout: { shot: TeaserShot }; dur?: unknown }[];
+    for (const s of scenes) if (typeof s.dur === "number") canonDur.set(s.layout.shot, s.dur);
+  }
+  return canonDur.get(shot ?? "hook");
+}
+
+/**
+ * "↺ Kembalikan durasi asli" / "🔒 Kunci lagi" adegan teaser yang kuncinya dibuka: durasi kembali ke cue sheet, `unlocked` dilepas,
+ * dan detik SFX bawaan yang sempat digeser kembali ke detik cue sheet (cue dengan id yang sama, dipasangkan ke yang terdekat) supaya
+ * terkunci lagi & sinkron dengan animasi. SFX tambahan user tetap, dijepit ≤ durasi. `sfxBack` = jumlah SFX bawaan yang dikembalikan.
+ */
+export function relockTeaser(s: Scene): { scene: Scene; sfxBack: number } {
+  const { unlocked: _u, ...rest } = s;
+  void _u;
+  if (!isTeaserScene(s)) return { scene: rest, sfxBack: 0 };
+  const dur = teaserDur(s.layout.shot) ?? s.dur;
+  const used = new Set<number>();
+  const at = new Map<number, number>();
+  for (const c of canonCues(s.layout.shot ?? "hook")) {
+    let best = -1;
+    s.sfx.forEach((x, k) => {
+      if (used.has(k) || x.id !== c.id) return;
+      if (best < 0 || Math.abs(x.at - c.at) < Math.abs(s.sfx[best].at - c.at)) best = k;
+    });
+    if (best < 0) continue;
+    used.add(best);
+    at.set(best, c.at);
+  }
+  let sfxBack = 0;
+  const sfx = s.sfx
+    .map((x, k) => {
+      const want = at.has(k) ? (at.get(k) as number) : Math.min(x.at, dur);
+      if (at.has(k) && Math.abs(want - x.at) > 5e-4) sfxBack++;
+      return Math.abs(want - x.at) > 5e-4 ? { ...x, at: want } : x;
+    })
+    .sort((a, b) => a.at - b.at);
+  return { scene: { ...rest, dur, sfx }, sfxBack };
+}
+
 /**
  * Adegan premium teaser: batasnya di ketukan musik (0,6 dtk) & visualnya buatan tangan, jadi durasi, jenis tampilan (kind + shot),
  * latar, kamera, catatan visual, detik mulai VO, dan teks layar shot yang teksnya bagian dari animasi TIDAK boleh berubah — baik
@@ -127,12 +179,20 @@ export function teaserVoAt(shot: TeaserShot | undefined): number | undefined {
  * Adegan dicocokkan lewat id; adegan teaser yang id-nya ditulis ulang (id lama hilang) dicocokkan lewat shot-nya, lalu sisanya
  * (id ditulis ulang DAN shot hilang/berubah — normalizeTimeline mengisi shot "hook") dipasangkan berurutan dengan adegan teaser
  * lama yang belum punya pasangan.
+ *
+ * `opts.user` = perubahan dari editor user (kartu rencana / timeline), bukan revisi Harley:
+ * - detik mulai VO (`vo.at`) yang diisi angka diterima (blok VO digeser di timeline / disusun otomatis); kosong → detik lama / naskah
+ * - kunci durasi (`unlocked`) ikut nilai baru; durasi hanya dikunci kalau adegan dikunci sebelum DAN sesudah perubahan (membuka
+ *   kunci, mengubah durasi saat terbuka, dan "Kembalikan durasi asli" + kunci lagi diterima)
+ * Revisi Harley (tanpa opts.user): `vo.at`, `unlocked` & durasi selalu dari versi lama (durasi yang diubah user setelah kunci
+ * dibuka tetap, AI tidak bisa membuka / menutup kunci).
  */
-export function keepTeaserVisual(prev: Timeline | null, next: Timeline): Timeline {
+export function keepTeaserVisual(prev: Timeline | null, next: Timeline, opts: { user?: boolean } = {}): Timeline {
   if (!prev || prev === next) return next;
   const olds = prev.scenes.filter(isTeaserScene);
   if (!olds.length) return next;
   const pairs = teaserPairs(olds, next.scenes);
+  const user = !!opts.user;
   let changed = false;
   const scenes = next.scenes.map((s, i) => {
     const o = pairs[i];
@@ -141,11 +201,17 @@ export function keepTeaserVisual(prev: Timeline | null, next: Timeline): Timelin
     const textLocked = !TEASER_TEXT_LINES[o.layout.shot ?? "hook"];
     // adegan lama tanpa vo.at (proyek tersimpan sebelum ada offset naskah, atau teks VO sempat dikosongkan) → detik naskah shot itu
     const oldAt = voAtOf(o.vo) ?? teaserVoAt(o.layout.shot);
-    const vo = s.vo && oldAt !== undefined && voAtOf(s.vo) !== oldAt ? { ...s.vo, at: oldAt } : s.vo;
+    const keepAt = user && voAtOf(s.vo) !== undefined;
+    const vo = s.vo && !keepAt && oldAt !== undefined && voAtOf(s.vo) !== oldAt ? { ...s.vo, at: oldAt } : s.vo;
     const text = textLocked ? o.text : s.text;
-    if (id === s.id && s.dur === o.dur && s.layout === o.layout && s.bg === o.bg && s.camera === o.camera && s.visual === o.visual && vo === s.vo && text === s.text) return s;
+    const unlocked = user ? !!s.unlocked : !!o.unlocked;
+    const dur = user && (o.unlocked || unlocked) ? s.dur : o.dur;
+    if (id === s.id && s.dur === dur && !!s.unlocked === unlocked && s.layout === o.layout && s.bg === o.bg && s.camera === o.camera && s.visual === o.visual && vo === s.vo && text === s.text) return s;
     changed = true;
-    return { ...s, id, dur: o.dur, layout: o.layout, bg: o.bg, camera: o.camera, visual: o.visual, vo, text };
+    const out: Scene = { ...s, id, dur, layout: o.layout, bg: o.bg, camera: o.camera, visual: o.visual, vo, text };
+    if (unlocked) out.unlocked = true;
+    else delete out.unlocked;
+    return out;
   });
   return changed ? { ...next, scenes } : next;
 }
@@ -202,21 +268,23 @@ export function retimesTeaser(prev: Timeline | null, next: Timeline): boolean {
     const b = next.scenes[i];
     if (a.id !== b.id) return false;
     if (Math.abs(a.dur - b.dur) < 1e-6) continue;
-    if (isTeaserScene(a)) teaserMoved = true;
+    // adegan teaser yang kuncinya dibuka boleh berubah durasi (bukan tempel ketukan lama yang salah)
+    if (isLockedTeaser(a) && isLockedTeaser(b)) teaserMoved = true;
     if (strip(a) !== strip(b)) return false;
   }
   return teaserMoved;
 }
 
 /**
- * Tempel batas adegan ke ketukan musik, tapi adegan premium teaser tidak digeser (durasinya tetap). Batas dihitung dari awal adegan
+ * Tempel batas adegan ke ketukan musik, tapi adegan premium teaser yang masih dikunci tidak digeser (durasinya tetap; yang kuncinya
+ * dibuka ikut ditempel seperti adegan biasa). Batas dihitung dari awal adegan
  * yang SEBENARNYA: adegan biasa sesudah adegan teaser ditempel ke ketukan terdekat dari posisinya setelah adegan teaser itu, jadi
  * hasilnya benar-benar di ketukan (bukan dihitung seolah adegan teaser ikut bergeser lalu dikembalikan).
  * Aturan lain sama dengan snapScenesToBeats: geser maks `maxShift`, durasi MIN_DUR..MAX_DUR, total tidak lebih panjang dari semula / MAX_TOTAL.
  */
 export function snapAroundTeaser<T extends Pick<Timeline, "scenes" | "fps">>(tl: T, beats: number[], maxShift = 0.35): T {
   if (beats.length < 2) return tl;
-  if (!tl.scenes.some(isTeaserScene)) return snapScenesToBeats(tl, beats, maxShift);
+  if (!tl.scenes.some(isLockedTeaser)) return snapScenesToBeats(tl, beats, maxShift);
   const fps = tl.fps;
   const fr = (t: number) => Math.round(t * fps) / fps;
   const cap = Math.floor(Math.min(MAX_TOTAL, totalSec(tl)) * fps + 1e-6) / fps;
@@ -226,7 +294,7 @@ export function snapAroundTeaser<T extends Pick<Timeline, "scenes" | "fps">>(tl:
   const restMin: number[] = new Array(n).fill(0);
   for (let i = n - 2; i >= 0; i--) {
     const s = tl.scenes[i + 1];
-    restMin[i] = restMin[i + 1] + (isTeaserScene(s) ? s.dur : MIN_DUR);
+    restMin[i] = restMin[i + 1] + (isLockedTeaser(s) ? s.dur : MIN_DUR);
   }
   const bounds = [0];
   let acc = 0; // batas asli (sebelum ditempel)
@@ -234,7 +302,7 @@ export function snapAroundTeaser<T extends Pick<Timeline, "scenes" | "fps">>(tl:
   tl.scenes.forEach((s, i) => {
     acc += s.dur;
     const prev = bounds[bounds.length - 1];
-    if (isTeaserScene(s)) {
+    if (isLockedTeaser(s)) {
       const end = fr(prev + s.dur);
       bounds.push(end);
       shift = end - acc;
@@ -256,7 +324,7 @@ export function snapAroundTeaser<T extends Pick<Timeline, "scenes" | "fps">>(tl:
     const b = pick(target) ?? pick(prev + s.dur);
     bounds.push(b ?? (ok(a) ? a : Math.min(hi, fr(prev + Math.min(MAX_DUR, Math.max(MIN_DUR, s.dur))))));
   });
-  const scenes = tl.scenes.map((s, i) => (isTeaserScene(s) ? s : { ...s, dur: fr(bounds[i + 1] - bounds[i]) }));
+  const scenes = tl.scenes.map((s, i) => (isLockedTeaser(s) ? s : { ...s, dur: fr(bounds[i + 1] - bounds[i]) }));
   if (scenes.some((s) => s.dur < MIN_DUR - 1e-6) || totalSec({ scenes }) > MAX_TOTAL + 1e-6) return tl;
   return scenes.every((s, i) => s.dur === tl.scenes[i].dur) ? tl : { ...tl, scenes };
 }
@@ -271,7 +339,7 @@ export function beatReport(tl: Pick<Timeline, "scenes" | "fps">, beats: number[]
   tl.scenes.forEach((s, i) => {
     const end = i + 1 < st.length ? st[i + 1] : st[i] + Math.max(1, Math.round(s.dur * tl.fps)) / tl.fps;
     if (Math.abs(nearestBeat(end, beats) - end) <= tol) r.onBeat++;
-    else if (isTeaserScene(s)) r.offLocked++;
+    else if (isLockedTeaser(s)) r.offLocked++;
     else r.offFree++;
   });
   return r;

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import re
 from difflib import SequenceMatcher
@@ -45,6 +46,48 @@ def split_sentences(text: str, max_chars: int = 220) -> list[str]:
     for s in merged:
         out.extend(_split_long(s, max_chars))
     return out
+
+
+def chunk_text(text: str, max_chars: int = 260) -> list[str]:
+    """
+    Potongan "satu tarikan" untuk mesin suara: teks ≤ max_chars huruf → 1 potong utuh (intonasi satu baris tidak reset per kalimat).
+    Lebih panjang → beberapa potong ≤ max_chars yang menggabungkan KALIMAT UTUH (bukan 1 kalimat per potong): jumlah potong
+    sesedikit mungkin, panjangnya dibuat serata mungkin (potongan sisa yang pendek sekali bikin mesin ngawur). Kalimat tunggal yang
+    lebih panjang dari max_chars dipecah di koma (sama dengan split_sentences).
+    """
+    t = clean_text(text)
+    if not t:
+        return []
+    if len(t) <= max_chars and "\n" not in t:
+        return [t]
+    sents = split_sentences(t, max_chars)
+    if len(sents) <= 1:
+        return sents
+    n = len(sents)
+    total = len(" ".join(sents))
+    target = total / max(1, math.ceil(total / max_chars))
+    INF = (10**9, 0.0)
+    # dp[i] = (jumlah potong, jumlah kuadrat selisih panjang dari target) terbaik untuk kalimat [0, i)
+    dp: list[tuple[int, float]] = [(0, 0.0)] + [INF] * n
+    back = [0] * (n + 1)
+    for i in range(1, n + 1):
+        ln = -1
+        for j in range(i - 1, -1, -1):
+            ln += len(sents[j]) + 1
+            if ln > max_chars and j < i - 1:
+                break
+            if dp[j][0] >= INF[0]:
+                continue
+            cand = (dp[j][0] + 1, dp[j][1] + (ln - target) ** 2)
+            if cand < dp[i]:
+                dp[i], back[i] = cand, j
+    out: list[str] = []
+    i = n
+    while i > 0:
+        j = back[i]
+        out.append(" ".join(sents[j:i]))
+        i = j
+    return out[::-1]
 
 
 def _split_long(s: str, max_chars: int) -> list[str]:
@@ -137,6 +180,17 @@ def norm_words(s: str) -> list[str]:
     return s.split()
 
 
+# bunyi luncur dari ejaan mesin suara website (lib/studio/pronounce.ts: soal → sowal, buat → buwat, dia → diya, Indonesia →
+# Indonesiya): ASR bahasa Indonesia menulis "soal" / "dia" → saat menghitung WER/CER kedua sisi disamakan supaya take yang
+# diucapkan benar tidak dianggap salah ucap (tidak memicu versi tambahan / cadangan per kalimat)
+_GLIDE_W = re.compile(r"([uo])w(?=[aeiou])")
+_GLIDE_Y = re.compile(r"iy(?=[aeiou])")
+
+
+def _sound_words(s: str) -> list[str]:
+    return [_GLIDE_Y.sub("i", _GLIDE_W.sub(r"\1", w)) for w in norm_words(s)]
+
+
 def _lev(a: list, b: list) -> int:
     if not a:
         return len(b)
@@ -150,14 +204,14 @@ def _lev(a: list, b: list) -> int:
 
 
 def wer(ref: str, hyp: str) -> float:
-    r, h = norm_words(ref), norm_words(hyp)
+    r, h = _sound_words(ref), _sound_words(hyp)
     if not r:
         return 0.0 if not h else 1.0
     return _lev(r, h) / len(r)
 
 
 def cer(ref: str, hyp: str) -> float:
-    r, h = list("".join(norm_words(ref))), list("".join(norm_words(hyp)))
+    r, h = list("".join(_sound_words(ref))), list("".join(_sound_words(hyp)))
     if not r:
         return 0.0 if not h else 1.0
     return _lev(r, h) / len(r)

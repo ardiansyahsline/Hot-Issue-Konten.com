@@ -378,6 +378,26 @@
     "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
   },
   {
+    "id": "trailer-groove-perkusi",
+    "file": "trailer-groove-perkusi.mp3",
+    "kategori": "trailer-pulse",
+    "tags": [
+      "groove",
+      "perkusi",
+      "trailer",
+      "musik",
+      "tanpa-nada",
+      "sub"
+    ],
+    "durasi_detik": 19.2,
+    "lufs": -21.5,
+    "true_peak_db": -1.6,
+    "dipakai_untuk": "Groove trailer tanpa nada (musik cadangan)",
+    "sumber_pack": "Turunan trailer-pulse-sedang (Federico Soler - Effective Trailer Alarms Vol. 2)",
+    "file_asli": "EffectiveTrailer_Alarms_Vol2_QuarterNotes_013.wav (diolah: 32 ketukan pertama, HPSS bagian perkusif saja, low-pass 150 Hz orde 8 = hanya pukulan sub, tanpa nada ±340-450 Hz, loop 19,2 dtk)",
+    "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
+  },
+  {
     "id": "trailer-pulse-lambat",
     "file": "trailer-pulse-lambat.mp3",
     "kategori": "trailer-pulse",
@@ -390,7 +410,7 @@
     "durasi_detik": 30.02,
     "lufs": -9.2,
     "true_peak_db": -0.4,
-    "dipakai_untuk": "Lapisan ritme trailer (bisa jadi musik cadangan)",
+    "dipakai_untuk": "Ritme trailer bernada sirene/alarm (pilih manual saja, jangan jadi latar panjang)",
     "sumber_pack": "Federico Soler - Effective Trailer Alarms Vol. 2",
     "file_asli": "EffectiveTrailer_Alarms_Vol2_HalfNotes_003.wav",
     "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"
@@ -426,7 +446,7 @@
     "durasi_detik": 30.02,
     "lufs": -11.0,
     "true_peak_db": -1.1,
-    "dipakai_untuk": "Lapisan ritme trailer energik (musik cadangan)",
+    "dipakai_untuk": "Ritme trailer bernada alarm berulang (pilih manual saja; musik cadangan pakai trailer-groove-perkusi)",
     "sumber_pack": "Federico Soler - Effective Trailer Alarms Vol. 2",
     "file_asli": "EffectiveTrailer_Alarms_Vol2_QuarterNotes_013.wav",
     "lisensi": "Sonniss GDC 2026 Game Audio Bundle - royalty-free, tanpa atribusi; jangan didistribusikan ulang sebagai file mentah"

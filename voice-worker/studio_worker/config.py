@@ -99,6 +99,8 @@ class Config:
     idle_unload_min: int
     freesound_key: str
     sfx_dir: str
+    # skor kealamian UTMOS saat memilih take (NATURAL_MOS=0 → hanya kejelasan + nada)
+    natural_mos: bool = True
 
     @property
     def cache(self) -> Path:
@@ -182,11 +184,12 @@ def load(env_file: Path | None = None) -> Config:
         render_timeout_min=_int("RENDER_TIMEOUT_MIN", 40, 5, 240),
         render_browser=_env("REMOTION_BROWSER"),
         df_atten_db=_float("DF_ATTEN_DB", 18, 6, 30),
-        takes=_int("TAKES", 2, 1, 4),
+        takes=_int("TAKES", 3, 1, 4),
         preload=_bool("PRELOAD", False),
         idle_unload_min=_int("IDLE_UNLOAD_MIN", 0, 0, 1440),
         freesound_key=_env("FREESOUND_API_KEY"),
         sfx_dir=_env("SFX_DIR", r"C:\Konten.com\STUDIO-FX"),
+        natural_mos=_bool("NATURAL_MOS", True),
     )
     cfg.ensure_dirs()
     return cfg

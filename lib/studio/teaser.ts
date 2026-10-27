@@ -11,6 +11,11 @@ type Row = {
   name: string;
   dur: number;
   vo: string;
+  /**
+   * ejaan untuk mesin suara Indonesia (subtitle tetap `vo`): ditulis seperti diucapkan, TANPA tanda hubung (strip sering
+   * dibaca aneh / jadi jeda) — mis. "si es treker", "pepete", "ei ai", "ril taim", "daunlod". Kamus ejaan (lib/studio/pronounce.ts)
+   * tidak menyentuh kata yang sengaja dieja di sini.
+   */
   spell: string;
   /** detik mulai VO dari awal adegan (dari "waktu target" naskah-vo.md) */
   voAt: number;
@@ -29,7 +34,7 @@ const ROWS: Row[] = [
     name: "Hook",
     dur: 3.0,
     vo: "Hot issue numpuk… chat tim berantakan…",
-    spell: "Hot isyu numpuk… chat tim berantakan…",
+    spell: "Hot isyu numpuk… cet tim berantakan…",
     voAt: 0.3,
     text: ["Hot issue numpuk?", "Chat tim berantakan?"],
     visual: "Potongan cepat masalah: hot issue numpuk, chat berantakan, data kececer",
@@ -42,7 +47,7 @@ const ROWS: Row[] = [
     name: "Reveal",
     dur: 1.8,
     vo: "Kenalin. CS Tracker.",
-    spell: "Kenalin. Si-es Treker.",
+    spell: "Kenalin. Si es treker.",
     voAt: 0.2,
     text: ["CS Tracker"],
     visual: "Logo CS Tracker + light sweep",
@@ -56,7 +61,7 @@ const ROWS: Row[] = [
     name: "Dashboard + Hot Issue",
     dur: 5.4,
     vo: "Semua hot issue langsung ke-ranking otomatis. Yang paling panas, paling atas.",
-    spell: "Semua hot isyu langsung ke-renking otomatis. Yang paling panas, paling atas.",
+    spell: "Semua hot isyu langsung kerengking otomatis. Yang paling panas, paling atas.",
     voAt: 0.4,
     text: ["Paling panas, paling atas"],
     visual: "Angka berjalan, badge HOT naik ke #1",
@@ -84,7 +89,7 @@ const ROWS: Row[] = [
     name: "Chat tim",
     dur: 6.0,
     vo: "Ngobrol bareng tim, real-time. Satu tempat, nggak ada yang kelewat.",
-    spell: "Ngobrol bareng tim, ril-taim. Satu tempat, nggak ada yang kelewat.",
+    spell: "Ngobrol bareng tim, ril taim. Satu tempat, nggak ada yang kelewat.",
     voAt: 0.2,
     text: ["Satu tempat, real-time"],
     visual: "Bubble chat Alif, Derencalibur, Nengok, Irsyad, Natasha masuk, reaksi emoji, lampiran (identitas clipper diburamkan)",
@@ -97,7 +102,7 @@ const ROWS: Row[] = [
     name: "AI",
     dur: 12.0,
     vo: "Tanya AI soal hot issue, saham, sampai kripto. Dia mikir dulu… bahkan nanya balik, biar jawabannya pas.",
-    spell: "Tanya E-ai soal hot isyu, saham, sampai kripto. Dia mikir dulu… bahkan nanya balik, biar jawabannya pas.",
+    spell: "Tanya ei ai soal hot isyu, saham, sampai kripto. Dia mikir dulu… bahkan nanya balik, biar jawabannya pas.",
     voAt: 0.2,
     text: ["AI yang mikir dulu", "Bahkan nanya balik"],
     visual: "AskCard muncul & dipilih, hero MBTI + label dibantu oleh, langkah berpikir, jawaban, chart saham/kripto",
@@ -110,7 +115,7 @@ const ROWS: Row[] = [
     name: "Desain berita (TWS)",
     dur: 7.2,
     vo: "Butuh konten berita? Sekali ketik… langsung jadi. Tinggal download.",
-    spell: "Butuh konten berita? Sekali ketik… langsung jadi. Tinggal daun-lod.",
+    spell: "Butuh konten berita? Sekali ketik… langsung jadi. Tinggal daunlod.",
     voAt: 0.2,
     text: ["Sekali ketik, langsung jadi"],
     visual: "Cover berita asli (MSCI, Prabowo) angka 3D slam, carousel geser, export Figma",
@@ -123,7 +128,7 @@ const ROWS: Row[] = [
     name: "Train your AI",
     dur: 6.0,
     vo: "Mau AI yang ngerti gaya kamu? Latih versimu sendiri.",
-    spell: "Mau E-ai yang ngerti gaya kamu? Latih versimu sendiri.",
+    spell: "Mau ei ai yang ngerti gaya kamu? Latih versimu sendiri.",
     voAt: 0.15,
     text: ["Latih AI versimu"],
     visual: "Kuis diketuk, animasi tipe muncul, pilih peran",
@@ -137,7 +142,7 @@ const ROWS: Row[] = [
     name: "Musik + laporan/PPT",
     dur: 3.6,
     vo: "Plus musik, laporan, sampai PPT.",
-    spell: "Plus musik, laporan, sampai pe-pe-te.",
+    spell: "Plus musik, laporan, sampai pepete.",
     voAt: 0.15,
     text: ["Musik, laporan, PPT"],
     visual: "Pemutar musik, halaman laporan/PPT dibalik",
@@ -164,7 +169,7 @@ const ROWS: Row[] = [
     name: "Outro",
     dur: 4.2,
     vo: "CS Tracker. Kerja lebih cepat… bareng-bareng.",
-    spell: "Si-es Treker. Kerja lebih cepat… bareng-bareng.",
+    spell: "Si es treker. Kerja lebih cepat… bareng bareng.",
     voAt: 0.3,
     text: ["Kerja lebih cepat", "Bareng-bareng"],
     visual: "Logo + tagline + CTA, hit akhir, potong bersih",
@@ -187,7 +192,8 @@ export function teaserTimelineRaw(): Record<string, unknown> {
     platform: "Internal tim (TikTok/Reels 9:16)",
     goal: "Kenalkan semua fitur terbaru CS Tracker ke tim",
     mood: "trailer premium, energik, percaya diri",
-    voice: { mode: "bank", voiceName: "Alif - Energik", exaggeration: 0.65, cfg: 0.35, edgeVoice: "id-ID-ArdiNeural" },
+    // gaya bicara Promo energik (lib/studio/voiceStyle.ts): cfg 0,5 = tempo asli lebih cepat → jarang perlu dipercepat atempo
+    voice: { mode: "bank", voiceName: "Alif - Energik", preset: "promo", exaggeration: 0.65, cfg: 0.5, temperature: 0.85, edgeVoice: "id-ID-ArdiNeural" },
     music: { src: "bed", name: "Trailer bed (100 BPM)", bpm: 100 },
     grain: true,
     vignette: true,

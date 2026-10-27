@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import { isVideoSrc } from "@/components/remotion/studio/backgrounds";
 import { useStudioStatus } from "@/lib/studio/client";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { FONTS } from "@/components/remotion/studio/theme";
-import { captionLineWidth, captionMaxChars, isTeaserBeatCue, roughWordWidth, teaserCaptionFit, teaserTextLines } from "@/lib/studio/teaserLock";
+import { captionLineWidth, captionMaxChars, isLockedTeaser, isTeaserBeatCue, relockTeaser, roughWordWidth, teaserCaptionFit, teaserDur, teaserTextLines } from "@/lib/studio/teaserLock";
 import {
   PLAN_LAYOUTS,
   MAX_DUR,
@@ -25,6 +26,7 @@ import {
   type Scene,
   type ScreenKind,
   type Side,
+  type Timeline,
   type TransitionKind,
   voStartOf,
 } from "@/lib/studio/timeline";
@@ -32,6 +34,9 @@ import { sfxSrc, storagePathOf } from "@/lib/studio/urls";
 import FreesoundPanel from "./FreesoundPanel";
 import { Field, Num, Seg, Toggle, Txt, UploadBtn } from "./fields";
 import { BG_LABEL, CAMERA_LABEL, DIR_LABEL, LAYOUT_LABEL, MUSIC_LABEL, SCREEN_LABEL, TRANSITION_LABEL, commaList, fmtSec, parseNum, wordCount } from "./planUtils";
+
+/** 🔊 Dengar per adegan (dimuat saat kartu dibuka; berbagi modul dengan panel Suara VO) */
+const VoListen = dynamic(() => import("./VoListen"), { ssr: false, loading: () => null });
 
 export type SfxItem = SfxMeta & { src?: string };
 export type ScenePatch = Partial<Scene> | ((s: Scene) => Partial<Scene>);
@@ -125,6 +130,8 @@ export default function SceneCard({
   onMove,
   onDup,
   onDel,
+  timeline,
+  onTimeline,
 }: {
   scene: Scene;
   index: number;
@@ -137,8 +144,13 @@ export default function SceneCard({
   onMove: (id: string, d: -1 | 1) => void;
   onDup: (id: string) => void;
   onDel: (id: string) => void;
+  /** timeline lengkap (suara, kamus ejaan, jendela VO teaser) untuk tombol 🔊 Dengar; kosong = tombol tidak tampil */
+  timeline?: Timeline;
+  /** ubah timeline lengkap (tombol "Pakai ini" memasang contoh suara ke VO proyek) */
+  onTimeline?: (fn: (t: Timeline) => Timeline) => unknown;
 }) {
   const [askDel, setAskDel] = useState(false);
+  const [askUnlock, setAskUnlock] = useState(false);
   const [draftLines, setDraftLines] = useState<string[] | null>(null);
   const patch = (p: ScenePatch) => onPatch(s.id, p);
   const setLayout = (p: Partial<Layout>) => patch((x) => ({ layout: { ...x.layout, ...p } }));
@@ -157,6 +169,9 @@ export default function SceneCard({
   const textLines = teaserTextLines(s);
   const teaser = textLines !== null;
   const textLocked = textLines === 0;
+  // kunci durasi adegan teaser (dibuka user → durasi & detik SFX bawaan bebas; animasi tetap dibuat untuk durasi aslinya)
+  const durLocked = isLockedTeaser(s);
+  const canonDur = teaser ? (teaserDur(s.layout.shot) ?? s.dur) : s.dur;
   // teaser selalu 9:16; baris yang lebih lebar dari kotak aman turun ke baris berikut dan menabrak UI animasi
   const fit = teaser && !textLocked ? teaserCaptionFit(s, "9:16") : null;
   const measure = useCaptionMeasure(fit?.size ?? null);
@@ -216,22 +231,58 @@ export default function SceneCard({
         <div id={`${headId}-body`} className="space-y-3.5 border-t border-zinc-800/70 px-2.5 pb-3 pt-3 sm:px-3">
           {teaser && (
             <p role="note" data-teaser-note className="rounded-xl border border-orange-500/30 bg-orange-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-orange-200">
-              {textLocked
-                ? "🎞️ Adegan premium buatan tangan: visual, durasi & teks layar tetap (bagian dari animasi); VO, SFX, transisi dan musik boleh diubah."
-                : "🎞️ Adegan premium buatan tangan: visual & durasi tetap; teks layar, VO, SFX, transisi dan musik boleh diubah."}{" "}
-              Detik SFX bawaan dikunci karena sinkron dengan gerakan.
+              {durLocked
+                ? textLocked
+                  ? "🎞️ Adegan premium buatan tangan: visual, durasi & teks layar tetap (bagian dari animasi); VO, SFX, transisi dan musik boleh diubah."
+                  : "🎞️ Adegan premium buatan tangan: visual & durasi tetap; teks layar, VO, SFX, transisi dan musik boleh diubah."
+                : `🎞️ Adegan premium buatan tangan · 🔓 kunci durasi dibuka: durasi & detik SFX boleh diubah, tapi animasinya dibuat untuk ${fmtSec(canonDur, 2)} — bisa terpotong / diam di akhir.`}{" "}
+              {durLocked ? "Detik SFX bawaan dikunci karena sinkron dengan gerakan." : "Visual & teks layar animasi tetap."}
             </p>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Nama adegan">{(id) => <Txt id={id} value={s.name} maxLength={40} onCommit={(v) => patch({ name: v })} />}</Field>
-            <Field label="Durasi" hint={teaser ? "Dikunci di ketukan musik (adegan premium)" : `${MIN_DUR}–${MAX_DUR} detik`}>
-              {(id) =>
-                teaser ? (
-                  <div id={id} className="flex h-9 items-center text-[13px] tabular-nums text-zinc-300">
-                    {fmtSec(s.dur, 2)}
-                  </div>
+            <Field
+              label="Durasi"
+              hint={
+                durLocked ? (
+                  "Dikunci di ketukan musik (adegan premium)"
+                ) : teaser ? (
+                  <span className="text-amber-400" data-dur-unlocked>
+                    🔓 Kunci dibuka · animasi dibuat untuk {fmtSec(canonDur, 2)}
+                    {Math.abs(canonDur - s.dur) > 1e-6 ? " — bisa terpotong / diam di akhir" : ""}
+                  </span>
                 ) : (
-                  <div className="flex items-center gap-1.5">
+                  `${MIN_DUR}–${MAX_DUR} detik`
+                )
+              }
+            >
+              {(id) =>
+                durLocked ? (
+                  askUnlock ? (
+                    <div id={id} role="alert" data-unlock-warn className="space-y-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-[12px] leading-relaxed text-amber-200">
+                      <p>
+                        ⚠️ Animasi premium ini dibuat pas untuk {fmtSec(s.dur, 2)}. Kalau durasinya diubah, animasinya bisa terpotong (lebih pendek) atau diam di akhir (lebih
+                        panjang), dan potongan adegan sesudahnya bisa tidak pas ketukan musik lagi.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" className="btn-ghost px-3 py-1.5 text-[12px] text-amber-200" onClick={() => (setAskUnlock(false), patch({ unlocked: true }))} data-unlock-yes>
+                          🔓 Ya, buka kunci
+                        </button>
+                        <button type="button" className="px-2 text-[12px] font-semibold text-zinc-400 hover:text-zinc-200" onClick={() => setAskUnlock(false)}>
+                          Batal
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div id={id} className="flex h-9 items-center gap-2 text-[13px] tabular-nums text-zinc-300">
+                      🔒 {fmtSec(s.dur, 2)}
+                      <button type="button" className="text-[12px] font-semibold text-orange-400 hover:text-orange-300" onClick={() => setAskUnlock(true)} data-unlock>
+                        🔓 Buka kunci durasi
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <button type="button" className="btn-ghost h-9 w-9 shrink-0 p-0" aria-label="Kurangi 0,1 detik" onClick={() => dur(s.dur - 0.1)}>
                       −
                     </button>
@@ -240,6 +291,22 @@ export default function SceneCard({
                       +
                     </button>
                     <span className="text-[12px] text-zinc-500">dtk</span>
+                    {teaser && (
+                      <button
+                        type="button"
+                        className="text-[12px] font-semibold text-orange-400 hover:text-orange-300"
+                        title="Durasi & detik SFX bawaan kembali ke aslinya, lalu dikunci lagi"
+                        onClick={() =>
+                          patch((x) => {
+                            const r = relockTeaser(x).scene;
+                            return { unlocked: undefined, dur: r.dur, sfx: r.sfx };
+                          })
+                        }
+                        data-relock
+                      >
+                        {Math.abs(canonDur - s.dur) > 1e-6 ? "↺ Kembalikan durasi asli" : "🔒 Kunci lagi"}
+                      </button>
+                    )}
                   </div>
                 )
               }
@@ -271,7 +338,7 @@ export default function SceneCard({
             >
               {(id) => <Txt id={id} multiline value={s.vo?.text ?? ""} maxLength={400} onCommit={(v) => patch((x) => ({ vo: v.trim() ? (x.vo ? { ...x.vo, text: v } : { text: v }) : null }))} />}
             </Field>
-            <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin salah baca, mis. “Si-es Treker”, “E-ai”. Subtitle tetap pakai teks asli.">
+            <Field label="Ejaan untuk mesin suara" hint="Isi kalau mesin masih salah baca. Tulis seperti diucapkan, tanpa strip: mis. “si es treker”, “ei ai”. Istilah umum (PPT, AI, download…) sudah dieja otomatis lewat 📖 Kamus ejaan. Subtitle tetap pakai teks asli.">
               {(id) => (
                 <Txt
                   id={id}
@@ -285,6 +352,7 @@ export default function SceneCard({
               )}
             </Field>
           </div>
+          {timeline && s.vo?.text && <VoListen scene={s} timeline={timeline} onTimeline={onTimeline} />}
 
           {textLocked ? (
             <Field label="🔤 Teks di layar" hint="Dikunci: teks layar adegan ini digambar langsung di animasi premium (ganti pesannya lewat Teks VO).">
@@ -439,7 +507,7 @@ export default function SceneCard({
             </div>
           </div>
 
-          <SfxEditor scene={s} sfxList={sfxList} patch={patch} lockAt={teaser ? (c) => isTeaserBeatCue(s, c) : undefined} />
+          <SfxEditor scene={s} sfxList={sfxList} patch={patch} lockAt={durLocked ? (c) => isTeaserBeatCue(s, c) : undefined} />
         </div>
       )}
     </div>

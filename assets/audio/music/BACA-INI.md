@@ -9,4 +9,5 @@ Kriteria:
   Kata kunci: `cinematic tech trailer`, `epic corporate`, `technology promo`.
 
 Kalau folder ini masih kosong: Studio otomatis menyusun **musik cadangan ("trailer bed")** dari
-`sfx/trailer-pulse-*`, `sfx/boom-trailer-*`, `sfx/braam-*`, dan `sfx/riser-blastoff`.
+`sfx/trailer-groove-perkusi` (pukulan sub tanpa nada), `sfx/trailer-pulse-panjang` (sustain), `sfx/boom-trailer-*`,
+`sfx/braam-*`, dan `sfx/riser-blastoff`.

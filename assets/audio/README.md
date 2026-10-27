@@ -4,7 +4,7 @@ Semua bahan audio untuk Studio (Remotion) dan teaser CS Tracker.
 
 | Folder | Isi |
 |---|---|
-| `sfx/` | 40 sound effect pilihan (mp3 48 kHz, 192 kbps) + `sfx.json` (kategori, tag, durasi, LUFS, true peak, saran pemakaian, sumber) |
+| `sfx/` | 41 sound effect pilihan (mp3 48 kHz, 192 kbps) + `sfx.json` (kategori, tag, durasi, LUFS, true peak, saran pemakaian, sumber). `trailer-groove-perkusi` = turunan `trailer-pulse-sedang` (hanya pukulan sub/bass < 150 Hz, tanpa nada sirene) untuk groove musik cadangan |
 | `music/` | Musik latar teaser. Lihat `music/BACA-INI.md` |
 | `teaser/` | `naskah-vo.md` (naskah voice over + ejaan untuk mesin suara) dan `cue-sheet.md` (urutan adegan, SFX, musik, VO) |
 

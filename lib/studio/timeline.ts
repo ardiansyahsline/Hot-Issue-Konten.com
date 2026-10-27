@@ -6,6 +6,9 @@
  * Satuan waktu = detik (dibulatkan ke frame saat dirender). Semua teks & angka dari AI dianggap DATA, bukan kode.
  */
 import { SFX_BUILTIN, type SfxMeta } from "./sfxMeta";
+import { legacySayKey, normLexicon, upgradeTeaserSpell, type LexEntry } from "./pronounce";
+import { normHeard } from "./heard";
+import { normPreset, normTemperature, type VoicePreset } from "./voiceStyle";
 
 export const FPS = 30;
 export type Ratio = "9:16" | "16:9" | "1:1" | "4:5";
@@ -132,9 +135,13 @@ export type Scene = {
   /**
    * voice over adegan ini. `spell` = ejaan khusus untuk mesin suara (subtitle tetap pakai `text`).
    * `at` = detik mulai VO dihitung dari awal adegan (opsional, 0..dur; kosong = VO_AT bawaan 0,15 dtk) — mis. teaser
-   * memakai waktu target naskah per adegan. Dipakai saat VO dibuat (VoLine.at) & sebagai cadangan subtitle/audio.
+   * memakai waktu target naskah per adegan. Dipakai saat VO dibuat (VoLine.at) & sebagai cadangan subtitle/audio; digeser user di
+   * timeline / disusun otomatis (arrangeVo) supaya VO tidak numpuk.
+   * `tempo` = kecepatan VO yang diatur sendiri (TEMPO_MIN–TEMPO_MAX × normal, mis. 1,1); kosong = otomatis (adegan teaser dipercepat
+   * sendiri kalau kepanjangan). Dipakai saat suara adegan ini dibuat (Edge: rate, laptop: atempo).
+   * `gainDb` = volume kalimat VO ini (dB, -24..+6, kosong = 0) — diatur di mixer timeline, suara tidak dibuat ulang.
    */
-  vo: { text: string; spell?: string; at?: number } | null;
+  vo: { text: string; spell?: string; at?: number; tempo?: number; gainDb?: number } | null;
   /** teks di layar, maks ±6–7 kata per baris */
   text: string[];
   /** catatan storyboard (apa yang terlihat) */
@@ -147,25 +154,77 @@ export type Scene = {
   sfx: SfxCue[];
   music: MusicLevel;
   subtitles: boolean;
+  /**
+   * khusus adegan premium teaser: true = kunci durasi dibuka user (durasi & detik SFX bawaan boleh diubah; animasi tetap dibuat
+   * untuk durasi aslinya → bisa terpotong / diam di akhir). Kosong = dikunci di ketukan musik (lihat teaserLock.isLockedTeaser).
+   */
+  unlocked?: boolean;
+  /** volume adegan ini (dB, -24..+6 per jalur; kosong = 0): musik selama adegan, VO & SFX milik adegan. Diatur di mixer timeline */
+  gain?: Mix;
 };
 
 export type VoiceMode = "bank" | "edge" | "elevenlabs" | "none";
 export type EdgeVoice = "id-ID-ArdiNeural" | "id-ID-GadisNeural";
-export type Voice = { mode: VoiceMode; voiceId?: string | null; voiceName?: string; edgeVoice?: EdgeVoice; exaggeration?: number; cfg?: number };
+/**
+ * `lexicon` = kamus ejaan milik proyek ({from, to}, maks 60): kata yang sering salah dibaca mesin suara → cara bacanya.
+ * Ditambah kamus bawaan & dipakai otomatis untuk teks ucapan tiap adegan (lib/studio/pronounce.ts); subtitle tidak berubah.
+ * `preset` = gaya bicara bank suara (natural | promo | tenang | kustom) dan `temperature` = variasi intonasi (0,5–1,0) — dibaca
+ * lewat voiceStyle (lib/studio/voiceStyle.ts) bersama `exaggeration` & `cfg`; kosong = preset bawaan (teaser: Promo energik).
+ */
+export type Voice = {
+  mode: VoiceMode;
+  voiceId?: string | null;
+  voiceName?: string;
+  edgeVoice?: EdgeVoice;
+  exaggeration?: number;
+  cfg?: number;
+  temperature?: number;
+  /** id VoicePreset ("natural" | "promo" | "tenang" | "kustom"); bertipe string supaya data skill / lama tetap bisa ditampung */
+  preset?: VoicePreset | (string & {});
+  lexicon?: LexEntry[];
+};
 
 /**
  * Musik: `src` = "bed" (trailer bed cadangan dari SFX), "none", atau URL file yang bisa diputar
  * (/api/studio/asset/music/… untuk file repo, /api/studio/file?p=… untuk upload user).
- * `beats` (detik) dari deteksi BPM — dipakai untuk menempel potongan & impact ke ketukan.
+ * `beats` (detik lagu) dari deteksi BPM — dipakai untuk menempel potongan & impact ke ketukan.
+ * `offset` = detik lagu yang dilewati: file musik diputar mulai detik ke-`offset` (0 = dari awal; digeser di jalur musik timeline);
+ * kalau sisa lagu lebih pendek dari video, sesudah lagu habis diulang dari awal (musicHeadSec). Ketukan ikut digeser ke waktu
+ * video (musicFileBeats). Trailer bed tidak memakai offset (selalu ikut adegan).
+ * `dur` = panjang file musik (detik), ditulis editor bersama offset — offset dijepit supaya tidak lewat ujung lagu, dan hanya
+ * dipakai kalau `dur` ada (musicOffsetOf).
+ * `gain` = volume lama file musik (dB); volume musik sekarang diatur lewat `Timeline.mix.musicDb` (lihat musicVolDb).
  */
-export type Music = { src: string; name?: string; bpm?: number | null; beats?: number[] | null; offset?: number; gain?: number; lufs?: number | null };
+export type Music = { src: string; name?: string; bpm?: number | null; beats?: number[] | null; offset?: number; gain?: number; lufs?: number | null; dur?: number };
 
 export type Word = { w: string; s: number; e: number };
 /**
  * VO hasil generate per adegan. `src` URL yang bisa diputar. `at` = detik mulai dihitung dari awal adegan. `dur` = panjang file
  * (bisa membawa hening di ujung). `speed` = persen suara dipercepat otomatis supaya pas di jendela adegan teaser (1–30, kosong = tidak).
+ * `say` = kunci 8 hex teks + teks ucapan saat suara dibuat (voSayKey, lib/studio/pronounce.ts): beda dengan naskah / kamus ejaan
+ * sekarang = suaranya dibuat dari versi lama (perlu "Generate ulang VO"). Kosong = VO lama (tidak diketahui).
+ * `heard` = teks yang terdengar oleh pengecek ucapan (ASR) di laptop saat suara bank dibuat (maks 400 huruf, teks biasa) —
+ * dibandingkan dengan naskah untuk menyorot kata yang salah dengar (lib/studio/heard.ts). Kosong = tidak diketahui (Edge / premium).
  */
-export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[]; speed?: number };
+export type VoLine = { sceneId: string; src: string; dur: number; at?: number; words?: Word[]; speed?: number; say?: string; tempo?: number; heard?: string };
+/**
+ * Kecepatan VO yang diatur sendiri per kalimat (× tempo normal). `VoLine.tempo` = kecepatan yang dipakai saat baris itu dibuat
+ * (diatur user; kosong = otomatis, lihat `speed`).
+ */
+export const TEMPO_MIN = 0.85;
+export const TEMPO_MAX = 1.3;
+export const TEMPOS = [0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3] as const;
+/** kecepatan dari data (angka / "1,1") → kelipatan 0,05 di TEMPO_MIN..TEMPO_MAX; selain itu undefined (= otomatis) */
+export function normTempo(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v.replace(",", ".")) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.round(Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, n)) * 20) / 20;
+}
+/** kecepatan → rate Edge-TTS: 1,1 → "+10%", 0,85 → "-15%", 1 → "+0%" */
+export const tempoRate = (f: number): string => {
+  const n = Math.round((f - 1) * 100);
+  return `${n < 0 ? "-" : "+"}${Math.abs(n)}%`;
+};
 
 /** detik mulai VO bawaan dari awal adegan (adegan tanpa `vo.at`) */
 export const VO_AT = 0.15;
@@ -216,7 +275,20 @@ export type Timeline = {
   vignette?: boolean;
   /** tanpa VO sama sekali (versi musik + SFX + teks) */
   muteVo?: boolean;
+  /** sutradara AI proyek ini (kosong = Harley) — lihat `Director` */
+  director?: Director;
+  /** volume campuran (dB) — lihat `Mix` */
+  mix?: Mix;
 };
+
+/**
+ * Sutradara AI proyek: `hero` = nama hero bawaan (mis. "Harley") atau karakter buatan user "char:<uuid>".
+ * `name` = nama tampilan (untuk karakter buatan). `notes` = catatan gaya dari user (maks 20 × 300 huruf, teks biasa) —
+ * dikirim ke AI sebagai CATATAN, bukan perintah sistem. Server memeriksa hero sebelum dipakai (route chat).
+ */
+export type Director = { hero: string; name?: string; notes?: string[] };
+/** volume campuran per jalur (dB, -24..+6; kosong = 0) — dipakai mixer audio (components/remotion/studio/audio.tsx, lihat usesMixer) */
+export type Mix = { musicDb?: number; voDb?: number; sfxDb?: number };
 
 // ---------------------------------------------------------------------------------------------
 // Aturan & batas
@@ -265,6 +337,35 @@ export function sfxGain(m: Pick<SfxMeta, "cat" | "lufs" | "tp">, extraDb = 0): n
   const headroom = -1 - m.tp; // jangan sampai puncak > -1 dBTP
   return dbToGain(Math.max(-40, Math.min(want, headroom, 24)));
 }
+
+/**
+ * Slider volume per SFX (mixer): angka yang TERDENGAR relatif bawaan, bukan `cue.gain` mentah — sfxGain menjepit tiap file di
+ * batas puncaknya, jadi menaikkan `cue.gain` di atas batas itu tidak berbunyi apa-apa (dan file yang sudah di batas punya "zona mati"
+ * di bawah 0). `cueDbView` = `cue.gain` → dB terdengar, `cueGainFor` = dB terdengar → `cue.gain`, `cueMaxDb` = naik maksimal (0..+6),
+ * `cueMinDb` = turun maksimal (cue.gain dibatasi -24 dB, jadi file yang sudah dijepit puncaknya tidak bisa turun sejauh -24).
+ */
+const cueBase = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">) => {
+  const want0 = (TARGET_LUFS[m.cat] ?? -17) - m.lufs;
+  const cap = Math.min(-1 - m.tp, 24);
+  return { want0, cap, base: Math.max(-40, Math.min(want0, cap)) };
+};
+export const cueMaxDb = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">): number => {
+  const { cap, base } = cueBase(m);
+  return Math.max(0, Math.min(6, Math.floor((cap - base) * 2) / 2));
+};
+export const cueMinDb = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">): number => {
+  const { want0, cap, base } = cueBase(m);
+  return Math.min(0, Math.ceil((Math.max(-40, Math.min(want0 - 24, cap)) - base) * 2) / 2);
+};
+export const cueDbView = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">, gain: number | undefined): number => {
+  const { want0, cap, base } = cueBase(m);
+  return Math.round((Math.max(-40, Math.min(want0 + (gain ?? 0), cap)) - base) * 10) / 10;
+};
+export const cueGainFor = (m: Pick<SfxMeta, "cat" | "lufs" | "tp">, db: number): number | undefined => {
+  if (Math.abs(db) < 1e-9) return undefined;
+  const { want0, base } = cueBase(m);
+  return Math.round(Math.max(-24, Math.min(12, base + db - want0)) * 10) / 10;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Helper waktu
@@ -444,6 +545,9 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const seen = new Set<string>();
   let total = 0;
   const scenes: Scene[] = [];
+  // adegan teaser yang ejaannya di-upgrade (versi lama pakai strip) → kunci teks ucapan LAMA untuk baris VO yang dibuat sebelum ada
+  // `say`, supaya peringatan "📖 ejaan berubah… Generate ulang" muncul (suaranya masih dibuat dari ejaan lama)
+  const legacySay = new Map<string, string>();
   for (const sv of arr(o.scenes).slice(0, MAX_SCENES)) {
     const s = (sv && typeof sv === "object" ? sv : {}) as Record<string, unknown>;
     const dur = Math.round(num(s.dur, 3, MIN_DUR, MAX_DUR) * FPS) / FPS;
@@ -459,7 +563,16 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
     // offset mulai VO (opsional): angka 0..dur, kosong / bukan angka = bawaan (field tidak disimpan)
     const voAtRaw = voRaw?.at;
     const voAt = voAtRaw === undefined || voAtRaw === null || voAtRaw === "" ? NaN : num(voAtRaw, NaN, 0, dur);
-    const vo: Scene["vo"] = voText ? { text: voText, spell: str(voRaw?.spell, 400) || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}) } : null;
+    // ejaan teaser versi lama (pakai strip) → versi baru tanpa strip (hanya kalimat yang persis sama, lihat upgradeTeaserSpell)
+    const tempo = normTempo(voRaw?.tempo);
+    // volume kalimat VO (mixer): -24..+6 dB; 0 / kosong tidak disimpan
+    const voDb = mixDb(voRaw?.gainDb);
+    const spellRaw = str(voRaw?.spell, 400);
+    const spell = upgradeTeaserSpell(spellRaw);
+    if (voText && spellRaw && spell !== spellRaw) legacySay.set(id, legacySayKey(voText, spellRaw));
+    const vo: Scene["vo"] = voText
+      ? { text: voText, spell: spell || undefined, ...(Number.isFinite(voAt) ? { at: Math.round(voAt * 1000) / 1000 } : {}), ...(tempo !== undefined ? { tempo } : {}), ...(voDb ? { gainDb: voDb } : {}) }
+      : null;
     const tr = (s.transition && typeof s.transition === "object" ? s.transition : { kind: s.transition }) as Record<string, unknown>;
     const bg = (s.bg && typeof s.bg === "object" ? s.bg : {}) as Record<string, unknown>;
     // SFX: hanya dari katalog, maks 8 per adegan, urut waktu, maks 2 SFX keras berdekatan
@@ -479,6 +592,8 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       loudKept.push(c.at);
       return true;
     });
+    const layout = normLayout(s.layout, text);
+    const gain = normGain(s.gain);
     scenes.push({
       id,
       name: str(s.name, 40) || `Adegan ${scenes.length + 1}`,
@@ -486,7 +601,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       vo,
       text,
       visual: str(s.visual, 400),
-      layout: normLayout(s.layout, text),
+      layout,
       bg: { kind: oneOf(bg.kind, ["gradient", "particles", "solid", "grid", "media"] as const, "gradient"), colors: arr(bg.colors).map((c) => color(c, "")).filter(Boolean).slice(0, 3), media: safeMediaSrc(bg.media) },
       transition: { kind: oneOf(tr.kind, TRANSITIONS, scenes.length ? "slide" : "cut"), dir: oneOf(tr.dir, ["left", "right", "up", "down"] as const, "left"), dur: num(tr.dur, DEFAULT_TRANSITION_SEC, 0.1, 1.2) },
       camera: oneOf(s.camera, ["none", "push", "pull", "pan", "tilt"] as const, "push"),
@@ -494,15 +609,26 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       sfx,
       music: oneOf(s.music, ["silent", "low", "mid", "high", "drop"] as const, "mid"),
       subtitles: s.subtitles === undefined ? true : !!s.subtitles,
+      // kunci durasi hanya ada di adegan premium teaser; hanya `true` yang disimpan
+      ...(layout.kind === "teaser" && s.unlocked === true ? { unlocked: true } : {}),
+      // volume adegan (mixer): hanya jalur ≠ 0 dB yang disimpan
+      ...(gain ? { gain } : {}),
     });
   }
   if (!scenes.length) scenes.push(...defaultTimeline().scenes);
   const v = (o.voice && typeof o.voice === "object" ? o.voice : {}) as Record<string, unknown>;
   const m = (o.music && typeof o.music === "object" ? o.music : {}) as Record<string, unknown>;
   const mSrc = str(m.src, 600);
+  // panjang file musik (detik, opsional) → offset tidak boleh lewat ujung lagu
+  const mDur = m.dur === undefined || m.dur === null ? 0 : Math.round(num(m.dur, 0, 0, 3600) * 1000) / 1000;
+  const mOff = num(m.offset, 0, 0, MAX_MUSIC_OFFSET);
   // baris VO tanpa `at` (data lama) mulai di offset adegannya (vo.at) atau bawaan 0,15
-  const vo = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
-  return {
+  const vo0 = normVo(o.vo, new Map(scenes.map((s) => [s.id, voStartOf(s)] as const)));
+  const vo = vo0 && legacySay.size ? { ...vo0, lines: vo0.lines.map((l) => (!l.say && legacySay.has(l.sceneId) ? { ...l, say: legacySay.get(l.sceneId) } : l)) } : vo0;
+  // kamus ejaan proyek: {from, to} terisi, dibatasi panjang & jumlahnya (normLexicon)
+  const lexicon = normLexicon(v.lexicon);
+  // durasi adegan dibatasi → mulai VO (scene.vo.at & line.at) & detik SFX yang lewat ujung adegan ikut dijepit
+  return clampToScenes<Timeline>({
     v: 1,
     title: str(o.title, 80) || "Video baru",
     ratio,
@@ -520,23 +646,251 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       edgeVoice: oneOf(v.edgeVoice, ["id-ID-ArdiNeural", "id-ID-GadisNeural"] as const, "id-ID-ArdiNeural"),
       exaggeration: v.exaggeration === undefined ? undefined : num(v.exaggeration, 0.6, 0.25, 1),
       cfg: v.cfg === undefined ? undefined : num(v.cfg, 0.4, 0.1, 1),
+      // gaya bicara bank suara (opsional): id preset dikenal & variasi 0,5–1,0 — kosong / rusak tidak disimpan
+      ...(normPreset(v.preset) ? { preset: normPreset(v.preset) } : {}),
+      ...(normTemperature(v.temperature) !== undefined ? { temperature: normTemperature(v.temperature) } : {}),
+      ...(lexicon.length ? { lexicon } : {}),
     },
     music: {
       src: mSrc === "none" || mSrc === "bed" ? mSrc : safeMediaSrc(mSrc) ?? "bed",
       name: str(m.name, 80) || undefined,
       bpm: m.bpm === undefined || m.bpm === null ? null : num(m.bpm, 100, 40, 240),
-      beats: Array.isArray(m.beats) ? m.beats.map((x) => num(x, NaN, 0, MAX_TOTAL)).filter(Number.isFinite).slice(0, 2000) : null,
-      offset: num(m.offset, 0, 0, 120),
+      // detik LAGU (bukan video): lagu bisa mulai dari detik ke-offset → batasnya video terpanjang + offset terbesar; di luar itu dibuang
+      beats: Array.isArray(m.beats) ? m.beats.map((x) => num(x, NaN, -1, 1e9)).filter((x) => x >= 0 && x <= MAX_TOTAL + MAX_MUSIC_OFFSET).slice(0, 2000) : null,
+      offset: mDur > 0 ? Math.min(mOff, maxMusicOffset(mDur)) : mOff,
       gain: num(m.gain, 0, -24, 12),
       lufs: m.lufs === undefined || m.lufs === null ? null : num(m.lufs, -14, -40, 0),
+      ...(mDur > 0 ? { dur: mDur } : {}),
     },
     scenes,
     vo,
     grain: o.grain === undefined ? true : !!o.grain,
     vignette: o.vignette === undefined ? true : !!o.vignette,
     muteVo: !!o.muteVo,
-  };
+    ...normDirectorMix(o),
+  });
 }
+
+// ---------- sutradara & volume campuran (opsional; field kosong / rusak tidak disimpan) ----------
+export const DIRECTOR_NOTES_MAX = 20;
+export const DIRECTOR_NOTE_LEN = 300;
+export const MIX_MIN_DB = -24;
+export const MIX_MAX_DB = 6;
+const CHAR_HERO = /^char:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HERO_NAME = /^[A-Za-z][A-Za-z .'-]{0,39}$/;
+/** teks biasa satu baris: tag HTML, tanda < > `, karakter kontrol dibuang */
+export const plainText = (v: unknown, max: number) =>
+  (typeof v === "string" ? v : typeof v === "number" ? String(v) : "")
+    .replace(/<\/?[a-z!?][^>]*>/gi, " ")
+    .replace(/[<>`\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+/** catatan gaya: maks 20 × 300 huruf, teks biasa, tanpa dobel */
+export function normNotes(v: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of Array.isArray(v) ? v : []) {
+    const t = plainText(x, DIRECTOR_NOTE_LEN);
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push(t);
+    if (out.length >= DIRECTOR_NOTES_MAX) break;
+  }
+  return out;
+}
+/** hero sah secara bentuk: "char:<uuid>" atau nama hero (huruf). Cek hero benar-benar ada dilakukan server chat */
+export const isDirectorHero = (v: unknown): v is string => typeof v === "string" && (CHAR_HERO.test(v.trim()) || HERO_NAME.test(v.trim()));
+export function normDirector(v: unknown): Director | undefined {
+  const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
+  if (!o || !isDirectorHero(o.hero)) return undefined;
+  const hero = o.hero.trim();
+  const name = plainText(o.name, 40);
+  const notes = normNotes(o.notes);
+  return { hero: CHAR_HERO.test(hero) ? hero.toLowerCase() : hero, ...(name ? { name } : {}), ...(notes.length ? { notes } : {}) };
+}
+/** dB volume campuran: angka → -24..+6 (0,1 dB); bukan angka → undefined */
+export const mixDb = (v: unknown): number | undefined => {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? parseFloat(v.replace(",", ".")) : NaN;
+  return Number.isFinite(n) ? Math.round(Math.min(MIX_MAX_DB, Math.max(MIX_MIN_DB, n)) * 10) / 10 : undefined;
+};
+export function normMix(v: unknown): Mix | undefined {
+  const o = (v && typeof v === "object" ? v : null) as Record<string, unknown> | null;
+  if (!o) return undefined;
+  const out: Mix = {};
+  for (const k of ["musicDb", "voDb", "sfxDb"] as const) {
+    const d = mixDb(o[k]);
+    if (d !== undefined) out[k] = d;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+function normDirectorMix(o: Record<string, unknown>): Pick<Timeline, "director" | "mix"> {
+  const director = normDirector(o.director);
+  const mix = normMix(o.mix);
+  return { ...(director ? { director } : {}), ...(mix ? { mix } : {}) };
+}
+
+// ---------- mixer: volume campuran (tl.mix), per adegan (scene.gain), per kalimat VO (scene.vo.gainDb); SFX = cue.gain ----------
+export type MixKey = keyof Mix;
+export const MIX_KEYS: readonly MixKey[] = ["musicDb", "voDb", "sfxDb"];
+/** volume adegan: seperti normMix, tapi jalur 0 dB tidak disimpan (kosong = 0) */
+function normGain(v: unknown): Mix | undefined {
+  const m = normMix(v);
+  if (!m) return undefined;
+  for (const k of MIX_KEYS) if (!m[k]) delete m[k];
+  return Object.keys(m).length ? m : undefined;
+}
+/** dB dari data (kosong / rusak = 0), dijepit -24..+6 */
+export const dbOf = (v: unknown): number => mixDb(v) ?? 0;
+/**
+ * true kalau mixer dipakai: ada volume ≠ 0 di campuran, adegan, atau kalimat VO. false → audio persis sama dengan sebelum ada
+ * mixer (timeline lama). Gain per SFX lama (`cue.gain`) tidak dihitung: aturannya tidak berubah.
+ */
+export function usesMixer(tl: Pick<Timeline, "mix" | "scenes">): boolean {
+  if (MIX_KEYS.some((k) => dbOf(tl.mix?.[k]) !== 0)) return true;
+  return tl.scenes.some((s) => dbOf(s.vo?.gainDb) !== 0 || MIX_KEYS.some((k) => dbOf(s.gain?.[k]) !== 0));
+}
+/** true kalau ada volume VO ≠ 0 (campuran / adegan / kalimat). VO lengkap (.mp3 dari laptop) tidak memuatnya → unduh VO dirender ulang */
+export function voGainOn(tl: Pick<Timeline, "mix" | "scenes">): boolean {
+  return dbOf(tl.mix?.voDb) !== 0 || tl.scenes.some((s) => dbOf(s.gain?.voDb) !== 0 || dbOf(s.vo?.gainDb) !== 0);
+}
+/** dB total VO adegan: campuran + adegan + kalimat (bisa lewat +6; puncaknya dijaga limiter audio) */
+export const voDbOf = (tl: Pick<Timeline, "mix">, sc: Pick<Scene, "gain" | "vo">): number => dbOf(tl.mix?.voDb) + dbOf(sc.gain?.voDb) + dbOf(sc.vo?.gainDb);
+/** dB total SFX adegan: campuran + adegan (di luar gain per SFX `cue.gain`) */
+export const sfxDbOf = (tl: Pick<Timeline, "mix">, sc: Pick<Scene, "gain">): number => dbOf(tl.mix?.sfxDb) + dbOf(sc.gain?.sfxDb);
+const isMusicFile = (m: Pick<Music, "src"> | undefined) => !!m && m.src !== "none" && m.src !== "bed";
+/**
+ * volume musik yang terdengar (dB dari bawaan): tl.mix.musicDb + gain lama file musik (music.gain — trailer bed tidak memakainya).
+ * Slider musik di timeline & kartu rencana memakai angka ini, jadi yang tampil = yang terdengar.
+ */
+export function musicVolDb(tl: Pick<Timeline, "mix" | "music">): number {
+  const legacy = isMusicFile(tl.music) ? Math.min(6, Math.max(MIX_MIN_DB, Number(tl.music.gain) || 0)) : 0;
+  return Math.round(Math.min(MIX_MAX_DB, Math.max(MIX_MIN_DB, dbOf(tl.mix?.musicDb) + legacy)) * 10) / 10;
+}
+/** Mix dengan satu jalur diganti (0 dB = jalurnya dihapus; semua kosong = undefined) */
+export function setMixKey(mix: Mix | undefined, k: MixKey, db: number): Mix | undefined {
+  const out: Mix = { ...(mix ?? {}) };
+  const d = mixDb(db) ?? 0;
+  if (d) out[k] = d;
+  else delete out[k];
+  return Object.keys(out).length ? out : undefined;
+}
+/** timeline dengan volume campuran satu jalur diganti. Musik: gain lama file musik dilebur ke mix.musicDb (lihat musicVolDb) */
+export function withMixDb<T extends Pick<Timeline, "mix" | "music">>(tl: T, k: MixKey, db: number): T {
+  const mix = setMixKey(tl.mix, k, db);
+  const out = { ...tl, mix } as T;
+  if (!mix) delete out.mix;
+  if (k === "musicDb" && tl.music.gain) out.music = { ...tl.music, gain: 0 };
+  return out;
+}
+/**
+ * timeline dengan volume adegan `id` satu jalur diganti. VO lengkap (.mp3 dari laptop) tetap disimpan: selama volume VO diatur
+ * (voGainOn), unduh VO dirender ulang dengan volume mixer; kembali 0 dB → file laptop dipakai lagi
+ */
+export function withSceneDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, k: MixKey, db: number): T {
+  let hit = false;
+  const scenes = tl.scenes.map((s) => {
+    if (s.id !== id) return s;
+    const gain = setMixKey(s.gain, k, db);
+    if (dbOf(gain?.[k]) === dbOf(s.gain?.[k])) return s;
+    hit = true;
+    const { gain: _old, ...rest } = s;
+    return gain ? { ...rest, gain } : rest;
+  });
+  return hit ? { ...tl, scenes } : tl;
+}
+/** timeline dengan volume kalimat VO adegan `id` diganti (teks naskah tidak disentuh; VO lengkap .mp3 tetap, lihat withSceneDb) */
+export function withVoDb<T extends Pick<Timeline, "scenes" | "vo">>(tl: T, id: string, db: number): T {
+  const d = mixDb(db) ?? 0;
+  let hit = false;
+  const scenes = tl.scenes.map((s) => {
+    if (s.id !== id || !s.vo || dbOf(s.vo.gainDb) === d) return s;
+    hit = true;
+    const { gainDb: _old, ...vo } = s.vo;
+    return { ...s, vo: d ? { ...vo, gainDb: d } : vo };
+  });
+  return hit ? { ...tl, scenes } : tl;
+}
+/** offset musik terbesar (detik lagu) */
+export const MAX_MUSIC_OFFSET = 120;
+/**
+ * offset terbesar untuk lagu sepanjang `dur` detik: sisa putaran pertama minimal 0,5 dtk. Sisa lagu yang lebih pendek dari video
+ * tidak masalah: sesudah habis lagu diulang dari awal (musicHeadSec).
+ */
+export const maxMusicOffset = (dur: number | undefined): number =>
+  dur && dur > 0 ? Math.max(0, Math.min(MAX_MUSIC_OFFSET, Math.floor((dur - 0.5) * 10) / 10)) : MAX_MUSIC_OFFSET;
+/**
+ * detik lagu yang dilewati, dijepit ke panjang lagu. Hanya berlaku kalau panjang lagu (`dur`) diketahui — editor selalu menulisnya
+ * bersama offset; offset tanpa `dur` (data lama / tulisan AI) diabaikan supaya render tidak gagal karena offset lewat ujung lagu.
+ * Trailer bed / tanpa musik = 0.
+ */
+export function musicOffsetOf(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  if (!m || !isMusicFile(m) || !(Number(m.dur) > 0)) return 0;
+  const o = Number(m.offset) || 0;
+  return o > 0 ? Math.min(o, maxMusicOffset(m.dur)) : 0;
+}
+/**
+ * Tumpang-tindih (crossfade) di tiap titik ulang lagu kalau offset dipakai (detik). File mp3 membawa hening encoder ±25–50 ms
+ * (awal + ujung) yang tidak dibuang decoder render, jadi kalau putaran berikutnya baru mulai saat file habis, musik putus sesaat.
+ * Putaran berikutnya mulai segini lebih awal & disilang-pudar (audio.tsx); ketukan ikut (musicFileBeats).
+ */
+export const MUSIC_XFADE_SEC = 0.08;
+/**
+ * Detik video tempat putaran ulang pertama mulai (lagu dari awal) kalau offset dipakai = sisa lagu sesudah detik ke-offset dikurangi
+ * crossfade (MUSIC_XFADE_SEC). 0 = tanpa offset (lagu diulang utuh seperti biasa).
+ */
+export function musicHeadSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  const off = musicOffsetOf(m);
+  return off > 0 ? Math.max(0, Math.round((Number(m?.dur) - off - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
+}
+/**
+ * Batas putaran ulang lagu (ketukan musicFileBeats & bagian crossfade musicParts di audio.tsx — harus sama supaya ketukan = bunyi).
+ * Lagu terpendek yang boleh pakai offset (0,6 dtk, maxMusicOffset) di video terpanjang (MAX_TOTAL + TAIL_SEC) = ±348 putaran.
+ */
+export const MAX_MUSIC_CYCLES = 400;
+/** jarak antar putaran ulang (detik) kalau offset dipakai = panjang lagu − crossfade. 0 = tanpa offset (loop biasa, jarak = panjang lagu) */
+export function musicCycleSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  return musicOffsetOf(m) > 0 ? Math.max(0.1, Math.round((Number(m?.dur) - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
+}
+/**
+ * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) atau grid dari BPM (ketukan
+ * pertama lagu dianggap di detik 0 lagu). Kalau panjang lagu (`dur`) diketahui: putaran pertama mulai dari detik ke-offset, lalu
+ * tiap putaran ulang (lagu dari awal, lihat musicHeadSec / musicCycleSec) ketukannya ikut sampai `until`.
+ * Tanpa `dur` (data lama) → persis sama dengan sebelum ada offset lagu.
+ */
+export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset" | "dur">, until: number, minBeats = 1): number[] {
+  const detected = !!m.beats && m.beats.length >= Math.max(1, minBeats);
+  const dur = Number(m.dur) > 0 ? Number(m.dur) : 0;
+  if (!dur) {
+    if (detected) return m.beats as number[];
+    if (!m.bpm) return [];
+    // data lama (offset tanpa dur, mis. tulisan AI): offset = fase ketukan pertama grid BPM seperti dulu, lagu tetap diputar dari awal
+    return beatGrid(m.bpm, Math.max(0, Number(m.offset) || 0), until);
+  }
+  const song = (detected ? (m.beats as number[]).filter((b) => b < dur) : m.bpm ? beatGrid(m.bpm, 0, dur - 1e-3) : []).slice().sort((a, b) => a - b);
+  if (!song.length) return [];
+  const off = musicOffsetOf(m);
+  const r3 = (t: number) => Math.round(t * 1000) / 1000;
+  // offset: putaran ulang mulai MUSIC_XFADE_SEC sebelum lagu habis (crossfade) — ketukan di ujung yang tertimpa putaran berikutnya dibuang
+  const head = off > 0 ? musicHeadSec(m) : dur;
+  const cycle = off > 0 ? musicCycleSec(m) : dur;
+  const out: number[] = [];
+  for (const b of song) if (b >= off && b - off <= until + 1e-6 && (off === 0 || b - off < head - 1e-6)) out.push(r3(b - off));
+  // putaran ulang: lagu dari awal (maks MAX_MUSIC_CYCLES putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
+  for (let st = head, k = 0; st <= until + 1e-6 && k < MAX_MUSIC_CYCLES; st += cycle, k++) {
+    for (const b of song) {
+      if (st + b > until + 1e-6 || (off > 0 && b >= cycle - 1e-6)) break;
+      out.push(r3(st + b));
+    }
+  }
+  return out;
+}
+/** ketukan pertama grid BPM di waktu video kalau lagu mulai dari detik ke-`off` (ketukan pertama lagu dianggap di detik 0 lagu) */
+export const musicGridPhase = (bpm: number, off: number): number => {
+  const step = 60 / bpm;
+  return off > 0 ? Math.round(((step - (off % step)) % step) * 1000) / 1000 : 0;
+};
 
 /** VO cadangan tanpa penyimpanan server (service role kosong) dikirim sebagai data URL mp3/wav — dibatasi ±1,5 MB per baris */
 const MAX_DATA_VO = 2_000_000;
@@ -559,8 +913,23 @@ function normVo(v: unknown, sceneAt: Map<string, number>): VoTrack | null {
         .slice(0, 400);
       const sid = str(x.sceneId, 40);
       const speed = Math.round(num(x.speed, 0, 0, 100));
+      const say = typeof x.say === "string" && /^[0-9a-f]{8}$/.test(x.say) ? x.say : "";
+      const tempo = normTempo(x.tempo);
+      const heard = normHeard(x.heard);
       const line: VoLine | null =
-        src && sceneAt.has(sid) ? { sceneId: sid, src, dur: num(x.dur, 1, 0.05, MAX_DUR * 2), at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR), words, ...(speed > 0 ? { speed } : {}) } : null;
+        src && sceneAt.has(sid)
+          ? {
+              sceneId: sid,
+              src,
+              dur: num(x.dur, 1, 0.05, MAX_DUR * 2),
+              at: num(x.at, sceneAt.get(sid) ?? VO_AT, 0, MAX_DUR),
+              words,
+              ...(speed > 0 ? { speed } : {}),
+              ...(say ? { say } : {}),
+              ...(tempo !== undefined ? { tempo } : {}),
+              ...(heard ? { heard } : {}),
+            }
+          : null;
       return line;
     })
     .filter((l): l is VoLine => !!l);
@@ -724,25 +1093,39 @@ export function speedupPct(speech: number, win: number, cur = 0): number {
   return Math.min(MAX_SPEEDUP, Math.max(cur + 1, n));
 }
 
+/** detik ucapan tiap baris VO yang diputar (aturan sama dengan planAudio: punya src & adegannya masih punya teks VO), urut mulai */
+type VoSpan = { i: number; s: number; e: number };
+function voSpans(tl: Pick<Timeline, "scenes" | "fps" | "vo">): VoSpan[] {
+  const starts = sceneStartSecs(tl);
+  return tl.scenes
+    .flatMap((sc, i) => {
+      const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
+      if (!l?.src || !sc.vo?.text) return [];
+      const s = starts[i] + voStartOf(sc, l);
+      // ucapan asli (bukan panjang file): hening di ujung mp3 boleh menimpa VO berikutnya
+      return [{ i, s, e: s + voSpeechEnd(l) }];
+    })
+    .sort((a, b) => a.s - b.s || a.i - b.i);
+}
+
 /**
- * VO adegan yang ucapannya (voSpeechEnd) masih bunyi saat VO adegan sesudahnya mulai (dua suara bersamaan) — terjadi kalau VO lebih panjang dari
- * adegannya dan adegan itu tidak diperpanjang (adegan premium teaser dikunci di ketukan). Aturan baris yang diputar sama dengan
- * planAudio (baris punya src & adegannya masih punya teks VO). `sec` = lama tumpang tindih (detik), `next` = adegan yang VO-nya
- * pertama kali tertabrak. Dipakai VoPanel (peringatan) & ExportPanel; pemanggil yang mengecek VO dimatikan / tidak.
+ * Pasangan VO yang ucapannya (voSpeechEnd) bunyi bersamaan — terjadi kalau VO lebih panjang dari ruangnya (adegan premium teaser
+ * dikunci di ketukan, VO digeser, adegan diperpendek). SEMUA pasangan dilaporkan, berurutan menurut waktu mulai (bukan nomor
+ * adegan): `scene` = VO yang mulai lebih dulu, `next` = VO yang tertimpa, `sec` = lama dua suara itu bersamaan (detik), jadi
+ * jumlah `sec` = total detik suara numpuk. Aturan baris yang diputar sama dengan planAudio. Dipakai VoPanel, TimelineEditor &
+ * ExportPanel; pemanggil yang mengecek VO dimatikan / tidak.
  */
 export function voClashes(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene: number; next: number; sec: number }[] {
-  const starts = sceneStartSecs(tl);
-  const spans = tl.scenes.flatMap((sc, i) => {
-    const l = tl.vo?.lines.find((x) => x.sceneId === sc.id);
-    if (!l?.src || !sc.vo?.text) return [];
-    const s = starts[i] + voStartOf(sc, l);
-    // ucapan asli (bukan panjang file): hening di ujung mp3 boleh menimpa VO berikutnya
-    return [{ i, s, e: s + voSpeechEnd(l) }];
-  });
+  const sp = voSpans(tl);
   const out: { scene: number; next: number; sec: number }[] = [];
-  for (const a of spans) {
-    const hit = spans.filter((b) => b.i > a.i && a.e > b.s + 1e-3).sort((x, y) => x.s - y.s)[0];
-    if (hit) out.push({ scene: a.i, next: hit.i, sec: Math.min(a.e, hit.e) - hit.s });
+  for (let x = 0; x < sp.length; x++) {
+    const a = sp[x];
+    for (let y = x + 1; y < sp.length; y++) {
+      const b = sp[y];
+      if (b.s >= a.e - 1e-3) break; // urut mulai → VO sesudahnya juga mulai setelah VO ini selesai
+      const sec = Math.min(a.e, b.e) - b.s;
+      if (sec > 1e-3) out.push({ scene: a.i, next: b.i, sec: Math.round(sec * 1000) / 1000 });
+    }
   }
   return out;
 }
@@ -763,4 +1146,252 @@ export function voCutoffs(tl: Pick<Timeline, "scenes" | "fps" | "vo">): { scene:
     const cut = s + voSpeechEnd(l) - Math.max(s, end); // mulai sesudah video habis = seluruh ucapan hilang (planAudio melewatinya)
     return cut > 1e-3 ? [{ scene: i, sec: Math.round(cut * 1000) / 1000 }] : [];
   });
+}
+
+/** total detik suara VO yang bermasalah: semua pasangan yang numpuk (voClashes) + ucapan yang terpotong di akhir video (voCutoffs) */
+export function voBadSec(tl: Pick<Timeline, "scenes" | "fps" | "vo">): number {
+  const t = voClashes(tl).reduce((a, c) => a + c.sec, 0) + voCutoffs(tl).reduce((a, c) => a + c.sec, 0);
+  return Math.round(t * 1000) / 1000;
+}
+
+/** VO yang mulainya digeser lebih lambat tetap mulai paling lambat segini sebelum adegannya habis (detik) */
+export const VO_MIN_IN_SCENE = 0.3;
+/** mulai VO yang diatur sendiri (timeline) paling lambat segini sebelum adegannya habis; durasi adegan berubah → dijepit ke sini */
+export const VO_END_ROOM = 0.1;
+/** susun otomatis menggeser mulai VO paling jauh max(1 dtk, 30% durasi adegannya) — VO tetap menempel ke visual adegannya */
+export const VO_SHIFT_MIN = 1;
+export const VO_SHIFT_PART = 0.3;
+/** satu VO yang digeser arrangeVo: indeks adegan, detik mulai lama & baru (dari awal adegan) */
+export type VoMove = { scene: number; from: number; to: number };
+
+/**
+ * isotonic regression berbatas (pool-adjacent-violators untuk kerugian kuadrat + batas lo..hi tiap titik): urutan naik terdekat
+ * (jumlah kuadrat terkecil) dari `q` dengan lo[k] ≤ hasil[k] ≤ hi[k]. Nilai tiap blok = rata-rata blok yang dijepit ke batas blok
+ * (maks lo, min hi) — PAV tetap optimal untuk kerugian cembung terpisah seperti ini. Batas harus bisa dipenuhi (lihat packVo).
+ */
+function isotonicBounded(q: number[], lo: number[], hi: number[]): number[] {
+  type B = { sum: number; n: number; lo: number; hi: number };
+  const val = (b: B) => Math.min(Math.max(b.sum / b.n, b.lo), Math.max(b.lo, b.hi));
+  const blocks: B[] = [];
+  q.forEach((v, k) => {
+    blocks.push({ sum: v, n: 1, lo: lo[k], hi: hi[k] });
+    while (blocks.length > 1) {
+      const b = blocks[blocks.length - 1];
+      const a = blocks[blocks.length - 2];
+      if (val(a) <= val(b) + 1e-12) break;
+      a.sum += b.sum;
+      a.n += b.n;
+      a.lo = Math.max(a.lo, b.lo);
+      a.hi = Math.min(a.hi, b.hi);
+      blocks.pop();
+    }
+  });
+  return blocks.flatMap((b) => new Array<number>(b.n).fill(val(b)));
+}
+
+/** satu VO yang ikut disusun: mulai lama a0 (detik global), panjang ucapan L, rentang mulai yang boleh lo..hi */
+type ArrSp = { i: number; S: number; at0: number; a0: number; L: number; lo: number; hi: number };
+
+/**
+ * Susun rapat tanpa numpuk (jarak mulai VO k → k+1 ≥ ucapan + VO_GAP) dengan geseran kuadrat terkecil (isotonic regression).
+ * Jarak yang mustahil dipenuhi dikurangi seperlunya (`ok` = false) — hasil itu hanya titik awal pencarian minimizeOverlap.
+ */
+function packVo(sp: ArrSp[], end: number): { a: number[]; ok: boolean } {
+  const n = sp.length;
+  const lo0 = sp.map((x) => x.lo);
+  const hi0 = sp.map((x) => x.hi);
+  // VO terakhir harus selesai sebelum video habis (kalau masih bisa: tidak lebih awal dari batas bawahnya)
+  const cutFree = end - sp[n - 1].L >= lo0[n - 1] - 1e-9;
+  hi0[n - 1] = Math.max(lo0[n - 1], Math.min(hi0[n - 1], end - sp[n - 1].L));
+  let ok = cutFree;
+  const d = sp.slice(0, -1).map((x) => x.L + VO_GAP);
+  let early = lo0[0];
+  for (let k = 1; k < n; k++) {
+    const want = Math.max(lo0[k], early + d[k - 1]);
+    if (want > hi0[k] + 1e-9) {
+      ok = false;
+      d[k - 1] = Math.max(0, hi0[k] - early);
+    }
+    early = Math.min(hi0[k], Math.max(lo0[k], early + d[k - 1]));
+  }
+  // b_k = a_k − C_k (C = jumlah jarak sebelumnya) → syarat tidak numpuk jadi b naik; rentang mulai jadi batas b (dibuat naik:
+  // maks berjalan dari kiri / min berjalan dari kanan — himpunan yang sama) → isotonic regression berbatas
+  const C: number[] = [0];
+  for (let k = 1; k < n; k++) C.push(C[k - 1] + d[k - 1]);
+  const lo = lo0.map((v, k) => v - C[k]);
+  const hi = hi0.map((v, k) => v - C[k]);
+  for (let k = 1; k < n; k++) lo[k] = Math.max(lo[k], lo[k - 1]);
+  for (let k = n - 2; k >= 0; k--) hi[k] = Math.min(hi[k], hi[k + 1]);
+  const y = isotonicBounded(
+    sp.map((x, k) => x.a0 - C[k]),
+    lo.map((v, k) => Math.min(v, hi[k])),
+    hi,
+  );
+  return { a: sp.map((x, k) => Math.min(Math.max(Math.min(Math.max(y[k], Math.min(lo[k], hi[k])), hi[k]) + C[k], x.lo), x.hi)), ok };
+}
+
+/** bobot geseran (per detik²) dibanding 1 dtk suara numpuk — VO yang tidak ikut mengurangi tumpang tindih tetap di tempatnya */
+const ARR_MU = 0.1;
+const ARR_STEP = 0.01;
+
+/** detik suara bertumpuk (semua pasangan, tiap ucapan + jeda `gap`) + ucapan terpotong di akhir video, untuk mulai `a` */
+function overlapSec(a: number[], L: number[], end: number, gap: number): number {
+  let t = 0;
+  for (let x = 0; x < a.length; x++) {
+    for (let y = x + 1; y < a.length; y++) t += Math.max(0, Math.min(a[x] + L[x], a[y] + L[y]) + gap - Math.max(a[x], a[y]));
+    t += Math.max(0, a[x] + L[x] - Math.max(a[x], end));
+  }
+  return t;
+}
+
+/**
+ * VO yang memang tidak muat: cari mulai (per VO, langkah 0,01 dtk di rentangnya) yang membuat total suara numpuk + terpotong
+ * sekecil mungkin, dengan biaya geseran ARR_MU·geser² — bukan memadatkan berantai (memadatkan hanya memindah tumpang tindih).
+ */
+function minimizeOverlap(start: number[], sp: ArrSp[], end: number): number[] {
+  const a = [...start];
+  const n = a.length;
+  const L = sp.map((x) => x.L);
+  const term = (k: number, v: number) => {
+    let t = ARR_MU * (v - sp[k].a0) ** 2 + Math.max(0, v + L[k] - Math.max(v, end));
+    for (let y = 0; y < n; y++) if (y !== k) t += Math.max(0, Math.min(v + L[k], a[y] + L[y]) + VO_GAP - Math.max(v, a[y]));
+    return t;
+  };
+  for (let sweep = 0; sweep < 16; sweep++) {
+    let better = false;
+    for (let k = 0; k < n; k++) {
+      const cur = term(k, a[k]);
+      if (cur <= 1e-12) continue;
+      const { lo, hi, a0 } = sp[k];
+      let best = a[k];
+      let bestT = cur;
+      const tryAt = (v: number) => {
+        const t = term(k, v);
+        if (t < bestT - 1e-9) {
+          bestT = t;
+          best = v;
+        }
+      };
+      // kasar (5 × langkah) lalu dihaluskan di sekitar yang terbaik — cukup cepat untuk dihitung ulang tiap timeline berubah
+      const C = ARR_STEP * 5;
+      for (let j = Math.ceil((lo - a0) / C - 1e-9), j1 = Math.floor((hi - a0) / C + 1e-9); j <= j1; j++) tryAt(a0 + j * C);
+      tryAt(lo);
+      tryAt(hi);
+      const mid = best;
+      for (let j = -4; j <= 4; j++) {
+        const v = mid + j * ARR_STEP;
+        if (j && v >= lo - 1e-9 && v <= hi + 1e-9) tryAt(v);
+      }
+      if (best !== a[k]) {
+        a[k] = best;
+        better = true;
+      }
+    }
+    if (!better) break;
+  }
+  return a;
+}
+
+/**
+ * Susun otomatis VO yang masih numpuk (ucapan voSpeechEnd + jeda VO_GAP masih bunyi saat VO berikutnya mulai) atau terpotong di
+ * akhir video — langkah terakhir setelah jeda dipadatkan & suara dipercepat maks 30% tetap belum muat. Tiap VO hanya boleh
+ * bergeser max(VO_SHIFT_MIN dtk, VO_SHIFT_PART × durasi adegannya), tidak sebelum awal adegannya dan paling lambat VO_MIN_IN_SCENE
+ * dtk sebelum adegannya habis — supaya VO tetap cocok dengan visual adegannya.
+ * - Muat di rentang itu → disusun tanpa numpuk dengan geseran sesedikit mungkin (jumlah kuadrat terkecil).
+ * - Tidak muat → dicari posisi dengan total suara numpuk (semua pasangan) + terpotong paling kecil; dipakai HANYA kalau totalnya
+ *   jadi bersih atau turun berarti (≥ 0,2 dtk dan ≥ 25%). Selain itu tidak ada yang digeser (`moved` kosong) — pemanggil
+ *   melaporkan jujur lewat voClashes / voCutoffs.
+ * Durasi adegan & audio tidak berubah; posisi baru disimpan ke `line.at` & `scene.vo.at` (VO lengkap .mp3 dilepas).
+ * `before` / `after` = total detik suara numpuk + terpotong (voBadSec) sebelum & sesudah.
+ */
+export function arrangeVo<T extends Pick<Timeline, "scenes" | "fps" | "vo">>(tl: T): { tl: T; moved: VoMove[]; before: number; after: number } {
+  // timeline tidak pernah diubah di tempat (selalu objek baru) → hasil untuk objek yang sama dipakai ulang (VoPanel & TimelineEditor)
+  const hit = arrCache.get(tl);
+  if (hit) return hit as { tl: T; moved: VoMove[]; before: number; after: number };
+  const r = arrangeVoRaw(tl);
+  arrCache.set(tl, r);
+  return r;
+}
+const arrCache = new WeakMap<object, { tl: unknown; moved: VoMove[]; before: number; after: number }>();
+function arrangeVoRaw<T extends Pick<Timeline, "scenes" | "fps" | "vo">>(tl: T): { tl: T; moved: VoMove[]; before: number; after: number } {
+  const lines = tl.vo?.lines;
+  const none = (b = 0) => ({ tl, moved: [] as VoMove[], before: b, after: b });
+  if (!lines?.length) return none();
+  const starts = sceneStartSecs(tl);
+  const end = videoEndSec(tl);
+  const sp: ArrSp[] = [];
+  tl.scenes.forEach((sc, i) => {
+    const l = lines.find((x) => x.sceneId === sc.id);
+    if (!l?.src || !sc.vo?.text) return;
+    const at0 = voStartOf(sc, l);
+    const S = starts[i];
+    const a0 = S + at0;
+    const lim = Math.max(VO_SHIFT_MIN, VO_SHIFT_PART * sc.dur);
+    sp.push({ i, S, at0, a0, L: voSpeechEnd(l), lo: Math.max(S, a0 - lim), hi: Math.min(S + Math.max(at0, sc.dur - VO_MIN_IN_SCENE), a0 + lim) });
+  });
+  if (!sp.length) return none();
+  sp.sort((x, y) => x.a0 - y.a0 || x.i - y.i);
+  const L = sp.map((x) => x.L);
+  const a0 = sp.map((x) => x.a0);
+  const before = overlapSec(a0, L, end, 0);
+  const pack = packVo(sp, end);
+  let a = pack.a;
+  if (!pack.ok) {
+    // tidak muat: dua titik awal (posisi lama & hasil memadatkan), ambil yang total numpuk + biaya gesernya paling kecil
+    const cost = (v: number[]) => overlapSec(v, L, end, VO_GAP) + ARR_MU * v.reduce((s, x, k) => s + (x - a0[k]) ** 2, 0);
+    const m1 = minimizeOverlap(a0, sp, end);
+    const m2 = minimizeOverlap(pack.a, sp, end);
+    a = cost(m2) < cost(m1) - 1e-9 ? m2 : m1;
+    const after = overlapSec(a, L, end, 0);
+    const gain = before - after;
+    if (!(before > 1e-3 && (after <= 1e-3 || (gain >= 0.2 - 1e-9 && gain >= 0.25 * before - 1e-9)))) return none(Math.round(before * 1000) / 1000);
+  }
+  const moved: VoMove[] = [];
+  const at = new Map<string, number>();
+  sp.forEach((x, k) => {
+    const to = Math.max(0, Math.round((a[k] - x.S) * 1000) / 1000);
+    if (Math.abs(to - x.at0) < 5e-4) return;
+    moved.push({ scene: x.i, from: x.at0, to });
+    at.set(tl.scenes[x.i].id, to);
+  });
+  if (!moved.length) return none(Math.round(before * 1000) / 1000);
+  moved.sort((p, q) => p.scene - q.scene);
+  const vo = tl.vo as VoTrack;
+  const out: T = {
+    ...tl,
+    scenes: tl.scenes.map((s) => (at.has(s.id) && s.vo ? { ...s, vo: { ...s.vo, at: at.get(s.id) } } : s)),
+    vo: { ...vo, full: null, lines: vo.lines.map((l) => (at.has(l.sceneId) ? { ...l, at: at.get(l.sceneId) } : l)) },
+  };
+  return { tl: out, moved, before: Math.round(before * 1000) / 1000, after: voBadSec(out) };
+}
+
+/**
+ * Jepit detik yang bergantung pada durasi adegan setelah durasinya berubah (adegan diperpendek, kunci teaser dibuka / dikembalikan):
+ * mulai VO (`scene.vo.at` & `line.at`) paling lambat VO_END_ROOM dtk sebelum adegannya habis, detik SFX ≤ durasi adegan.
+ * Tidak ada yang perlu dijepit → objek yang sama. Mulai VO berubah → VO lengkap (.mp3) dilepas (tidak sinkron lagi).
+ */
+export function clampToScenes<T extends Pick<Timeline, "scenes" | "vo">>(tl: T): T {
+  const room = new Map(tl.scenes.map((s) => [s.id, Math.max(0, Math.round((s.dur - VO_END_ROOM) * 1000) / 1000)] as const));
+  let sceneFix = false;
+  const scenes = tl.scenes.map((s) => {
+    const max = room.get(s.id) ?? 0;
+    const voFix = !!s.vo && typeof s.vo.at === "number" && s.vo.at > max + 1e-6;
+    const sfxFix = s.sfx.some((c) => c.at > s.dur + 1e-6);
+    if (!voFix && !sfxFix) return s;
+    sceneFix = true;
+    return {
+      ...s,
+      ...(voFix && s.vo ? { vo: { ...s.vo, at: max } } : {}),
+      ...(sfxFix ? { sfx: s.sfx.map((c) => (c.at > s.dur + 1e-6 ? { ...c, at: Math.round(s.dur * 1000) / 1000 } : c)) } : {}),
+    };
+  });
+  let lineFix = false;
+  const lines = (tl.vo?.lines ?? []).map((l) => {
+    const max = room.get(l.sceneId);
+    if (max === undefined || l.at === undefined || l.at <= max + 1e-6) return l;
+    lineFix = true;
+    return { ...l, at: max };
+  });
+  if (!sceneFix && !lineFix) return tl;
+  return { ...tl, scenes: sceneFix ? scenes : tl.scenes, ...(lineFix && tl.vo ? { vo: { ...tl.vo, full: null, lines } } : {}) };
 }

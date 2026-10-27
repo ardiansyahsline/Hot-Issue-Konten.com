@@ -454,7 +454,16 @@ const CRYPTO_WORDS: Record<string, [string, string]> = {
   avax: ["AVAX", "Avalanche"], tron: ["TRX", "TRON"], trx: ["TRX", "TRON"], shib: ["SHIB", "Shiba Inu"], litecoin: ["LTC", "Litecoin"],
   hype: ["HYPE", "Hyperliquid"], chainlink: ["LINK", "Chainlink"],
 };
-const IDX_CODES = /\b(bbri|bbca|bmri|bbni|bris|tlkm|asii|goto|antm|adro|unvr|icbp|indf|mdka|pgas|ptba|smgr|untr|cpin|amrt|mapi|bbtn|arto|bren|cuan|ptro|dewa|inco|medc|aadi)\b/i;
+const IDX_CODES = /\b(bbri|bbca|bmri|bbni|bris|tlkm|asii|goto|antm|adro|unvr|icbp|indf|mdka|pgas|ptba|smgr|untr|cpin|amrt|mapi|bbtn|arto|bren|cuan|ptro|dewa|inco|medc|aadi)\b/gi;
+/** kode aset yang juga kata sehari-hari ("ada saran?", "satu ton", "lagi hype", "lagi cuan", "dewa") */
+const COMMON_WORD_CODES = /^(ada|ton|sui|pump|hype|cuan|dewa)$/i;
+/** kata sehari-hari di atas hanya dianggap kode aset kalau ditulis KAPITAL ("ADA", "CUAN") di pesan yang tidak kapital semua */
+function codeWritten(text: string, w: string): boolean {
+  if (!COMMON_WORD_CODES.test(w)) return true;
+  const letters = text.replace(/[^a-zA-Z]/g, "");
+  if (letters.length >= 8 && letters.replace(/[^A-Z]/g, "").length / letters.length > 0.6) return false;
+  return new RegExp(`\\b${w.toUpperCase()}\\b`).test(text);
+}
 
 type Asset = { market: Market; symbol: string; name?: string };
 /** tebak aset dari kalimat (cadangan kalau perencana AI tidak mengisi symbols) */
@@ -467,8 +476,8 @@ function guessAsset(text: string): Asset | null {
   if (usdt && !/^(xau|eur|gbp|aud)$/i.test(usdt[1])) return { market: "crypto", symbol: usdt[1].toUpperCase(), name: CRYPTO_WORDS[usdt[1].toLowerCase()]?.[1] };
   const coin = t.match(/\b(?:koin|coin|token|crypto|kripto)\s+([a-z0-9]{2,12})\b/i);
   if (coin && !/^(yang|apa|ini|itu|baru|bagus|lagi)$/i.test(coin[1])) return { market: "crypto", symbol: coin[1].toUpperCase(), name: CRYPTO_WORDS[coin[1].toLowerCase()]?.[1] };
-  for (const [w, [sym, name]] of Object.entries(CRYPTO_WORDS)) if (new RegExp(`\\b${w}\\b`, "i").test(t)) return { market: "crypto", symbol: sym, name };
-  const saham = t.match(/\bsaham\s+([a-z]{4})\b/i) ?? t.match(IDX_CODES);
+  for (const [w, [sym, name]] of Object.entries(CRYPTO_WORDS)) if (new RegExp(`\\b${w}\\b`, "i").test(t) && codeWritten(text, w)) return { market: "crypto", symbol: sym, name };
+  const saham = t.match(/\bsaham\s+([a-z]{4})\b/i) ?? [...t.matchAll(IDX_CODES)].find((m) => codeWritten(text, m[1]));
   if (saham) return { market: "saham_id", symbol: saham[1].toUpperCase() };
   return null;
 }

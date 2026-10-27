@@ -1,0 +1,470 @@
+/**
+ * Skill Studio: setelan proyek yang bisa disimpan / dibagikan supaya referensi tim sama — kamus ejaan, suara, volume campuran,
+ * sutradara, catatan gaya. Disimpan sebagai file .json (unduh / impor) atau di Library tim (tabel studio_skills, migration-21).
+ *
+ * File skill = JSON TIDAK DIPERCAYA (bisa dari siapa saja): `normSkill` memvalidasi ketat — batas ukuran ±64 KB, kamus lewat
+ * normLexicon (maks 60), catatan maks 20 × 300 huruf tanpa HTML, angka dibatasi rentangnya, field asing dibuang.
+ * Aman dipakai di server & browser (tanpa import server-only).
+ */
+import { lexiconRisk, type LexRisk } from "./heard";
+import { DEFAULT_LEXICON, MAX_LEXICON, normLexicon, type LexEntry } from "./pronounce";
+import {
+  isDirectorHero,
+  mixDb,
+  musicVolDb,
+  normNotes,
+  setMixKey,
+  plainText,
+  DIRECTOR_NOTES_MAX,
+  type Director,
+  type EdgeVoice,
+  type Mix,
+  type Timeline,
+  type Voice,
+  type VoiceMode,
+} from "./timeline";
+import { applyStyle, isTeaserTimeline, normPreset, normTemperature, styleLabel, voicePatch, voiceStyle, CFG_MAX, CFG_MIN, EXG_MAX, EXG_MIN, type VoicePreset } from "./voiceStyle";
+
+export const SKILL_KIND = "studio-skill";
+export const SKILL_VERSION = 1;
+/** batas ukuran file / data skill (byte JSON) */
+export const SKILL_MAX_BYTES = 64 * 1024;
+export const SKILL_NAME_MAX = 60;
+export const SKILL_DESC_MAX = 300;
+
+export type SkillSection = "lexicon" | "voice" | "mix" | "director" | "notes";
+export const SKILL_SECTIONS: readonly SkillSection[] = ["lexicon", "voice", "mix", "director", "notes"];
+export const SECTION_LABEL: Record<SkillSection, string> = {
+  lexicon: "Kamus ejaan",
+  voice: "Suara",
+  mix: "Volume",
+  director: "Sutradara",
+  notes: "Catatan gaya",
+};
+export const SECTION_ICON: Record<SkillSection, string> = { lexicon: "📖", voice: "🎙️", mix: "🎚️", director: "🎬", notes: "✍️" };
+
+/** setelan suara di skill (tanpa voiceId: id bank suara beda per database — dicocokkan lewat voiceName saat diterapkan) */
+/** suara di skill: `preset` / `temperature` = nama & rentang yang sama dengan timeline.voice (lib/studio/voiceStyle.ts) */
+export type SkillVoice = { mode?: VoiceMode; voiceName?: string; edgeVoice?: EdgeVoice; exaggeration?: number; cfg?: number; temperature?: number; preset?: VoicePreset };
+export type StudioSkill = {
+  kind: typeof SKILL_KIND;
+  v: typeof SKILL_VERSION;
+  name: string;
+  desc?: string;
+  created_at: string;
+  sections: {
+    lexicon?: LexEntry[];
+    voice?: SkillVoice;
+    mix?: Mix;
+    director?: { hero: string; name?: string };
+    notes?: string[];
+  };
+};
+export type SkillResult = { ok: true; skill: StudioSkill } | { ok: false; error: string };
+/** satu baris Library tim (GET /api/studio/skills) */
+export type SkillLibraryRow = {
+  id: string;
+  name: string;
+  desc: string | null;
+  owner: string;
+  ownerName: string;
+  mine: boolean;
+  canDelete: boolean;
+  created_at: string;
+  sections: SkillSection[];
+  skill: StudioSkill;
+};
+
+/** voice di timeline (gaya bicara: preset + temperature ada di Voice sendiri) */
+export type VoiceLike = Voice;
+/**
+ * bagian timeline yang dibaca / diubah skill (Timeline memenuhi tipe ini; tanpa rencana cukup { director }). `scenes` hanya dibaca
+ * untuk gaya bicara bawaan (proyek teaser: Promo energik).
+ */
+export type SkillTarget = { voice?: VoiceLike; mix?: Mix; director?: Director; scenes?: Timeline["scenes"]; music?: Timeline["music"] };
+const teaserOf = (t: SkillTarget) => isTeaserTimeline(t.scenes ? { scenes: t.scenes } : null);
+const isMusicFile = (m: Timeline["music"] | undefined) => !!m && m.src !== "none" && m.src !== "bed";
+/**
+ * volume campuran yang TERDENGAR: musik = tl.mix.musicDb + volume lama file musik (music.gain, proyek yang diatur dengan slider
+ * lama) — sama dengan slider mixer (musicVolDb). Dipakai saat skill disimpan / dibandingkan.
+ */
+function heardMix(t: SkillTarget): Mix | undefined {
+  if (!t.music || !isMusicFile(t.music) || !t.music.gain) return t.mix;
+  return setMixKey(t.mix, "musicDb", musicVolDb({ mix: t.mix, music: t.music }));
+}
+
+const MODES: readonly VoiceMode[] = ["bank", "edge", "elevenlabs", "none"];
+const EDGE_VOICES: readonly EdgeVoice[] = ["id-ID-ArdiNeural", "id-ID-GadisNeural"];
+
+const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+/** angka (atau teks angka "0,7") di rentang lo..hi (2 angka di belakang koma); bukan angka → undefined */
+function clampNum(v: unknown, lo: number, hi: number): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? parseFloat(v.replace(",", ".")) : NaN;
+  return Number.isFinite(n) ? Math.round(Math.min(hi, Math.max(lo, n)) * 100) / 100 : undefined;
+}
+/** buang kunci yang nilainya undefined */
+function compact<T extends Record<string, unknown>>(o: T): T {
+  for (const k of Object.keys(o)) if (o[k] === undefined) delete o[k];
+  return o;
+}
+/** kunci kamus (sama dengan pronounce.ts: huruf kecil, spasi & strip diabaikan) */
+const lexKey = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
+
+function normVoice(v: unknown): SkillVoice | undefined {
+  const o = obj(v);
+  if (!o) return undefined;
+  const out = compact<SkillVoice>({
+    mode: MODES.includes(o.mode as VoiceMode) ? (o.mode as VoiceMode) : undefined,
+    voiceName: plainText(o.voiceName, 60) || undefined,
+    edgeVoice: EDGE_VOICES.includes(o.edgeVoice as EdgeVoice) ? (o.edgeVoice as EdgeVoice) : undefined,
+    // rentang sama dengan normalizeTimeline / slider panel Suara VO; preset hanya id yang dikenal (natural|promo|tenang|kustom)
+    exaggeration: clampNum(o.exaggeration, EXG_MIN, EXG_MAX),
+    cfg: clampNum(o.cfg, CFG_MIN, CFG_MAX),
+    temperature: normTemperature(o.temperature),
+    preset: normPreset(o.preset),
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+
+function normMixPart(v: unknown): Mix | undefined {
+  const o = obj(v);
+  if (!o) return undefined;
+  const out = compact<Mix>({ musicDb: mixDb(o.musicDb), voDb: mixDb(o.voDb), sfxDb: mixDb(o.sfxDb) });
+  return Object.keys(out).length ? out : undefined;
+}
+
+function normDirectorPart(v: unknown): { hero: string; name?: string } | undefined {
+  const o = obj(v);
+  if (!o || !isDirectorHero(o.hero)) return undefined;
+  const hero = o.hero.trim();
+  const name = plainText(o.name, 40);
+  return { hero: hero.startsWith("char:") ? hero.toLowerCase() : hero, ...(name ? { name } : {}) };
+}
+
+/** ukuran JSON (byte UTF-8); gagal di-stringify (mis. melingkar) → Infinity */
+function jsonBytes(v: unknown): number {
+  try {
+    const s = JSON.stringify(v);
+    return s === undefined ? 0 : new TextEncoder().encode(s).length;
+  } catch {
+    return Infinity;
+  }
+}
+
+/**
+ * Validasi ketat skill dari file / database / body permintaan (teks JSON atau objek). Tidak pernah melempar error.
+ * Field asing dibuang, angka dibatasi, teks dibersihkan. Skill tanpa satu pun bagian yang terpakai ditolak.
+ */
+export function normSkill(raw: unknown): SkillResult {
+  let data: unknown = raw;
+  if (typeof raw === "string") {
+    if (raw.length > SKILL_MAX_BYTES || new TextEncoder().encode(raw).length > SKILL_MAX_BYTES) return { ok: false, error: "File skill terlalu besar (maks 64 KB)." };
+    try {
+      data = JSON.parse(raw.replace(/^﻿/, ""));
+    } catch {
+      return { ok: false, error: "File ini bukan JSON skill yang valid." };
+    }
+  } else if (jsonBytes(raw) > SKILL_MAX_BYTES) return { ok: false, error: "File skill terlalu besar (maks 64 KB)." };
+  const o = obj(data);
+  if (!o || o.kind !== SKILL_KIND) return { ok: false, error: "Ini bukan file skill Studio." };
+  if (Number(o.v) !== SKILL_VERSION) return { ok: false, error: "Versi skill tidak dikenal. Minta pembuatnya menyimpan ulang." };
+  const name = plainText(o.name, SKILL_NAME_MAX);
+  if (!name) return { ok: false, error: "Nama skill kosong." };
+  const desc = plainText(o.desc, SKILL_DESC_MAX);
+  const t = typeof o.created_at === "string" && o.created_at.length <= 40 ? Date.parse(o.created_at) : NaN;
+  const s = obj(o.sections) ?? {};
+  const lexicon = normLexicon(Array.isArray(s.lexicon) ? s.lexicon.slice(0, MAX_LEXICON * 4) : []);
+  const notes = normNotes(Array.isArray(s.notes) ? s.notes.slice(0, DIRECTOR_NOTES_MAX * 4) : []);
+  const sections = compact<StudioSkill["sections"]>({
+    lexicon: lexicon.length ? lexicon : undefined,
+    voice: normVoice(s.voice),
+    mix: normMixPart(s.mix),
+    director: normDirectorPart(s.director),
+    notes: notes.length ? notes : undefined,
+  });
+  if (!Object.keys(sections).length) return { ok: false, error: "Skill ini kosong — tidak ada bagian yang bisa dipakai." };
+  return {
+    ok: true,
+    skill: { kind: SKILL_KIND, v: SKILL_VERSION, name, ...(desc ? { desc } : {}), created_at: new Date(Number.isFinite(t) ? t : Date.now()).toISOString(), sections },
+  };
+}
+
+/** bagian yang terisi di skill (urutan tetap) */
+export const skillSections = (skill: Pick<StudioSkill, "sections">): SkillSection[] => SKILL_SECTIONS.filter((k) => skill.sections[k] !== undefined);
+
+/** bagian yang bisa diambil dari proyek ini (ada isinya) */
+export function availableSections(src: SkillTarget): SkillSection[] {
+  return SKILL_SECTIONS.filter((k) => {
+    if (k === "lexicon") return !!src.voice?.lexicon?.length;
+    if (k === "voice") return !!src.voice;
+    if (k === "mix") return Object.keys(heardMix(src) ?? {}).length > 0;
+    if (k === "director") return true; // kosong = Harley
+    return !!src.director?.notes?.length;
+  });
+}
+
+/**
+ * Ambil skill dari proyek (hanya bagian yang dicentang & ada isinya). Hasil sudah lewat normSkill.
+ * Gagal (mis. semua bagian kosong) → null.
+ */
+export function collectSkill(src: SkillTarget, parts: readonly SkillSection[], info: { name: string; desc?: string; now?: Date }): StudioSkill | null {
+  const want = new Set(parts);
+  const v = src.voice;
+  const sections: Record<string, unknown> = {};
+  if (want.has("lexicon") && v?.lexicon?.length) sections.lexicon = v.lexicon;
+  if (want.has("voice") && v)
+    sections.voice = {
+      mode: v.mode,
+      voiceName: v.voiceName,
+      edgeVoice: v.edgeVoice,
+      // gaya bicara yang benar-benar dipakai (preset bawaan / angka lama ikut terbaca) → proyek lain mendapat suara yang sama
+      ...voicePatch(voiceStyle(v, teaserOf(src))),
+    };
+  const mix = heardMix(src);
+  if (want.has("mix") && mix) sections.mix = mix;
+  if (want.has("director")) sections.director = { hero: src.director?.hero ?? "Harley", name: src.director?.name };
+  if (want.has("notes") && src.director?.notes?.length) sections.notes = src.director.notes;
+  const r = normSkill({ kind: SKILL_KIND, v: SKILL_VERSION, name: info.name, desc: info.desc, created_at: (info.now ?? new Date()).toISOString(), sections });
+  return r.ok ? r.skill : null;
+}
+
+/** gabung kamus: kata yang sama (per `from`) diganti versi skill di tempatnya, kata baru ditambah di belakang (maks 60) */
+export function mergeLexicon(cur: readonly LexEntry[] | undefined, add: readonly LexEntry[]): { lexicon: LexEntry[]; added: number; replaced: number; skipped: number } {
+  const base = normLexicon(cur ?? []);
+  const incoming = normLexicon(add);
+  const idx = new Map(base.map((e, i) => [lexKey(e.from), i] as const));
+  let replaced = 0;
+  const extra: LexEntry[] = [];
+  for (const e of incoming) {
+    const i = idx.get(lexKey(e.from));
+    if (i === undefined) extra.push(e);
+    else if (base[i].to !== e.to || base[i].from !== e.from) {
+      base[i] = e;
+      replaced++;
+    }
+  }
+  const room = Math.max(0, MAX_LEXICON - base.length);
+  const lexicon = normLexicon([...base, ...extra.slice(0, room)]);
+  return { lexicon, added: Math.min(extra.length, room), replaced, skipped: Math.max(0, extra.length - room) };
+}
+
+/** gabung catatan gaya: yang lama dulu, catatan baru ditambah; lewat 20 → yang paling lama dibuang */
+export function mergeNotes(cur: readonly string[] | undefined, add: readonly string[]): { notes: string[]; added: number } {
+  const base = normNotes(cur ?? []);
+  const have = new Set(base.map((n) => n.toLowerCase()));
+  const extra = normNotes(add).filter((n) => !have.has(n.toLowerCase()));
+  const all = [...base, ...extra];
+  return { notes: all.slice(Math.max(0, all.length - DIRECTOR_NOTES_MAX)), added: extra.length };
+}
+
+export type ApplyOpts = {
+  /** bank suara yang siap: voiceName dari skill dicocokkan ke id bank di database ini */
+  voices?: readonly { id: string; name: string }[];
+  /**
+   * entri kamus skill yang dipilih di pratinjau (kunci `LexChange.key`); entri lain yang mengubah ucapan tidak dipakai, entri yang
+   * tidak mengubah ucapan (sama dengan kamus proyek / bawaan) tetap ikut. Tidak diisi → semua entri.
+   */
+  lexicon?: readonly string[];
+};
+
+/** satu perubahan kamus ejaan dari skill (pratinjau impor) */
+export type LexChange = {
+  /** kunci entri (huruf kecil, spasi & strip diabaikan) — dipakai ApplyOpts.lexicon */
+  key: string;
+  from: string;
+  to: string;
+  /** ejaan yang diganti: milik proyek, atau ejaan bawaan Studio (`builtin`) */
+  old?: string;
+  builtin?: boolean;
+  /** entri yang mengganti kata dengan kata lain (bukan sekadar cara baca) — tidak dicentang otomatis */
+  risk: LexRisk | null;
+};
+
+/**
+ * semua entri kamus skill yang benar-benar mengubah ejaan proyek ini; entri yang sudah sama tidak ikut. Entri bertanda risiko
+ * di depan (terlihat tanpa menggulir daftar), selebihnya urutan skill.
+ */
+export function lexiconChanges(cur: readonly LexEntry[] | undefined, add: readonly LexEntry[]): LexChange[] {
+  const base = new Map(normLexicon(cur ?? []).map((e) => [lexKey(e.from), e] as const));
+  const builtin = new Map(DEFAULT_LEXICON.map((e) => [lexKey(e.from), e] as const));
+  const out: LexChange[] = [];
+  for (const e of normLexicon(add)) {
+    const key = lexKey(e.from);
+    const mine = base.get(key);
+    if (mine && mine.to === e.to && mine.from === e.from) continue;
+    const def = builtin.get(key);
+    const sameDef = !!def && def.to.toLowerCase() === e.to.toLowerCase();
+    // belum ada di kamus proyek tapi sama dengan kamus bawaan Studio → ucapannya tidak berubah, tidak perlu ditampilkan
+    if (!mine && sameDef) continue;
+    // sama / mirip dengan kamus bawaan Studio → bukan kata baru yang mencurigakan
+    const risk = sameDef ? null : lexiconRisk(e.from, e.to, def?.to);
+    out.push({ key, from: e.from, to: e.to, ...(mine ? { old: mine.to } : def ? { old: def.to, builtin: true } : {}), risk });
+  }
+  return [...out.filter((e) => e.risk), ...out.filter((e) => !e.risk)];
+}
+
+/**
+ * Terapkan skill ke proyek — hanya bagian yang dicentang. Kamus & catatan digabung (tanpa dobel); suara, volume & sutradara
+ * ditimpa sebatas kolom yang ada di skill. Proyek tanpa rencana (tanpa `voice`) hanya menerima sutradara & catatan.
+ */
+export function applySkill<T extends SkillTarget>(target: T, skill: StudioSkill, parts: readonly SkillSection[], opts: ApplyOpts = {}): T {
+  const want = new Set(parts);
+  const sec = skill.sections;
+  const out: T = { ...target };
+  if (out.voice) {
+    let voice: VoiceLike = { ...out.voice };
+    const pick = opts.lexicon ? new Set(opts.lexicon) : null;
+    // entri yang tidak mengubah ucapan (sama dengan kamus proyek / bawaan, tidak tampil di pratinjau) tetap ikut seperti dulu
+    const changed = pick && sec.lexicon ? new Set(lexiconChanges(voice.lexicon, sec.lexicon).map((e) => e.key)) : null;
+    const lex = pick && changed ? (sec.lexicon ?? []).filter((e) => pick.has(lexKey(e.from)) || !changed.has(lexKey(e.from))) : sec.lexicon;
+    if (want.has("lexicon") && lex?.length) {
+      let m = mergeLexicon(voice.lexicon, lex);
+      // kamus penuh: entri yang dipilih di pratinjau didahulukan dari entri yang tidak mengubah ucapan
+      if (m.skipped && pick) m = mergeLexicon(voice.lexicon, [...lex.filter((e) => pick.has(lexKey(e.from))), ...lex.filter((e) => !pick.has(lexKey(e.from)))]);
+      voice = { ...voice, lexicon: m.lexicon.length ? m.lexicon : undefined };
+    }
+    if (want.has("voice") && sec.voice) {
+      const sv = sec.voice;
+      const { exaggeration, cfg, temperature, preset, ...rest } = sv;
+      // gaya bicara lewat applyStyle: preset tanpa angka → angka preset itu (angka lama proyek tidak mengubahnya jadi Kustom)
+      const next: VoiceLike = applyStyle({ ...voice, ...compact({ ...rest }) }, { exaggeration, cfg, temperature, preset }, teaserOf(target));
+      if (sv.voiceName !== undefined && sv.voiceName !== voice.voiceName) {
+        // bank suara dicocokkan lewat nama; tidak ada di database ini → kosong (Studio memakai suara bawaan)
+        const hit = opts.voices?.find((x) => x.name.trim().toLowerCase() === sv.voiceName!.trim().toLowerCase());
+        next.voiceId = hit ? hit.id : null;
+      }
+      voice = next;
+    }
+    out.voice = voice;
+  }
+  if (want.has("mix") && sec.mix) {
+    out.mix = { ...(out.mix ?? {}), ...sec.mix };
+    // musicDb skill = volume musik yang terdengar → volume lama file musik dilebur (tidak dobel, sama dengan withMixDb)
+    if (sec.mix.musicDb !== undefined && out.music && isMusicFile(out.music) && out.music.gain) out.music = { ...out.music, gain: 0 };
+  }
+  if (want.has("director") && sec.director) {
+    const notes = out.director?.notes;
+    out.director = { hero: sec.director.hero, ...(sec.director.name ? { name: sec.director.name } : {}), ...(notes?.length ? { notes } : {}) };
+  }
+  if (want.has("notes") && sec.notes?.length) {
+    const { notes } = mergeNotes(out.director?.notes, sec.notes);
+    out.director = { ...(out.director ?? { hero: "Harley" }), notes };
+  }
+  return out;
+}
+
+const VOICE_MODE_LABEL: Record<VoiceMode, string> = { bank: "Bank suara", edge: "Suara cadangan", elevenlabs: "Premium", none: "Tanpa suara" };
+const EDGE_LABEL: Record<EdgeVoice, string> = { "id-ID-ArdiNeural": "Ardi (pria)", "id-ID-GadisNeural": "Gadis (wanita)" };
+const db = (n: number | undefined) => (n === undefined ? "–" : `${n > 0 ? "+" : n < 0 ? "−" : ""}${String(Math.abs(n)).replace(".", ",")} dB`);
+
+/** label sutradara untuk ringkasan (nama karakter / hero) */
+export const directorText = (d: { hero: string; name?: string } | undefined) => (d ? d.name || (d.hero.startsWith("char:") ? "Karakter buatan" : d.hero) : "Harley");
+
+/** ringkasan singkat isi satu bagian proyek (untuk daftar centang "Simpan sebagai skill"); kosong = bagian tidak ada isinya */
+export function sectionSummary(src: SkillTarget, key: SkillSection, dirName?: string): string {
+  const v = src.voice;
+  if (key === "lexicon") return v?.lexicon?.length ? `${v.lexicon.length} kata` : "";
+  if (key === "voice") {
+    if (!v) return "";
+    const who = v.mode === "bank" ? v.voiceName || "bawaan" : v.mode === "edge" ? EDGE_LABEL[v.edgeVoice ?? "id-ID-ArdiNeural"] : "";
+    // gaya bicara hanya berarti untuk bank suara (Chatterbox di laptop)
+    const style = v.mode === "bank" ? styleLabel(voiceStyle(v, teaserOf(src))) : "";
+    return [VOICE_MODE_LABEL[v.mode], who, style].filter(Boolean).join(" · ");
+  }
+  if (key === "mix") {
+    const m = heardMix(src);
+    if (!m || !Object.keys(m).length) return "";
+    return [m.musicDb !== undefined ? `Musik ${db(m.musicDb)}` : "", m.voDb !== undefined ? `VO ${db(m.voDb)}` : "", m.sfxDb !== undefined ? `SFX ${db(m.sfxDb)}` : ""].filter(Boolean).join(" · ");
+  }
+  if (key === "director") return dirName || directorText(src.director);
+  return src.director?.notes?.length ? `${src.director.notes.length} catatan` : "";
+}
+
+/**
+ * Pratinjau perubahan per bagian sebelum diterapkan (kalimat awam singkat). `ok` = bagian bisa diterapkan ke proyek ini.
+ */
+export type SkillPreviewItem = {
+  key: SkillSection;
+  ok: boolean;
+  lines: string[];
+  /** kamus: SEMUA entri yang mengubah ejaan (dari → ke), dipilih per entri di pratinjau */
+  entries?: LexChange[];
+};
+export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: ApplyOpts = {}): SkillPreviewItem[] {
+  const sec = skill.sections;
+  const out: SkillPreviewItem[] = [];
+  const noPlan = !target.voice;
+  if (sec.lexicon) {
+    if (noPlan) out.push({ key: "lexicon", ok: false, lines: [`${sec.lexicon.length} kata — butuh rencana video dulu.`] });
+    else {
+      const entries = lexiconChanges(target.voice?.lexicon, sec.lexicon);
+      const fresh = entries.filter((e) => !e.old || e.builtin).length;
+      const risky = entries.filter((e) => e.risk).length;
+      const lines = [entries.length ? `${fresh} kata baru, ${entries.length - fresh} ejaan diganti.` : "Semua kata sudah sama — tidak ada yang berubah."];
+      if (risky) lines.push(`⚠️ ${risky} entri bisa mengganti kata jadi kata lain (suara VO beda dari subtitle) — tidak dicentang otomatis, cek dulu.`);
+      const room = Math.max(0, MAX_LEXICON - normLexicon(target.voice?.lexicon ?? []).length);
+      if (fresh > room) lines.push(`Kamus proyek muat ${room} kata baru lagi (maks ${MAX_LEXICON}) — sisanya dilewati.`);
+      out.push({ key: "lexicon", ok: true, lines, entries });
+    }
+  }
+  if (sec.voice) {
+    if (noPlan) out.push({ key: "voice", ok: false, lines: ["Butuh rencana video dulu."] });
+    else {
+      const v = target.voice!;
+      const s = sec.voice;
+      const lines: string[] = [];
+      if (s.mode && s.mode !== v.mode) lines.push(`Mesin: ${VOICE_MODE_LABEL[v.mode]} → ${VOICE_MODE_LABEL[s.mode]}`);
+      if (s.voiceName !== undefined && s.voiceName !== v.voiceName) {
+        const hit = !opts.voices || opts.voices.some((x) => x.name.trim().toLowerCase() === s.voiceName!.trim().toLowerCase());
+        lines.push(`Suara bank: ${v.voiceName || "bawaan"} → ${s.voiceName}${hit ? "" : " (tidak ada di bank — pakai suara bawaan)"}`);
+      }
+      if (s.edgeVoice && s.edgeVoice !== v.edgeVoice) lines.push(`Suara cadangan: ${EDGE_LABEL[v.edgeVoice ?? "id-ID-ArdiNeural"]} → ${EDGE_LABEL[s.edgeVoice]}`);
+      // gaya bicara: dibandingkan hasil akhirnya (sama dengan applySkill), label awam "Natural ngobrol" / "Kustom (ekspresi …)"
+      const teaser = teaserOf(target);
+      const before = styleLabel(voiceStyle(v, teaser));
+      const after = styleLabel(voiceStyle(applyStyle(v, s, teaser), teaser));
+      if (before !== after) lines.push(`Gaya bicara: ${before} → ${after}`);
+      out.push({ key: "voice", ok: true, lines: lines.length ? lines : ["Sama dengan setelan sekarang."] });
+    }
+  }
+  if (sec.mix) {
+    const m = heardMix(target) ?? {};
+    const s = sec.mix;
+    const lines: string[] = [];
+    if (s.musicDb !== undefined && s.musicDb !== m.musicDb) lines.push(`Musik: ${db(m.musicDb)} → ${db(s.musicDb)}`);
+    if (s.voDb !== undefined && s.voDb !== m.voDb) lines.push(`VO: ${db(m.voDb)} → ${db(s.voDb)}`);
+    if (s.sfxDb !== undefined && s.sfxDb !== m.sfxDb) lines.push(`SFX: ${db(m.sfxDb)} → ${db(s.sfxDb)}`);
+    out.push({ key: "mix", ok: !noPlan, lines: noPlan ? ["Butuh rencana video dulu."] : lines.length ? lines : ["Sama dengan setelan sekarang."] });
+  }
+  if (sec.director) {
+    const same = (target.director?.hero ?? "Harley") === sec.director.hero;
+    const lines = [same ? `Tetap ${directorText(sec.director)}.` : `${directorText(target.director)} → ${directorText(sec.director)}`];
+    if (!same && sec.director.hero.startsWith("char:")) lines.push("Karakter buatan hanya bisa dipakai pemiliknya — selain itu tetap Harley.");
+    out.push({ key: "director", ok: true, lines });
+  }
+  if (sec.notes) {
+    const cur = normNotes(target.director?.notes ?? []);
+    const have = new Set(cur.map((n) => n.toLowerCase()));
+    // isi catatan ditampilkan sebelum diterapkan (skill orang lain bisa membawa catatan bernada perintah)
+    const extra = normNotes(sec.notes).filter((n) => !have.has(n.toLowerCase()));
+    const lines = [extra.length ? `${extra.length} catatan baru ditambahkan:` : "Semua catatan sudah ada."];
+    for (const n of extra.slice(0, 5)) lines.push(`• ${n.length > 80 ? `${n.slice(0, 80).trimEnd()}…` : n}`);
+    if (extra.length > 5) lines.push(`…dan ${extra.length - 5} lagi.`);
+    const drop = cur.length + extra.length - DIRECTOR_NOTES_MAX;
+    if (drop > 0) lines.push(`${drop} catatan lama dibuang (maks ${DIRECTOR_NOTES_MAX}).`);
+    out.push({ key: "notes", ok: true, lines });
+  }
+  return out;
+}
+
+/** nama file unduhan: skill-<nama>.json */
+export const skillFileName = (skill: Pick<StudioSkill, "name">) =>
+  `skill-${
+    skill.name
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "studio"
+  }.json`;

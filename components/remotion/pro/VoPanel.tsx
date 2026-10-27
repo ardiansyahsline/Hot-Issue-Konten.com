@@ -18,11 +18,14 @@ import {
   type VoiceJobLine,
 } from "@/lib/studio/client";
 import {
+  arrangeVo,
   MAX_DUR,
   MAX_SPEEDUP,
   MAX_TOTAL,
+  normTempo,
   sceneStartSecs,
   speedupPct,
+  tempoRate,
   VO_AT,
   voClashes,
   voCutoffs,
@@ -34,12 +37,32 @@ import {
   type Timeline,
   type VoiceMode,
   type VoLine,
+  type VoMove,
   type VoTrack,
   type Word,
 } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
 import { teaserVoAt } from "@/lib/studio/teaserLock";
+import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, legacySayKey, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
+import { heardFromResult } from "@/lib/studio/heard";
+import {
+  bankSettings,
+  CFG_MAX,
+  CFG_MIN,
+  EXG_MAX,
+  EXG_MIN,
+  isTeaserTimeline,
+  presetOf,
+  TEMP_MAX,
+  TEMP_MIN,
+  VOICE_PRESETS,
+  voicePatch,
+  voiceStyle,
+  type VoicePreset,
+  type VoiceStyle,
+} from "@/lib/studio/voiceStyle";
 import { isTeaserScene } from "./teaserLock";
+import { DEFAULT_DIRECTOR } from "./DirectorPicker";
 
 /** lisensi CC-BY-4.0 pocket-tts-indonesian mewajibkan kredit terlihat */
 const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis Pocket TTS dari Kyutai";
@@ -49,11 +72,10 @@ const POCKET_CREDIT = "pocket-tts-indonesian oleh tryzz889 (CC-BY-4.0), berbasis
  * adegan minimal selesai 0,25 dtk setelah VO
  */
 const TAIL = 0.25;
-const DEF_EXG = 0.65;
-const DEF_CFG = 0.35;
-const DEFAULT_VOICE = "Alif - Energik";
-const NO_SCRIPT = "Belum ada naskah VO di adegan. Minta Harley tuliskan naskahnya dulu.";
-const STALE = 'Naskah VO berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
+export const DEFAULT_VOICE = "Alif - Energik";
+/** naskah VO kosong — ditulis oleh sutradara yang sedang dipakai proyek ini (bawaan Harley) */
+const noScript = (who: string) => `Belum ada naskah VO di adegan. Minta ${who} tuliskan naskahnya dulu.`;
+const STALE = 'Naskah VO atau kamus ejaan berubah selama suara dibuat, jadi suaranya tidak dipakai. Klik "Generate ulang VO".';
 
 type Run =
   | { s: "idle" }
@@ -63,17 +85,23 @@ type Run =
   | { s: "error"; msg: string; detail?: string; fallback?: boolean };
 
 const fmt = (n: number) => String(Number(n.toFixed(2))).replace(".", ",");
-const names = (l: string[]) => (l.length <= 2 ? l.join(" & ") : `${l.slice(0, -1).join(", ")} & ${l[l.length - 1]}`);
-const cleanWords = (w: unknown): Word[] =>
+/** 1,1 → "1,1×" */
+export const fmtTempo = (f: number) => `${String(Number(f.toFixed(2))).replace(".", ",")}×`;
+export const names = (l: string[]) => (l.length <= 2 ? l.join(" & ") : `${l.slice(0, -1).join(", ")} & ${l[l.length - 1]}`);
+export const cleanWords = (w: unknown): Word[] =>
   (Array.isArray(w) ? w : [])
     .filter((x): x is Word => !!x && typeof x === "object" && typeof (x as Word).w === "string")
     .map((x) => ({ w: x.w, s: Number(x.s) || 0, e: Number(x.e) || 0 }));
-/** naskah VO adegan masih sama dengan yang dikirim ke mesin suara (teks & ejaan) */
-const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined) =>
-  !!s?.vo && !!sent && s.vo.text === sent.text && (s.vo.spell || "") === (sent.spell || "");
+/**
+ * naskah VO adegan masih sama dengan yang dikirim ke mesin suara: teks subtitle & teks ucapan AKHIR (ejaan adegan + kamus ejaan
+ * proyek + angka jadi kata, voSpeech) — ubah kamus selama suara dibuat → suaranya tidak dipakai (STALE).
+ * `bank` = job laptop: teks ucapan versi bank (+ bunyi luncur); job lama (dikirim sebelum ada bunyi luncur) juga diterima.
+ */
+const sameVo = (s: Scene | undefined, sent: { text: string; spell?: string | null } | undefined, lex: LexEntry[] | undefined, bank = false) =>
+  sameSpeech(voSpeech(s?.vo, lex), sent) || (bank && sameSpeech(voSpeech(s?.vo, lex, "bank"), sent));
 
 /** mulai VO adegan untuk VO BARU: offset adegan; proyek teaser lama (tersimpan sebelum ada vo.at) memakai detik naskah shot-nya */
-const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
+export const sceneVoAt = (s: Scene): number => s.vo?.at ?? (isTeaserScene(s) ? teaserVoAt(s.layout.shot) : undefined) ?? voStartOf(s);
 /**
  * detik VO adegan `s` melewati batas aman adegan (mulai + panjang UCAPAN + 0,25 dtk − durasi); ≤ 0 = muat.
  * Ucapan = voSpeechEnd (kata terakhir + 0,12 dtk): hening di ujung file tidak dihitung.
@@ -107,9 +135,12 @@ export async function speedUpToFit<R extends Pick<VoLine, "dur" | "words">>(firs
   return { r, speed };
 }
 
-/** ringkasan VO yang dipercepat otomatis: "3 kalimat dipercepat ±12–25%" + adegan yang sudah mentok 30% tapi masih belum muat */
+/**
+ * ringkasan VO yang dipercepat otomatis: "3 kalimat dipercepat ±12–25%" + adegan yang sudah mentok 30% tapi masih belum muat.
+ * Baris yang kecepatannya diatur sendiri (VoLine.tempo) tidak dihitung.
+ */
 export function speedInfo(t: Timeline): { text: string | null; maxed: string[] } {
-  const lines = (t.vo?.lines ?? []).filter((l) => (l.speed ?? 0) > 0 && t.scenes.some((s) => s.id === l.sceneId && s.vo?.text));
+  const lines = (t.vo?.lines ?? []).filter((l) => (l.speed ?? 0) > 0 && l.tempo === undefined && t.scenes.some((s) => s.id === l.sceneId && s.vo?.text));
   if (!lines.length) return { text: null, maxed: [] };
   const pcts = lines.map((l) => l.speed as number);
   const lo = Math.min(...pcts);
@@ -147,28 +178,46 @@ export const overText = (next: string[], tail: string[]): string =>
   ]
     .filter(Boolean)
     .join(" ");
+/** saran mengatur sendiri di timeline (geser blok VO / atur kecepatan per kalimat) */
+const TL_TIP = "Atau atur sendiri di Timeline: klik blok VO lalu geser mulainya / pilih kecepatan kalimat itu.";
 /**
- * saran untuk VO yang menabrak / terpotong di akhir video: sudah dipercepat (mentok) / suara premium (tidak bisa dipercepat) /
- * adegan biasa / VO lama (generate ulang)
+ * saran untuk VO yang menabrak / terpotong di akhir video: sudah dipercepat & disusun (mentok) / suara premium (tidak bisa
+ * dipercepat) / adegan biasa / VO lama (generate ulang) — plus saran mengatur sendiri di timeline
  */
 export function clashTip(tl: Timeline, ids: string[], what: "menabrak" | "terpotong" = "menabrak"): string {
   const lines = (tl.vo?.lines ?? []).filter((l) => ids.includes(l.sceneId));
+  if (lines.some((l) => l.tempo !== undefined))
+    return `Kecepatan kalimat itu diatur sendiri — pilih yang lebih cepat di Timeline (klik blok VO), geser mulainya, atau pendekkan teks VO-nya.`;
   if (lines.some((l) => (l.speed ?? 0) > 0))
-    return `Suaranya sudah dipercepat otomatis (maks ${MAX_SPEEDUP}%) tapi masih belum muat — pendekkan teks VO adegan itu, atau coba suara lain.`;
-  if (tl.vo?.engine === "elevenlabs") return "Suara premium tidak bisa dipercepat otomatis — pendekkan teks VO adegan itu lalu generate ulang.";
-  if (!tl.scenes.some((s) => ids.includes(s.id) && isTeaserScene(s))) return "Pendekkan teks VO adegan itu atau tambah durasi adegannya, lalu generate ulang.";
-  return `Klik "Generate ulang VO": VO adegan teaser dipercepat otomatis (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik. Kalau masih ${what}, pendekkan teks VO adegan itu.`;
+    return `Suaranya sudah dipercepat otomatis (maks ${MAX_SPEEDUP}%) dan disusun ulang tapi masih belum muat — pendekkan teks VO adegan itu, atau coba suara lain. ${TL_TIP}`;
+  if (tl.vo?.engine === "elevenlabs") return `Suara premium tidak bisa dipercepat otomatis — pendekkan teks VO adegan itu lalu generate ulang. ${TL_TIP}`;
+  if (!tl.scenes.some((s) => ids.includes(s.id) && isTeaserScene(s))) return `Pendekkan teks VO adegan itu atau tambah durasi adegannya, lalu generate ulang. ${TL_TIP}`;
+  return `Klik "Generate ulang VO": jeda dipadatkan & VO adegan teaser dipercepat otomatis (maks ${MAX_SPEEDUP}%) supaya pas ketukan musik. Kalau masih ${what}, pendekkan teks VO adegan itu. ${TL_TIP}`;
+}
+
+/** "Reveal mulai 0,2 dtk lebih lambat, Hook 0,1 dtk lebih awal" */
+export function movedText(tl: Pick<Timeline, "scenes">, moved: VoMove[]): string {
+  return moved
+    .map((m) => {
+      const d = m.to - m.from;
+      return `${tl.scenes[m.scene]?.name ?? "VO"} mulai ${fmt(Math.max(0.01, Math.abs(d)))} dtk lebih ${d > 0 ? "lambat" : "awal"}`;
+    })
+    .join(", ");
 }
 
 /**
  * perpanjang adegan yang ucapan VO-nya lebih panjang (at + ucapan asli + 0,25 — hening di ujung file tidak dihitung), tetap dalam batas
- * 20 dtk/adegan & 180 dtk total.
+ * 20 dtk/adegan & 180 dtk total. Lalu VO yang masih numpuk / terpotong di akhir video disusun otomatis (arrangeVo: mulai VO digeser
+ * sesedikit mungkin di dalam adegannya) — `moved` = VO yang digeser; `clash` / `cut` = yang tetap tidak muat sesudahnya.
  * Adegan premium teaser (layout "teaser") TIDAK pernah diperpanjang: batasnya di grid ketukan 0,6 dtk (beat sync semua
  * adegan sesudahnya), jadi cukup dicatat: `over` (suara keluar dari adegan, ambang sama dengan TimelineEditor), `tight` (muat tapi
  * jeda ke akhir adegan < 0,25 dtk), `clash` (masih bunyi saat VO adegan berikutnya mulai → dua suara bersamaan), dan `cut`
  * (ucapan belum selesai saat video habis → ujung kalimat terpotong, mis. Outro teaser yang tetap kepanjangan walau dipercepat 30%).
  */
-export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[] } {
+export function fitVo(
+  tl: Timeline,
+  vo: VoTrack,
+): { tl: Timeline; grown: string[]; tooLong: string[]; over: string[]; tight: string[]; clash: VoClash[]; cut: VoClash[]; moved: VoMove[]; before: number; after: number } {
   const fps = tl.fps || 30;
   let total = tl.scenes.reduce((a, s) => a + s.dur, 0);
   const grown: string[] = [];
@@ -197,15 +246,43 @@ export function fitVo(tl: Timeline, vo: VoTrack): { tl: Timeline; grown: string[
     return { ...s, dur };
   });
   // adegan bergeser -> VO lengkap (.mp3) dari worker tidak sinkron lagi
-  const out: Timeline = { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo };
-  return { tl: out, grown, tooLong, over, tight, clash: voClashList(out), cut: voCutList(out) };
+  const grownTl: Timeline = { ...tl, scenes, vo: shifted && vo.full ? { ...vo, full: null } : vo };
+  // langkah terakhir anti-numpuk: susun mulai VO (setelah jeda dipadatkan & dipercepat maks 30% di mesin suara)
+  const { tl: out, moved, before, after } = arrangeVo(grownTl);
+  // catatan lewat / mepet dihitung ulang dari posisi baru
+  const over2 = over.length || tight.length ? out.scenes.filter((s) => isTeaserScene(s) && vo.lines.some((l) => l.sceneId === s.id)) : [];
+  const fit2 = new Map(over2.map((s) => [s.name, teaserVoFit(s, out.vo!.lines.find((l) => l.sceneId === s.id)!)] as const));
+  return {
+    tl: out,
+    grown,
+    tooLong,
+    over: moved.length ? [...fit2].filter(([, f]) => f === "lewat").map(([n]) => n) : over,
+    tight: moved.length ? [...fit2].filter(([, f]) => f === "mepet").map(([n]) => n) : tight,
+    clash: voClashList(out),
+    cut: voCutList(out),
+    moved,
+    before,
+    after,
+  };
 }
 
 /**
  * Panel suara VO: pilih suara (bank suara di laptop / cadangan Edge / premium ElevenLabs / tanpa VO),
  * atur ekspresi, lalu bikin VO. Worker mati / gagal -> otomatis pakai cadangan (label "VO sementara").
  */
-export default function VoPanel({ timeline: tl, onChange, projectId }: { timeline: Timeline; onChange: (tl: Timeline) => void; projectId: string | null }) {
+export default function VoPanel({
+  timeline: tl,
+  onChange,
+  projectId,
+  director,
+}: {
+  timeline: Timeline;
+  onChange: (tl: Timeline) => void;
+  projectId: string | null;
+  /** nama sutradara aktif (activeDirector di DirectorPicker); kosong = Harley */
+  director?: string;
+}) {
+  const who = director?.trim() || DEFAULT_DIRECTOR;
   const uid = useId();
   const status = useStudioStatus();
   const { voices, loaded, error: voiceErr } = useVoices();
@@ -233,7 +310,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   // adegan teaser yang VO-nya lewat / mepet batas adegan (tidak diperpanjang — durasi dikunci di ketukan) & VO yang menabrak
   // VO adegan berikutnya -> peringatan tetap terlihat
   // VO yang terpotong di akhir video -> peringatan merah tersendiri
-  const { overNow, tightNow, clashNow, clashHint, cutNow, cutHint, fast } = useMemo(() => {
+  const { overNow, tightNow, clashNow, clashSec, clashHint, cutNow, cutHint, fast, arranged, tempos } = useMemo(() => {
     const clashNow = voClashList(tl);
     const cutNow = voCutList(tl);
     const overNext: string[] = [];
@@ -253,20 +330,55 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       overNow: overText(overNext, overTail),
       tightNow,
       clashNow: clashNow.map((c) => c.label),
+      // total detik dua suara bersamaan (semua pasangan)
+      clashSec: voClashes(tl).reduce((a, c) => a + c.sec, 0),
       clashHint: clashNow.length ? clashTip(tl, clashNow.map((c) => c.id)) : "",
       cutNow: cutNow.map((c) => c.label),
       cutHint: cutNow.length ? clashTip(tl, cutNow.map((c) => c.id), "terpotong") : "",
       fast: speedInfo(tl),
+      // VO numpuk / terpotong yang masih bisa dirapikan dengan menggeser mulainya (tombol 🪄 Susun otomatis)
+      arranged: clashNow.length || cutNow.length ? arrangeVo(tl) : null,
+      // kalimat yang kecepatannya diatur sendiri di timeline
+      tempos: (tl.vo?.lines ?? []).flatMap((l) => {
+        const sc = tl.scenes.find((x) => x.id === l.sceneId);
+        return l.tempo !== undefined && sc?.vo?.text ? [`${sc.name} ${fmtTempo(l.tempo)}`] : [];
+      }),
     };
   }, [tl]);
+  /** 🪄 Susun otomatis: geser mulai VO yang numpuk sesedikit mungkin (arrangeVo), laporkan jujur yang tetap tidak muat */
+  const arrangeNow = () => {
+    const r = arrangeVo(tlRef.current);
+    if (!r.moved.length) return;
+    onChange(r.tl);
+    setNote(
+      `🪄 Disusun otomatis: ${movedText(r.tl, r.moved)}.${r.after > 1e-3 ? ` Suara numpuk berkurang ${fmt(r.before)} → ${fmt(r.after)} dtk — sisanya lihat peringatan merah.` : " Sekarang tidak ada suara yang numpuk."}`,
+    );
+  };
+  // VO yang dibuat dari naskah / ejaan lama: kunci teks ucapan saat dibuat (VoLine.say) beda dengan naskah + kamus ejaan sekarang.
+  // Baris tanpa `say` (dibuat sebelum ada kamus ejaan): mesin dulu menerima ejaan / teks apa adanya → dianggap lama kalau teks ucapan
+  // sekarang berbeda (kamus / angka / ejaan teaser baru mengubahnya; ejaan teaser yang di-upgrade diberi kunci lama saat dimuat)
+  const oldSay = useMemo(
+    () =>
+      (tl.vo?.lines ?? []).flatMap((l) => {
+        const s = tl.scenes.find((x) => x.id === l.sceneId);
+        if (!l.src || !s?.vo?.text) return [];
+        const made = l.say || legacySayKey(s.vo.text, s.vo.spell);
+        return made !== voSayKey(s.vo, tl.voice.lexicon) ? [s.name] : [];
+      }),
+    [tl],
+  );
   // offset mulai VO per adegan (mis. teaser: waktu target naskah) -> sebutkan contoh yang paling jauh
   const lateVo = voScenes.reduce<Scene | null>((a, s) => (s.vo?.at !== undefined && s.vo.at > (a?.vo?.at ?? VO_AT) + 1e-3 ? s : a), null);
 
-  // ekspresi: digeser lokal, disimpan ke timeline saat dilepas
-  const [exg, setExg] = useState(v.exaggeration ?? DEF_EXG);
-  const [cfg, setCfg] = useState(v.cfg ?? DEF_CFG);
-  useEffect(() => setExg(v.exaggeration ?? DEF_EXG), [v.exaggeration]);
-  useEffect(() => setCfg(v.cfg ?? DEF_CFG), [v.cfg]);
+  // gaya bicara bank suara: preset (Natural / Promo / Tenang) atau Kustom (slider digeser lokal, disimpan saat dilepas)
+  const teaser = isTeaserTimeline(tl);
+  const style = voiceStyle(v, teaser);
+  const [exg, setExg] = useState(style.exaggeration);
+  const [cfg, setCfg] = useState(style.cfg);
+  const [temp, setTemp] = useState(style.temperature);
+  useEffect(() => setExg(style.exaggeration), [style.exaggeration]);
+  useEffect(() => setCfg(style.cfg), [style.cfg]);
+  useEffect(() => setTemp(style.temperature), [style.temperature]);
 
   const setVoice = (patch: Partial<Timeline["voice"]>) => onChange({ ...tlRef.current, voice: { ...tlRef.current.voice, ...patch } });
 
@@ -288,8 +400,16 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     const msgs = extra.filter(Boolean);
     if (r.grown.length) msgs.push(`Adegan ${names(r.grown)} diperpanjang otomatis supaya VO-nya muat.`);
     if (r.tooLong.length) msgs.push(`VO adegan ${names(r.tooLong)} masih kepanjangan — pendekkan naskahnya.`);
+    if (r.moved.length)
+      msgs.push(
+        r.after > 1e-3
+          ? `🪄 Mulai VO digeser supaya numpuknya berkurang (${fmt(r.before)} → ${fmt(r.after)} dtk): ${movedText(r.tl, r.moved)}.`
+          : `🪄 Disusun otomatis supaya suara tidak numpuk: ${movedText(r.tl, r.moved)}.`,
+      );
     if (r.clash.length)
-      msgs.push(`⛔ VO menabrak VO adegan berikutnya: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). ${clashTip(r.tl, r.clash.map((c) => c.id))}`);
+      msgs.push(
+        `⛔ VO tetap menabrak VO adegan berikutnya${r.moved.length ? " walau sudah disusun ulang" : ""}: ${names(r.clash.map((c) => c.label))} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). ${clashTip(r.tl, r.clash.map((c) => c.id))}`,
+      );
     if (r.cut.length)
       msgs.push(`⛔ Ujung VO terpotong di akhir video: ${names(r.cut.map((c) => c.label))} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. ${clashTip(r.tl, r.cut.map((c) => c.id), "terpotong")}`);
     const last = r.tl.scenes.length - 1;
@@ -312,11 +432,30 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     // naskah yang dikirim: adegan yang naskahnya berubah / dihapus selama job jalan tidak ditempeli suara lama
     const sent = Array.isArray(j.lines) && j.lines.length ? new Map(j.lines.map((l) => [l.scene_id, l])) : null;
     const got = (j.result?.lines ?? []).filter((l) => !!l && typeof l.path === "string" && at.has(l.scene_id));
-    const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id)));
+    const lex = t.voice.lexicon;
+    const ok = got.filter((l) => !sent || sameVo(t.scenes[at.get(l.scene_id)!], sent.get(l.scene_id), lex, true));
+    // kecepatan diatur sendiri tapi laptop belum mengenal `speed` (belum git pull) → suaranya kecepatan normal, dilaporkan jujur
+    const oldWorker = ok.some((l) => sent?.get(l.scene_id)?.speed !== undefined && normTempo(l.tempo) === undefined);
     // mulai VO = offset adegan (scene.vo.at) / bawaan — sama dengan `start` yang dikirim ke laptop (VO lengkap .mp3)
     const lines: VoLine[] = ok.map((l) => {
-      const speed = Math.round(Number(l.speed) || 0);
-      return { sceneId: l.scene_id, src: storageSrc(l.path), dur: Math.max(0.05, Number(l.dur) || 0.05), at: sceneVoAt(t.scenes[at.get(l.scene_id)!]), words: cleanWords(l.words), ...(speed > 0 ? { speed } : {}) };
+      const tempo = normTempo(l.tempo);
+      const speed = tempo === undefined ? Math.round(Number(l.speed) || 0) : 0;
+      const sc = t.scenes[at.get(l.scene_id)!];
+      // `say` hanya kalau naskah yang dikirim diketahui (job lama tanpa `lines` → tidak tahu teks ucapannya)
+      const say = sent ? voSayKey(sc.vo, lex) : "";
+      // teks yang terdengar oleh pengecek ucapan di laptop (untuk sorot salah dengar di kartu adegan)
+      const heard = heardFromResult(l);
+      return {
+        sceneId: l.scene_id,
+        src: storageSrc(l.path),
+        dur: Math.max(0.05, Number(l.dur) || 0.05),
+        at: sceneVoAt(sc),
+        words: cleanWords(l.words),
+        ...(speed > 0 ? { speed } : {}),
+        ...(tempo !== undefined ? { tempo } : {}),
+        ...(say ? { say } : {}),
+        ...(heard ? { heard } : {}),
+      };
     });
     if (!lines.length) {
       setRun(got.length ? { s: "error", msg: STALE } : { s: "error", msg: "Mesin suara selesai tapi hasilnya kosong. Coba generate ulang.", fallback: true });
@@ -328,14 +467,22 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       ok.length === sent.size &&
       ok.every((l) => Math.abs(Number(l.start ?? sent.get(l.scene_id)?.start) - (starts[at.get(l.scene_id)!] + sceneVoAt(t.scenes[at.get(l.scene_id)!]))) < 2e-3);
     const name = voicesRef.current.find((x) => x.id === j.voice_id)?.name ?? t.voice.voiceName ?? "Bank suara";
-    finish(t, {
-      jobId: j.id,
-      engine: /pocket/i.test(j.engine_used ?? "") ? "pocket" : "chatterbox",
-      temp: false,
-      label: `Bank suara · ${name}`,
-      lines,
-      full: fullOk && j.result?.full_path ? storageSrc(j.result.full_path) : null,
-    });
+    const squeezed = ok.filter((l) => (Number(l.squeeze) || 0) > 0.005).length;
+    finish(
+      t,
+      {
+        jobId: j.id,
+        engine: /pocket/i.test(j.engine_used ?? "") ? "pocket" : "chatterbox",
+        temp: false,
+        label: `Bank suara · ${name}`,
+        lines,
+        full: fullOk && j.result?.full_path ? storageSrc(j.result.full_path) : null,
+      },
+      [
+        squeezed ? `✂️ Jeda di dalam ${squeezed} kalimat dipadatkan dulu supaya pas tanpa mempercepat suara terlalu banyak.` : "",
+        oldWorker ? "⚠️ Mesin suara di laptop versi lama belum bisa mengatur kecepatan per kalimat — suaranya kecepatan normal. Jalankan git pull di laptop lalu buat ulang." : "",
+      ],
+    );
   };
 
   // ---------------- pantau job suara di laptop ----------------
@@ -377,8 +524,11 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   const genTts = async (engine: "edge" | "elevenlabs", why?: string) => {
     const t0 = tlRef.current;
     const items = t0.scenes.filter((s) => s.vo?.text);
-    if (!items.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!items.length) return setRun({ s: "error", msg: noScript(who) });
     const edgeVoice: EdgeVoice = t0.voice.edgeVoice ?? "id-ID-ArdiNeural";
+    // teks ucapan akhir per adegan (ejaan adegan + kamus ejaan + angka jadi kata); subtitle tetap vo.text
+    const lex0 = t0.voice.lexicon;
+    const sent = new Map(items.map((s) => [s.id, voSpeech(s.vo, lex0)!]));
     // adegan teaser (durasi dikunci di ketukan): jendela ucapan sampai VO adegan berikutnya mulai − 0,1 dtk
     const wins = teaserWindows(t0);
     const ctrl = new AbortController();
@@ -395,11 +545,14 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       while (k < items.length && !ctrl.signal.aborted) {
         const s = items[k++];
         try {
-          const req = { text: s.vo!.text, spell: s.vo!.spell || undefined, voice: edgeVoice };
-          const first = await requestTts({ ...req, engine }, ctrl.signal);
+          const p = sent.get(s.id)!;
+          const req = { text: p.text, spell: p.spell ?? undefined, voice: edgeVoice };
+          // kecepatan diatur sendiri (scene.vo.tempo) → rate Edge persis itu, tanpa percepat otomatis
+          const tempo = s.vo?.tempo;
+          const first = await requestTts({ ...req, engine, ...(tempo !== undefined ? { rate: tempoRate(tempo) } : {}) }, ctrl.signal);
           // Edge: ucapan lebih panjang dari jendela adegan teaser → minta ulang lebih cepat (rate "+N%", maks 30%).
           // Premium (ElevenLabs) tidak punya pengatur tempo → tidak dipercepat. Gagal minta ulang → pakai versi terakhir yang ada.
-          const win = first.engine === "edge" ? wins.get(s.id) : undefined;
+          const win = first.engine === "edge" && tempo === undefined ? wins.get(s.id) : undefined;
           const { r, speed } =
             win === undefined
               ? { r: first, speed: 0 }
@@ -412,7 +565,16 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
                   }
                 });
           if (ctrl.signal.aborted) return;
-          out.push({ sceneId: s.id, src: r.src, dur: r.dur, at: sceneVoAt(s), words: r.words, ...(speed > 0 ? { speed } : {}) });
+          out.push({
+            sceneId: s.id,
+            src: r.src,
+            dur: r.dur,
+            at: sceneVoAt(s),
+            words: r.words,
+            ...(speed > 0 ? { speed } : {}),
+            ...(tempo !== undefined && r.engine === "edge" ? { tempo } : {}),
+            say: voSayKey(s.vo, lex0),
+          });
           results.push(r);
         } catch (e) {
           if (ctrl.signal.aborted) return;
@@ -427,9 +589,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     if (ctrl.signal.aborted) return setRun({ s: "idle" });
     if (!out.length) return setRun({ s: "error", msg: lastErr || "Gagal bikin suara. Coba lagi." });
     const t = tlRef.current;
-    // naskah adegan diubah selama suara dibuat -> suara lamanya tidak dipakai
-    const sent = new Map(items.map((s) => [s.id, s.vo!]));
-    const fresh = out.filter((l) => sameVo(t.scenes.find((s) => s.id === l.sceneId), sent.get(l.sceneId)));
+    // naskah adegan / kamus ejaan diubah selama suara dibuat -> suara lamanya tidak dipakai
+    const fresh = out.filter((l) => sameVo(t.scenes.find((s) => s.id === l.sceneId), sent.get(l.sceneId), t.voice.lexicon));
     if (!fresh.length) return setRun({ s: "error", msg: STALE });
     const order = new Map(t.scenes.map((s, i) => [s.id, i]));
     fresh.sort((a, b) => (order.get(a.sceneId) ?? 0) - (order.get(b.sceneId) ?? 0));
@@ -447,21 +608,35 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
   // ---------------- bank suara lewat mesin di laptop ----------------
   const genBank = async (voice: StudioVoice) => {
     const t0 = tlRef.current;
-    const t: Timeline = { ...t0, voice: { ...t0.voice, mode: "bank", voiceId: voice.id, voiceName: voice.name, exaggeration: exg, cfg } };
+    const t: Timeline = { ...t0, voice: { ...t0.voice, mode: "bank", voiceId: voice.id, voiceName: voice.name } };
     const starts = sceneStartSecs(t);
     // adegan teaser: `max` = jendela ucapan (detik) → laptop mempercepat suara yang lebih panjang (atempo, maks 1,3×, nada tetap)
     const wins = teaserWindows(t);
+    // `spell` = teks ucapan akhir versi bank (ejaan adegan + kamus ejaan + angka jadi kata + bunyi luncur "sowal") → laptop lama
+    // pun langsung memakai ejaan baru. Kecepatan diatur sendiri (scene.vo.tempo) → `speed` (atempo persis, `max` tidak dikirim)
     const lines: VoiceJobLine[] = t.scenes.flatMap((s, i) => {
-      if (!s.vo?.text) return [];
+      const p = voSpeech(s.vo, t.voice.lexicon, "bank");
+      if (!p) return [];
       const max = wins.get(s.id);
-      return [{ id: s.id, scene_id: s.id, text: s.vo.text, spell: s.vo.spell ?? null, start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000, ...(max !== undefined ? { max } : {}) }];
+      const tempo = s.vo?.tempo;
+      return [
+        {
+          id: s.id,
+          scene_id: s.id,
+          text: p.text,
+          spell: p.spell,
+          start: Math.round((starts[i] + sceneVoAt(s)) * 1000) / 1000,
+          ...(tempo !== undefined ? { speed: tempo } : max !== undefined ? { max } : {}),
+        },
+      ];
     });
-    if (!lines.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!lines.length) return setRun({ s: "error", msg: noScript(who) });
     onChange(t);
     setNote(null);
     setRun({ s: "start" });
     try {
-      const j = await createVoiceJob({ kind: "tts", project_id: projectId, voice_id: voice.id, engine: "auto", lines, settings: { exaggeration: exg, cfg_weight: cfg, takes: 2 } });
+      // gaya bicara (preset / kustom) → ekspresi, tempo, variasi + 3 versi per potongan (dipilih yang paling jelas & natural)
+      const j = await createVoiceJob({ kind: "tts", project_id: projectId, voice_id: voice.id, engine: "auto", lines, settings: bankSettings(t) });
       handled.current = null;
       startedHere.current.add(j.id);
       rememberJob(jobKey, j.id);
@@ -474,7 +649,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
 
   const generate = (preferBank = false) => {
     setNote(null);
-    if (!voScenes.length) return setRun({ s: "error", msg: NO_SCRIPT });
+    if (!voScenes.length) return setRun({ s: "error", msg: noScript(who) });
     const m = preferBank ? "bank" : mode;
     if (m === "bank") {
       if (workerOn && bankVoice) return void genBank(bankVoice);
@@ -507,8 +682,18 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
     await genTts("edge", "Dipakai suara cadangan dulu (VO sementara).");
   };
 
-  const commitExg = (val: number) => val !== (v.exaggeration ?? DEF_EXG) && setVoice({ exaggeration: val });
-  const commitCfg = (val: number) => val !== (v.cfg ?? DEF_CFG) && setVoice({ cfg: val });
+  /** pilih gaya bicara: preset = angkanya; Kustom = angka yang sedang dipakai (lalu bisa digeser) */
+  const pickStyle = (id: VoicePreset) => {
+    if (id === style.preset) return;
+    const next: VoiceStyle = id === "kustom" ? { ...style, preset: "kustom" } : { preset: id, exaggeration: presetOf(id).exaggeration, cfg: presetOf(id).cfg, temperature: presetOf(id).temperature };
+    setVoice(voicePatch(next));
+  };
+  /** slider Kustom dilepas → simpan (preset jadi Kustom) */
+  const commitKnob = (patch: Partial<Pick<VoiceStyle, "exaggeration" | "cfg" | "temperature">>) => {
+    const next: VoiceStyle = { preset: "kustom", exaggeration: exg, cfg, temperature: temp, ...patch };
+    if (style.preset === "kustom" && next.exaggeration === style.exaggeration && next.cfg === style.cfg && next.temperature === style.temperature) return;
+    setVoice(voicePatch(next));
+  };
 
   const opt = (id: VoiceMode, title: string, sub: string, children?: ReactNode) => (
     <label key={id} className={`block cursor-pointer rounded-xl border px-3 py-2.5 transition ${mode === id ? "border-orange-500 bg-orange-500/10" : "border-zinc-800 hover:border-zinc-700"} ${busy ? "cursor-not-allowed opacity-80" : ""}`}>
@@ -577,53 +762,70 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
                 ))}
               </select>
             )}
-            <div>
-              <div className="flex justify-between text-xs">
-                <span className="font-semibold text-zinc-300">Ekspresi</span>
-                <span className="tabular-nums text-zinc-400">{fmt(exg)}</span>
+            <div data-vo-style>
+              <div className="text-xs font-semibold text-zinc-300">🗣️ Gaya bicara</div>
+              <div role="radiogroup" aria-label="Gaya bicara" className="mt-1.5 grid grid-cols-2 gap-1.5">
+                {[...VOICE_PRESETS.map((p) => ({ id: p.id as VoicePreset, label: p.label })), { id: "kustom" as VoicePreset, label: "Kustom" }].map((o) => {
+                  const on = style.preset === o.id;
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      disabled={busy}
+                      onClick={() => pickStyle(o.id)}
+                      className={`min-h-[36px] rounded-lg border px-2 py-1.5 text-left text-[12px] font-semibold leading-tight transition ${on ? "border-orange-500 bg-orange-500/15 text-orange-300" : "border-zinc-700 text-zinc-400 hover:border-zinc-600"}`}
+                      data-vo-style-opt={o.id}
+                    >
+                      {o.label}
+                      {o.id === (teaser ? "promo" : "natural") && <span className="block text-[10px] font-normal text-zinc-500">saran{teaser ? " untuk teaser" : ""}</span>}
+                    </button>
+                  );
+                })}
               </div>
-              <input
-                type="range"
-                min={0.25}
-                max={1}
-                step={0.05}
-                value={exg}
-                disabled={busy}
-                aria-label="Ekspresi"
-                className="w-full accent-orange-500"
-                onChange={(e) => setExg(Number(e.target.value))}
-                onPointerUp={(e) => commitExg(Number(e.currentTarget.value))}
-                onKeyUp={(e) => commitExg(Number(e.currentTarget.value))}
-                onBlur={(e) => commitExg(Number(e.currentTarget.value))}
-              />
-              <p className="text-[10px] text-zinc-500">Saran 0,6–0,7. Makin tinggi makin semangat.</p>
+              <p className="mt-1 text-[10.5px] leading-relaxed text-zinc-500" data-vo-style-hint>
+                {style.preset === "kustom"
+                  ? "Atur sendiri ekspresi, tempo & variasi di bawah."
+                  : `${presetOf(style.preset).hint} Ekspresi ${fmt(style.exaggeration)} · tempo ${fmt(style.cfg)} · variasi ${fmt(style.temperature)}.`}
+              </p>
             </div>
-            <div>
-              <div className="flex justify-between text-xs">
-                <span className="font-semibold text-zinc-300">Tempo</span>
-                <span className="tabular-nums text-zinc-400">{fmt(cfg)}</span>
-              </div>
-              <input
-                type="range"
-                min={0.1}
-                max={1}
-                step={0.05}
-                value={cfg}
-                disabled={busy}
-                aria-label="Tempo"
-                className="w-full accent-orange-500"
-                onChange={(e) => setCfg(Number(e.target.value))}
-                onPointerUp={(e) => commitCfg(Number(e.currentTarget.value))}
-                onKeyUp={(e) => commitCfg(Number(e.currentTarget.value))}
-                onBlur={(e) => commitCfg(Number(e.currentTarget.value))}
-              />
-              <p className="text-[10px] text-zinc-500">Saran 0,3–0,4. Lebih kecil = bicara lebih santai.</p>
-            </div>
-            {(exg !== DEF_EXG || cfg !== DEF_CFG) && (
-              <button type="button" className="text-[11px] font-semibold text-zinc-500 hover:text-zinc-300" disabled={busy} onClick={() => setVoice({ exaggeration: DEF_EXG, cfg: DEF_CFG })}>
-                ↺ Pakai saran
-              </button>
-            )}
+            {style.preset === "kustom" &&
+              (
+                [
+                  ["Ekspresi", exg, setExg, "exaggeration", EXG_MIN, EXG_MAX, "Makin tinggi makin semangat (dan sedikit lebih cepat)."],
+                  ["Tempo", cfg, setCfg, "cfg", CFG_MIN, CFG_MAX, "Makin tinggi bicara makin cepat & rapat; makin kecil makin santai."],
+                  ["Variasi", temp, setTemp, "temperature", TEMP_MIN, TEMP_MAX, "Makin tinggi intonasi makin hidup; terlalu tinggi bisa ngaco."],
+                ] as const
+              ).map(([label, val, set, key, min, max, tip]) => (
+                <div key={key} data-vo-knob={key}>
+                  <div className="flex justify-between text-xs">
+                    <span className="font-semibold text-zinc-300">{label}</span>
+                    <span className="tabular-nums text-zinc-400">{fmt(val)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={0.05}
+                    value={val}
+                    disabled={busy}
+                    aria-label={label}
+                    className="w-full accent-orange-500"
+                    onChange={(e) => set(Number(e.target.value))}
+                    onPointerUp={(e) => commitKnob({ [key]: Number(e.currentTarget.value) })}
+                    onKeyUp={(e) => commitKnob({ [key]: Number(e.currentTarget.value) })}
+                    onBlur={(e) => commitKnob({ [key]: Number(e.currentTarget.value) })}
+                  />
+                  <p className="text-[10px] text-zinc-500">{tip}</p>
+                </div>
+              ))}
+            <p className="text-[10.5px] leading-relaxed text-zinc-500" data-vo-ref-tip>
+              💡 Masih kedengeran datar? Rekam ulang suara referensi 10–20 dtk dengan gaya yang sama dengan videonya — tips di tab <b>🎙️ Bank suara</b>.
+            </p>
+            <p className="text-[10.5px] leading-relaxed text-zinc-500" data-vo-takes-tip>
+              ⏱️ Laptop membuat 3 versi tiap kalimat lalu memilih yang paling jelas &amp; natural — bisa ±1,5× lebih lama dari dulu.
+            </p>
             {!workerOn && status !== null && <p className="text-[11px] text-amber-400">{status.worker.online ? "Mesin suara laptop belum bisa dipakai" : "Laptop mati"} — sementara dibikin pakai suara cadangan.</p>}
           </div>,
         )}
@@ -654,6 +856,8 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
         {opt("none", "🔇 Tanpa VO", "Musik + SFX + teks saja (subtitle ikut mati)")}
       </div>
 
+      {mode !== "none" && <LexiconEditor value={v.lexicon} disabled={busy} onChange={(lexicon) => setVoice({ lexicon: lexicon.length ? lexicon : undefined })} />}
+
       {/* VO yang sudah ada */}
       {tl.vo?.lines.length && mode !== "none" ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2.5 text-xs">
@@ -672,9 +876,14 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
               ⏩ {fast.text}.{fast.maxed.length > 0 && ` ${names(fast.maxed)} sudah dipercepat maksimal ${MAX_SPEEDUP}% tapi masih agak panjang.`}
             </div>
           )}
+          {tempos.length > 0 && (
+            <div className="mt-1.5 text-zinc-400" data-vo-tempos>
+              🎚️ Kecepatan diatur sendiri: {names(tempos)}
+            </div>
+          )}
           {clashNow.length > 0 && (
             <div className="mt-1.5 rounded-lg bg-red-500/10 px-2.5 py-2 text-red-300" data-vo-clash role="alert">
-              ⛔ VO menabrak VO adegan berikutnya: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
+              ⛔ VO menabrak VO adegan berikutnya{clashNow.length > 1 ? ` (total ${fmt(Math.max(0.01, clashSec))} dtk)` : ""}: {names(clashNow)} — dua suara bunyi bersamaan (durasi adegan teaser dikunci di ketukan musik). {clashHint}
             </div>
           )}
           {cutNow.length > 0 && (
@@ -682,9 +891,19 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
               ⛔ Ujung VO terpotong di akhir video: {names(cutNow)} — videonya habis sebelum kalimatnya selesai, jadi kata terakhir tidak terdengar. {cutHint}
             </div>
           )}
+          {arranged && arranged.moved.length > 0 && !busy && (
+            <button type="button" className="mt-1.5 block text-[12px] font-semibold text-orange-400 hover:text-orange-300" onClick={arrangeNow} data-vo-arrange>
+              🪄 Susun otomatis (geser mulai VO supaya tidak numpuk)
+            </button>
+          )}
           {overNow && (
             <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-over>
               {overNow}
+            </div>
+          )}
+          {oldSay.length > 0 && !busy && (
+            <div className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-2 text-amber-300" data-vo-oldsay>
+              📖 Naskah / ejaan {names(oldSay)} berubah sejak VO dibuat — suaranya masih versi lama. Klik &quot;Generate ulang VO&quot; supaya ikut berubah.
             </div>
           )}
           {tightNow.length > 0 && (
@@ -746,7 +965,7 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
           <button type="button" className="btn-primary w-full" disabled={!voScenes.length} onClick={() => generate()}>
             {tl.vo?.lines.length ? "🔁 Generate ulang VO" : "🎙️ Bikin suara VO"}
           </button>
-          {!voScenes.length && <p className="text-[11px] text-zinc-500">Belum ada naskah VO — minta Harley tuliskan dulu.</p>}
+          {!voScenes.length && <p className="text-[11px] text-zinc-500">Belum ada naskah VO — minta {who} tuliskan dulu.</p>}
         </>
       )}
 
@@ -763,5 +982,118 @@ export default function VoPanel({ timeline: tl, onChange, projectId }: { timelin
       )}
       {note && !busy && <p className="text-[11px] leading-relaxed text-zinc-400">{note}</p>}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 📖 Kamus ejaan proyek (timeline.voice.lexicon)
+// ---------------------------------------------------------------------------------------------
+type LexRow = { id: number; from: string; to: string };
+let lexSeq = 0;
+const lexRows = (v: LexEntry[] | undefined): LexRow[] => (v ?? []).map((e) => ({ id: ++lexSeq, ...e }));
+const lexKey = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "");
+
+/**
+ * Kamus ejaan milik proyek: kata yang sering salah dibaca → cara bacanya. Baris diketik lokal, disimpan ke timeline saat keluar
+ * kolom / Enter (baris yang belum lengkap tetap tampil tapi belum dipakai). Kamus bawaan bisa diganti dengan menulis kata yang sama.
+ */
+function LexiconEditor({ value, onChange, disabled }: { value: LexEntry[] | undefined; onChange: (v: LexEntry[]) => void; disabled?: boolean }) {
+  const key = JSON.stringify(value ?? []);
+  const [rows, setRows] = useState<LexRow[]>(() => lexRows(value));
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  // kamus dari luar berubah (undo, proyek lain, revisi) -> ikut; baris yang belum lengkap tetap dipertahankan
+  useEffect(() => {
+    setRows((r) => (JSON.stringify(normLexicon(r)) === key ? r : [...lexRows(JSON.parse(key) as LexEntry[]), ...r.filter((x) => !x.from.trim() || !x.to.trim())]));
+  }, [key]);
+  const commit = (next: LexRow[] = rowsRef.current) => {
+    setRows(next);
+    const clean = normLexicon(next);
+    if (JSON.stringify(clean) !== key) onChange(clean);
+  };
+  const edit = (id: number, p: Partial<LexRow>) => setRows((r) => r.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  const used = normLexicon(rows).length;
+  const firstOf = new Map<string, number>();
+  for (const r of rows) if (r.from.trim() && !firstOf.has(lexKey(r.from.trim()))) firstOf.set(lexKey(r.from.trim()), r.id);
+  const inp = "input min-w-0 py-1.5 text-[12.5px]";
+  return (
+    <details className="group rounded-xl border border-zinc-800 px-3 py-2" data-lexicon>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span>
+          📖 Kamus ejaan{used ? <span className="ml-1 text-xs font-normal text-zinc-500">({used} kata)</span> : null}
+        </span>
+        <span aria-hidden className="text-[11px] text-zinc-500 transition group-open:rotate-90">
+          ▶
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Kata yang sering salah dibaca mesin suara → tulis cara bacanya. Dipakai otomatis di semua adegan (subtitle tetap tulisan asli). Ejaan khusus di kartu adegan tetap
+          menang. Habis diubah, klik &quot;Generate ulang VO&quot;.
+        </p>
+        {rows.map((r) => {
+          const dup = !!r.from.trim() && firstOf.get(lexKey(r.from.trim())) !== r.id;
+          return (
+            <div key={r.id} className="space-y-0.5" data-lex-row>
+              <div className="flex items-center gap-1.5">
+                <input
+                  className={`${inp} flex-[2]`}
+                  value={r.from}
+                  maxLength={LEX_FROM_MAX}
+                  placeholder="mis. PPT"
+                  aria-label="Kata yang ditulis"
+                  disabled={disabled}
+                  onChange={(e) => edit(r.id, { from: e.target.value })}
+                  onBlur={() => commit()}
+                  onKeyDown={(e) => e.key === "Enter" && commit()}
+                />
+                <span aria-hidden className="flex-none text-zinc-500">
+                  →
+                </span>
+                <input
+                  className={`${inp} flex-[3]`}
+                  value={r.to}
+                  maxLength={LEX_TO_MAX}
+                  placeholder="mis. pepete"
+                  aria-label={`Cara baca ${r.from || "kata"}`}
+                  disabled={disabled}
+                  onChange={(e) => edit(r.id, { to: e.target.value })}
+                  onBlur={() => commit()}
+                  onKeyDown={(e) => e.key === "Enter" && commit()}
+                />
+                <button
+                  type="button"
+                  className="h-8 w-8 flex-none rounded-lg text-[13px] text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                  aria-label={`Hapus ${r.from || "baris"} dari kamus`}
+                  disabled={disabled}
+                  onClick={() => commit(rows.filter((x) => x.id !== r.id))}
+                >
+                  ✕
+                </button>
+              </div>
+              {dup && <p className="text-[10.5px] text-amber-400">Kata ini sudah ada di atas — yang dipakai baris pertama.</p>}
+            </div>
+          );
+        })}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            className="text-[12px] font-semibold text-orange-400 hover:text-orange-300 disabled:opacity-50"
+            disabled={disabled || rows.length >= MAX_LEXICON}
+            onClick={() => setRows((r) => [...r, { id: ++lexSeq, from: "", to: "" }])}
+          >
+            ＋ Tambah kata
+          </button>
+          <span className="text-[10.5px] text-zinc-500">Contoh: PPT → pepete · CS → si es · real-time → ril taim</span>
+        </div>
+        <details className="text-[11px] text-zinc-500">
+          <summary className="cursor-pointer font-semibold hover:text-zinc-300">Ejaan bawaan ({DEFAULT_LEXICON.length})</summary>
+          <p className="mt-1 leading-relaxed" data-lex-default>
+            {DEFAULT_LEXICON.map((e) => `${e.from} → ${e.to}`).join(" · ")}
+          </p>
+          <p className="mt-1">Mau dibaca lain? Tulis kata yang sama di kamus di atas (mis. chat → chat supaya tidak jadi &quot;cet&quot;).</p>
+        </details>
+      </div>
+    </details>
   );
 }

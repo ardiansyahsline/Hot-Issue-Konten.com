@@ -338,6 +338,13 @@ export function useVoices(): { voices: StudioVoice[]; reload: () => void; loaded
   return { voices, reload, loaded, error };
 }
 
+/** suara bank yang siap, sekali baca tanpa realtime (tombol "🔊 Dengar" per adegan). Gagal → Error berpesan awam */
+export async function fetchReadyVoices(): Promise<StudioVoice[]> {
+  const { data, error } = await studioDb().from("studio_voices").select(VOICE_COLS).eq("status", "siap").order("created_at", { ascending: true });
+  if (error) throw new Error(friendlyStudioError(error));
+  return ((data ?? []) as StudioVoice[]).slice().sort((a, b) => Number(!a.seed_key) - Number(!b.seed_key));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Upload ke bucket "studio"
 // ---------------------------------------------------------------------------------------------
@@ -397,9 +404,30 @@ export type JobTable = "studio_voice_jobs" | "studio_render_jobs";
  * `max` (opsional, adegan teaser) = jendela ucapan maksimal (detik): suara yang lebih panjang dipercepat di laptop (atempo, maks 1,3×,
  * nada tetap). Worker lama tanpa dukungan `max` mengabaikannya.
  */
-export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number };
-/** `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat supaya muat di `max` */
-export type VoiceJobResultLine = { id: string; scene_id: string; path: string; dur: number; words?: Word[]; start?: number; speed?: number };
+/**
+ * `max` = jendela ucapan (detik, adegan teaser): laptop memadatkan jeda lalu mempercepat maks 1,3× supaya muat.
+ * `speed` = kecepatan diatur sendiri (× normal, 0,85–1,3): laptop memakai atempo persis faktor itu (`max` diabaikan).
+ */
+export type VoiceJobLine = { id: string; scene_id: string; text: string; spell: string | null; start: number; max?: number; speed?: number };
+/**
+ * `start` = detik baris ini ditaruh di VO lengkap (full.mp3); `speed` = persen suara dipercepat (negatif = diperlambat);
+ * `tempo` = kecepatan diatur sendiri yang dipakai; `squeeze` = detik jeda di dalam baris yang dipadatkan supaya muat di `max`.
+ * `heard` = teks yang terdengar oleh pengecek ucapan (ASR) untuk baris ini, atau `takes[].heard` per kalimat / potongan
+ * (dibaca heardFromResult, lib/studio/heard.ts) — worker lama tidak mengirimnya.
+ */
+export type VoiceJobResultLine = {
+  id: string;
+  scene_id: string;
+  path: string;
+  dur: number;
+  words?: Word[];
+  start?: number;
+  speed?: number;
+  tempo?: number;
+  squeeze?: number;
+  heard?: string | null;
+  takes?: { heard?: string | null }[];
+};
 export type VoiceJobResult = {
   lines?: VoiceJobResultLine[];
   full_path?: string | null;

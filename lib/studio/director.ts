@@ -22,16 +22,20 @@ import {
   isLoudSfx,
   isOwnPresetLogo,
   logoFitsBrand,
+  musicGridPhase,
+  musicOffsetOf,
   normalizeTimeline,
   sceneStartSecs,
   type LayoutKind,
   type MusicLevel,
+  type Scene,
   type ScreenKind,
   type Timeline,
   type TransitionKind,
   type VoTrack,
 } from "./timeline";
 import { keepTeaserVisual } from "./teaserLock";
+import { applyStyle, isTeaserTimeline } from "./voiceStyle";
 
 export const DIRECTOR_HERO = "Harley";
 /** sama dengan batas normalizeTimeline (lib/studio/timeline.ts, `.slice(0, 8)`) & MAX_SFX di SceneCard */
@@ -49,7 +53,7 @@ const EXAMPLE = {
   goal: "Kenalkan CS Tracker ke tim",
   mood: "energik, sinematik",
   brand: { id: "konten" },
-  voice: { mode: "bank", voiceName: "Alif - Energik", exaggeration: 0.65, cfg: 0.35 },
+  voice: { mode: "bank", voiceName: "Alif - Energik", preset: "promo" },
   music: { src: "bed" },
   grain: true,
   vignette: true,
@@ -58,7 +62,7 @@ const EXAMPLE = {
       id: "s1",
       name: "Hook",
       dur: 3,
-      vo: { text: "Hot issue numpuk… chat tim berantakan…", spell: "Hot isyu numpuk… chat tim berantakan…" },
+      vo: { text: "Hot issue numpuk… chat tim berantakan…", spell: "Hot isyu numpuk… cet tim berantakan…" },
       text: ["Hot issue numpuk…", "Chat tim berantakan…"],
       visual: "Potongan cepat: daftar issue menumpuk, bubble chat tumpang tindih, kartu data berserakan. Kamera push pelan, sedikit getar.",
       layout: { kind: "kinetic", style: "punch", emphasis: ["numpuk", "berantakan"] },
@@ -80,7 +84,7 @@ const EXAMPLE = {
       id: "s2",
       name: "Reveal",
       dur: 2,
-      vo: { text: "Kenalin. CS Tracker.", spell: "Kenalin. Si-es Treker." },
+      vo: { text: "Kenalin. CS Tracker.", spell: "Kenalin. Si es treker." },
       text: ["Kenalin: CS Tracker"],
       visual: "Layar gelap sesaat (anticipation), logo CS Tracker muncul dengan overshoot kecil + light sweep, partikel oranye tipis.",
       layout: { kind: "logo", title: "CS Tracker", tagline: "Kerja lebih cepat, bareng-bareng" },
@@ -102,7 +106,7 @@ const EXAMPLE = {
       dur: 5,
       vo: {
         text: "Semua hot issue langsung ke-ranking otomatis. Yang paling panas, paling atas.",
-        spell: "Semua hot isyu langsung ke-renking otomatis. Yang paling panas, paling atas.",
+        spell: "Semua hot isyu langsung kerengking otomatis. Yang paling panas, paling atas.",
       },
       text: ["Hot issue ke-ranking otomatis", "Paling panas, paling atas"],
       visual: "Mockup HP melayang dengan tilt 3D halus: layar Hot Issue, badge HOT naik ke posisi #1, angka laporan berjalan.",
@@ -162,7 +166,7 @@ export const DIRECTOR_RULES = [
   '  "title": "judul proyek singkat", "ratio": "9:16|16:9|1:1|4:5",',
   '  "concept": "konsep 1–2 kalimat", "hook": "isi hook 1,5 dtk pertama", "platform": "TikTok / Reels", "goal": "tujuan video", "mood": "energik, sinematik",',
   '  "brand": {"id": "konten|tws|custom", "name": "…", "primary": "#hex", "accent": "#hex", "bg": "#hex", "text": "#hex", "font": "jakarta|inter|interTight", "logo": "src lampiran logo"},',
-  '  "voice": {"mode": "bank|edge|elevenlabs|none", "voiceId": "id dari BANK SUARA", "voiceName": "…", "exaggeration": 0.6, "cfg": 0.4},',
+  '  "voice": {"mode": "bank|edge|elevenlabs|none", "voiceId": "id dari BANK SUARA", "voiceName": "…", "preset": "natural|promo|tenang"},',
   '  "music": {"src": "bed|none|src dari MUSIK TERSEDIA", "name": "…"},',
   '  "grain": true, "vignette": true,',
   '  "scenes": [{',
@@ -184,8 +188,8 @@ export const DIRECTOR_RULES = [
   "- transition = cara MASUK ke adegan itu; adegan pertama \"cut\". Variasikan tapi tetap satu bahasa visual (energik: slide + whip + zoom; premium: fade + mask; berita: cut + slide; teknologi: glitch secukupnya).",
   `- sfx.at = detik dari awal adegan saat "pukulan" SFX harus terdengar (website menggeser file-nya sendiri supaya pukulannya pas). riser-blastoff: taruh at 0 di adegan reveal → riser otomatis mulai ±7 dtk sebelumnya & memuncak tepat saat reveal. Latar panjang (ambience, trailer-pulse) taruh at 0. Maks ${MAX_SFX_PER_SCENE} SFX per adegan. Hanya id dari KATALOG SFX / SFX TAMBAHAN — id lain dibuang otomatis.`,
   "- music.src: \"bed\" = trailer bed bebas hak cipta (bawaan kalau tidak ada musik), \"none\" = tanpa musik, atau src dari MUSIK TERSEDIA / lampiran audio user. JANGAN pakai lagu berhak cipta (lagu artis, sound viral) — kalau diminta, jelaskan singkat & tawarkan trailer bed atau upload musik bebas hak cipta.",
-  "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca. Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"Si-es Treker\", \"AI\" → \"E-ai\", \"review\" → \"riviu\", \"real-time\" → \"ril-taim\", \"download\" → \"daun-lod\", \"PPT\" → \"pe-pe-te\", \"ranking\" → \"renking\". Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
-  "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). exaggeration 0.25–1 (makin tinggi makin ekspresif), cfg 0.1–1 (makin rendah makin santai).",
+  "- vo.spell: ejaan fonetik untuk kata asing / singkatan supaya mesin suara berbahasa Indonesia tidak salah baca — tulis seperti diucapkan orang Indonesia, TANPA tanda hubung/strip (strip dibaca aneh / jadi jeda). Contoh: \"Hot issue\" → \"Hot isyu\", \"CS Tracker\" → \"si es treker\", \"AI\" → \"ei ai\", \"review\" → \"riviu\", \"real-time\" → \"ril taim\", \"download\" → \"daunlod\", \"PPT\" → \"pepete\", \"ranking\" → \"rengking\". Website juga punya kamus ejaan bawaan untuk istilah umum (PPT, AI, CS, download, review, TikTok, IHSG, dll.) dan membaca angka sebagai kata, jadi spell cukup untuk kata lain yang tidak umum. Titik tiga (…) = jeda dramatis ±0,4 dtk, titik = jeda pendek. Kosongkan spell kalau sama dengan text.",
+  "- voice.mode: \"bank\" = bank suara tim (paling natural, butuh mesin suara di laptop menyala; isi voiceId dari BANK SUARA kalau ada), \"edge\" = suara cadangan, \"elevenlabs\" = premium (hanya kalau user minta), \"none\" = tanpa VO (semua vo null, info lewat teks layar). voice.preset = gaya bicara bank suara supaya tidak kedengeran AI: \"natural\" = santai kayak ngobrol (bawaan), \"promo\" = energik & cepat untuk iklan / teaser, \"tenang\" = pelan & meyakinkan untuk penjelasan. Cukup isi preset; exaggeration (0.25–1, ekspresi) / cfg (0.1–1, tempo) / temperature (0.5–1, variasi) hanya kalau user minta atur angka sendiri. Revisi: salin voice dari TIMELINE SEKARANG apa adanya kecuali user minta ganti gaya bicara.",
   "- subtitles true kalau ada VO (false kalau teks layarnya sudah sama persis dengan VO).",
   "- bg.media, layout.src, brand.logo hanya boleh src dari LAMPIRAN USER (alamat /api/studio/…). Jangan menulis URL luar.",
   '- ADEGAN PREMIUM (layout.kind "teaser", mis. di proyek Teaser CS Tracker) = animasi buatan tangan yang sinkron dengan ketukan musik. Saat revisi, salin PERSIS dari TIMELINE SEKARANG: id, layout (kind + shot), bg, camera, visual, dur, dan vo.at. Yang boleh diubah HANYA teks VO (vo.text & vo.spell — VO mulai di detik vo.at, jadi harus muat di dur − vo.at − 0,25 dtk, ±2,5 kata per detik; mis. dur 5,4 & vo.at 1,2 → maks ±3,9 dtk ≈ 9 kata. Kepanjangan → pendekkan kalimatnya, dur tidak bisa ditambah), SFX (nyala/mati, tambah, hapus; detik SFX bawaannya jangan digeser), transition, dan level musik (scene.music). Teks layar (text) hanya tampil di shot chat & montage (1 baris) dan trainAi (maks 2 baris), maks 6 kata per baris; shot lain teks layarnya bagian dari animasi, jadi biarkan. Jangan membuat adegan "teaser" baru dan jangan mengubah adegan lain menjadi "teaser".',
@@ -275,14 +279,18 @@ const BED_BEAT = 60 / BED_BPM;
 function beatGridOf(m: Timeline["music"]): { beat: number; first: number } | null {
   if (m.src === "none") return null;
   if (m.src === "bed") return { beat: BED_BEAT, first: 0 };
-  const b = [...(m.beats ?? [])].sort((x, y) => x - y);
+  // ketukan lagu di waktu video (lagu mulai dari detik ke-offset) — sama dengan musicBeats di komposisi
+  const off = musicOffsetOf(m);
+  const b = (m.beats ?? []).map((x) => x - off).filter((x) => x >= 0).sort((x, y) => x - y);
   const gaps = b
     .slice(1)
     .map((x, i) => x - b[i])
     .filter((g) => g > 0.05)
     .sort((x, y) => x - y);
   if (gaps.length) return { beat: gaps[Math.floor(gaps.length / 2)], first: b[0] };
-  return m.bpm ? { beat: 60 / m.bpm, first: m.offset ?? 0 } : null;
+  // grid BPM: data lama (offset tanpa dur) = offset sebagai fase ketukan pertama, seperti dulu (sama dengan musicFileBeats)
+  if (!m.bpm) return null;
+  return { beat: 60 / m.bpm, first: Number(m.dur) > 0 ? musicGridPhase(m.bpm, off) : Math.max(0, Number(m.offset) || 0) };
 }
 
 /** katalog TETAP: SFX bawaan, layout + props, layar mockup, transisi, level musik, rasio */
@@ -396,7 +404,11 @@ export function compactTimeline(tl: Timeline): string {
   delete rest.vo;
   delete rest.v;
   delete rest.fps;
-  const { beats, ...music } = tl.music;
+  // sutradara (catatan gayanya dikirim terpisah) & volume campuran diatur user, bukan bagian rencana AI
+  delete rest.director;
+  delete rest.mix;
+  // panjang file musik (dur) = data file, bukan rencana → tidak dikirim (dipertahankan mergeRevision)
+  const { beats, dur: _songDur, ...music } = tl.music;
   const grid = beatGridOf(tl.music);
   return JSON.stringify(
     prune({
@@ -406,7 +418,13 @@ export function compactTimeline(tl: Timeline): string {
         ...(beats?.length ? { beatsDetected: beats.length } : {}),
         ...(grid ? { beatSec: Math.round(grid.beat * 1000) / 1000, firstBeatSec: Math.round(grid.first * 1000) / 1000 } : {}),
       },
-      scenes: tl.scenes.map((s) => ({ ...s, sfx: s.sfx.map((c) => ({ id: c.id, at: c.at, ...(c.gain !== undefined ? { gain: c.gain } : {}), ...(c.on ? {} : { on: false }) })) })),
+      // volume adegan & volume kalimat VO (mixer) diatur user, bukan bagian rencana AI
+      scenes: tl.scenes.map((s) => ({
+        ...s,
+        gain: undefined,
+        vo: s.vo ? { ...s.vo, gainDb: undefined } : s.vo,
+        sfx: s.sfx.map((c) => ({ id: c.id, at: c.at, ...(c.gain !== undefined ? { gain: c.gain } : {}), ...(c.on ? {} : { on: false }) })),
+      })),
     })
   );
 }
@@ -595,15 +613,24 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
   if (!has(o, "voice")) out.voice = prev.voice;
   else if (out.voice.mode === prev.voice.mode) {
     const v = o.voice;
+    const ai = out.voice;
     out.voice = {
       ...out.voice,
       voiceId: has(v, "voiceId") ? out.voice.voiceId : prev.voice.voiceId,
       voiceName: has(v, "voiceName") ? out.voice.voiceName : prev.voice.voiceName,
       edgeVoice: has(v, "edgeVoice") ? out.voice.edgeVoice : prev.voice.edgeVoice,
-      exaggeration: has(v, "exaggeration") ? out.voice.exaggeration : prev.voice.exaggeration,
-      cfg: has(v, "cfg") ? out.voice.cfg : prev.voice.cfg,
+      exaggeration: prev.voice.exaggeration,
+      cfg: prev.voice.cfg,
+      preset: prev.voice.preset,
+      temperature: prev.voice.temperature,
     };
+    // gaya bicara pilihan user (panel Suara VO) tetap, kecuali AI benar-benar mengubahnya: hanya kolom yang beda dari versi lama
+    // yang dipakai (salinan apa adanya tidak mengubah apa-apa); preset tanpa angka → angka preset itu (bukan jadi Kustom)
+    const changed = (k: "preset" | "exaggeration" | "cfg" | "temperature") => (has(v, k) && ai[k] !== prev.voice[k] ? ai[k] : undefined);
+    out.voice = applyStyle(out.voice, { preset: changed("preset"), exaggeration: changed("exaggeration"), cfg: changed("cfg"), temperature: changed("temperature") }, isTeaserTimeline(prev));
   }
+  // kamus ejaan proyek (diisi user di panel Suara VO) tidak boleh hilang gara-gara AI menulis ulang objek voice tanpa kamus
+  if (!has(o.voice, "lexicon")) out.voice = { ...out.voice, lexicon: prev.voice.lexicon?.length ? prev.voice.lexicon : undefined };
   // musik: hasil deteksi ketukan & level tetap kalau file musiknya sama
   if (!has(o, "music")) out.music = prev.music;
   else if (out.music.src === prev.music.src) {
@@ -616,26 +643,71 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
       offset: has(m, "offset") ? out.music.offset : prev.music.offset,
       gain: has(m, "gain") ? out.music.gain : prev.music.gain,
       lufs: has(m, "lufs") ? out.music.lufs : prev.music.lufs,
+      // panjang lagu (ditulis editor bersama offset) selalu dari versi lama: tanpa ini offset lagu pilihan user diabaikan (musicOffsetOf)
+      ...(prev.music.dur ? { dur: prev.music.dur } : {}),
     };
   }
   for (const k of ["grain", "vignette", "muteVo"] as const) if (!has(o, k)) out[k] = prev[k];
+  // sutradara & volume campuran diatur user (bukan AI): selalu dari versi lama
+  out.director = prev.director;
+  out.mix = prev.mix;
+  if (!out.director) delete out.director;
+  if (!out.mix) delete out.mix;
   // adegan dengan id yang sama: media lampiran yang tidak ditulis ulang AI tetap dipakai
   const rawScenes = Array.isArray(o.scenes) ? (o.scenes as unknown[]) : [];
   const prevById = new Map(prev.scenes.map((s) => [s.id, s]));
   out.scenes = next.scenes.map((s, i) => {
     const old = prevById.get(s.id);
-    if (!old) return s;
+    if (!old) return keepUserGain(s, undefined);
     const rs = (rawScenes[i] && typeof rawScenes[i] === "object" ? rawScenes[i] : {}) as Record<string, unknown>;
     let scene = s;
     if (old.layout.src && !s.layout.src && s.layout.kind === old.layout.kind && !has(rs.layout, "src")) scene = { ...scene, layout: { ...scene.layout, src: old.layout.src } };
     if (old.bg.media && !s.bg.media && s.bg.kind === old.bg.kind && !has(rs.bg, "media")) scene = { ...scene, bg: { ...scene.bg, media: old.bg.media } };
     // adegan biasa tidak boleh diubah jadi adegan premium teaser (animasinya buatan tangan untuk isi teaser, bukan isi adegan ini)
     if (old.layout.kind !== "teaser" && scene.layout.kind === "teaser") scene = { ...scene, layout: old.layout };
-    return scene;
+    // detik mulai VO (digeser user di timeline / disusun otomatis) & kecepatan VO yang diatur sendiri tidak hilang kalau AI menulis
+    // ulang objek vo tanpa kolom itu
+    const rv = rs.vo && typeof rs.vo === "object" ? rs.vo : null;
+    if (scene.vo && old.vo) {
+      const at = !has(rv, "at") && old.vo.at !== undefined && scene.vo.at === undefined ? old.vo.at : undefined;
+      const tempo = !has(rv, "tempo") && old.vo.tempo !== undefined && scene.vo.tempo === undefined ? old.vo.tempo : undefined;
+      if (at !== undefined || tempo !== undefined)
+        scene = { ...scene, vo: { ...scene.vo, ...(at !== undefined ? { at: Math.min(at, scene.dur) } : {}), ...(tempo !== undefined ? { tempo } : {}) } };
+    }
+    return keepUserGain(scene, old);
   });
   // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
-  out.scenes = keepTeaserVisual(prev, out).scenes;
+  const merged = out.scenes;
+  out.scenes = keepTeaserVisual(prev, out).scenes.map((s, i) => {
+    // id adegan teaser yang ditulis ulang AI baru dikembalikan di sini (dipasangkan lewat shot / urutan) → volume mixer & kecepatan
+    // VO milik user dari adegan lama itu dipasang sekarang (di atas belum ketemu karena id-nya beda)
+    const old = s.id !== merged[i]?.id ? prevById.get(s.id) : undefined;
+    if (!old) return s;
+    const rs = (rawScenes[i] && typeof rawScenes[i] === "object" ? rawScenes[i] : {}) as Record<string, unknown>;
+    const rv = rs.vo && typeof rs.vo === "object" ? rs.vo : null;
+    let scene = s;
+    if (scene.vo && old.vo?.tempo !== undefined && scene.vo.tempo === undefined && !has(rv, "tempo")) scene = { ...scene, vo: { ...scene.vo, tempo: old.vo.tempo } };
+    return keepUserGain(scene, old);
+  });
   out.vo = keepVo(prev, out);
+  return out;
+}
+
+/**
+ * volume adegan (`gain`) & volume kalimat VO (`vo.gainDb`) diatur user di mixer timeline, bukan AI: selalu dari adegan lama dengan
+ * id yang sama (adegan baru: tanpa volume khusus)
+ */
+function keepUserGain(s: Scene, old: Scene | undefined): Scene {
+  let out = s;
+  if (out.gain !== old?.gain) {
+    const { gain: _ai, ...rest } = out;
+    out = old?.gain ? { ...rest, gain: old.gain } : rest;
+  }
+  const g = old?.vo?.gainDb;
+  if (out.vo && out.vo.gainDb !== g) {
+    const { gainDb: _ai, ...vo } = out.vo;
+    out = { ...out, vo: g !== undefined ? { ...vo, gainDb: g } : vo };
+  }
   return out;
 }
 

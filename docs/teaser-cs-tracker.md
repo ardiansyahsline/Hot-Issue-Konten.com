@@ -3,7 +3,7 @@
 Video teaser internal tim, gaya trailer produk premium.
 **Format:** 9:16 (1080×1920), 30 fps, 59,4 detik + 0,5 detik hening di akhir.
 **Penonton:** tim internal (nama asli tim boleh tampil, identitas clipper selalu disamarkan).
-**Musik:** trailer bed 100 BPM yang disusun dari SFX bawaan (tidak pakai musik berhak cipta). 1 ketukan = 0,6 detik; semua pergantian adegan & pukulan efek jatuh tepat di ketukan.
+**Musik:** trailer bed 100 BPM yang disusun dari SFX bawaan (tidak pakai musik berhak cipta): pukulan sub (bass rendah) tanpa nada sirene (`trailer-groove-perkusi`, sengaja pelan: suara latar berulang mirip alarm sudah dihilangkan) + braam, boom, riser. 1 ketukan = 0,6 detik; semua pergantian adegan & pukulan efek jatuh tepat di ketukan.
 **Sumber:** `assets/audio/teaser/cue-sheet.md` + `naskah-vo.md` (diterjemahkan ke `lib/studio/teaser.ts`). Semua tampilan dibuat ulang dari komponen website asli, bukan screenshot.
 
 ## Storyboard
@@ -53,6 +53,6 @@ Nama tim (Alif, Derencalibur, Nengok, Irsyad, Natasha) tampil. Identitas clipper
 ## Lisensi aset
 - Remotion: gratis untuk tim ≤ 3 orang; lebih dari itu wajib Company License (lihat README).
 - SFX: Sonniss GDC (royalty-free, boleh di video, tidak boleh disebar ulang sebagai file SFX → disajikan lewat route wajib login) + CC0.
-- Musik: trailer bed disusun dari SFX di atas (tanpa musik berhak cipta).
+- Musik: trailer bed disusun dari SFX di atas (tanpa musik berhak cipta). Groove-nya `trailer-groove-perkusi` = turunan SFX Sonniss `trailer-pulse-sedang` yang diolah jadi pukulan sub < 150 Hz saja (nada ±340-450 Hz & sapuan mirip alarm/sirene dibuang), lisensi tetap Sonniss GDC.
 - Font: Inter, Plus Jakarta Sans, Inter Tight (SIL Open Font License).
 - Logo Konten.com & TWS: aset milik sendiri.

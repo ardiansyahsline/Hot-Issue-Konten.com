@@ -1,10 +1,15 @@
 """
 Pembersih referensi suara (bank suara):
   1. decode → mono 48 kHz, high-pass ringan
-  2. DeepFilterNet3 dengan batas peredaman 15–20 dB (lebih dari itu suara jadi "aneh"/robotik); cadangan: ffmpeg afftdn ringan
-  3. potong otomatis ke klip 8–10 dtk terbaik: dipotong di tengah jeda (tidak memotong kata), banyak bicara, tanpa hening panjang, energi stabil
+  2. DeepFilterNet3 dengan peredaman ADAPTIF: atten = clamp(28 − SNR rekaman, 6, 18) dB — rekaman bersih cukup dibersihkan ringan
+     (pembersihan berlebihan bikin suara "metalik" dan Chatterbox ikut meniru); cadangan: ffmpeg anlmdn (kekuatan ikut adaptif)
+  3. potong otomatis ke klip 9–12 dtk (utamakan ±10 dtk) yang PALING HIDUP: dipotong di tengah jeda (tidak memotong kata), banyak bicara,
+     tanpa hening panjang / clipping, dan nada naik-turun (variasi semitone, hadiah sampai ±4 st, penalti > 6 st). Chatterbox meniru
+     prosodi referensi — potongan datar menghasilkan suara datar. 6 dtk pertama dinilai dobel (T3 Chatterbox hanya memakai 6 dtk
+     pertama referensi, S3Gen 10 dtk pertama).
   4. loudness -20 LUFS (pyloudnorm), puncak maks -1 dBTP
-  5. skor kualitas: perkiraan SNR → bising rendah / sedang / tinggi + saran rekam ulang (bahasa awam)
+  5. skor kualitas: perkiraan SNR → bising rendah / sedang / tinggi + saran rekam ulang (bahasa awam); quality.ver = CLEAN_VER
+     (versi pembersih; suara lama dengan versi lebih rendah dibersihkan ulang sekali otomatis sebelum TTS — lihat jobs_clean.outdated)
 """
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import ff, meter
+from . import ff, meter, natural
 from . import log as vlog
 
 log = vlog.get("bersih")
@@ -24,6 +29,14 @@ log = vlog.get("bersih")
 SR = 48000
 REF_LUFS = -20.0
 HOP = 0.01  # detik per frame analisis
+# versi pembersih (disimpan di quality.ver). 2 = denoise adaptif + pilih potongan paling hidup (dulu: paling datar, atten 18 dB tetap)
+CLEAN_VER = 2
+# durasi potongan referensi: 9–12 dtk, utamakan ±10 dtk (S3Gen Chatterbox memakai 10 dtk pertama, sisanya hanya untuk embedding suara)
+SEG_LO, SEG_HI, SEG_MID, SEG_SOFT = 9.0, 12.0, 10.0, 10.4
+# variasi nada: hadiah sampai ±4 semitone, di atas 6 st dianggap teriak / salah deteksi → penalti
+ST_GOOD, ST_MAX = 4.0, 6.0
+T3_SEC = 6.0  # T3 Chatterbox hanya memakai 6 dtk pertama referensi sebagai contoh gaya bicara
+PITCH_HOP = 0.02  # frame analisis nada (detik) untuk seluruh rekaman
 _DF: tuple | None = None
 _DF_ERR: str | None = None
 
@@ -72,6 +85,17 @@ def deepfilter():
     return _DF
 
 
+def adaptive_atten(snr: float, cap: float = 18.0) -> float:
+    """peredaman bising (dB) sesuai kebersihan rekaman: clamp(28 − SNR, 6, cap). SNR 25 dB → 6 dB (ringan), SNR ≤ 10 dB → 18 dB.
+    `cap` = DF_ATTEN_DB di .env (bawaan 18)."""
+    try:
+        snr_f = float(snr)
+    except (TypeError, ValueError):
+        snr_f = 0.0
+    hi = max(6.0, float(cap))
+    return round(max(6.0, min(hi, 28.0 - snr_f)), 1)
+
+
 def denoise(y: np.ndarray, atten_db: float) -> tuple[np.ndarray, str]:
     df = deepfilter()
     if df is not None:
@@ -91,7 +115,9 @@ def denoise(y: np.ndarray, atten_db: float) -> tuple[np.ndarray, str]:
             tmp_in = Path(td) / "in.wav"
             ff.write_wav(tmp_in, y, SR, "FLOAT")
             # dengung rendah + bising halus: high-pass sedikit lebih tinggi + non-local means (lembut, tidak robotik)
-            out = ff.decode(tmp_in, SR, mono=True, af="highpass=f=90,anlmdn=s=7")
+            # kekuatan ikut peredaman adaptif: 18 dB → s=7 (seperti dulu), 6 dB → s=3 (ringan)
+            strength = round(max(3.0, min(7.0, 3.0 + 4.0 * (float(atten_db) - 6.0) / 12.0)), 1)
+            out = ff.decode(tmp_in, SR, mono=True, af=f"highpass=f=90,anlmdn=s={strength:g}")
         return out, "ffmpeg-anlmdn"
     except ff.FFError as e:
         log.warning("Pembersih ffmpeg gagal (%s) — audio dipakai apa adanya.", e)
@@ -139,14 +165,52 @@ def snr_db(db: np.ndarray, sp: np.ndarray) -> float:
     return round(max(0.0, speech - noise), 1)
 
 
-def pick_segment(y: np.ndarray, sr: int, lo: float = 8.0, hi: float = 10.4, pad: float = 0.15) -> tuple[int, int, dict]:
-    """pilih klip terbaik [s, e) (sampel). Potong hanya di tengah jeda ≥ 120 ms supaya kata tidak terpotong."""
+def pitch_grid(y: np.ndarray, sr: int, n: int) -> np.ndarray | None:
+    """nada (Hz, nan = tidak bersuara) per frame analisis HOP (n frame) — pyin sekali untuk seluruh rekaman. Gagal → None."""
+    tr = natural.f0_track(y, sr, hop=PITCH_HOP)
+    if tr is None:
+        return None
+    f0, vf = tr
+    f0 = np.where(vf, f0, np.nan)
+    # frame energi k mulai di k·HOP (jendela 30 ms) → tengahnya k·HOP + 0,015; frame pyin j berpusat di j·PITCH_HOP
+    j = np.clip(np.round((np.arange(n) * HOP + 0.015) / PITCH_HOP).astype(int), 0, len(f0) - 1)
+    return f0[j]
+
+
+def pitch_var(f0: np.ndarray | None, a: int, b: int) -> float | None:
+    """variasi nada potongan [a, b) (semitone); 6 dtk pertama dinilai dobel (bagian yang dipakai T3 sebagai contoh gaya bicara)"""
+    if f0 is None:
+        return None
+    st_all = natural.semitone_std(f0[a:b])
+    if st_all is None:
+        return None
+    st6 = natural.semitone_std(f0[a : min(b, a + int(round(T3_SEC / HOP)))])
+    return round(0.5 * st_all + 0.5 * (st6 if st6 is not None else st_all), 3)
+
+
+def pitch_bonus(st: float | None) -> float:
+    """hadiah variasi nada: naik sampai ±4 st (+0,8), datar 4–6 st, turun di atas 6 st (teriak / salah deteksi). Tidak terukur → 0."""
+    if st is None:
+        return 0.0
+    return 0.2 * min(float(st), ST_GOOD) - 0.3 * max(0.0, float(st) - ST_MAX)
+
+
+def pick_segment(y: np.ndarray, sr: int, lo: float = SEG_LO, hi: float = SEG_HI, pad: float = 0.15, f0: np.ndarray | None = None) -> tuple[int, int, dict]:
+    """
+    pilih klip terbaik [s, e) (sampel). Potong hanya di tengah jeda ≥ 120 ms supaya kata tidak terpotong.
+    Nilai: banyak bicara, tanpa jeda panjang / clipping, durasi ±10 dtk, dan nada paling HIDUP (dulu: energi paling stabil = paling
+    datar → Chatterbox meniru datarnya). `f0` (nada per frame HOP) boleh diberikan; kosong → dihitung pyin.
+    """
     db = meter.frame_db(y, sr, 0.03, HOP)
     sp, floor, thr = vad(db)
     n = len(db)
     h = int(HOP * sr)
     if not sp.any():
         return 0, len(y), {"speech": 0.0}
+    if f0 is None:
+        f0 = pitch_grid(y, sr, n)
+    elif len(f0) != n:
+        f0 = np.resize(np.asarray(f0, dtype=np.float64), n)
     pauses = [(a, b) for a, b in runs(sp, False) if (b - a) * HOP >= 0.12]
     cuts = sorted({0, n, *[(a + b) // 2 for a, b in pauses]})
     clip = np.abs(y) >= 0.995
@@ -162,13 +226,15 @@ def pick_segment(y: np.ndarray, sr: int, lo: float = 8.0, hi: float = 10.4, pad:
         dur = (b - a) * HOP + 2 * pad
         ratio = float(seg.mean())
         longest = max([(e - s) * HOP for s, e in runs(seg, False)] or [0.0])
-        sdb = db[a:b][seg]
-        stab = float(np.std(sdb)) if sdb.size else 20.0
         nclip = int(clip[a * h : b * h].sum())
-        return ratio * 2.0 - max(0.0, longest - 0.6) * 1.5 - stab / 20.0 - min(nclip, 50) * 0.02 - abs(dur - 9.2) * 0.08
+        size = abs(dur - SEG_MID) * 0.08 + max(0.0, dur - SEG_SOFT) * 0.25
+        return ratio * 2.0 - max(0.0, longest - 0.6) * 1.5 - min(nclip, 50) * 0.02 - size + pitch_bonus(pitch_var(f0, a, b))
 
     best: tuple[float, int, int] | None = None
-    for lo_, hi_ in ((lo, hi), (6.0, 12.0)):
+    # rentang utama dulu; rekaman yang bicaranya sedikit di bawah 9 dtk (mis. referensi 9 dtk) → 8–12 dtk dulu supaya tetap dapat
+    # potongan terpanjang (S3Gen memakai sampai 10 dtk), baru cadangan longgar 6–14 dtk
+    passes = list(dict.fromkeys(((lo, hi), (min(lo, 8.0), hi), (min(lo, 6.0), max(hi, 14.0)))))
+    for lo_, hi_ in passes:
         for i in range(len(cuts)):
             for j in range(i + 1, len(cuts)):
                 sp_ = span(cuts[i], cuts[j])
@@ -188,7 +254,7 @@ def pick_segment(y: np.ndarray, sr: int, lo: float = 8.0, hi: float = 10.4, pad:
         whole = span(0, n)
         assert whole is not None
         a, b = whole
-        if (b - a) * HOP > hi:  # bicara tanpa jeda: ambil ±10 dtk, berhenti di frame paling pelan
+        if (b - a) * HOP > hi:  # bicara tanpa jeda: ambil ±10–12 dtk, berhenti di frame paling pelan
             lim = a + int(hi / HOP)
             win = db[a + int(lo / HOP) : lim]
             b = a + int(lo / HOP) + int(np.argmin(win)) if win.size else lim
@@ -196,7 +262,8 @@ def pick_segment(y: np.ndarray, sr: int, lo: float = 8.0, hi: float = 10.4, pad:
     _, a, b = best
     s = max(0, a * h - int(pad * sr))
     e = min(len(y), b * h + int(pad * sr))
-    return s, e, {"speech": round(float(sp[a:b].mean()), 2), "floor_db": round(floor, 1), "thr_db": round(thr, 1)}
+    st = pitch_var(f0, a, b)
+    return s, e, {"speech": round(float(sp[a:b].mean()), 2), "floor_db": round(floor, 1), "thr_db": round(thr, 1), "st": st}
 
 
 # ---------------------------------------------------------------- proses utama
@@ -218,6 +285,7 @@ def advice(noise: str, dur: float, clipped: bool, quiet: bool, speech_sec: float
 
 
 def process(src: Path, dst: Path, atten_db: float = 18.0, progress: Callable[[float, str], None] | None = None) -> CleanResult:
+    """`atten_db` = batas atas peredaman (DF_ATTEN_DB); yang dipakai adaptif: clamp(28 − SNR, 6, atten_db)"""
     def step(p: float, msg: str) -> None:
         if progress:
             progress(p, msg)
@@ -235,7 +303,8 @@ def process(src: Path, dst: Path, atten_db: float = 18.0, progress: Callable[[fl
     clipped = int((np.abs(raw) >= 0.995).sum()) > SR * 0.002
 
     step(0.25, "Membersihkan bising…")
-    den, how = denoise(raw, atten_db)
+    atten = adaptive_atten(snr_raw, atten_db)
+    den, how = denoise(raw, atten)
     if len(den) != len(raw):
         den = np.pad(den, (0, max(0, len(raw) - len(den))))[: len(raw)]
 
@@ -271,12 +340,14 @@ def process(src: Path, dst: Path, atten_db: float = 18.0, progress: Callable[[fl
         "start": round(s / SR, 2),
         "clip": bool(clipped),
         "denoise": how,
-        "atten_db": atten_db,
+        "atten_db": atten,
+        "st": info.get("st"),
+        "ver": CLEAN_VER,
         "saran": advice(noise, dur, clipped, quiet, speech_sec) if ok else ("Rekaman tidak bisa dipakai: " + advice(noise, dur, clipped, quiet, speech_sec)),
     }
     if not ok:
         return CleanResult(False, q)
     ff.write_wav(dst, out, SR)
     step(0.95, "Selesai dibersihkan")
-    log.info("Referensi bersih: %.1f dtk (mulai %.1f dtk), SNR ±%.0f dB (%s), pembersih %s", dur, s / SR, snr, noise, how)
+    log.info("Referensi bersih: %.1f dtk (mulai %.1f dtk), SNR ±%.0f dB (%s), pembersih %s %.0f dB, variasi nada %s st", dur, s / SR, snr, noise, how, atten, info.get("st"))
     return CleanResult(True, q, dst, [f"total rekaman {total:.1f} dtk", str(info)])
