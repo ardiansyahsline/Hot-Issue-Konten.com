@@ -237,9 +237,47 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 ## Pengaturan `.env` lain
 Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris untuk job yang tidak membawa
 setelan, 1–4, bawaan 3 — website Studio sekarang selalu meminta 3 versi, jadi angka ini tidak mengubah job dari website; laptop lambat
-tidak perlu diatur: versi ke-3 otomatis dilewati kalau batas waktu per baris terlewati, minimal 2 versi), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
+tidak perlu diatur: jumlah versi otomatis dikurangi kalau tidak sempat, lihat **Kecepatan mesin suara** di bawah), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
 berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`, `PRELOAD` (1 = panaskan mesin di latar saat mulai), `UPLOAD_WORKERS` (unggahan
 bersamaan, bawaan 3), `QUIET_LOG` (1 = log bersih, 0 = semua peringatan tampil).
+
+## Kecepatan mesin suara
+Kenapa dulu lambat (6,5 detik suara butuh ±32 detik) dan apa yang diubah:
+- **Hook yang bocor.** Chatterbox bawaan memasang 3 "penyadap" attention baru di setiap kalimat tanpa pernah melepasnya — tiap
+  penyadap menyalin data ke CPU di setiap langkah, jadi worker makin lama makin lambat. Sekarang dipasang **sekali** saja.
+- **Semua 30 layer dipaksa ke mode attention lambat** (eager) hanya untuk mengecek keselarasan teks. Sekarang hanya 3 layer yang
+  dicek memakai mode itu, 27 sisanya memakai SDPA (cepat).
+- **Versi dibuat satu-satu.** 3 versi = 3× waktu. Sekarang 3 versi dibuat **sekaligus** di GPU (konteks suara + teks dihitung sekali);
+  GPU mengerjakan beberapa baris hampir sama cepatnya dengan satu baris. Tiap versi tetap punya benih acaknya sendiri.
+- **bf16** (RTX 30xx ke atas, termasuk RTX 50xx): transformer dijalankan bf16, bagian lain tetap fp32. Kalau muncul angka tidak wajar,
+  otomatis kembali ke fp32 untuk sesi itu.
+- **Batas panjang dari teks.** Dulu tiap versi boleh sampai 40 detik suara; versi yang "nyasar" membuang waktu sampai batas itu.
+  Sekarang batasnya ±2,5× perkiraan panjang kalimat.
+- **Muat model lebih cepat**: model dicari di laptop dulu (tanpa cek internet), modul dibangun langsung di GPU, bobot dibaca langsung
+  ke GPU. Model belum diunduh → pesan "jalankan SIAPKAN-MODEL.bat" (tidak pernah mengunduh di tengah job).
+- **Cek ucapan tiap versi** memakai faster-whisper beam 1 langsung dari memori (tanpa tulis file); timestamp kata hasil akhir tetap
+  teliti (beam 5).
+- **Batas waktu per kalimat dihitung dari panjang kalimat** (bawaan `max(20 dtk, 8 × panjang ucapan)`, dulu minimal 45 dtk tetap).
+  Jumlah versi otomatis disesuaikan dari kecepatan laptop yang tercatat (`data/speed.json`): kalau 3 versi diperkirakan tidak sempat,
+  dibuat 2 atau 1 (alasannya tertulis di log). Semua versi salah ucap → dicoba sekali lagi maksimal 2 versi kalau waktunya cukup.
+
+Contoh baris log per potongan: `6,5 dtk suara dalam 9,8 dtk (3 versi sekaligus)` (angkanya tergantung laptop).
+
+Ukur sendiri di laptop: matikan worker, lalu klik dua kali **`UKUR-KECEPATAN.bat`** (±2–4 menit). Hasilnya tabel cara lama vs cara
+baru (detik suara per detik proses, langkah/detik, VRAM puncak), file `data/bench-<tanggal>.json`, dan contoh suara
+`data/bench-A.wav` (lama) / `data/bench-C.wav` (baru) untuk didengar.
+
+Pengaturan (`.env`, biarkan bawaan kecuali ada masalah):
+
+| Nama | Bawaan | Arti |
+|---|---|---|
+| `TTS_DTYPE` | `auto` | `auto` = bf16 kalau GPU mendukung; `fp32` = paling aman (lebih lambat) |
+| `TTS_BATCH` | `1` | `1` = versi satu kalimat dibuat sekaligus; `0` = satu-satu |
+| `ASR_BEAM_TAKES` | `1` | ketelitian cek ucapan tiap versi (1 = cepat) |
+| `LINE_BUDGET_PER_SEC` | `8` | batas waktu per kalimat = detik ucapan × angka ini … |
+| `LINE_BUDGET_MIN` | `20` | … tapi minimal sekian detik |
+
+Tes mandiri jalur cepat (bobot acak di CPU, tanpa GPU/internet): `.venv\Scripts\python selftest_cepat.py` (`--ringan` = tanpa torch).
 
 ---
 

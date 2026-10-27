@@ -74,18 +74,30 @@ class Asr:
                 log.warning("faster-whisper di %s gagal: %s", dev, str(e)[:200])
         self.error = " | ".join(errs)[:500]
 
-    def transcribe(self, path: Path, words: bool = True) -> tuple[str, list[tuple[str, float, float]]]:
-        """balikan (teks, [(kata, mulai, selesai)])"""
+    def transcribe(self, src, words: bool = True, beam: int | None = None) -> tuple[str, list[tuple[str, float, float]]]:
+        """
+        balikan (teks, [(kata, mulai, selesai)]). `src` = path file audio ATAU np.ndarray float32 mono 16 kHz (tanpa tulis/baca
+        file). beam bawaan 5 (timestamp kata baris final); cek take cukup beam kecil (ASR_BEAM_TAKES, bawaan 1). words=False →
+        tanpa timestamp sama sekali (lebih cepat).
+        """
+        beam = 5 if beam is None else max(1, int(beam))
+        if isinstance(src, (str, Path)):
+            audio = str(src)
+        else:
+            import numpy as np
+
+            audio = np.ascontiguousarray(np.asarray(src, dtype=np.float32).reshape(-1))
         with self.lock:
             if not self.available:
                 raise RuntimeError(self.error or "ASR tidak tersedia")
             for attempt in range(2):
                 try:
                     segs, _ = self.model.transcribe(  # type: ignore[union-attr]
-                        str(path),
+                        audio,
                         language="id",
-                        beam_size=5,
+                        beam_size=beam,
                         word_timestamps=words,
+                        without_timestamps=not words,
                         vad_filter=False,
                         condition_on_previous_text=False,
                         temperature=0.0,

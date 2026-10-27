@@ -1,7 +1,8 @@
 """
 Job kind 'tts': VO dari bank suara.
   per baris → SATU TARIKAN: teks ucapan ≤ 260 huruf dibuat sekali jalan (intonasi tidak reset per kalimat); lebih panjang → potongan
-    ≤ 260 huruf berisi kalimat utuh (text.chunk_text) → tiap potongan dibuat beberapa versi (takes, bawaan 3, dibatasi waktu)
+    ≤ 260 huruf berisi kalimat utuh (text.chunk_text) → tiap potongan dibuat beberapa versi (takes, bawaan 3, dibatasi waktu
+    dari panjang kalimat; Chatterbox membuat semua versi SEKALIGUS dalam satu batch, jumlahnya menyesuaikan kecepatan laptop)
   → pilih take: kejelasan (cek ASR: WER/CER + cek durasi/hening) tetap utama; yang hampir sama jelasnya bersaing di kealamian
     (natural.py: MOS UTMOS bila ada − penalti nada datar)
   → semua take satu-tarikan jelek (WER > 0,35) → dicoba mode lama per kalimat, dipakai yang skornya lebih baik
@@ -39,6 +40,7 @@ import numpy as np
 
 from . import VERSION, ff, meter, mix, natural, post
 from . import log as vlog
+from . import speed as speedmod
 from . import text as T
 from .engines import EngineDown, EngineFailed
 from .jobctx import JobCtx, JobError, Runtime
@@ -54,10 +56,16 @@ ONE_PASS_CHARS = 260
 ONE_PASS_BAD = 0.35
 # jumlah versi per potongan bila website tidak menentukan (settings.takes)
 DEFAULT_TAKES = 3
-# batas waktu per potongan: versi ke-3 dst. hanya dibuat kalau masih muat di max(45 dtk, 6 × perkiraan durasi ucapan)
+# batas waktu per potongan dihitung dari panjang kalimat: max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan durasi ucapan)
+# (bawaan max(20 dtk, 8 × durasi); dulu tetap minimal 45 dtk). Jumlah versi direncanakan dari kecepatan laptop yang tercatat
+# (speed.py) supaya muat; mesin tanpa synth_batch (pocket) tetap dibuat satu-satu dengan cek waktu seperti dulu (minimal 2 versi)
 MIN_TAKES = 2
-TAKE_BUDGET_MIN = 45.0
-TAKE_BUDGET_PER_SEC = 6.0
+LINE_BUDGET_MIN = 20.0
+LINE_BUDGET_PER_SEC = 8.0
+TAKE_BUDGET_MIN = LINE_BUDGET_MIN  # nama lama
+TAKE_BUDGET_PER_SEC = LINE_BUDGET_PER_SEC
+# semua versi salah ucap → satu batch tambahan maksimal sekian versi (kalau waktunya masih ada)
+EXTRA_TAKES = 2
 # tempo alami dulu (native_fit): kelebihan sesudah jeda dipadatkan > 4% → buat ulang dengan cfg_weight + 0,2 (maks 0,85);
 # versi cepat dipakai kalau atempo-nya lebih sedikit dan kejelasannya tidak memburuk > 0,05
 NATIVE_OVER = 0.04
@@ -270,9 +278,73 @@ def take_seed(sentence: str, k: int, base: int | None = None) -> int:
     return (b + 7919 * k) % (2**31 - 1)
 
 
+def _cfg_num(cfg, name: str, d: float) -> float:
+    v = getattr(cfg, name, None) if cfg is not None else None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else d
+
+
+def line_budget(sentence: str, cfg=None) -> float:
+    """batas waktu (detik) membuat semua versi untuk satu potongan teks: max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan ucapan)"""
+    mn = _cfg_num(cfg, "line_budget_min", LINE_BUDGET_MIN)
+    per = _cfg_num(cfg, "line_budget_per_sec", LINE_BUDGET_PER_SEC)
+    return max(mn, per * speedmod.est_audio_sec(len(sentence)))
+
+
 def take_budget(sentence: str) -> float:
-    """batas waktu (detik) membuat versi untuk satu potongan teks"""
-    return max(TAKE_BUDGET_MIN, TAKE_BUDGET_PER_SEC * max(0.6, len(sentence) / 14.5))
+    """nama lama line_budget (bawaan .env)"""
+    return line_budget(sentence)
+
+
+def plan_takes(name: str, sentence: str, want: int, budget: float, speed, batch: bool) -> int:
+    """
+    jumlah versi terbesar ≤ `want` yang perkiraan waktunya (speed.estimate; batch = sekaligus, selain itu n × 1 versi) masih muat
+    di `budget`; minimal 1. Tanpa catatan kecepatan → `want` apa adanya. Dikurangi → alasannya dicatat di log.
+    """
+    want = max(1, int(want))
+    if speed is None or want <= 1:
+        return want
+    chars = len(sentence)
+
+    def est(n: int) -> float:
+        return float(speed.estimate(name, chars, n)) if batch else n * float(speed.estimate(name, chars, 1))
+
+    n = want
+    while n > 1 and est(n) > budget:
+        n -= 1
+    if n < want:
+        log.info(
+            "  laptop: %d versi (bukan %d) supaya muat batas %s dtk — %d versi diperkirakan %s dtk",
+            n, want, _n1(budget, 0), want, _n1(est(want), 0),
+        )
+    return n
+
+
+def _n1(x: float, d: int = 1) -> str:
+    """angka gaya Indonesia (koma desimal) untuk log"""
+    return f"{float(x):.{d}f}".replace(".", ",")
+
+
+def _takes_beam(asr) -> bool:
+    import inspect
+
+    try:
+        return "beam" in inspect.signature(asr.transcribe).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def heard_take(asr, y: np.ndarray, sr: int, tmp: Path, k: int, beam: int = 1) -> str | None:
+    """teks yang terdengar ASR untuk satu take; ASR baru → langsung dari array 16 kHz (tanpa tulis wav), beam kecil"""
+    if asr is None or not asr.available or not y.size:
+        return None
+    try:
+        if _takes_beam(asr):
+            return asr.transcribe(natural.to16k(y, sr), words=False, beam=beam)[0]
+        p = ff.write_wav(tmp / f"take-{k}.wav", y, sr)
+        return asr.transcribe(p, words=False)[0]
+    except Exception as e:
+        log.warning("Cek ASR gagal (%s) — take dinilai dari audio saja.", e)
+        return None
 
 
 def choose_take(takes: list[tuple[np.ndarray, dict]], sr: int) -> int:
@@ -289,38 +361,81 @@ def choose_take(takes: list[tuple[np.ndarray, dict]], sr: int) -> int:
     return natural.choose([sc for _, sc in takes])
 
 
-def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None, seed: int | None = None) -> tuple[np.ndarray, dict]:
+def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None, seed: int | None = None, speed=None, cfg=None) -> tuple[np.ndarray, dict]:
+    """
+    Buat beberapa versi satu potongan teks lalu pilih yang paling jelas (+ alami). Mesin dengan synth_batch (Chatterbox) → semua
+    versi dibuat SEKALIGUS dalam satu panggilan (jumlahnya direncanakan dari `speed` supaya muat batas waktu); semua salah ucap →
+    satu batch tambahan maks 2 versi kalau waktunya masih ada. Mesin lain → satu-satu dengan cek waktu seperti dulu.
+    `speed` (speed.Speed) & `cfg` opsional — pemanggil lama tanpa keduanya tetap jalan.
+    """
+    cfg = cfg if cfg is not None else getattr(engine, "cfg", None)
+    name = str(getattr(engine, "name", "") or "mesin")
+    beam = int(_cfg_num(cfg, "asr_beam_takes", 1))
+    budget = take_budget(sentence) if cfg is None else line_budget(sentence, cfg)
+    batch_fn = getattr(engine, "synth_batch", None)
+    batch = callable(batch_fn) and bool(getattr(cfg, "tts_batch", True) if cfg is not None else True)
     takes: list[tuple[np.ndarray, dict]] = []
-    n = st["takes"]
-    k = 0
     t0 = time.monotonic()
-    budget = take_budget(sentence)
-    while k < n:
-        y = engine.synth(sentence, ref, st, take_seed(sentence, k, seed))
+    trial = bool(st.get("trial"))
+    want = 1 if trial else int(st["takes"])
+
+    def add(k: int, y: np.ndarray) -> str | None:
         # hening awal/akhir dibuang tanpa memakan ekor napas / nada turun akhir kalimat (sisa 150 ms + fade 30 ms)
         y = natural.trim_take(y, engine.sr)
-        heard = None
-        if asr is not None and asr.available and y.size:
-            p = ff.write_wav(tmp / f"take-{k}.wav", y, engine.sr)
-            try:
-                heard = asr.transcribe(p, words=False)[0]
-            except Exception as e:
-                log.warning("Cek ASR gagal (%s) — take dinilai dari audio saja.", e)
+        heard = heard_take(asr, y, engine.sr, tmp, k, beam)
         sc = score_take(y, engine.sr, sentence, heard)
         sc["take"] = k + 1
         takes.append((y, sc))
         if on_take:
             on_take(k)
-        k += 1
-        # semua versi jelek (salah ucap > 35%) → coba maksimal 2 versi tambahan
-        if k == n and n < st["takes"] + 2 and min(t[1]["score"] for t in takes) > 0.35 and heard is not None and not st.get("trial"):
-            n += 1
-        # batas waktu wajar: minimal 2 versi, versi berikutnya hanya kalau perkiraan selesainya masih di dalam batas
-        if k < n and k >= MIN_TAKES:
+        return heard
+
+    if batch:
+        n = plan_takes(name, sentence, want, budget, speed, True)
+
+        def run(ks: list[int]) -> tuple[float, bool]:
+            t1 = time.monotonic()
+            ys = batch_fn(sentence, ref, st, [take_seed(sentence, k, seed) for k in ks])
+            wall = time.monotonic() - t1
+            durs = [len(y) / engine.sr for y in ys]
+            avg = sum(durs) / max(1, len(durs))
+            if speed is not None:
+                speed.record(name, avg, wall, len(ks))
+            log.info("  %s dtk suara dalam %s dtk (%s)", _n1(avg), _n1(wall), f"{len(ks)} versi sekaligus" if len(ks) > 1 else "1 versi")
+            got = [add(k, y) for k, y in zip(ks, ys)]
+            return wall, any(h is not None for h in got)
+
+        wall, heard_any = run(list(range(n)))
+        # semua versi salah ucap (> 35%) → satu batch tambahan (maks 2 versi) kalau waktu masih ada
+        if heard_any and not trial and min(t[1]["score"] for t in takes) > ONE_PASS_BAD:
+            extra = EXTRA_TAKES
             spent = time.monotonic() - t0
-            if spent + spent / k > budget:
-                log.info("  batas waktu %.0f dtk: %d versi dalam %.0f dtk — versi lain dilewati", budget, k, spent)
-                break
+            est = float(speed.estimate(name, len(sentence), extra)) if speed is not None else wall
+            if spent + est <= budget:
+                run(list(range(n, n + extra)))
+            else:
+                log.info("  semua versi kurang jelas, tapi versi tambahan tidak muat batas %s dtk (sudah %s dtk)", _n1(budget, 0), _n1(spent, 0))
+    else:
+        n = plan_takes(name, sentence, want, budget, speed, False)
+        min_takes = min(MIN_TAKES, n)
+        k = 0
+        heard = None
+        while k < n:
+            t1 = time.monotonic()
+            y = engine.synth(sentence, ref, st, take_seed(sentence, k, seed))
+            if speed is not None:
+                speed.record(name, len(y) / engine.sr, time.monotonic() - t1, 1)
+            heard = add(k, y)
+            k += 1
+            # semua versi jelek (salah ucap > 35%) → coba maksimal 2 versi tambahan
+            if k == n and n < want + EXTRA_TAKES and min(t[1]["score"] for t in takes) > ONE_PASS_BAD and heard is not None and not trial:
+                n += 1
+            # batas waktu wajar: minimal 2 versi, versi berikutnya hanya kalau perkiraan selesainya masih di dalam batas
+            if k < n and k >= min_takes:
+                spent = time.monotonic() - t0
+                if spent + spent / k > budget:
+                    log.info("  batas waktu %s dtk: %d versi dalam %s dtk — versi lain dilewati", _n1(budget, 0), k, _n1(spent, 0))
+                    break
     i = choose_take(takes, engine.sr)
     best = takes[i]
     info = best[1]
@@ -346,7 +461,10 @@ def _joined(parts: list[np.ndarray], labels: list[str], sr: int, bed, key: str) 
 
 
 def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path, tick, bed, key: str, **kw) -> tuple[np.ndarray, dict]:
-    """mode lama per kalimat untuk satu potongan: tiap kalimat dipilih sendiri lalu disambung room tone. Skor = rata-rata berbobot huruf."""
+    """
+    mode lama per kalimat untuk satu potongan: tiap kalimat dipilih sendiri lalu disambung room tone. Skor = rata-rata berbobot
+    huruf. `kw` diteruskan ke pick_take (seed, dan opsional speed / cfg).
+    """
     ys, infos = [], []
     for s in sents:
         y, info = pick_take(engine, s, ref, st, asr, work, tick, **kw)
@@ -364,11 +482,19 @@ def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path,
     return y, info
 
 
-def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=None) -> tuple[Path, dict]:
+def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=None, speed=None, cfg=None) -> tuple[Path, dict]:
+    """
+    satu baris VO. `speed` (rt.speed: catatan kecepatan → jumlah versi yang muat batas waktu + perkiraan selesai) dan `cfg`
+    (rt.cfg: LINE_BUDGET_*, ASR_BEAM_TAKES, TTS_BATCH) opsional — pemanggil lama tanpa keduanya tetap jalan seperti dulu.
+    """
     spoken = ln["spell"] or ln["text"]
     chunks = T.chunk_text(spoken, ONE_PASS_CHARS) or [spoken]
-    # benih dasar dari website (hanya dikirim kalau ada → pemanggilan lama pick_take tetap sama)
+    # benih dasar dari website (hanya dikirim kalau ada → pemanggilan lama pick_take tetap sama); speed/cfg juga hanya kalau ada
     kw = {"seed": ln["seed"]} if ln.get("seed") is not None else {}
+    if speed is not None:
+        kw["speed"] = speed
+    if cfg is not None:
+        kw["cfg"] = cfg
     sr = engine.sr
     bed = natural.ref_bed(ref, sr)
     parts: list[np.ndarray] = []

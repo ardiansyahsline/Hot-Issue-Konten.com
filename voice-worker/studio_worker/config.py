@@ -114,6 +114,16 @@ class Config:
     render_gpu: str = "auto"
     # bitrate video saat encode NVENC (NVENC tidak memakai CRF), format Remotion: angka + K/M
     render_bitrate: str = "10M"
+    # --- CEPAT ---
+    # transformer Chatterbox: auto (bf16 kalau GPU mendukung) / bf16 / fp32
+    tts_dtype: str = "auto"
+    # versi (takes) satu potongan dibuat sekaligus dalam satu batch GPU (0 = satu-satu)
+    tts_batch: bool = True
+    # beam faster-whisper untuk cek tiap take (timestamp kata baris final tetap beam 5)
+    asr_beam_takes: int = 1
+    # batas waktu membuat versi per potongan = max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan detik ucapan)
+    line_budget_per_sec: float = 8.0
+    line_budget_min: float = 20.0
 
     @property
     def cache(self) -> Path:
@@ -228,6 +238,12 @@ def load(env_file: Path | None = None) -> Config:
         upload_workers=_int("UPLOAD_WORKERS", 3, 1, 8),
         quiet_log=_bool("QUIET_LOG", True),
         preload_old_default=preload_old,
+        # --- CEPAT ---
+        tts_dtype=_env("TTS_DTYPE", "auto").lower() if _env("TTS_DTYPE", "auto").lower() in ("auto", "bf16", "fp32") else "auto",
+        tts_batch=_bool("TTS_BATCH", True),
+        asr_beam_takes=_int("ASR_BEAM_TAKES", 1, 1, 5),
+        line_budget_per_sec=_float("LINE_BUDGET_PER_SEC", 8.0, 1.0, 60.0),
+        line_budget_min=_float("LINE_BUDGET_MIN", 20.0, 5.0, 600.0),
     )
     # --- RENDER-GPU ---
     cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))
