@@ -27,7 +27,10 @@ export type EGuess = {
   /** alasan singkat bahasa awam */
   why: string;
 };
-export type EToken = EGuess & { start: number; end: number };
+/** `name` = ditulis berhuruf besar di tengah kalimat (mungkin nama diri: Berlin, Pentagon) — tebakan imbuhan tidak dipakai */
+export type EToken = EGuess & { start: number; end: number; name: boolean };
+/** `name`: kata ini mungkin nama diri / kata asing (huruf besar di tengah kalimat) → e-nya tidak ditebak dari imbuhan */
+export type GuessOpts = { name?: boolean };
 export type SpellCand = { text: string; why: string; kind: "asli" | "kamus" | "pepet" | "taling" | "ragu" };
 
 /** paling banyak kandidat ejaan otomatis per kata (termasuk tulisan asli) */
@@ -62,25 +65,31 @@ const PEPET =
   "senin seni senja senyum sepatu seperti sepi sepuluh serah serangga serba serbu sering serta seru sesak sesal sesudah setelah setia " +
   "setuju tebak tebal tebing tegak tegang tegar tegas teguh tekad tekan tekun telaga telah telan telapak telat teliti telinga teluk " +
   "telur teman tembak tembus tempuh temu tenaga tenang tenggelam tengok tentang tentara tentu tenun tepat tepi tepuk tepung terang " +
-  "terbang terbit terima terjang terjun terka ternak ternyata tertib tetangga tetap tetapi wewenang kera ngeri sementara pemilu ke";
+  "terbang terbit terima terjang terjun terka ternak ternyata tertib tetangga tetap tetapi wewenang kera ngeri sementara pemilu ke " +
+  // lebaran (hari raya) = lə-baran: kata utuh di daftar menang atas lebar (taling) + -an
+  "lebaran";
 /** semua e taling */
 const TALING =
-  "enak sore beres meja ekor nenek lele karet kaget becak bebek bego bete cewek cek ceker desa dewa dewan ember ejek elang esok es keju " +
+  "enak sore beres meja ekor nenek lele karet kaget becak bebek bego bete cewek cek ceker desa dewa dewan ejek elang esok es keju " +
   "kepo keren lebar lewat merah mewah nekat pena pendek pensil pentas perak pesta resmi rela sehat sewa tempe tempo tenda tetes bensin " +
   "besok belok bengkel beda hebat heran hemat hewan heboh kece oke hore sate kafe tes teh tega deh eh repot rewel level model hotel paket " +
   "roket proyek efek efektif konten kreator video media teknologi teknik ekonomi energi emosi eja era elit etika ekstra ekspor elegan " +
-  "demo rekor sektor sentimen investasi investor presiden regulasi tren rekening dompet denda sesi seri sel servis serius tema tenis " +
+  "demo rekor sektor sentimen investasi investor presiden regulasi tren dompet denda sesi seri sel servis serius tema tenis " +
   "televisi telepon pensiun penalti permen pers proses peka tembok mental mentor menu memori memo melodi merek mewek mesra melon sedan " +
   "sepak lebay baper mager rese pede capek kredit debat detail desain emiten dividen resesi koreksi netizen fenomena rekomendasi " +
   "komentar konser pandemi target klien manajemen strategi momen konsep efisien objek subjek aspek reaksi respons realita rekap relevan " +
-  "sukses sistem aset progres agresif negatif ide versi tiket resep terminal termos termin member membran eropa medan denpasar terapi teori " +
-  "teror mentalitas mentoring";
+  "sukses sistem aset progres agresif negatif ide versi tiket resep terminal termos termin member membran eropa denpasar terapi teori " +
+  "teror mentalitas mentoring " +
+  // nama / kata serapan yang terlihat seperti berawalan ber-/pen-/pem- (tebakan imbuhan salah: bər-lin, pən-tagon, pəm-pek)
+  "pempek berlin pentagon";
 /** campuran: é = taling, e = pepet */
 const CAMPUR =
   "meréka keréta bendéra sepéda keméja merdéka kecéwa jelék persén seléra tempél celotéh terompét cengéng gedé gemés ceréwét mentéga " +
-  "pécel méter séptémber désémber novémber lengkét pesantrén geréja pendéta";
+  "pécel méter séptémber désémber novémber lengkét pesantrén geréja pendéta rékening émber";
 /** bunyinya bisa dua / tidak yakin → tidak ditebak */
-const RAGU = "apel serang teras per kecap bela seram sendok dewasa setan metode seret geger personal personel persona performa pentil perban semester generasi";
+const RAGU = "apel serang teras per kecap bela seram sendok dewasa setan metode seret geger personal personel persona performa pentil perban semester generasi " +
+  // medan perang = mədan, kota Medan = médan
+  "medan perfect";
 /** kata dasar tanpa huruf e (untuk mengenali imbuhan: se+buah, ter+baik, ke+ber+sama+an) */
 const ROOTS =
   "ada adil ajak ajar akan akhir alam alir ambil aman amat anak anggap angkat antar arah arti asah asal atur awal awas bagai bagi bagus " +
@@ -251,17 +260,19 @@ const preName = (p: string) => `${p}-`;
 
 const guessCache = new Map<string, EGuess>();
 /** tebak bunyi tiap huruf e di satu kata (lihat keterangan modul) */
-export function guessE(raw: string): EGuess {
+export function guessE(raw: string, opts: GuessOpts = {}): EGuess {
   const word = (typeof raw === "string" ? raw : "").normalize("NFC");
-  const hit = guessCache.get(word);
+  const name = !!opts.name;
+  const ck = name ? `\u0001${word}` : word;
+  const hit = guessCache.get(ck);
   if (hit) return { ...hit, marks: hit.marks.map((m) => ({ ...m })) };
-  const g = guessWord(word);
+  const g = guessWord(word, name);
   if (guessCache.size > 3000) guessCache.clear();
-  guessCache.set(word, g);
+  guessCache.set(ck, g);
   return { ...g, marks: g.marks.map((m) => ({ ...m })) };
 }
 
-function guessWord(word: string): EGuess {
+function guessWord(word: string, name: boolean): EGuess {
   const lower = lowerKeep(word);
   const key = plainKey(lower);
   const at: number[] = [];
@@ -277,12 +288,13 @@ function guessWord(word: string): EGuess {
     const preTxt = p.pre.length ? `Imbuhan ${p.pre.map(preName).join(" + ")}${p.pre.some((x) => x.includes("e")) ? " (e dibaca ə)" : ""} + ` : "";
     why = p.pre.length || p.suf ? `${preTxt}${rootTxt}${p.suf && !p.pre.length ? " + akhiran" : ""}.` : `${rootTxt[0].toUpperCase()}${rootTxt.slice(1)}.`;
   } else {
-    // kata dasar tidak dikenal: hanya e di awalan yang hampir pasti imbuhan (di-/ke-/se- di depannya boleh)
+    // kata dasar tidak dikenal: hanya e di awalan yang hampir pasti imbuhan (di-/ke-/se- di depannya boleh). Nama diri / kata asing
+    // (huruf besar di tengah kalimat: Berlin, Pentagon) bukan kata berimbuhan → tidak ditebak.
     pat = [...key].map(() => undefined);
     for (const i of at) pat[i] = null;
-    const tries: { off: number; outer: boolean }[] = [{ off: 0, outer: false }];
-    if (/^(ke|se)/.test(key)) tries.push({ off: 2, outer: true });
-    if (/^di/.test(key)) tries.push({ off: 2, outer: false });
+    const tries: { off: number; outer: boolean }[] = name ? [] : [{ off: 0, outer: false }];
+    if (!name && /^(ke|se)/.test(key)) tries.push({ off: 2, outer: true });
+    if (!name && /^di/.test(key)) tries.push({ off: 2, outer: false });
     for (const t of tries) {
       const rest = key.slice(t.off);
       const s = STRONG.find((x) => key.length >= x.min && x.re.test(rest));
@@ -292,7 +304,7 @@ function guessWord(word: string): EGuess {
       why = `Imbuhan ${s.what} (e dibaca ə); bagian lain tidak yakin.`;
       break;
     }
-    if (!why) why = "Tidak yakin — kata ini tidak ada di daftar.";
+    if (!why) why = name ? "Tidak yakin — mungkin nama diri / kata asing (huruf besar di tengah kalimat)." : "Tidak yakin — kata ini tidak ada di daftar.";
   }
   // tanda yang sudah ditulis di naskah menang (é / è = taling, ê / ĕ / ə = pepet)
   const marks: EMark[] = at.map((i) => ({ at: i, kind: E_TALING.includes(lower[i]) ? "taling" : E_PEPET.includes(lower[i]) ? "pepet" : (pat?.[i] ?? null) }));
@@ -303,9 +315,25 @@ function guessWord(word: string): EGuess {
   return { word, marks, pepet: nP > 0, sure: nU === 0, kind, why };
 }
 
+/** huruf pertama kapital tapi bukan kapital semua ("Berlin" ya; "BARENG" = penekanan, bukan nama) */
+const capInitial = (w: string) => w[0] !== w[0].toLowerCase() && w !== w.toUpperCase();
+/** tanda kutip / kurung pembuka di antara akhir kalimat dan kata berikutnya ("Halo." “Berlin …) */
+const OPENERS = `"'“”‘’()[]{}«»*`;
+/** kata di `at` ada di awal kalimat: sebelumnya (lewati spasi, kutip, kurung) awal teks, baris baru, atau . ! ? … */
+function sentenceStart(s: string, at: number): boolean {
+  for (let i = at - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === "\n") return true;
+    if (/\s/.test(c) || OPENERS.includes(c)) continue;
+    return ".!?…".includes(c);
+  }
+  return true;
+}
+
 /**
  * kata ber-huruf e di teks (+ tebakannya & posisinya). Kata yang menempel angka / apostrof ("bareng2", "Wa'alaikum") dilewati —
- * kamus ejaan juga tidak mencocokkannya.
+ * kamus ejaan juga tidak mencocokkannya. Kata berhuruf besar di tengah kalimat dianggap mungkin nama diri (`name`): kata di daftar
+ * tetap ditebak (hari Senin, saat Lebaran), tebakan imbuhan untuk kata tak dikenal tidak (Pentium, Mendoza).
  */
 export function eWords(text: string): EToken[] {
   const out: EToken[] = [];
@@ -316,7 +344,8 @@ export function eWords(text: string): EToken[] {
     if (/[\d'’]/.test(tok) || /\p{M}/u.test(tok)) continue;
     if (![...tok.toLowerCase()].some(isE)) continue;
     const start = m.index ?? 0;
-    out.push({ ...guessE(tok), start, end: start + tok.length });
+    const name = capInitial(tok) && !sentenceStart(s, start);
+    out.push({ ...guessE(tok, { name }), start, end: start + tok.length, name });
   }
   return out;
 }
@@ -329,14 +358,34 @@ const replaceAt = (w: string, pos: readonly number[], ch: string) => [...w].map(
 const ONSETS = new Set(["sk", "sn", "sm", "sl", "sp", "st", "sw", "kr", "pr", "tr", "br", "dr", "gr", "kl", "pl", "bl", "gl", "fr", "fl"]);
 
 /**
- * SATU e pepet diganti apostrof (bar'ng) — yang paling belakang (biasanya di kata dasar; e imbuhan me-/ber- jarang salah baca).
- * e di awal / akhir kata atau di sebelah huruf hidup tidak; hasil tanpa huruf hidup → null.
+ * e pepet yang boleh dihilangkan: SATU, yang paling belakang (biasanya di kata dasar; e imbuhan me-/ber- jarang salah baca).
+ * e di awal / akhir kata atau di sebelah huruf hidup tidak.
  */
+function elidePos(w: string, pos: readonly number[]): number | null {
+  const ok = pos.filter((i) => i > 0 && i < w.length - 1 && !isVowel(w[i - 1]) && !isVowel(w[i + 1]));
+  return ok.length ? ok[ok.length - 1] : null;
+}
+const hasVowel = (w: string) => [...w].some((c) => isVowel(c));
+/** e pepet itu diganti apostrof (bar'ng); hasil tanpa huruf hidup → null */
 function elide(w: string, pos: readonly number[]): string | null {
-  const ok = pos.filter((i) => i > 0 && i < w.length - 1 && !isVowel(w[i - 1]) && !isVowel(w[i + 1])).slice(-1);
-  if (!ok.length) return null;
-  const out = replaceAt(w, ok, "'");
-  return [...out].some((c) => isVowel(c)) ? out : null;
+  const at = elidePos(w, pos);
+  if (at === null) return null;
+  const out = replaceAt(w, [at], "'");
+  return hasVowel(out) ? out : null;
+}
+/**
+ * e pepet yang sama dibuang begitu saja, TANPA apostrof (barng, dngan, gantng) — variasi huruf biasa (ASCII) kedua.
+ * Kenapa ini, bukan ĕ: mesin bank membaca per huruf dan tokenizer multibahasa bisa menormalkan ĕ / ê jadi e + tanda kecil
+ * (NFKD), jadi ĕ kemungkinan terdengar sama dengan ê (sudah jadi kandidat 2). Apostrof bisa dibaca jeda / singkatan
+ * ("bar ng"); tanpa apostrof huruf matinya menempel, dan gugus huruf mati di bahasa Indonesia diucapkan dengan sisipan ə
+ * (tulisan singkat dgn / tmpt dibaca dəngan / təmpat) — jadi peluangnya beda dengan kandidat apostrof. Tetap lolos isPepetSpelling
+ * (cuma membuang huruf e), jadi pengecek risiko kamus & garis hijau di naskah tetap jalan.
+ */
+function dropE(w: string, pos: readonly number[]): string | null {
+  const at = elidePos(w, pos);
+  if (at === null) return null;
+  const out = w.slice(0, at) + w.slice(at + 1);
+  return hasVowel(out) ? out : null;
 }
 /** e pepet di suku pertama dibuang kalau gugusnya wajar (sekarang → skarang, terus → trus, belum → blum) */
 function syncope(w: string, pos: readonly number[]): string | null {
@@ -348,10 +397,11 @@ function syncope(w: string, pos: readonly number[]): string | null {
 
 /**
  * Kandidat ejaan untuk satu kata (maks 5, termasuk tulisan asli di urutan pertama), huruf kecil — siap jadi entri kamus ejaan.
- * Pepet: ê, ə, apostrof (bar'ng), tanpa e (skarang) atau ĕ. Taling: é, è. Tidak yakin: dua arah (ê / é …). Tanpa e: tulisan asli saja.
- * `current` = ejaan di kamus proyek sekarang (ikut dicoba, di urutan kedua).
+ * Pepet: ê, ə, apostrof (bar'ng), lalu tanpa e — suku pertama (skarang) atau e yang sama tanpa apostrof (barng). Taling: é, è.
+ * Tidak yakin: dua arah (ê / é …). Tanpa e: tulisan asli saja.
+ * `current` = ejaan di kamus proyek sekarang (ikut dicoba, di urutan kedua). `name` = mungkin nama diri (lihat guessE).
  */
-export function spellCandidates(raw: string, opts: { current?: string | null } = {}): SpellCand[] {
+export function spellCandidates(raw: string, opts: { current?: string | null; name?: boolean } = {}): SpellCand[] {
   const w = lowerKeep((raw ?? "").normalize("NFC").trim()).replace(new RegExp("^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}]+$", "gu"), "");
   if (!w) return [];
   const out: SpellCand[] = [];
@@ -362,7 +412,7 @@ export function spellCandidates(raw: string, opts: { current?: string | null } =
   add(w, "Tulisan asli — pembanding.", "asli");
   const cur = typeof opts.current === "string" ? lowerKeep(opts.current.normalize("NFC").replace(/\s+/g, " ").trim()) : "";
   if (cur && cur !== w) add(cur, "Ejaan yang ada di 📖 Kamus sekarang.", "kamus");
-  const g = guessE(w);
+  const g = guessE(w, { name: opts.name });
   const P = g.marks.filter((m) => m.kind === "pepet" && !E_PEPET.includes(w[m.at])).map((m) => m.at);
   const T = g.marks.filter((m) => m.kind === "taling" && !E_TALING.includes(w[m.at])).map((m) => m.at);
   const U = g.marks.filter((m) => m.kind === null).map((m) => m.at);
@@ -371,8 +421,9 @@ export function spellCandidates(raw: string, opts: { current?: string | null } =
     add(replaceAt(w, P, "ə"), "ə = lambang bunyi pepet di kamus pengucapan.", "pepet");
     add(elide(w, P), "Huruf e dibuang pakai apostrof — mesin biasanya mengucap e sangat pendek, mirip ə.", "pepet");
     if (T.length) add(replaceAt(replaceAt(w, P, "ê"), T, "é"), "Dua-duanya ditandai: pepet ê, taling é.", "pepet");
-    add(syncope(w, P), "Tanpa huruf e, seperti orang bicara cepat — huruf biasa saja.", "pepet");
-    add(replaceAt(w, P, "ĕ"), "ĕ = tanda pepet di ejaan Melayu lama.", "pepet");
+    const short = syncope(w, P);
+    if (short) add(short, "Tanpa huruf e, seperti orang bicara cepat — huruf biasa saja.", "pepet");
+    else add(dropE(w, P), "Huruf e dibuang tanpa apostrof (seperti tulisan singkat dgn, tmpt) — huruf mati yang berdempetan biasanya diucapkan dengan sisipan ə.", "pepet");
   } else if (T.length) {
     add(replaceAt(w, T, "é"), "é = tanda e taling (seperti enak, sore), dipakai kamus KBBI.", "taling");
     add(replaceAt(w, T, "è"), "è = e taling yang lebih terbuka (seperti bebek, nenek).", "taling");

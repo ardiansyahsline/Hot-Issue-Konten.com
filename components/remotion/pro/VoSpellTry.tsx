@@ -42,13 +42,15 @@ const errMsg = (e: unknown) => (e instanceof Error && e.message && e.message.len
  * 🎧 Coba ejaan (popover): kandidat ejaan satu kata (lib/studio/pepet.ts — bisa diedit / ditambah) → "Coba semua di laptop" = SATU job
  * bank suara berisi kalimat adegan itu dengan kata tersebut dieja tiap kandidat (1 versi per kalimat supaya cepat, gaya bicara sama
  * dengan proyek, benih acak sama) → tiap hasil bisa diputar → "✓ Pakai ini" = entri 📖 Kamus ejaan proyek khusus bank suara
- * ({from, to, bank}); VO adegan yang ucapannya berubah otomatis ditandai "perlu dibuat ulang" (kunci VoLine.say).
+ * ({from, to, bank}); VO adegan yang ucapannya berubah otomatis ditandai "perlu dibuat ulang" (kunci VoLine.say). Kata yang sudah punya
+ * entri biasa di 📖 Kamus (dipakai suara cadangan Edge juga) → tanya dulu sebelum diganti / dilepas (Edge ikut berubah).
  * Job ditandai settings.purpose = "coba-ejaan" dan hasilnya TIDAK PERNAH dipasang ke VO adegan / timeline.
  */
 export default function VoSpellTry({
   scene,
   timeline,
   word,
+  name,
   onLexicon,
   onClose,
 }: {
@@ -56,6 +58,8 @@ export default function VoSpellTry({
   timeline: Timeline;
   /** kata seperti di naskah */
   word: string;
+  /** kata berhuruf besar di tengah kalimat (mungkin nama diri): e-nya tidak ditebak dari imbuhan */
+  name?: boolean;
   /** simpan kamus ejaan proyek yang baru (undefined = kosong) */
   onLexicon?: (lex: LexEntry[] | undefined) => void;
   onClose: () => void;
@@ -66,12 +70,12 @@ export default function VoSpellTry({
   const tlRef = useRef(timeline);
   tlRef.current = timeline;
   const wordKey = word.toLowerCase().slice(0, LEX_FROM_MAX);
-  const guess = useMemo(() => guessE(word), [word]);
+  const guess = useMemo(() => guessE(word, { name }), [word, name]);
   const lex = timeline.voice.lexicon;
   const own = normLexicon(lex ?? []).find((e) => lexKey(e.from) === lexKey(word));
 
   const [rows, setRows] = useState<Row[]>(() => {
-    const base = spellCandidates(word, { current: own?.to });
+    const base = spellCandidates(word, { current: own?.to, name });
     // kata tanpa huruf e (dari 👂 Terdengar): saran bunyi luncur / suku kata
     if (guess.kind === "tanpa-e") for (const s of spellSuggestions(word, lex)) if (base.length < MAX_CAND && !base.some((c) => c.text === s)) base.push({ text: s, why: "Saran: bunyi luncur / suku kata dipisah.", kind: "ragu" });
     return base.map((c) => ({ id: ++rowSeq, ...c }));
@@ -80,6 +84,8 @@ export default function VoSpellTry({
   const [play, setPlay] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [picked, setPicked] = useState<{ to: string; scenes: string[]; same: boolean } | null>(null);
+  // pilihan yang ikut mengubah cara baca Edge (kata sudah punya entri biasa di 📖 Kamus) → tunggu konfirmasi
+  const [ask, setAsk] = useState<{ row: Row; before: string; after: string } | null>(null);
   const jobRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const busy = st.s === "start" || st.s === "job";
@@ -101,6 +107,7 @@ export default function VoSpellTry({
   const run = async () => {
     setErr(null);
     setPicked(null);
+    setAsk(null);
     const t = tlRef.current;
     const s = t.scenes.find((x) => x.id === scene.id) ?? scene;
     const built = buildTryJob(s, word, rowsOk, t.voice.lexicon, bankSettings(t));
@@ -171,15 +178,23 @@ export default function VoSpellTry({
     }
   };
 
-  /** pilih ejaan → 📖 Kamus ejaan proyek (khusus bank suara); tulisan asli = hapus ejaan kata ini dari kamus proyek */
-  const use = (r: Row) => {
+  /**
+   * pilih ejaan → 📖 Kamus ejaan proyek (khusus bank suara); tulisan asli = hapus ejaan kata ini dari kamus proyek. Kalau kata itu
+   * sudah punya entri biasa (dipakai Edge juga), pilihan ini mengubah cara baca Edge → tanya dulu (`sure` = sudah dikonfirmasi).
+   */
+  const use = (r: Row, sure = false) => {
     if (!onLexicon) return;
     setErr(null);
     const t = tlRef.current;
-    const { next, same } = lexiconAfterPick(t.voice.lexicon, word, r.text);
+    const { next, same, edge } = lexiconAfterPick(t.voice.lexicon, word, r.text);
     if (!next) return setErr("📖 Kamus ejaan sudah penuh (60 kata) — hapus kata yang tidak dipakai dulu di panel Suara VO.");
-    // VO adegan yang ucapannya berubah karena ejaan ini → peringatan "perlu dibuat ulang" (VoLine.say beda) muncul sendiri
-    const scenes = same ? [] : scenesToRebuild(t, t.voice.lexicon, next);
+    if (edge && !sure) {
+      setPicked(null);
+      return setAsk({ row: r, ...edge });
+    }
+    setAsk(null);
+    // VO adegan yang dibuat dari ucapan lain (kunci VoLine.say beda dengan kamus baru) → "perlu dibuat ulang", sama dengan panel Suara VO
+    const scenes = same ? [] : scenesToRebuild(t, next);
     if (!same) onLexicon(next.length ? next : undefined);
     setPicked({ to: r.text.replace(/\s+/g, " ").trim(), scenes, same });
   };
@@ -187,6 +202,7 @@ export default function VoSpellTry({
   const edit = (id: number, text: string) => {
     setRows((x) => x.map((r) => (r.id === id ? { ...r, text } : r)));
     setPicked(null);
+    setAsk(null);
   };
   const res = st.s === "done" ? st.res : null;
   const tried = st.s === "done" ? st.rows : st.s === "job" ? st.rows : null;
@@ -251,7 +267,10 @@ export default function VoSpellTry({
                     className="h-8 w-8 flex-none rounded-lg text-[12px] text-zinc-500 hover:bg-zinc-800 hover:text-red-400 disabled:opacity-40"
                     aria-label={`Hapus ejaan ${r.text || "kosong"}`}
                     disabled={busy}
-                    onClick={() => setRows((x) => x.filter((y) => y.id !== r.id))}
+                    onClick={() => {
+                      setRows((x) => x.filter((y) => y.id !== r.id));
+                      if (ask?.row.id === r.id) setAsk(null);
+                    }}
                   >
                     ✕
                   </button>
@@ -329,6 +348,22 @@ export default function VoSpellTry({
           {err}
         </p>
       )}
+      {ask && (
+        <div className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-300" role="alertdialog" aria-labelledby={`${uid}-ask`} data-spell-ask>
+          <p id={`${uid}-ask`}>
+            “{wordKey}” sudah ada di 📖 Kamus ({wordKey} → {ask.before}) dan dipakai juga oleh suara cadangan Edge.{" "}
+            {ask.row.text.trim().toLowerCase() === wordKey ? "Kalau dilepas" : `Kalau diganti ${ask.row.text.trim()} (khusus bank suara)`}, Edge jadi membaca “{ask.after}”.
+          </p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <button type="button" className="rounded-lg px-2 py-1 text-[11.5px] font-semibold text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300" onClick={() => use(ask.row, true)} data-spell-ask-yes>
+              {ask.row.text.trim().toLowerCase() === wordKey ? "Ya, lepas" : "Ya, ganti"}
+            </button>
+            <button type="button" className="btn-ghost px-2 py-1 text-[11.5px]" onClick={() => setAsk(null)} data-spell-ask-no>
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
       {picked && (
         <div className="rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-emerald-300" role="status" data-spell-done>
           {picked.same ? (
@@ -341,7 +376,7 @@ export default function VoSpellTry({
           )}
         </div>
       )}
-      {res && !picked && <p className="text-[10.5px] text-zinc-500">Hasil coba hanya untuk didengar — VO adegan tidak berubah sampai kamu pilih &quot;✓ Pakai ini&quot; lalu buat ulang VO.</p>}
+      {res && !picked && !ask && <p className="text-[10.5px] text-zinc-500">Hasil coba hanya untuk didengar — VO adegan tidak berubah sampai kamu pilih &quot;✓ Pakai ini&quot; lalu buat ulang VO.</p>}
     </div>
   );
 }

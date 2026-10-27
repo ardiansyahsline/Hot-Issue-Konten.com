@@ -14,12 +14,17 @@ import VoSpellTry from "./VoSpellTry";
 export default function VoPepet({ timeline, onLexicon, disabled }: { timeline: Timeline; onLexicon: (lex: LexEntry[] | undefined) => void; disabled?: boolean }) {
   const mode = timeline.voice.mode;
   const lex = timeline.voice.lexicon;
-  const [open, setOpen] = useState<{ sceneId: string; word: string; at: number } | null>(null);
-  const rows = useMemo(
-    () => timeline.scenes.filter((s) => s.vo?.text).map((s) => ({ s, segs: pepetSegments(s.vo!.text, lex) })),
-    [timeline.scenes, lex],
-  );
-  const n = useMemo(() => new Set(rows.flatMap((r) => r.segs.filter((x) => x.tok?.pepet).map((x) => x.text.toLowerCase()))).size, [rows]);
+  const [open, setOpen] = useState<{ sceneId: string; word: string; at: number; name: boolean } | null>(null);
+  // potongan naskah dihitung ulang hanya kalau teks VO / kamus berubah (bukan tiap timeline.scenes baru: geser durasi, volume, dst.)
+  const voScenes = timeline.scenes.filter((s) => s.vo?.text);
+  const textSig = JSON.stringify(voScenes.map((s) => [s.id, s.vo!.text]));
+  const lexSig = JSON.stringify(lex ?? []);
+  const segsOf = useMemo(() => {
+    const l = JSON.parse(lexSig) as LexEntry[];
+    return new Map((JSON.parse(textSig) as [string, string][]).map(([id, text]) => [id, pepetSegments(text, l)] as const));
+  }, [textSig, lexSig]);
+  const rows = voScenes.map((s) => ({ s, segs: segsOf.get(s.id) ?? [] }));
+  const n = useMemo(() => new Set([...segsOf.values()].flatMap((segs) => segs.filter((x) => x.tok?.pepet).map((x) => x.text.toLowerCase()))).size, [segsOf]);
   if (mode !== "bank" && mode !== "edge") return null;
   if (!rows.length) return null;
 
@@ -68,7 +73,7 @@ export default function VoPepet({ timeline, onLexicon, disabled }: { timeline: T
                       title={t.fixed ? `Dieja “${t.fixed}” (khusus bank suara)` : t.pepet ? "e dibaca ə — ketuk untuk coba ejaan" : "Ketuk untuk coba ejaan"}
                       aria-label={`Coba ejaan “${x.text}”${t.fixed ? `, sekarang dieja ${t.fixed}` : t.pepet ? ", e dibaca ə" : ""}`}
                       aria-expanded={active}
-                      onClick={() => setOpen(active ? null : { sceneId: s.id, word: x.text, at: t.start })}
+                      onClick={() => setOpen(active ? null : { sceneId: s.id, word: x.text, at: t.start, name: t.name })}
                       data-pepet-word={x.text.toLowerCase()}
                       data-pepet={t.pepet ? "1" : "0"}
                       {...(t.fixed ? { "data-pepet-fixed": t.fixed } : {})}
@@ -79,7 +84,7 @@ export default function VoPepet({ timeline, onLexicon, disabled }: { timeline: T
                 })}
               </p>
               {open?.sceneId === s.id && (
-                <VoSpellTry key={`${open.word}-${open.at}`} scene={s} timeline={timeline} word={open.word} onLexicon={onLexicon} onClose={() => setOpen(null)} />
+                <VoSpellTry key={`${open.word}-${open.at}`} scene={s} timeline={timeline} word={open.word} name={open.name} onLexicon={onLexicon} onClose={() => setOpen(null)} />
               )}
             </div>
           ))}
