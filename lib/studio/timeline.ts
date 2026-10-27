@@ -831,17 +831,27 @@ export function musicOffsetOf(m: Pick<Music, "src" | "offset" | "dur"> | undefin
   return o > 0 ? Math.min(o, maxMusicOffset(m.dur)) : 0;
 }
 /**
- * Panjang putaran pertama lagu di video (detik) kalau offset dipakai = sisa lagu sesudah detik ke-offset; sesudahnya lagu diulang
- * DARI AWAL (audio.tsx). 0 = tanpa offset (lagu diulang utuh seperti biasa).
+ * Tumpang-tindih (crossfade) di tiap titik ulang lagu kalau offset dipakai (detik). File mp3 membawa hening encoder ±25–50 ms
+ * (awal + ujung) yang tidak dibuang decoder render, jadi kalau putaran berikutnya baru mulai saat file habis, musik putus sesaat.
+ * Putaran berikutnya mulai segini lebih awal & disilang-pudar (audio.tsx); ketukan ikut (musicFileBeats).
+ */
+export const MUSIC_XFADE_SEC = 0.08;
+/**
+ * Detik video tempat putaran ulang pertama mulai (lagu dari awal) kalau offset dipakai = sisa lagu sesudah detik ke-offset dikurangi
+ * crossfade (MUSIC_XFADE_SEC). 0 = tanpa offset (lagu diulang utuh seperti biasa).
  */
 export function musicHeadSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
   const off = musicOffsetOf(m);
-  return off > 0 ? Math.max(0, Math.round((Number(m?.dur) - off) * 1000) / 1000) : 0;
+  return off > 0 ? Math.max(0, Math.round((Number(m?.dur) - off - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
+}
+/** jarak antar putaran ulang (detik) kalau offset dipakai = panjang lagu − crossfade. 0 = tanpa offset (loop biasa, jarak = panjang lagu) */
+export function musicCycleSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
+  return musicOffsetOf(m) > 0 ? Math.max(0.1, Math.round((Number(m?.dur) - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
 }
 /**
  * Ketukan file musik di waktu video: hasil deteksi (`beats`, detik lagu, minimal `minBeats` buah) atau grid dari BPM (ketukan
  * pertama lagu dianggap di detik 0 lagu). Kalau panjang lagu (`dur`) diketahui: putaran pertama mulai dari detik ke-offset, lalu
- * tiap putaran ulang (lagu dari awal, lihat musicHeadSec) ketukannya ikut sampai `until`.
+ * tiap putaran ulang (lagu dari awal, lihat musicHeadSec / musicCycleSec) ketukannya ikut sampai `until`.
  * Tanpa `dur` (data lama) → persis sama dengan sebelum ada offset lagu.
  */
 export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset" | "dur">, until: number, minBeats = 1): number[] {
@@ -857,12 +867,15 @@ export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset"
   if (!song.length) return [];
   const off = musicOffsetOf(m);
   const r3 = (t: number) => Math.round(t * 1000) / 1000;
+  // offset: putaran ulang mulai MUSIC_XFADE_SEC sebelum lagu habis (crossfade) — ketukan di ujung yang tertimpa putaran berikutnya dibuang
+  const head = off > 0 ? musicHeadSec(m) : dur;
+  const cycle = off > 0 ? musicCycleSec(m) : dur;
   const out: number[] = [];
-  for (const b of song) if (b >= off && b - off <= until + 1e-6) out.push(r3(b - off));
+  for (const b of song) if (b >= off && b - off <= until + 1e-6 && (off === 0 || b - off < head - 1e-6)) out.push(r3(b - off));
   // putaran ulang: lagu dari awal (maks 400 putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
-  for (let st = dur - off, k = 0; st <= until + 1e-6 && k < 400; st += dur, k++) {
+  for (let st = head, k = 0; st <= until + 1e-6 && k < 400; st += cycle, k++) {
     for (const b of song) {
-      if (st + b > until + 1e-6) break;
+      if (st + b > until + 1e-6 || (off > 0 && b >= cycle - 1e-6)) break;
       out.push(r3(st + b));
     }
   }
