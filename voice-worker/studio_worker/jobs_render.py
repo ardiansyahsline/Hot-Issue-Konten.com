@@ -42,6 +42,8 @@ EXT_OF = {"mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav", "png": 
 SHARED_DIRS = {"voices", "sfx", "tts", "vo"}  # folder storage yang boleh dibaca semua user Studio
 # logo brand bawaan (BRANDS di lib/studio/timeline.ts) → file di folder public repo; remotion/Root.tsx memetakannya ke <public>/brand/<file>
 PRESET_LOGOS = {"/konten-logo.png": "konten-logo.png", "/brand/tws-logo.svg": "brand/tws-logo.svg"}
+# perkiraan sisa waktu render (linear dari waktu berjalan) baru ditampilkan sesudah progres sekian — di awal masih terlalu meleset
+ETA_MIN_FRAC = 0.10
 
 
 # ---------------------------------------------------------------- cek kesiapan
@@ -372,6 +374,13 @@ def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_s
 
 
 # ---------------------------------------------------------------- job
+def render_left(elapsed: float, frac: float) -> float | None:
+    """perkiraan sisa render (detik) untuk pesan "· sisa ±N": linear dari waktu berjalan, baru dipercaya sesudah ≥ 10% progres"""
+    if frac < ETA_MIN_FRAC or frac <= 0 or elapsed < 0:
+        return None
+    return max(0.0, elapsed * (1.0 - min(1.0, frac)) / frac)
+
+
 def run(ctx: JobCtx) -> None:
     rt = ctx.rt
     cfg = rt.cfg
@@ -400,6 +409,13 @@ def run(ctx: JobCtx) -> None:
         except Exception:  # internet putus sebentar: render jalan terus, dicek lagi 3 dtk kemudian
             return False
 
+    t_start = getattr(ctx, "t0", None) or time.monotonic()
+
+    def eta(frac: float) -> None:
+        left = render_left(time.monotonic() - t_start, frac)
+        if left is not None:
+            ctx.eta(left)
+
     def on_line(line: str) -> None:
         log.debug("remotion: %s", line)
         pr = parse_progress(line)
@@ -407,6 +423,7 @@ def run(ctx: JobCtx) -> None:
             return
         st, f = pr
         base, span, label = {"bundle": (0.08, 0.1, "Menyiapkan komposisi…"), "render": (0.2, 0.6, "Merender gambar…"), "encode": (0.8, 0.08, "Menyusun video…")}[st]
+        eta(base + span * f)
         ctx.progress(base + span * f, f"{label} {int(f * 100)}%")
 
     try:
@@ -433,6 +450,7 @@ def run(ctx: JobCtx) -> None:
         stage_builtin_assets(cfg.repo, bundle)
 
         raw = work / "raw.mp4"
+        eta(0.2)
         ctx.progress(0.2, "Merender gambar…", force=True)
         args = [node, str(cli), "render", str(bundle), "StudioVideo", str(raw), f"--props={props}", f"--concurrency={cfg.render_concurrency}", "--codec=h264", "--log=info", *conf_arg]
         browser = getattr(cfg, "render_browser", "")
@@ -443,6 +461,7 @@ def run(ctx: JobCtx) -> None:
             log.error("remotion render gagal:\n%s", "\n".join(tail))
             raise JobError("Render video gagal di laptop (cek log worker).")
 
+        eta(0.9)
         ctx.progress(0.9, "Menyamakan volume akhir (-14 LUFS)…", force=True)
         final = work / "final.mp4"
         if ff.has_audio(raw):
@@ -452,6 +471,7 @@ def run(ctx: JobCtx) -> None:
         size = final.stat().st_size
         if size > MAX_UPLOAD:
             raise JobError("File video terlalu besar untuk penyimpanan (maks 200 MB). Coba durasi lebih pendek.")
+        eta(0.95)
         ctx.progress(0.95, "Mengunggah video…", force=True)
         path = rt.supa.upload(f"renders/{ctx.id}.mp4", final, "video/mp4", timeout=1800)
         msg = "Video siap diunduh" + (f" ({len(missing)} file tidak ketemu, dilewati)" if missing else "")

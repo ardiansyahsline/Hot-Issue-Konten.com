@@ -707,6 +707,45 @@ def job_natural(rows: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------- job
+# perkiraan sisa waktu (pesan job "· sisa ±40 dtk"): kerja di luar mesin suara per baris (cek ASR, ffmpeg, cache) & penutup job
+ETA_LINE_EXTRA = 1.0
+ETA_CACHED_LINE = 0.3
+ETA_TAIL = 2.0
+# waktu muat mesin bila belum pernah diukur (detik) — Chatterbox di RTX 5050 ±34 dtk
+ETA_LOAD_DEFAULT = {"chatterbox": 35.0, "pocket": 10.0}
+
+
+def _accepts(fn, name: str) -> bool:
+    """fungsi `fn` menerima argumen kata kunci `name`? (make_line versi baru menerima speed=; versi lama tidak — dicek dari tanda
+    tangannya, bukan dengan menangkap TypeError yang bisa saja berasal dari dalam fungsi)"""
+    import inspect
+
+    try:
+        ps = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in ps or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in ps.values())
+
+
+def _speed(rt: Runtime):
+    """catatan kecepatan worker (rt.speed); tidak ada (tes / pemanggil lama) → catatan sementara berisi perkiraan bawaan"""
+    if getattr(rt, "speed", None) is not None:
+        return rt.speed
+    try:
+        from .speed import Speed
+
+        return Speed(None)
+    except ImportError:
+        return None
+
+
+def _engine_loaded(rt: Runtime, name: str) -> bool:
+    try:
+        return name in rt.engines.loaded()
+    except Exception:  # pengelola mesin palsu / lama tanpa loaded() → anggap sudah siap
+        return True
+
+
 def run(ctx: JobCtx) -> None:
     rt = ctx.rt
     job = ctx.job
@@ -745,12 +784,23 @@ def run(ctx: JobCtx) -> None:
             continue
         msg = "Suara selesai dibuat" + (" (Chatterbox, GPU laptop)" if name == "chatterbox" else f" dengan pocket-tts (CPU laptop). Kredit: {result.get('credit')}")
         ctx.done({"result": result, "engine_used": name, "cache_key": job_key(name, vhash, lines, st)}, msg)
+        rows = result.get("lines") or []
+        voice_sec = sum(float(r.get("dur") or 0) for r in rows)
+        hits = int(getattr(ctx, "cache_hits", 0) or 0)
+        est0 = getattr(ctx, "est0", None)
+        log.info(
+            "Job selesai: %d kalimat%s, %.0f dtk suara, %.0f dtk proses%s",
+            len(rows), f" ({hits} dari cache)" if hits else "", voice_sec, time.monotonic() - getattr(ctx, "t0", time.monotonic()),
+            f" (perkiraan awal {est0:.0f} dtk)" if isinstance(est0, (int, float)) else "",
+        )
         return
     log.error("Semua mesin suara gagal: %s", " | ".join(errors))
     raise JobError(FAIL_MSG)
 
 
 def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path, vhash: str, st: dict) -> dict:
+    from .supa import UploadPool, norm_path
+
     rt = ctx.rt
     cache = LineCache(rt.cfg.cache / "tts")
     work = rt.cfg.tmp / f"tts-{ctx.id}"
@@ -763,20 +813,61 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
     clips: list[tuple[np.ndarray, float]] = []
     cues: list[dict] = []
     t_next = 0.0
+    speed = _speed(rt)
+    # make_line versi baru (mesin cepat) menerima speed= untuk batas waktu & jumlah versi; versi lama tidak → kecepatan dicatat di sini
+    line_kw = {"speed": speed} if speed is not None and _accepts(make_line, "speed") else {}
+    takes = int(st.get("takes") or 1)
+
+    # perkiraan awal: baris yang belum ada di cache × kecepatan mesin (+ waktu muat mesin kalau belum dimuat)
+    keys = [line_key(name, vhash, ln, st) for ln in lines]
+    hits = [cache.get(k) for k in keys]
+    est = [
+        ETA_CACHED_LINE if hits[i] else (speed.estimate(name, len(ln["spell"] or ln["text"]), takes) if speed is not None else 6.0 * len(ln["spell"] or ln["text"]) / 14.5) + ETA_LINE_EXTRA
+        for i, ln in enumerate(lines)
+    ]
+    need_engine = any(h is None for h in hits)
+    load_left = 0.0
+    if need_engine and not _engine_loaded(rt, name):
+        load_left = (speed.load_sec(name) if speed is not None else None) or ETA_LOAD_DEFAULT.get(name, 30.0)
+    tail = ETA_TAIL + 0.1 * n
+    ctx.est0 = round(sum(est) + load_left + tail, 1)
+    ctx.cache_hits = sum(1 for h in hits if h)
+    ctx.eta(ctx.est0)
+    real_done = est_done = 0.0  # waktu nyata vs perkiraan baris yang sudah dibuat → koreksi perkiraan sisa
+
+    def left_after(i: int) -> float:
+        k = max(0.3, min(5.0, real_done / est_done)) if est_done > 0.5 else 1.0
+        return sum(est[i + 1 :]) * k + load_left + tail
+
+    pool = UploadPool(rt.supa, workers=int(getattr(rt.cfg, "upload_workers", 3) or 3))
     try:
         for i, ln in enumerate(lines):
+            if i:
+                ctx.check_cancel()  # dibatalkan dari website → berhenti di sini (antar baris), bukan di tengah GPU
+                pool.check()  # unggahan baris sebelumnya gagal → jangan buang waktu GPU untuk baris lain
             base = 0.05 + 0.85 * i / n
             ctx.progress(base, f"Membuat suara kalimat {i + 1} dari {n}…", force=True)
-            k = line_key(name, vhash, ln, st)
-            hit = cache.get(k)
+            k = keys[i]
+            hit = hits[i]
+            t_line = time.monotonic()
             if hit:
                 wav, meta = hit
                 log.info("Baris %s: pakai cache", ln["id"])
             else:
                 if engine is None:
                     ctx.progress(base, "Menyiapkan mesin suara…", force=True)
+                    t_load = time.monotonic()
                     engine = rt.engines.get(name)
-                wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"))
+                    took = time.monotonic() - t_load
+                    if took > 0.2 and speed is not None and not getattr(rt, "loading", False):
+                        speed.record_load(name, took)  # dimuat di job ini (PRELOAD=0); saat pemanasan latar dicatat worker
+                    load_left = 0.0
+                    ctx.eta(left_after(i - 1))  # mesin sudah siap: sisa = baris ini dst.
+                    t_line = time.monotonic()
+                t_gen = time.monotonic()
+                wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"), **line_kw)
+                if not line_kw and speed is not None:
+                    speed.record(name, float(meta.get("dur") or 0), time.monotonic() - t_gen, takes)
                 wav = cache.put(k, wav, meta)
             # kecepatan diatur sendiri → atempo persis; selain itu adegan teaser: ucapan lebih panjang dari jendelanya → jeda
             # dipadatkan, lalu tempo asli dipercepat (buat ulang, cfg_weight naik) dan sisanya baru atempo (maks 1,3×) — cache baris
@@ -801,12 +892,13 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
                     ctx.progress(base + 0.85 / n * 0.9, f"Kalimat {i + 1} kepanjangan — dibuat ulang dengan tempo bicara lebih cepat…", force=True)
                     wdir = work / "cepat"
                     wdir.mkdir(parents=True, exist_ok=True)
-                    w2, m2 = make_line(engine, ln, ref, st2, asr, wdir)
+                    w2, m2 = make_line(engine, ln, ref, st2, asr, wdir, **line_kw)
                     return cache.put(k2, w2, m2), m2
 
                 wav, meta = native_fit(wav, meta, ln.get("max"), st, work, ln["id"], regen)
-            mp3 = ff.encode_mp3(wav, work / f"{ln['id']}.mp3", 48000, "160k", mono=True)
-            path = rt.supa.upload(f"vo/{ctx.id}/{ln['id']}.mp3", mp3, "audio/mpeg")
+            # mp3 dibuat & diunggah di latar (paralel) sementara baris berikutnya dibuat GPU
+            path = norm_path(f"vo/{ctx.id}/{ln['id']}.mp3")
+            pool.submit(path, lambda w=wav, d=work / f"{ln['id']}.mp3": ff.encode_mp3(w, d, 48000, "160k", mono=True), "audio/mpeg")
             start = ln["start"] if ln["start"] is not None else t_next
             t_next = start + meta["dur"] + 0.3
             y, sr = ff.read_wav(wav)
@@ -825,11 +917,22 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             if heard:
                 row["heard"] = heard
             out_lines.append(row)
+            # perkiraan sisa diperbarui dari waktu nyata baris yang sudah dibuat
+            if not hit:
+                real_done += time.monotonic() - t_line
+                est_done += est[i]
+            ctx.eta(left_after(i))
         ctx.progress(0.92, "Menyusun VO lengkap…", force=True)
         full = mix.place_clips(clips, 48000, tail=0.5, ceiling_db=-1.0)
         full_wav = ff.write_wav(work / "full.wav", full, 48000)
-        full_path = rt.supa.upload(f"vo/{ctx.id}/full.mp3", ff.encode_mp3(full_wav, work / "full.mp3", 48000, "160k", mono=True), "audio/mpeg")
-        srt_path = rt.supa.upload(f"vo/{ctx.id}/full.srt", T.to_srt(cues).encode("utf-8"), "application/x-subrip")
+        # full.mp3 & srt diunggah bersamaan (sisa mp3 baris yang belum selesai ikut ditunggu)
+        full_path = norm_path(f"vo/{ctx.id}/full.mp3")
+        srt_path = norm_path(f"vo/{ctx.id}/full.srt")
+        pool.submit(full_path, lambda: ff.encode_mp3(full_wav, work / "full.mp3", 48000, "160k", mono=True), "audio/mpeg")
+        pool.submit(srt_path, T.to_srt(cues).encode("utf-8"), "application/x-subrip")
+        ctx.eta(ETA_TAIL)
+        ctx.progress(0.95, "Mengunggah VO…", force=True)
+        pool.wait()
         eng_label = engine.label if engine else ("Bank suara · Chatterbox (GPU laptop)" if name == "chatterbox" else "Bank suara · pocket-tts (CPU laptop)")
         credit = getattr(engine, "credit", None) if engine else None
         if name == "pocket" and not credit:
@@ -851,4 +954,5 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             "versi": VERSION,
         }
     finally:
+        pool.close(cancel=True)  # error / batal: unggahan yang belum mulai dibatalkan, yang sedang jalan ditunggu dulu
         shutil.rmtree(work, ignore_errors=True)

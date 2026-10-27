@@ -123,6 +123,26 @@ Menghapusnya: `powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1 -H
 3. **Task Scheduler** (kalau pakai nyala otomatis): Start → *Task Scheduler* → *Task Scheduler Library* →
    **Konten Studio voice-worker** → kolom *Status* harus *Running*.
 
+## Alur kerja worker (supaya cepat) & log
+- **Saat mulai**: worker mengecek model di laptop (hanya cek file, sekejap). Model yang belum ada **tidak pernah diunduh di tengah
+  job** — komponennya dilewati dulu (Chatterbox → pocket-tts / Edge di website, cek ucapan → cek audio saja, DeepFilterNet → pembersih
+  ffmpeg, UTMOS → versi dipilih dari kejelasan + nada) lalu diunduh di latar (`AUTO_DOWNLOAD=1`); begitu selesai langsung dipakai lagi.
+- **Pemanasan** (`PRELOAD=1`, bawaan): mesin suara, cek ucapan (faster-whisper) & UTMOS dimuat **sekali** di latar dan tetap di GPU
+  selama worker hidup. Antrian tetap dicek; job yang datang saat pemanasan menunggu sebentar ("Menyiapkan mesin suara…").
+  `.env` lama yang masih berisi `PRELOAD=0` bawaan dulu otomatis dianggap 1 (mematikan: `PRELOAD=mati`).
+- **Selama job**: progres dikirim ke website di latar (paling sering 1× per detik, GPU tidak menunggu internet); mp3 tiap kalimat dibuat
+  & diunggah sambil kalimat berikutnya dibuat (`UPLOAD_WORKERS`, bawaan 3 sekaligus); `full.mp3` & SRT diunggah bersamaan. Tombol batal
+  di website menghentikan job di batas kalimat berikutnya.
+- **Perkiraan selesai**: pesan job di Studio diakhiri `· sisa ±40 dtk` / `· sisa ±2 mnt`, dihitung dari catatan kecepatan laptop ini
+  (`data/speed.json`, makin tepat setelah beberapa job) dan diperbarui tiap kalimat selesai. Render MP4 juga (perkiraan muncul setelah
+  ±10%). Detak jantung mengirim kecepatan (`info.speed`), status model (`info.models`) dan `info.warm` (mesin sudah panas).
+- **Cek antrian**: tiap 1 dtk selama 1 menit sesudah job (job susulan langsung terambil), lalu tiap `POLL_SEC`, dan tiap ≥ 10 dtk kalau
+  sudah 30 menit menganggur.
+- **Log bersih** (`QUIET_LOG=1`, bawaan): peringatan library yang tidak penting (FutureWarning / DeprecationWarning torch, torchaudio,
+  transformers, diffusers, pkg_resources, librosa, DeepFilterNet; "EOS token detected", "Detected 2x repetition", "forcing EOS" dari
+  Chatterbox) dan progress bar per langkah disembunyikan. Peringatan & error dari worker sendiri tetap tampil. Tiap job ditutup ringkasan,
+  mis. `Job selesai: 5 kalimat, 32 dtk suara, 41 dtk proses (perkiraan awal 45 dtk)`. Mencari masalah? Isi `QUIET_LOG=0` → semua tampil lagi.
+
 ## Update setelah ada perubahan di repo
 ```powershell
 cd C:\Konten.com\Hot-Issue-Konten.com
@@ -174,6 +194,7 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 ```powershell
 .venv\Scripts\python selftest.py
 .venv\Scripts\python selftest_natural.py
+.venv\Scripts\python selftest_runtime.py
 ```
 
 ---
@@ -186,7 +207,7 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `jalankan.bat` / `pasang-otomatis.ps1` | Menjalankan manual / otomatis lewat Task Scheduler |
 | `install.ps1`, `requirements.txt`, `requirements-gpu.txt` | Pemasang (urutan paket penting — pakai `install.ps1`) |
 | `cek_gpu.py` | Cek GPU + tes suara |
-| `selftest.py`, `selftest_natural.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo) |
+| `selftest.py`, `selftest_natural.py`, `selftest_runtime.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_runtime.py`: alur worker — progres latar, batal, perkiraan sisa, unggah paralel, cek antrian, pemanasan, log bersih) |
 | `tambah_sfx.py`, `freesound_cc0.py` | Tambah SFX |
 | `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
 | `bank-suara/` | Rekaman referensi suara Alif (jangan diubah) |
@@ -196,7 +217,8 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris untuk job yang tidak membawa
 setelan, 1–4, bawaan 3 — website Studio sekarang selalu meminta 3 versi, jadi angka ini tidak mengubah job dari website; laptop lambat
 tidak perlu diatur: versi ke-3 otomatis dilewati kalau batas waktu per baris terlewati, minimal 2 versi), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
-berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`.
+berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`, `PRELOAD` (1 = panaskan mesin di latar saat mulai), `UPLOAD_WORKERS` (unggahan
+bersamaan, bawaan 3), `QUIET_LOG` (1 = log bersih, 0 = semua peringatan tampil).
 
 ---
 

@@ -101,6 +101,14 @@ class Config:
     sfx_dir: str
     # skor kealamian UTMOS saat memilih take (NATURAL_MOS=0 → hanya kejelasan + nada)
     natural_mos: bool = True
+    # --- RUNTIME --- (alur worker: unggah paralel, log bersih)
+    # jumlah unggahan ke Supabase Storage yang jalan bersamaan (mp3 per baris diunggah sementara baris berikutnya dibuat)
+    upload_workers: int = 3
+    # 1 = sembunyikan peringatan library yang tidak penting (FutureWarning torch, "forcing EOS" Chatterbox, progress bar);
+    # 0 = semua tampil (untuk mencari masalah)
+    quiet_log: bool = True
+    # "PRELOAD=0" dari .env lama (nilai bawaan dulu) diabaikan → dicatat di log saat worker mulai
+    preload_old_default: bool = False
 
     @property
     def cache(self) -> Path:
@@ -138,11 +146,31 @@ def apply_thread_limits(n: int) -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
+# --- RUNTIME ---
+# .env lama = salinan .env.example versi dulu: "PRELOAD=0" persis di bawah komentar bawaannya adalah NILAI BAWAAN LAMA (bukan pilihan
+# pemakai) → dianggap kosong supaya bawaan baru berlaku (1 = mesin dipanaskan di latar saat worker mulai, job pertama tidak menunggu
+# muat model ±30 dtk). Yang memang ingin mematikan: ubah jadi PRELOAD=mati (atau hapus komentar bawaan di atasnya).
+_OLD_PRELOAD = "# muat model suara saat worker mulai (1) atau saat job pertama (0)\nPRELOAD=0"
+
+
+def _preload(env_file: Path) -> tuple[bool, bool]:
+    """(PRELOAD, True kalau "PRELOAD=0" bawaan .env lama diabaikan)"""
+    if _env("PRELOAD") == "0":
+        try:
+            txt = env_file.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+        except OSError:
+            txt = ""
+        if _OLD_PRELOAD in txt:
+            return True, True
+    return _bool("PRELOAD", True), False
+
+
 def load(env_file: Path | None = None) -> Config:
+    env_file = env_file or ROOT / ".env"
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(env_file or ROOT / ".env", override=False)
+        load_dotenv(env_file, override=False)
     except ImportError:  # python-dotenv belum terpasang: pakai env sistem saja
         pass
 
@@ -157,6 +185,7 @@ def load(env_file: Path | None = None) -> Config:
     if hf_token:
         os.environ.setdefault("HF_TOKEN", hf_token)
 
+    preload, preload_old = _preload(env_file)
     order = [e.strip().lower() for e in _env("ENGINE_ORDER", "chatterbox,pocket").split(",")]
     order = [e for e in order if e in ("chatterbox", "pocket")] or ["chatterbox", "pocket"]
 
@@ -185,11 +214,15 @@ def load(env_file: Path | None = None) -> Config:
         render_browser=_env("REMOTION_BROWSER"),
         df_atten_db=_float("DF_ATTEN_DB", 18, 6, 30),
         takes=_int("TAKES", 3, 1, 4),
-        preload=_bool("PRELOAD", False),
+        preload=preload,
         idle_unload_min=_int("IDLE_UNLOAD_MIN", 0, 0, 1440),
         freesound_key=_env("FREESOUND_API_KEY"),
         sfx_dir=_env("SFX_DIR", r"C:\Konten.com\STUDIO-FX"),
         natural_mos=_bool("NATURAL_MOS", True),
+        # --- RUNTIME ---
+        upload_workers=_int("UPLOAD_WORKERS", 3, 1, 8),
+        quiet_log=_bool("QUIET_LOG", True),
+        preload_old_default=preload_old,
     )
     cfg.ensure_dirs()
     return cfg
