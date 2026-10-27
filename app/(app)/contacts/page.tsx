@@ -7,10 +7,12 @@ import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import { cleanSearch, fmtDate, isAutoHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
+import { requireTab } from "@/lib/tabs.server";
 
 type SP = Promise<Record<string, string | undefined>>;
 
 export default async function ContactsPage({ searchParams }: { searchParams: SP }) {
+  const access = await requireTab("dashboard");
   const sp = await searchParams;
   const { supabase } = await getCurrentUser();
   const q = (sp.q ?? "").trim();
@@ -71,7 +73,8 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
   // Kasus Video Review yang email/link-nya mengandung kata yang dicari
   let vrCases: VideoReviewRow[] = [];
   const vrTerm = cleanSearch(q).toLowerCase().replace(/^@/, "");
-  if (vrTerm.length >= 4) {
+  // tab Video Review ditutup admin -> kasus Video Review tidak ikut dicari
+  if (vrTerm.length >= 4 && !access.blocked.has("video_review")) {
     const { data: vrLinks } = await supabase
       .from("video_review_links")
       .select("review_id")

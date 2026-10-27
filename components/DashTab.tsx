@@ -6,9 +6,13 @@ export type DashTabKey = "vr" | "agent";
 const KEY = "cs-top-tab";
 const Ctx = createContext<{ tab: DashTabKey; setTab: (t: DashTabKey) => void } | null>(null);
 
-/** Tab Video Review / Dari agent di Dashboard — dipakai bersama oleh Top 3 dan list ranking di bawahnya */
-export function DashTabProvider({ children }: { children: React.ReactNode }) {
-  const [tab, set] = useState<DashTabKey>("vr");
+/**
+ * Tab Video Review / Dari agent di Dashboard — dipakai bersama oleh Top 3 dan list ranking di bawahnya.
+ * `only` = kunci ke satu tab (mis. tab Video Review ditutup admin untuk user ini -> selalu "agent").
+ */
+export function DashTabProvider({ children, only }: { children: React.ReactNode; only?: DashTabKey }) {
+  const [picked, set] = useState<DashTabKey>(only ?? "vr");
+  const tab = only ?? picked;
   useEffect(() => {
     try {
       if (localStorage.getItem(KEY) === "agent") set("agent");

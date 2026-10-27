@@ -8,8 +8,10 @@ import { fmtDate, fmtDay } from "@/lib/utils";
 import { VrLinks, VrNotes, VrStatusBadge } from "@/components/VrBits";
 import VrCategorySelect from "@/components/VrCategorySelect";
 import { deleteReview, setReviewStatus } from "../actions";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function ReviewDetail({ params }: { params: Promise<{ id: string }> }) {
+  await requireTab("video_review");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const { supabase } = await getCurrentUser();

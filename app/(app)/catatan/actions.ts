@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getProfile } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
 import { isSgCategory, isSgStatus } from "@/lib/suggestions";
 import { attachmentPaths, parseAttachments, removeFiles, saveAttachments } from "@/lib/attachments.server";
 
@@ -17,7 +18,15 @@ function parse(fd: FormData) {
   return { data: { category, title, body } } as const;
 }
 
+/** tab Catatan & Saran ditutup admin -> pesan ramah (null = boleh) */
+async function closed() {
+  const tab = await assertTab("catatan");
+  return tab.ok ? null : tab.error;
+}
+
 export async function createSuggestion(_prev: SgState, fd: FormData): Promise<SgState> {
+  const no = await closed();
+  if (no) return { error: no };
   const parsed = parse(fd);
   if ("error" in parsed) return { error: parsed.error };
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
@@ -36,6 +45,8 @@ export async function createSuggestion(_prev: SgState, fd: FormData): Promise<Sg
 }
 
 export async function updateSuggestion(id: number, _prev: SgState, fd: FormData): Promise<SgState> {
+  const no = await closed();
+  if (no) return { error: no };
   const parsed = parse(fd);
   if ("error" in parsed) return { error: parsed.error };
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
@@ -53,6 +64,8 @@ export async function updateSuggestion(id: number, _prev: SgState, fd: FormData)
 
 /** Ubah progress (Baru / In Progress / Done / Rejected) + alasan — khusus admin */
 export async function setProgress(id: number, _prev: SgState, fd: FormData): Promise<SgState> {
+  const no = await closed();
+  if (no) return { error: no };
   const status = fd.get("status");
   const reason = String(fd.get("status_reason") ?? "").trim() || null;
   if (!isSgStatus(status)) return { error: "Status tidak valid." };
@@ -68,6 +81,7 @@ export async function setProgress(id: number, _prev: SgState, fd: FormData): Pro
 
 /** Tanggapan — semua role boleh. `parent_id` = balasan ke tanggapan tertentu. */
 export async function addComment(id: number, fd: FormData) {
+  if (await closed()) return;
   const { supabase, user } = await getCurrentUser();
   const files = parseAttachments(fd, user.id);
   const body = String(fd.get("body") ?? "").trim().slice(0, 5000) || (files.length ? "📎 Lampiran bukti" : "");
@@ -84,6 +98,7 @@ export async function addComment(id: number, fd: FormData) {
 }
 
 export async function deleteComment(id: number, commentId: number) {
+  if (await closed()) return;
   const { supabase } = await getCurrentUser();
   const { data: replies } = await supabase.from("suggestion_comments").select("id").eq("parent_id", commentId);
   const paths = await attachmentPaths(supabase, [{ column: "suggestion_comment_id", ids: [commentId, ...(replies ?? []).map((r) => r.id as number)] }]);
@@ -93,6 +108,7 @@ export async function deleteComment(id: number, commentId: number) {
 }
 
 export async function deleteSuggestion(id: number) {
+  if (await closed()) return;
   const { supabase } = await getCurrentUser();
   const { data: cs } = await supabase.from("suggestion_comments").select("id").eq("suggestion_id", id);
   const paths = await attachmentPaths(supabase, [

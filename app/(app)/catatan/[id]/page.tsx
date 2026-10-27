@@ -13,10 +13,12 @@ import CommentComposer from "@/components/comments/CommentComposer";
 import Reactions from "@/components/emoji/Reactions";
 import { buildThread, nameMap, peopleMap, type CommentRow, type Person } from "@/lib/comments.server";
 import { summarize, type ReactionRow } from "@/lib/reactions";
+import { requireTab } from "@/lib/tabs.server";
 
 type Comment = CommentRow & { files: AttachmentRow[] | null };
 
 export default async function CatatanDetail({ params }: { params: Promise<{ id: string }> }) {
+  await requireTab("catatan");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const { supabase, user } = await getCurrentUser();

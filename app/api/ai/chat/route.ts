@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { assertTab, canTab, getTabAccess } from "@/lib/tabs.server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
@@ -55,6 +56,8 @@ export async function POST(req: NextRequest) {
   if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu melengkapi pengaturan AI di Vercel.");
 
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const gate = await assertTab("ai");
+  if (!gate.ok) return gate.res;
   // info teknis (hero pengganti, daftar error) hanya untuk pemilik (Alif); user lain melihat hero pilihannya saja
   const owner = isAiOwner(user.email);
   let body: Body;
@@ -327,7 +330,9 @@ export async function POST(req: NextRequest) {
   const marketOnly = !webOn && !hasImages && !folder ? ensureTradePlan(null, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })), assetAsk) : null;
   const [context, web] = await Promise.all([
     useData
-      ? buildSiteContext(supabase)
+      ? getTabAccess()
+          // data tab yang ditutup admin untuk user ini tidak ikut dikirim ke AI
+          .then((a) => buildSiteContext(supabase, a.blocked))
           .catch(() => "")
           .finally(() => step("data", "done"))
       : Promise.resolve(""),
@@ -432,7 +437,14 @@ export async function POST(req: NextRequest) {
   const photos = await photosP;
   if (photoMode) turnRules.push(photoRules(photoQ, photos, visualMode));
   // user minta putar / ganti / matikan musik -> AI kirim blok ```music``` yang dijalankan pemutar 🎵
-  if (MUSIC_INTENT.test(lastText)) turnRules.push(MUSIC_RULES);
+  // (tab Musik AI ditutup admin -> pemutar tidak dipasang, jadi AI tidak boleh mengirim perintah musik)
+  if (MUSIC_INTENT.test(lastText)) {
+    turnRules.push(
+      (await canTab("musik"))
+        ? MUSIC_RULES
+        : "🎵 Pemutar musik website DITUTUP admin untuk user ini. JANGAN kirim blok ```music```; bilang singkat bahwa tab Musik AI ditutup admin untuk akunnya."
+    );
+  }
   const folderMsg = folder ? folderPrompt(folder) : "";
   // user minta analisa / trade plan suatu instrumen -> wajib beri angka konkret + blok tradeplan (digambar di chart)
   // tujuan "Berita & sentimen" dari kartu pasar -> rangkum kabar, tanpa trade plan

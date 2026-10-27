@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
 import { canEditReviews, canWriteReviews } from "@/lib/roles";
 import { parseCsv } from "@/lib/csv";
 import {
@@ -25,15 +26,22 @@ export type ImportResult = { ok?: string; error?: string } | undefined;
 
 const NO_ACCESS = "Role kamu tidak punya akses untuk ini di Video Review.";
 
+/** Boleh input / import (tab Video Review terbuka + role penulis) */
 async function writer() {
-  const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
-  return canWriteReviews(profile?.role) ? ctx : null;
+  const [ctx, profile, tab] = await Promise.all([getCurrentUser(), getProfile(), assertTab("video_review")]);
+  return tab.ok && canWriteReviews(profile?.role) ? ctx : null;
 }
 
-/** Boleh edit kasus yang sudah ada (writer + Discord Moderator) */
+/** Boleh edit kasus yang sudah ada (writer + Discord Moderator), tab Video Review juga harus terbuka */
 async function editor() {
-  const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
-  return canEditReviews(profile?.role) ? ctx : null;
+  const [ctx, profile, tab] = await Promise.all([getCurrentUser(), getProfile(), assertTab("video_review")]);
+  return tab.ok && canEditReviews(profile?.role) ? ctx : null;
+}
+
+/** Alasan ditolak: tab ditutup admin, atau role tidak punya akses */
+async function noAccess() {
+  const tab = await assertTab("video_review");
+  return tab.ok ? NO_ACCESS : tab.error;
 }
 
 const txt = (v: FormDataEntryValue | null) => String(v ?? "").trim() || null;
@@ -64,7 +72,7 @@ export async function createReview(_prev: VrFormState, fd: FormData): Promise<Vr
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
 
   const { data, error } = await w.supabase.from("video_reviews").insert(parsed.data).select("id").single();
   if (error || !data) return { error: `Gagal simpan: ${error?.message}` };
@@ -82,7 +90,7 @@ export async function updateReview(id: number, _prev: VrFormState, fd: FormData)
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
   const w = await editor();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
 
   const { error } = await w.supabase.from("video_reviews").update(parsed.data).eq("id", id);
   if (error) return { error: `Gagal update: ${error.message}` };
@@ -104,7 +112,7 @@ export async function updateReview(id: number, _prev: VrFormState, fd: FormData)
 export async function setReviewCategory(id: number, category: string) {
   if (category && !(VR_CATEGORIES as readonly string[]).includes(category)) return { error: "Kategori tidak valid" };
   const w = await editor();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { error } = await w.supabase.from("video_reviews").update({ category: category || null }).eq("id", id);
   if (error) return { error: error.message };
   revalidatePath("/video-review");
@@ -298,7 +306,7 @@ async function importRows(w: Writer, input: VrImportRow[]): Promise<ImportResult
 /** Import dari file CSV yang di-upload (sudah diparse di browser) */
 export async function importReviews(json: string): Promise<ImportResult> {
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   let rows: VrImportRow[];
   try {
     rows = JSON.parse(json);
@@ -312,7 +320,7 @@ export async function importReviews(json: string): Promise<ImportResult> {
 /** Ambil langsung dari link Google Sheet (sheet harus bisa dibuka "siapa saja yang punya link") */
 export async function syncFromSheet(_prev: ImportResult, fd: FormData): Promise<ImportResult> {
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const url = sheetCsvUrl(String(fd.get("url") ?? ""));
   if (!url) return { error: "Link Google Sheet tidak valid." };
 
@@ -342,7 +350,7 @@ export async function syncFromSheet(_prev: ImportResult, fd: FormData): Promise<
 /** Isi kategori otomatis untuk semua kasus yang kategorinya masih kosong */
 export async function autoCategorize(): Promise<ImportResult> {
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   let total = 0;
   for (let round = 0; round < 20; round++) {
     const { data, error } = await w.supabase.from("video_reviews").select("id, explanation").is("category", null).limit(1000);
@@ -367,7 +375,7 @@ export async function autoCategorize(): Promise<ImportResult> {
 /** Simpan catatan rangkuman manual untuk satu kategori */
 export async function saveCategoryNote(category: string, note: string): Promise<ImportResult> {
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { error } = await w.supabase
     .from("video_review_category_notes")
     .upsert({ category, note: note.trim() }, { onConflict: "category" });
@@ -381,7 +389,7 @@ export async function createReviewInline(_prev: { error?: string; ok?: string } 
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { data, error } = await w.supabase.from("video_reviews").insert(parsed.data).select("id").single();
   if (error || !data) return { error: `Gagal simpan: ${error?.message}` };
   if (parsed.links.length) {
@@ -399,7 +407,7 @@ export async function updateReviewInline(id: number, _prev: { error?: string; ok
   const parsed = parseForm(fd);
   if ("error" in parsed) return { error: parsed.error };
   const w = await editor();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { error } = await w.supabase.from("video_reviews").update(parsed.data).eq("id", id);
   if (error) return { error: `Gagal update: ${error.message}` };
   const { error: dErr } = await w.supabase.from("video_review_links").delete().eq("review_id", id);

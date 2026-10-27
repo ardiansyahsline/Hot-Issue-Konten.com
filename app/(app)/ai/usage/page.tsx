@@ -9,6 +9,7 @@ import { lockUsage, unlockUsage } from "./actions";
 import { heroName, providerOf, SMART_HERO } from "@/lib/aiModels";
 import { isBuiltinHero } from "@/lib/aiPersona";
 import { AiTable } from "@/components/ai/Markdown";
+import { requireTab } from "@/lib/tabs.server";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Usage AI · CS Tracker" };
@@ -34,6 +35,7 @@ const ago = (iso: string) => {
  * Halaman Usage AI — khusus pemilik (Alif). Hanya angka pemakaian; isi percakapan tetap privat.
  */
 export default async function UsagePage({ searchParams }: { searchParams: Promise<{ d?: string; salah?: string }> }) {
+  await requireTab("ai");
   const { user } = await getCurrentUser();
   if (!isAiOwner(user.email)) notFound();
   // 🔒 PIN terpisah untuk membuka halaman Usage

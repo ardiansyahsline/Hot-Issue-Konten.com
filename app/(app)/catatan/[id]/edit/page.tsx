@@ -3,8 +3,10 @@ import { getCurrentUser, getProfile } from "@/lib/auth";
 import type { SuggestionRow } from "@/lib/suggestions";
 import SgForm from "@/components/SgForm";
 import { updateSuggestion } from "../../actions";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function EditCatatan({ params }: { params: Promise<{ id: string }> }) {
+  await requireTab("catatan");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);

@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { notifyNewIssue } from "@/lib/notify.server";
 import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
 import { canWriteIssues } from "@/lib/roles";
 import { CATEGORIES, PRIORITIES, STATUSES } from "@/lib/constants";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
@@ -56,10 +57,16 @@ function parseContacts(formData: FormData): ContactInput[] {
 
 const NO_ACCESS = "Role kamu hanya bisa melihat (read-only). Minta admin ubah role kalau perlu input.";
 
-/** Context Supabase kalau user boleh input/edit Hot Issues, null kalau tidak */
+/** Context Supabase kalau user boleh input/edit Hot Issues (tab Dashboard terbuka + role penulis), null kalau tidak */
 async function writer() {
-  const [ctx, profile] = await Promise.all([getCurrentUser(), getProfile()]);
-  return canWriteIssues(profile?.role) ? { ...ctx, isAdmin: profile?.role === "admin" } : null;
+  const [ctx, profile, tab] = await Promise.all([getCurrentUser(), getProfile(), assertTab("dashboard")]);
+  return tab.ok && canWriteIssues(profile?.role) ? { ...ctx, isAdmin: profile?.role === "admin" } : null;
+}
+
+/** Alasan ditolak: tab ditutup admin, atau role hanya bisa melihat */
+async function noAccess() {
+  const tab = await assertTab("dashboard");
+  return tab.ok ? NO_ACCESS : tab.error;
 }
 
 export async function createIssue(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -68,7 +75,7 @@ export async function createIssue(_prev: FormState, formData: FormData): Promise
   const contacts = parseContacts(formData);
 
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { supabase } = w;
   // selain admin: PIC otomatis = yang input (dropdown PIC hanya untuk admin)
   const payload = w.isAdmin ? parsed.data : { ...parsed.data, pic_id: w.user.id };
@@ -101,7 +108,7 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
   const contacts = parseContacts(formData);
 
   const w = await writer();
-  if (!w) return { error: NO_ACCESS };
+  if (!w) return { error: await noAccess() };
   const { supabase } = w;
   // selain admin: PIC tidak diubah lewat form (pakai tombol "Saya yang pegang")
   const { pic_id, ...rest } = parsed.data;
@@ -171,6 +178,7 @@ export async function takeIssue(id: number) {
 
 /** Komentar / update issue — semua role boleh (termasuk User). `parent_id` = balasan. */
 export async function addNote(id: number, formData: FormData) {
+  if (!(await assertTab("dashboard")).ok) return;
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const files = parseAttachments(formData, user.id);
   const body = String(formData.get("body") ?? "").trim().slice(0, 5000) || (files.length ? "📎 Lampiran bukti" : "");
@@ -190,6 +198,7 @@ export async function addNote(id: number, formData: FormData) {
 }
 
 export async function deleteNote(issueId: number, noteId: number) {
+  if (!(await assertTab("dashboard")).ok) return;
   const { supabase } = await getCurrentUser();
   const { data: replies } = await supabase.from("issue_notes").select("id").eq("parent_id", noteId);
   const paths = await attachmentPaths(supabase, [{ column: "issue_note_id", ids: [noteId, ...(replies ?? []).map((r) => r.id as number)] }]);

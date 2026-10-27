@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 import { newsImages, personPhotos, searchPhotos, trackUnsplash } from "@/lib/photos.server";
 
@@ -14,6 +15,8 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: NextRequest) {
   await getCurrentUser();
+  const gate = await assertTab("ai");
+  if (!gate.ok) return gate.res;
   const sp = req.nextUrl.searchParams;
   const track = sp.get("track");
   if (track) return NextResponse.json({ ok: await trackUnsplash(track) });

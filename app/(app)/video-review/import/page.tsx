@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { requireWriter } from "@/lib/auth";
 import VrImport from "@/components/VrImport";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function ImportPage() {
+  await requireTab("video_review");
   await requireWriter("reviews", "/video-review");
   return (
     <div className="space-y-4">

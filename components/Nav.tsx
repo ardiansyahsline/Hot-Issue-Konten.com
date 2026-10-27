@@ -4,18 +4,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { canWriteIssues } from "@/lib/roles";
+import type { TabId } from "@/lib/tabs";
 import MusicButton from "./MusicButton";
 import { createClient } from "@/lib/supabase/client";
 
 /**
  * Jumlah Video Review berstatus "menunggu" (belum dicek tim video review).
  * Realtime: berubah langsung saat review baru masuk / status diubah; cadangan: cek ulang tiap 60 detik & tiap pindah halaman.
+ * `enabled` false (tab Video Review ditutup admin) -> tidak query & tidak berlangganan realtime sama sekali.
  */
-function usePendingVr(initial: number, path: string) {
+function usePendingVr(initial: number, path: string, enabled: boolean) {
   const [n, setN] = useState(initial);
   const sb = useRef<ReturnType<typeof createClient> | null>(null);
   const refresh = useRef<() => void>(() => {});
   useEffect(() => {
+    if (!enabled) return;
     const supabase = (sb.current ??= createClient());
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
@@ -39,25 +42,40 @@ function usePendingVr(initial: number, path: string) {
       clearInterval(iv);
       document.removeEventListener("visibilitychange", onVis);
       supabase.removeChannel(ch);
+      refresh.current = () => {};
     };
-  }, []);
+  }, [enabled]);
   useEffect(() => {
     refresh.current();
   }, [path]);
-  return n;
+  return enabled ? n : 0;
 }
 
-export default function Nav({ role, pendingVr = 0, studio = false }: { role: string | null; pendingVr?: number; studio?: boolean }) {
+export default function Nav({
+  role,
+  pendingVr = 0,
+  studio = false,
+  closed = [],
+}: {
+  role: string | null;
+  pendingVr?: number;
+  studio?: boolean;
+  /** tab yang ditutup admin untuk user ini (dihitung di server oleh layout) -> menunya disembunyikan */
+  closed?: TabId[];
+}) {
   const path = usePathname();
-  const vrPending = usePendingVr(pendingVr, path);
+  const open = (t: TabId) => !closed.includes(t);
+  const vrPending = usePendingVr(pendingVr, path, open("video_review"));
+  const music = open("musik");
   // icon + short = tampilan HP (semua menu kelihatan sebagai ikon + label kecil, tanpa geser)
   const links = [
-    { href: "/", label: "Dashboard", icon: "🏠", short: "Home", show: true },
-    { href: "/issues/new", label: "+ Issue Baru", icon: "➕", short: "Issue", show: canWriteIssues(role) },
-    { href: "/video-review", label: "Video Review", icon: "🎬", short: "Video", show: true },
-    { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: true },
-    { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: true },
-    { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: true },
+    { href: "/", label: "Dashboard", icon: "🏠", short: "Home", show: open("dashboard") },
+    // + Issue Baru butuh tab Dashboard DAN role penulis
+    { href: "/issues/new", label: "+ Issue Baru", icon: "➕", short: "Issue", show: open("dashboard") && canWriteIssues(role) },
+    { href: "/video-review", label: "Video Review", icon: "🎬", short: "Video", show: open("video_review") },
+    { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: open("catatan") },
+    { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: open("chat") },
+    { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: open("ai") },
     // Studio: admin, atau user yang diberi akses admin (dihitung di server oleh layout)
     { href: "/remotion", label: "🎬 Studio", icon: "🎬", short: "Studio", show: role === "admin" || studio },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
@@ -73,6 +91,8 @@ export default function Nav({ role, pendingVr = 0, studio = false }: { role: str
     return () => mq.removeEventListener("change", on);
   }, []);
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
+  // semua menu ditutup & tanpa tombol musik -> tidak perlu bar menu kosong
+  if (!links.length && !music) return null;
   const badge = (cls: string) =>
     vrPending > 0 && (
       <span
@@ -102,9 +122,11 @@ export default function Nav({ role, pendingVr = 0, studio = false }: { role: str
           {l.href === "/video-review" && badge("right-0.5 top-0")}
         </Link>
       ))}
-      <span className="flex min-w-0 items-center justify-center [&>button]:px-1 [&>button]:text-[16px]">
-        {narrow === true && <MusicButton />}
-      </span>
+      {music && (
+        <span className="flex min-w-0 items-center justify-center [&>button]:px-1 [&>button]:text-[16px]">
+          {narrow === true && <MusicButton />}
+        </span>
+      )}
     </nav>
     <nav className="hidden max-w-full gap-1 overflow-x-auto rounded-full sm:flex border border-zinc-800/80 bg-zinc-900 p-1 [scrollbar-width:none]" style={{ boxShadow: "var(--shadow-sm)" }}>
       {links.map((l) => {
@@ -123,7 +145,7 @@ export default function Nav({ role, pendingVr = 0, studio = false }: { role: str
           </Link>
         );
       })}
-      {narrow === false && <MusicButton />}
+      {music && narrow === false && <MusicButton />}
     </nav>
     </>
   );

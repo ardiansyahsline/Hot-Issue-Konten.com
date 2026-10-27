@@ -20,6 +20,7 @@ import HeatMeter from "@/components/reports/HeatMeter";
 import ReportForm from "@/components/reports/ReportForm";
 import { addReport, deleteReport } from "../reportActions";
 import type { IssueContact } from "@/lib/types";
+import { requireTab } from "@/lib/tabs.server";
 
 type Note = CommentRow & { files: AttachmentRow[] | null };
 type Report = { id: number; note: string; created_at: string; created_by: string | null; files: AttachmentRow[] | null };
@@ -49,6 +50,7 @@ export default async function IssueDetail({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ lapor?: string; lapor_error?: string }>;
 }) {
+  await requireTab("dashboard");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const sp = await searchParams;

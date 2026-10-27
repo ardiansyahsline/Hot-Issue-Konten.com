@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 import { aiConfig, healthMap, healthRank, isDeadModel, listCatalog, loadHealth } from "@/lib/ai.server";
 import { webConfig } from "@/lib/aiWeb.server";
@@ -10,6 +11,8 @@ export const maxDuration = 60;
 /** Daftar model untuk pemilih hero. status: 0 = terbukti jalan, 1 = belum dicoba, 2 = baru gagal */
 export async function GET() {
   const { supabase } = await getCurrentUser();
+  const gate = await assertTab("ai");
+  if (!gate.ok) return gate.res;
   const cfg = aiConfig();
   if (!cfg.ok) return NextResponse.json({ models: [], ready: false });
   const [catalog, health] = await Promise.all([listCatalog(), loadHealth(supabase)]);

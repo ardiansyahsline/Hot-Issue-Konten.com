@@ -1,5 +1,6 @@
 import { isAiOwner } from "@/lib/aiOwner";
 import { NextResponse } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 import { aiConfig, aiHeaders, listCatalog, markHealth } from "@/lib/ai.server";
 import { heroName, isChatModel, sameHeroVariants, setVisionCatalog } from "@/lib/aiModels";
@@ -16,6 +17,8 @@ let last: { at: number; results: Result[] } | null = null;
  */
 export async function POST() {
   const { supabase, user } = await getCurrentUser();
+  const gate = await assertTab("ai");
+  if (!gate.ok) return gate.res;
   if (!isAiOwner(user.email)) return NextResponse.json({ error: "Khusus pemilik AI." }, { status: 403 });
   const cfg = aiConfig();
   if (!cfg.ok) return NextResponse.json({ error: "Server AI belum disetel." }, { status: 503 });

@@ -13,6 +13,7 @@ import { agentRangkuman, topAgentIssues, type AgentIssueRow } from "@/lib/agentT
 import { CONTACT_TYPES, displayContact } from "@/lib/contacts";
 import { DashTabProvider, TabOnly } from "@/components/DashTab";
 import LoadMoreList, { RankBadge } from "@/components/LoadMoreList";
+import { requireTab } from "@/lib/tabs.server";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 const HOT_OR = `is_hot.eq.true,max_contact_reports_30d.gte.${HOT_THRESHOLD},report_count.gte.${REPORT_HOT_THRESHOLD}`;
@@ -23,6 +24,10 @@ type Counts = { open: number; in_progress: number; urgent: number; hot: number; 
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export default async function Dashboard({ searchParams }: { searchParams: SP }) {
+  // tab ditutup admin -> pindah ke tab lain yang boleh (tanpa pesan: beranda juga tujuan sesudah login)
+  const access = await requireTab("dashboard", { quiet: true });
+  // tab Video Review ditutup -> bagian Top / Ranking Video Review tidak ditampilkan
+  const vrOn = !access.blocked.has("video_review");
   const sp = await searchParams;
   const { supabase, user } = await getCurrentUser();
 
@@ -87,12 +92,14 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
       .order("issue_count_30d", { ascending: false })
       .order("last_seen", { ascending: false })
       .limit(10),
-    supabase
-      .from("video_reviews")
-      .select("category, status, resolution, report_date")
-      .gte("report_date", prevFrom)
-      .lte("report_date", today)
-      .limit(5000),
+    vrOn
+      ? supabase
+          .from("video_reviews")
+          .select("category, status, resolution, report_date")
+          .gte("report_date", prevFrom)
+          .lte("report_date", today)
+          .limit(5000)
+      : Promise.resolve({ data: [] }),
     supabase
       .from("issue_list")
       .select(AGENT_COLS)
@@ -203,8 +210,9 @@ export default async function Dashboard({ searchParams }: { searchParams: SP }) 
         <p className="page-sub">Pantau issue clipper yang lagi ramai, siapa yang pegang, dan kontak yang dilaporkan berulang.</p>
       </div>
 
-      <DashTabProvider>
+      <DashTabProvider only={vrOn ? undefined : "agent"}>
       <TopTabs
+        vrOff={!vrOn}
         vr={vrRows}
         agent={agentRows}
         range={range}

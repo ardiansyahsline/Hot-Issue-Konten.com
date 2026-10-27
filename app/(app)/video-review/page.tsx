@@ -20,12 +20,14 @@ import VrQuickForm from "@/components/VrQuickForm";
 import VrTable from "@/components/VrTable";
 import { ReportNav, VrCompare, VrVisual } from "@/components/VrReport";
 import { todayWib } from "@/lib/utils";
+import { requireTab } from "@/lib/tabs.server";
 
 type SP = Promise<Record<string, string | undefined>>;
 const NONE = "__none";
 const isDate = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 export default async function VideoReviewPage({ searchParams }: { searchParams: SP }) {
+  await requireTab("video_review");
   const sp = await searchParams;
   const [{ supabase }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const canWrite = canWriteReviews(profile?.role);

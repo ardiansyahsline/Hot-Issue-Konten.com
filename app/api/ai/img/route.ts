@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 import { safeUrl } from "@/lib/safeUrl.server";
 
@@ -15,6 +16,8 @@ const MAX = 8 * 1024 * 1024;
 
 export async function GET(req: NextRequest) {
   await getCurrentUser();
+  const gate = await assertTab("ai");
+  if (!gate.ok) return gate.res;
   let url = await safeUrl(req.nextUrl.searchParams.get("u") ?? "");
   if (!url) return NextResponse.json({ error: "alamat gambar tidak diizinkan" }, { status: 400 });
   // ikuti pengalihan (maks 3) sambil cek ulang alamatnya

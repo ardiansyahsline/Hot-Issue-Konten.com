@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import Nav from "@/components/Nav";
 import Logo from "@/components/Logo";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { canUseStudio } from "@/lib/studio/access.server";
+import { getTabAccess } from "@/lib/tabs.server";
 import { signOut } from "@/app/login/actions";
 import { ROLES, isRole } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -13,23 +15,30 @@ import Presence from "@/components/Presence";
 import NotifPrompt from "@/components/NotifPrompt";
 import UpdateNotice from "@/components/UpdateNotice";
 import SoundNotifier from "@/components/SoundNotifier";
+import TabNotice from "@/components/TabNotice";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [{ user }, profile, theme, pendingVr, studio] = await Promise.all([
+  const [{ user }, profile, theme, access, pendingVr, studio] = await Promise.all([
     getCurrentUser(),
     getProfile(),
     getTheme(),
-    // jumlah Video Review yang masih "menunggu" (bubble angka di tab Video Review)
-    getCurrentUser()
-      .then(({ supabase }) => supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu"))
-      .then((r) => r.count ?? 0, () => 0),
+    // tab yang ditutup admin untuk user ini (tabel belum ada -> tidak ada yang ditutup)
+    getTabAccess(),
+    // jumlah Video Review yang masih "menunggu" (bubble angka di tab Video Review); tab ditutup -> tidak dihitung
+    (async () => {
+      const [{ supabase }, a] = await Promise.all([getCurrentUser(), getTabAccess()]);
+      if (a.blocked.has("video_review")) return 0;
+      const r = await supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu");
+      return r.count ?? 0;
+    })().catch(() => 0),
     // menu Studio: admin atau user yang diberi akses (gagal cek -> disembunyikan)
     canUseStudio().catch(() => false),
   ]);
   const name = profile?.full_name || user.email;
   const role = profile && isRole(profile.role) ? ROLES[profile.role] : null;
+  const closed = [...access.blocked];
 
   return (
     <div className="min-h-screen">
@@ -45,7 +54,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               </span>
             </Link>
             <div className="order-3 w-full sm:order-none sm:w-auto">
-              <Nav role={profile?.role ?? null} pendingVr={pendingVr} studio={studio} />
+              <Nav role={profile?.role ?? null} pendingVr={pendingVr} studio={studio} closed={closed} />
             </div>
           </div>
           <div className="order-2 flex items-center gap-1.5 sm:order-none sm:gap-2">
@@ -69,12 +78,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-8">{children}</main>
-      <ChatWidget meId={user.id} />
+      <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-8">
+        <Suspense fallback={null}>
+          <TabNotice />
+        </Suspense>
+        {children}
+      </main>
+      {/* chat melayang hanya kalau tab Chat terbuka (tidak berlangganan pesan sama sekali kalau ditutup) */}
+      {!access.blocked.has("chat") && <ChatWidget meId={user.id} />}
       <Presence />
       <NotifPrompt />
       <UpdateNotice />
-      <SoundNotifier meId={user.id} />
+      <SoundNotifier meId={user.id} closed={closed} />
     </div>
   );
 }

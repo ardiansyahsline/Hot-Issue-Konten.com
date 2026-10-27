@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
 import { attachmentPaths, parseAttachments, removeFiles, saveAttachments } from "@/lib/attachments.server";
 import { notifyNewReport } from "@/lib/notify.server";
@@ -46,6 +47,8 @@ async function originFromRequest() {
  * Kontak yang sudah tercatat di topik ini dilewati (tetap dihitung sebagai laporan).
  */
 async function saveReport(issueId: number, formData: FormData, noteField = "note") {
+  const tab = await assertTab("dashboard");
+  if (!tab.ok) return { error: tab.error } as const;
   const { supabase, user } = await getCurrentUser();
   const contacts = parseContacts(formData);
   const files = parseAttachments(formData, user.id);
@@ -110,6 +113,7 @@ export async function addAsReport(issueId: number, formData: FormData) {
 }
 
 export async function deleteReport(issueId: number, reportId: number) {
+  if (!(await assertTab("dashboard")).ok) return;
   const { supabase } = await getCurrentUser();
   const paths = await attachmentPaths(supabase, [{ column: "issue_report_id", ids: [reportId] }]);
   const { data } = await supabase.from("issue_reports").delete().eq("id", reportId).select("id");
@@ -134,6 +138,7 @@ const words = (s: string) =>
 export async function findSimilarIssues(title: string): Promise<SimilarIssue[]> {
   const q = [...new Set(words(String(title ?? "").slice(0, 200)))];
   if (q.length === 0) return [];
+  if (!(await assertTab("dashboard")).ok) return [];
   const { supabase } = await getCurrentUser();
   const { data } = await supabase
     .from("issue_list")

@@ -3,6 +3,7 @@
 import { after } from "next/server";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
 import { notifyChat, notifySelfTest } from "@/lib/notify.server";
 import { normalizeSoundPrefs, type SoundPrefs } from "@/lib/sounds";
 
@@ -16,6 +17,7 @@ async function originFromRequest() {
 /** Dipanggil browser setelah pesan terkirim; pengiriman notifikasi berjalan di belakang (tidak bikin chat lambat) */
 export async function notifyChatMessage(messageId: number) {
   if (!Number.isInteger(messageId)) return;
+  if (!(await assertTab("chat")).ok) return;
   const { supabase, user } = await getCurrentUser();
   // pastikan pesan ini memang milik user yang login
   const { data } = await supabase.from("chat_messages").select("id").eq("id", messageId).eq("sender_id", user.id).maybeSingle();

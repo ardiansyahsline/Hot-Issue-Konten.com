@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -62,6 +63,8 @@ function rankSongs(items: Item[], q: string): Item[] {
 
 export async function GET(req: Request) {
   await getCurrentUser();
+  const gate = await assertTab("musik");
+  if (!gate.ok) return gate.res;
   const sp = new URL(req.url).searchParams;
   const q = (sp.get("q") ?? "").trim().slice(0, 120);
   const key = (process.env.YOUTUBE_API_KEY ?? "").trim();
