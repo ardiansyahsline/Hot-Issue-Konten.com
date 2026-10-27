@@ -29,6 +29,8 @@ class Runtime:
     asr: Any = None
     render_ok: bool = False
     status: dict = field(default_factory=lambda: {"status": "siap", "job": None})
+    # catatan kecepatan mesin suara (studio_worker/speed.py): batas waktu per baris, jumlah versi & perkiraan waktu selesai
+    speed: Any = None
 
 
 def owner_can_use_studio(supa, owner: str | None) -> bool:
