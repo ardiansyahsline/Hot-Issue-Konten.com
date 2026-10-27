@@ -225,9 +225,9 @@ def poll_wait(now: float, last_active: float, poll_sec: float) -> float:
 def models_mod():
     """studio_worker/models.py (unduh & cek model lokal); belum ada di cabang lama → None (semua dianggap siap)"""
     try:
-        from studio_worker import models  # type: ignore[attr-defined]
+        import importlib
 
-        return models
+        return importlib.import_module("studio_worker.models")  # lewat sys.modules (tes bisa memasang models palsu)
     except ImportError:
         return None
 
@@ -291,23 +291,31 @@ def set_absent(rt: Runtime, names: list[str], auto: bool) -> None:
     tail = " — diunduh otomatis di latar" if auto else " — jalankan siapkan-model (lihat README)"
     for n in names:
         why = ABSENT.get(n, f"model {n} belum diunduh") + tail
+        # tanda "belum diunduh" (bukan "rusak"): faster-whisper, DeepFilterNet & UTMOS tetap mengecek file lagi tiap 60 dtk / sesudah
+        # unduhan selesai, jadi model yang diunduh lewat SIAPKAN-MODEL.bat saat worker hidup juga langsung dipakai
         try:
+            now = time.monotonic()
             if n in ("chatterbox", "pocket") and rt.engines is not None and n in CFG.engine_order:
                 rt.engines.mark_down(n, why)
             elif n == "whisper" and rt.asr is not None and rt.asr.model is None:
                 rt.asr.error = why
+                if hasattr(rt.asr, "_missing_at"):
+                    rt.asr._missing_at = now
             elif n == "deepfilter":
                 from studio_worker import clean
 
                 if getattr(clean, "_DF", None) is None:
                     clean._DF_ERR = why
+                    miss = getattr(clean, "_DF_MISSING", None)
+                    if isinstance(miss, dict):
+                        miss.update(on=True, at=now)
             elif n == "utmos":
                 from studio_worker import natural
 
-                off = getattr(natural, "disable", None) or getattr(natural, "_disable", None)
+                off = getattr(natural, "_not_downloaded", None) or getattr(natural, "_disable", None)
                 if callable(off):
                     with getattr(natural, "_lock", threading.RLock()):
-                        off(why)
+                        off() if off is getattr(natural, "_not_downloaded", None) else off(why)
         except Exception as e:
             log.debug("tanda %s belum siap gagal: %s", n, e)
 
@@ -320,18 +328,24 @@ def set_ready(rt: Runtime, names: list[str]) -> None:
                 with rt.engines.lock:
                     rt.engines._down.pop(n, None)
             elif n == "whisper" and rt.asr is not None and rt.asr.model is None:
+                fn = getattr(rt.asr, "refresh", None)
+                if callable(fn):
+                    fn()
                 rt.asr.error = None
             elif n == "deepfilter":
                 from studio_worker import clean
 
                 if getattr(clean, "_DF", None) is None:
                     clean._DF_ERR = None
+                    miss = getattr(clean, "_DF_MISSING", None)
+                    if isinstance(miss, dict):
+                        miss.update(on=False)
             elif n == "utmos":
                 from studio_worker import natural
 
-                on = getattr(natural, "enable", None) or getattr(natural, "reset_off", None)
-                if callable(on):
-                    on()
+                fn = getattr(natural, "refresh", None)
+                if callable(fn):
+                    fn()
                 elif isinstance(getattr(natural, "_mos", None), dict):
                     with natural._lock:
                         natural._mos["off"] = None
@@ -372,14 +386,19 @@ def warm_engine(rt: Runtime, skip: set[str]) -> str | None:
         if sp is not None:
             d = info if isinstance(info, dict) else {}
             gen = _num(d, "wall_sec", "gen_sec", "wall")
+            audio0, ratio = _num(d, "audio_sec", "audio"), _num(d, "ratio")
+            if gen is None and audio0 and ratio:  # mesin cepat: ratio = detik proses per detik suara (n versi sekaligus)
+                gen = audio0 * ratio
             load = _num(d, "load_sec", "load")
+            if load is None and not was and _num(d, "sec"):  # waktu pemanasan sendiri bukan waktu muat model
+                load = max(0.0, took - float(d["sec"]))
             if load is None and not was:
                 load = max(0.0, took - (gen or 0.0))
             if load:
                 sp.record_load(name, load)
             audio = _num(d, "audio_sec", "audio")
             if audio and gen:
-                sp.record(name, audio, gen, int(d.get("takes") or 1))
+                sp.record(name, audio, gen, int(d.get("takes") or d.get("n") or 1))
         log.info("Mesin %s siap & dipanaskan (%.0f dtk) — job berikutnya tidak perlu menunggu muat model.", name, took)
         return name
     return None
@@ -398,7 +417,7 @@ def warm_utmos(rt: Runtime) -> None:
         from studio_worker import natural
 
         natural.configure(True, CFG.models / "torch-hub")
-        fn = getattr(natural, "preload", None) or getattr(natural, "warmup", None)
+        fn = getattr(natural, "preload", None) or getattr(natural, "warm", None) or getattr(natural, "warmup", None)
         if callable(fn):
             fn()
         else:

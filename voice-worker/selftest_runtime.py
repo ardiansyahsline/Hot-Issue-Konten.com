@@ -690,7 +690,8 @@ def t_isi_detak_jantung():
     info = hb.info()
     assert info["warm"] is True and info["speed"]["engines"]["chatterbox"]["ratio"]["3"] == 2.0, info["speed"]
     assert info["speed"]["engines"]["chatterbox"]["load"] == 21.0 and info["speed"]["chars_per_sec"] == 14.5
-    assert info["models"] is None, "tanpa models.py → None (website menganggap tidak diketahui)"
+    # models.py asli: status per model (cek file saja); cabang lama tanpa models.py → None (website menganggap tidak diketahui)
+    assert info["models"] is None or (isinstance(info["models"], dict) and "chatterbox" in info["models"]), info["models"]
     assert info["status"] == "siap" and info["engine"] == "chatterbox"
     sys.modules["studio_worker.models"] = FakeModels(["utmos"])
     try:

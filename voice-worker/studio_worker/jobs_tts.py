@@ -298,10 +298,14 @@ def take_budget(sentence: str) -> float:
 def plan_takes(name: str, sentence: str, want: int, budget: float, speed, batch: bool) -> int:
     """
     jumlah versi terbesar ≤ `want` yang perkiraan waktunya (speed.estimate; batch = sekaligus, selain itu n × 1 versi) masih muat
-    di `budget`; minimal 1. Tanpa catatan kecepatan → `want` apa adanya. Dikurangi → alasannya dicatat di log.
+    di `budget`; minimal 1. Kecepatan mesin ini belum pernah DIUKUR di laptop ini (hanya perkiraan bawaan) → `want` apa adanya (kualitas
+    tidak dikurangi gara-gara tebakan). Dikurangi → alasannya dicatat di log.
     """
     want = max(1, int(want))
     if speed is None or want <= 1:
+        return want
+    measured = getattr(speed, "measured", None)
+    if callable(measured) and not measured(name):
         return want
     chars = len(sentence)
 
@@ -942,6 +946,8 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
     speed = _speed(rt)
     # make_line versi baru (mesin cepat) menerima speed= untuk batas waktu & jumlah versi; versi lama tidak → kecepatan dicatat di sini
     line_kw = {"speed": speed} if speed is not None and _accepts(make_line, "speed") else {}
+    if line_kw and _accepts(make_line, "cfg"):  # batas waktu per baris, beam cek ucapan & TTS_BATCH dari .env
+        line_kw["cfg"] = rt.cfg
     takes = int(st.get("takes") or 1)
 
     # perkiraan awal: baris yang belum ada di cache × kecepatan mesin (+ waktu muat mesin kalau belum dimuat)
