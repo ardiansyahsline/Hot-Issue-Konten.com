@@ -46,6 +46,8 @@ import { teaserVoAt } from "@/lib/studio/teaserLock";
 import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, legacySayKey, normLexicon, sameSpeech, voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
 import { heardFromResult } from "@/lib/studio/heard";
 import { isTryJob } from "@/lib/studio/spellTry";
+import { estimateQueued, etaText, queuedText } from "@/lib/studio/eta";
+import { EtaChip, ModelsHint, WarmBadge, warmOf } from "./JobEta";
 import {
   bankSettings,
   CFG_MAX,
@@ -714,7 +716,10 @@ export default function VoPanel({
 
   const gpu = status?.worker.gpu;
   const queue = status?.worker.queue ?? 0;
+  const warm = workerOn ? warmOf(status) : undefined;
   const jobPct = run.s === "job" ? Math.round((job?.progress ?? 0) * 100) : 0;
+  // job masih antri: perkiraan lama pembuatan dari catatan kecepatan laptop (worker lama tanpa info.speed → teks biasa)
+  const queuedMsg = run.s === "job" && job?.id === run.id && job.status === "antri" ? queuedText(estimateQueued(job.lines, job.settings, status?.worker)) : null;
   const ttsPct = run.s === "tts" ? Math.round((run.done / Math.max(1, run.total)) * 100) : 0;
 
   return (
@@ -726,18 +731,34 @@ export default function VoPanel({
         ) : null}
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-zinc-400">
-        <span className={`h-2 w-2 flex-none rounded-full ${workerOn ? "bg-emerald-400" : "bg-zinc-500"}`} />
-        <span>
-          {status === null
-            ? "Cek mesin suara laptop…"
-            : workerOn
-              ? `Mesin suara laptop: nyala${gpu ? ` (GPU ${gpu})` : ""}${queue ? ` · ${queue} antrian` : ""}`
-              : status.worker.online
-                ? "Mesin suara laptop: belum bisa dipakai — pakai cadangan"
-                : "Mesin suara laptop: mati — pakai cadangan"}
-        </span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400" aria-live="polite" data-vo-laptop>
+        {warm !== undefined ? (
+          <>
+            <WarmBadge warm={warm} />
+            {(gpu || queue > 0) && (
+              <span>
+                {gpu ? `GPU ${gpu}` : ""}
+                {gpu && queue ? " · " : ""}
+                {queue ? `${queue} antrian` : ""}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className={`h-2 w-2 flex-none rounded-full ${workerOn ? "bg-emerald-400" : "bg-zinc-500"}`} />
+            <span>
+              {status === null
+                ? "Cek mesin suara laptop…"
+                : workerOn
+                  ? `Mesin suara laptop: nyala${gpu ? ` (GPU ${gpu})` : ""}${queue ? ` · ${queue} antrian` : ""}`
+                  : status.worker.online
+                    ? "Mesin suara laptop: belum bisa dipakai — pakai cadangan"
+                    : "Mesin suara laptop: mati — pakai cadangan"}
+            </span>
+          </>
+        )}
       </div>
+      {mode === "bank" && <ModelsHint status={status} />}
 
       <div className="space-y-2">
         {opt(
@@ -828,7 +849,7 @@ export default function VoPanel({
               💡 Masih kedengeran datar? Rekam ulang suara referensi 10–20 dtk dengan gaya yang sama dengan videonya — tips di tab <b>🎙️ Bank suara</b>.
             </p>
             <p className="text-[10.5px] leading-relaxed text-zinc-500" data-vo-takes-tip>
-              ⏱️ Laptop membuat 3 versi tiap kalimat lalu memilih yang paling jelas &amp; natural — bisa ±1,5× lebih lama dari dulu.
+              ⏱️ Laptop membuat beberapa versi tiap kalimat lalu memilih yang paling jelas &amp; natural — perkiraan waktu selesainya tampil selama suara dibuat.
             </p>
             {!workerOn && status !== null && <p className="text-[11px] text-amber-400">{status.worker.online ? "Mesin suara laptop belum bisa dipakai" : "Laptop mati"} — sementara dibikin pakai suara cadangan.</p>}
           </div>,
@@ -936,14 +957,17 @@ export default function VoPanel({
             <div className={`h-full rounded-full bg-orange-500 transition-[width] ${run.s === "start" || (run.s === "job" && !jobPct) ? "w-1/12 animate-pulse" : ""}`} style={run.s === "tts" ? { width: `${ttsPct}%` } : run.s === "job" && jobPct ? { width: `${jobPct}%` } : undefined} />
           </div>
           <div className="flex items-center justify-between gap-2 text-xs text-zinc-400">
-            <span className="min-w-0">
-              {run.s === "start"
-                ? "Menyiapkan antrian…"
-                : run.s === "tts"
-                  ? `Bikin suara ${run.done}/${run.total}…`
-                  : job?.status === "proses"
-                    ? `${job.message || "Laptop lagi bikin suara…"} ${jobPct ? `${jobPct}%` : ""}`
-                    : "Menunggu giliran di laptop…"}
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-vo-progress>
+              <span className="min-w-0">
+                {run.s === "start"
+                  ? "Menyiapkan antrian…"
+                  : run.s === "tts"
+                    ? `Bikin suara ${run.done}/${run.total}…`
+                    : job?.status === "proses"
+                      ? `${etaText(job.message, "Laptop lagi bikin suara…")} ${jobPct ? `${jobPct}%` : ""}`
+                      : (queuedMsg ?? "Menunggu giliran di laptop…")}
+              </span>
+              {run.s === "job" && job?.id === run.id && <EtaChip job={job} />}
             </span>
             {run.s !== "start" && (
               <button type="button" className="flex-none font-semibold text-red-400 hover:text-red-300" onClick={cancel}>
