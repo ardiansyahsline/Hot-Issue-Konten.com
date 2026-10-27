@@ -7,7 +7,7 @@ Hanya 2 nama file ini yang dikenali (nama lain = 404):
 
 | File | Isi | Asalnya |
 |---|---|---|
-| `teaser-cs-tracker-tanpa-vo.mp4` | Teaser **tanpa suara VO** (musik + SFX + teks) | Render laptop/CLI komposisi `TeaserCsTracker` dengan `--props='{"audio":"novo"}'` (contoh lengkap di `remotion/Root.tsx`). Bisa juga dari Studio Pro → Download → **Tanpa VO**. |
+| `teaser-cs-tracker-tanpa-vo.mp4` | Teaser **tanpa suara VO** (SFX + teks, tanpa musik latar) | Render laptop/CLI komposisi `TeaserCsTracker` dengan `--props='{"audio":"novo"}'` (contoh lengkap di `remotion/Root.tsx`). Bisa juga dari Studio Pro → Download → **Tanpa VO**. |
 | `teaser-cs-tracker.mp4` | Teaser **dengan suara VO** (suara Alif) | **Harus dari Studio Pro** (langkah di bawah), lalu taruh di folder ini. |
 
 ## Cara bikin versi dengan VO
@@ -32,4 +32,4 @@ Hanya 2 nama file ini yang dikenali (nama lain = 404):
 - Ukuran: usahakan tiap file < 50 MB (GitHub menolak > 100 MB). Kalau kebesaran, kecilkan dulu, misalnya:
   `ffmpeg -i in.mp4 -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 192k -movflags +faststart out.mp4`
 - Selama file belum ada, menu 🧩 Template menyembunyikan tombol download file itu. Tombol **Bikin file video** di menu itu
-  tetap jalan (versi tanpa VO, dengan musik + SFX).
+  tetap jalan (versi tanpa VO: SFX + teks, tanpa musik latar).

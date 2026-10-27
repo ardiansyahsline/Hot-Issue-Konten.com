@@ -73,7 +73,7 @@ export const COMPOSITIONS: Comp[] = [
     studio: true,
     renderName: "teaser-cs-tracker-tanpa-vo",
     note: "Hasil render di sini = versi tanpa VO (teaser-cs-tracker-tanpa-vo). Versi dengan VO: Studio Pro > Buka Teaser > Bikin suara VO > Download.",
-    guide: { title: "Suara VO", text: "Preview & render di menu ini tanpa suara VO (musik + SFX + teks). Versi dengan VO: Studio Pro > Buka Teaser > Bikin suara VO > Download." },
+    guide: { title: "Suara VO", text: "Preview & render di menu ini tanpa suara VO (SFX + teks, tanpa musik latar). Versi dengan VO: Studio Pro > Buka Teaser > Bikin suara VO > Download." },
     // tanpa isian: toggle "Pakai VO" lama dihapus (tidak mengubah hasil render — timeline bawaan tidak punya suara VO)
     fields: [],
   },

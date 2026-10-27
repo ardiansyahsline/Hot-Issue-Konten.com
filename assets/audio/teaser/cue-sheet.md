@@ -1,11 +1,13 @@
 # Cue Sheet Audio - Teaser CS Tracker (9:16, 30 fps, ±60 detik)
 
+> **Catatan 27 Okt 2026:** teaser sekarang **tanpa musik / suara latar** (termasuk `ambience-gelap` & trailer bed) atas permintaan Alif — musik ditambah sendiri. Kolom "Musik" di bawah = level kalau musik ditambah.
+
 ID SFX merujuk ke `assets/audio/sfx/sfx.json`. Waktu = target; tempel ke ketukan musik terdekat.
 Level awal disarankan: musik -18 LUFS (turun ±8 dB saat VO), SFX aksen -16 s/d -12 LUFS, VO -16 LUFS.
 
 | Waktu | Adegan | Visual (ringkas) | SFX | Musik | VO |
 |---|---|---|---|---|---|
-| 0.0 - 3.0 | Hook | Potongan cepat masalah: hot issue numpuk, chat berantakan, data kececer | `glitch-error` (0.0), `ui-snap` tiap potongan, `ambience-gelap` pelan di bawah, `braam-transisi-gelap` (1.2) | Intro pelan / build-up | #1 |
+| 0.0 - 3.0 | Hook | Potongan cepat masalah: hot issue numpuk, chat berantakan, data kececer | `glitch-error` (0.0), `ui-snap` tiap potongan, ~~`ambience-gelap` pelan di bawah~~ (dibuang 27 Okt), `braam-transisi-gelap` (1.2) | Intro pelan / build-up | #1 |
 | 3.0 - 5.0 | Reveal | Logo CS Tracker + light sweep | `riser-blastoff` berakhir tepat 3.0, `braam-epik-1` + `impact-chord` (3.0) | Hit pertama | #2 |
 | 5.0 - 10.0 | Dashboard + Hot Issue | Angka berjalan, badge HOT naik ke #1 | `swoosh-readout` (5.1), `ui-scifi-ping` saat HOT naik, `koin-ting` di angka | Groove masuk | #3 |
 | 10.0 - 15.0 | Issue & Video Review | Kartu status digeser (Rilis/Banding/Menunggu) | `whoosh-cepat` tiap geser, `ui-accept-glassy` saat status dipilih | Groove | #4 |
@@ -21,5 +23,5 @@ Aturan tambahan:
 - Jangan menumpuk lebih dari 2 SFX keras di saat yang sama; VO selalu paling jelas.
 - Transisi & impact harus jatuh tepat di ketukan (toleransi ±1 frame).
 - Musik berhenti di ketukan terakhir, beri 0.3-0.5 detik hening sebelum video habis.
-- Kalau `music/musik-teaser.mp3` tidak ada: susun trailer bed dari `trailer-pulse-sedang` (groove),
+- (Tidak berlaku lagi untuk teaser sejak 27 Okt — teaser tanpa musik.) Kalau `music/musik-teaser.mp3` tidak ada: susun trailer bed dari `trailer-pulse-sedang` (groove),
   `trailer-pulse-panjang` (sustain), `boom-trailer-*` (ketukan berat), `braam-*` (reveal/outro), `riser-blastoff` (build-up).

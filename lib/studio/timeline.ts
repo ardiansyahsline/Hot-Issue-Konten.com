@@ -521,6 +521,9 @@ function normLayout(v: unknown, text: string[]): Layout {
 export type NormalizeOpts = { extraSfx?: SfxMeta[] };
 
 /** bersihkan & batasi timeline dari AI / editan user. Tidak pernah melempar error — field rusak diganti bawaan. */
+/** nama musik bawaan proyek teaser CS Tracker lama (trailer bed) — lihat migrasi di normalizeTimeline */
+const LEGACY_TEASER_BED = "Trailer bed (100 BPM)";
+
 export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timeline {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const ratio = oneOf(o.ratio, RATIOS, "9:16");
@@ -627,6 +630,12 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
   const vo = vo0 && legacySay.size ? { ...vo0, lines: vo0.lines.map((l) => (!l.say && legacySay.has(l.sceneId) ? { ...l, say: legacySay.get(l.sceneId) } : l)) } : vo0;
   // kamus ejaan proyek: {from, to} terisi, dibatasi panjang & jumlahnya (normLexicon)
   const lexicon = normLexicon(v.lexicon);
+  // proyek teaser CS Tracker versi lama (trailer bed bawaan + ambience-gelap di hook) → teaser baru tanpa musik / suara latar. Hanya
+  // bawaan lama yang belum diubah: nama musiknya persis LEGACY_TEASER_BED (trailer bed yang dipilih sendiri lewat editor bernama
+  // "Trailer bed (cadangan)" → tidak disentuh)
+  const legacyTeaserBed = mSrc === "bed" && str(m.name, 80) === LEGACY_TEASER_BED && scenes.some((s) => s.layout.kind === "teaser");
+  if (legacyTeaserBed)
+    for (const s of scenes) if (s.layout.kind === "teaser" && s.layout.shot === "hook") s.sfx = s.sfx.filter((c) => !(c.id === "ambience-gelap" && c.at === 0));
   // durasi adegan dibatasi → mulai VO (scene.vo.at & line.at) & detik SFX yang lewat ujung adegan ikut dijepit
   return clampToScenes<Timeline>({
     v: 1,
@@ -651,7 +660,7 @@ export function normalizeTimeline(raw: unknown, opts: NormalizeOpts = {}): Timel
       ...(normTemperature(v.temperature) !== undefined ? { temperature: normTemperature(v.temperature) } : {}),
       ...(lexicon.length ? { lexicon } : {}),
     },
-    music: {
+    music: legacyTeaserBed ? { src: "none", name: "Tanpa musik", bpm: null, beats: null, offset: 0, gain: num(m.gain, 0, -24, 12), lufs: null } : {
       src: mSrc === "none" || mSrc === "bed" ? mSrc : safeMediaSrc(mSrc) ?? "bed",
       name: str(m.name, 80) || undefined,
       bpm: m.bpm === undefined || m.bpm === null ? null : num(m.bpm, 100, 40, 240),
