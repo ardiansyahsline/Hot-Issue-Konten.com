@@ -372,11 +372,14 @@ export type LexRisk = { kind: "common" | "word" | "acronym" | "number"; text: st
 const NUM_WORDS: ReadonlySet<string> = new Set(
   "nol satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas seratus seribu belas puluh ratus ribu juta miliar triliun koma persen".split(" "),
 );
-/** singkatan satuan sesudah angka → kata satuan yang boleh ditambahkan ucapan ("10rb" → "sepuluh ribu", "5jt" → "lima juta") */
-const NUM_UNIT: Readonly<Record<string, readonly string[]>> = {
+/**
+ * satuan sesudah angka → kata satuan yang WAJIB ikut diucapkan ("10rb" → "sepuluh ribu", "5jt" → "lima juta", "1,5x" → "satu koma
+ * lima kali"); "10rb" → "sepuluh" mengubah nilainya. Map: satuan "constructor" dll. dari file luar bukan kunci bawaan objek.
+ */
+const NUM_UNIT: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
   rb: ["ribu"], ribu: ["ribu"], k: ["ribu"], jt: ["juta"], juta: ["juta"], m: ["juta", "miliar"], b: ["miliar"], bn: ["miliar"],
-  miliar: ["miliar"], milyar: ["miliar"], t: ["triliun"], tn: ["triliun"], triliun: ["triliun"],
-};
+  miliar: ["miliar"], milyar: ["miliar"], t: ["triliun"], tn: ["triliun"], triliun: ["triliun"], x: ["kali"],
+}));
 /** angka cara baca Inggris di ejaan ("GPT-4" → "ji pi ti for", "Web3" → "web tri") */
 const EN_NUM: ReadonlyMap<string, string> = new Map(
   Object.entries({
@@ -385,35 +388,70 @@ const EN_NUM: ReadonlyMap<string, string> = new Map(
     eight: "delapan", eit: "delapan", nine: "sembilan", nain: "sembilan", ten: "sepuluh",
   }),
 );
-/** deret kata bilangan dalam teks (angka ditulis jadi kata dulu; "ketiga" = "tiga", "pertama" = "satu", "four" = "empat") */
-function numSeq(s: string): string {
-  return numbersToWords(s)
-    .toLowerCase()
-    .split(/[^a-z]+/)
-    .map((x) => (x === "pertama" ? "satu" : x.startsWith("ke") && NUM_WORDS.has(x.slice(2)) ? x.slice(2) : (EN_NUM.get(x) ?? x)))
-    .filter((x) => NUM_WORDS.has(x))
-    .join(" ");
-}
-/** nama huruf lain yang lazim ditulis (selain LETTER / LETTER_EN) */
-const LETTER_ALT: Readonly<Record<string, readonly string[]>> = {
-  a: ["e", "ey"], c: ["ce", "ci"], h: ["eich", "eits", "ech"], i: ["ay"], j: ["jey"], k: ["ke"], o: ["ou", "ow"], q: ["kyu"],
-  u: ["you"], x: ["ex", "iks"], y: ["way", "ey"], z: ["zed", "zi"],
-};
 /**
- * satu kata ucapan = nama huruf / angka ini? Huruf mati: kerangka konsonannya sama dengan salah satu nama hurufnya ("be" / "bi",
- * "se" / "si" / "ce") — "en" untuk R tidak. Huruf hidup: persis salah satu nama hurufnya. Angka: kata bilangannya.
+ * kata bilangan dari satu kata ucapan, dalam bentuk baku: "ketiga" = "tiga", "pertama" = "satu", "four" = "empat", "milyar" =
+ * "miliar", "sepuluh" / "sebelas" / "seratus" / "seribu" / "sejuta" … = "satu puluh" / "satu belas" / "satu ratus" / "satu ribu" /
+ * "satu juta" … (jadi "1rb" → "seribu" = "satu" + "ribu"). Bukan kata bilangan → [].
+ */
+function numWords(word: string): string[] {
+  const x = word.toLowerCase().replace(/[^a-z]/g, "").replace(/milyar$/, "miliar");
+  const w = x === "pertama" ? "satu" : x.startsWith("ke") && NUM_WORDS.has(x.slice(2)) ? x.slice(2) : (EN_NUM.get(x) ?? x);
+  if (/^se(puluh|belas|ratus|ribu|juta|miliar|triliun)$/.test(w)) return ["satu", w.slice(2)];
+  return NUM_WORDS.has(w) ? [w] : [];
+}
+/** deret kata bilangan dalam teks (angka ditulis jadi kata dulu; lihat numWords) */
+const numSeq = (s: string): string => numbersToWords(s).toLowerCase().split(/[^a-z]+/).flatMap(numWords).join(" ");
+
+/** nama huruf lain yang lazim ditulis (selain LETTER / LETTER_EN): V cara Indonesia "fe" / "fi", X "ek", Z "set" … */
+const LETTER_ALT: ReadonlyMap<string, readonly string[]> = new Map(Object.entries({
+  a: ["e", "ey"], c: ["ce", "ci"], h: ["eich", "eitch", "eits", "ech"], i: ["ay"], j: ["jey"], k: ["ke", "kay", "key"], o: ["ou", "ow"],
+  q: ["kyu"], u: ["you"], v: ["fe", "fi"], x: ["ex", "iks", "ek"], y: ["way", "ey"], z: ["zed", "zi", "set"],
+}));
+const ALPHA = [..."abcdefghijklmnopqrstuvwxyz"];
+/** ejaan nama huruf disamakan dulu: huruf kembar satu, ph / v = f, ch = c, x = ks, h di ujung dibuang ("vii" = "fi", "ex" = "eks", "beh" = "be") */
+function nameNorm(s: string): string {
+  const t = squash(s.toLowerCase().replace(/[^a-z]/g, "").replace(/ph/g, "f").replace(/ch/g, "c").replace(/x/g, "ks").replace(/v/g, "f"));
+  return t.length > 1 ? t.replace(/h$/, "") : t;
+}
+/** nama-nama tiap huruf (sudah lewat nameNorm) */
+const NAMES: ReadonlyMap<string, readonly string[]> = new Map(
+  ALPHA.map((ch) => [ch, [...new Set([LETTER.get(ch), LETTER_EN.get(ch), ...(LETTER_ALT.get(ch) ?? [])].filter((n): n is string => !!n).map(nameNorm))]]),
+);
+/** kerangka nama huruf: huruf matinya + tanda "-" kalau diawali huruf hidup ("es" → "-s" ≠ "se" → "s", "ef" → "-f" ≠ "fe" → "f") */
+const nameKey = (n: string) => (/^[aeiou]/.test(n) ? "-" : "") + n.replace(/[aeiou]/g, "");
+/** kerangka → huruf pemiliknya. Kerangka milik dua huruf (G "ji" / J "je" → "j", K "ka" / Q "ki" → "k", W "we" / Y "wai" → "w") tidak dipakai */
+const KEY_OWNERS: ReadonlyMap<string, readonly string[]> = (() => {
+  const m = new Map<string, string[]>();
+  NAMES.forEach((ns, ch) =>
+    ns.forEach((n) => {
+      const o = m.get(nameKey(n)) ?? [];
+      if (!o.includes(ch)) m.set(nameKey(n), [...o, ch]);
+    }),
+  );
+  return m;
+})();
+/**
+ * satu kata ucapan = nama huruf / angka ini? Huruf: salah satu namanya (Indonesia / Inggris / ejaan lazim; ejaan disamakan dulu,
+ * lihat nameNorm: "fi" = "vi", "ex" = "eks"). Nama huruf LAIN = bukan ("es" untuk C, "ka" untuk Q, "ji" untuk J, "ei" untuk E).
+ * Huruf mati juga boleh beda huruf hidupnya ("bee" = "be", "gi" = "ge") asal kerangkanya hanya milik huruf itu — "en" untuk R,
+ * "se" untuk S, "ko" untuk K (K / Q) tidak. Angka: kata bilangannya.
  */
 function letterOk(c: string, word: string): boolean {
-  const t = word.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (/\d/.test(c)) return t === c || (EN_NUM.get(t) ?? t) === numbersToWords(c).trim();
+  const raw = word.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/\d/.test(c)) return raw === c || (EN_NUM.get(raw) ?? raw) === numbersToWords(c).trim();
   const ch = c.toLowerCase();
-  if (t === ch) return true;
-  const names = [LETTER.get(ch), LETTER_EN.get(ch), ...(LETTER_ALT[ch] ?? [])].filter((n): n is string => !!n);
+  if (raw === ch) return true;
+  const names = NAMES.get(ch);
+  const t = nameNorm(raw);
+  if (!names || !t) return false;
   if (names.includes(t)) return true;
-  if (/[aeiou]/.test(ch)) return false;
-  const skel = (x: string) => x.replace(/[aeiou]/g, "");
-  return !!skel(t) && names.some((n) => skel(n) === skel(t));
+  if (ALPHA.some((o) => o !== ch && NAMES.get(o)?.includes(t)) || /[aeiou]/.test(ch)) return false;
+  const k = nameKey(t);
+  const own = KEY_OWNERS.get(k);
+  return k.replace("-", "") !== "" && !!own && own.length === 1 && own[0] === ch;
 }
+/** kata ucapan ini angka / kata bilangan? */
+const isNumWord = (w: string) => /\d/.test(w) || numWords(w).length > 0;
 
 /** kode mata uang yang biasa dibaca nama uangnya (bukan per huruf) */
 const CURRENCY: ReadonlyMap<string, readonly string[]> = new Map(
@@ -454,10 +492,12 @@ function enReading(w: string): string {
  * Bukan risiko: cara baca istilah asing ("download" → "daunlod", "share" → "syer"), singkatan dieja per huruf cara Indonesia /
  * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu", "ChatGPT" → "cet ji pi ti"), kode uang ("IDR" → "rupiah"), singkatan tanpa
  * huruf hidup ("dll" → "dan lain lain", "yg" → "yang"), angka jadi kata yang sama ("MP3" → "em pe tiga", "11%" → "sebelas persen",
- * "10rb" → "sepuluh ribu", "Q3" → "kuartal tiga").
- * Risiko juga: angka yang diucapkan beda ("11%" → "satu persen"), huruf singkatan diganti ("BBRI" → "be be en i"), dan kepanjangan
- * singkatan ("OJK" → "omong jual kosong") — kepanjangan tidak bisa dicek dari hurufnya, jadi tidak dicentang otomatis (kecuali
- * mirip ejaan yang sudah dipercaya).
+ * "10rb" → "sepuluh ribu", "Q3" → "kuartal tiga", "LQ45" → "el kyu empat puluh lima"), nama huruf cara Indonesia ("TV" → "ti fi",
+ * "XL" → "ek el", "BZ" → "be set").
+ * Risiko juga: angka yang diucapkan beda ("11%" → "satu persen") atau satuan / angkanya tidak terucap ("10rb" → "sepuluh", "Q3" →
+ * "kuartal", "Rp10rb" → "sepuluh ribu"), huruf singkatan diganti ("BBRI" → "be be en i"), dan kepanjangan singkatan ("OJK" →
+ * "omong jual kosong") — kepanjangan tidak bisa dicek dari hurufnya, jadi tidak dicentang otomatis (kecuali mirip ejaan yang sudah
+ * dipercaya).
  * `known` = ejaan lain yang sudah dipercaya untuk tulisan yang sama (mis. kamus bawaan Studio) — ejaan yang mirip itu aman.
  * null = aman.
  */
@@ -474,33 +514,60 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
     return { kind: "common", text: `Kata umum “${from}” diucapkan “${to}” — artinya bisa berubah. Subtitle tetap “${from}”.` };
   // kode uang dibaca nama uangnya
   if (one && (CURRENCY.get(one.toLowerCase()) ?? []).includes(toWords.join(" "))) return null;
-  // angka: ucapan harus membaca angka yang sama — utuh ("11%" → "sebelas persen"), per digit ("MP3" → "em pe tiga"), atau angka +
-  // satuan ("10rb" → "sepuluh ribu", bukan "sepuluh juta"). "11%" → "satu persen" mengubah isinya walau bunyinya mirip.
+  // kata ucapan (huruf kecil) tanpa tanda baca ("sepuluh," → "sepuluh")
+  const tw = toWords.map((w) => w.replace(/[^\p{L}\d]/gu, "")).filter(Boolean);
+  // angka: ucapan harus membaca angka yang sama — utuh ("11%" → "sebelas persen", "LQ45" → "el kyu empat puluh lima"), per digit
+  // ("MP3" → "em pe tiga"), atau angka + satuannya ("10rb" → "sepuluh ribu"). Mengubah isinya walau bunyinya mirip: angka lain
+  // ("11%" → "satu persen", "10rb" → "sepuluh juta"), satuan dibuang ("10rb" → "sepuluh"), angka dibuang ("Q3" → "kuartal").
   if (/\d/.test(from)) {
+    const no = (why: string): LexRisk => ({ kind: "number", text: `Angka “${from}” diucapkan “${to}” — ${why}. Subtitle tetap “${from}”.` });
     const said = numSeq(to);
-    const unit = NUM_UNIT[/\d\s*(\p{L}+)/u.exec(from)?.[1]?.toLowerCase() ?? ""] ?? [];
-    const same = [from, from.replace(/(\d)/g, " $1 "), from.replace(/(\d)(?=\p{L})/gu, "$1 ")].some((r) => {
+    if (!said) return no("angkanya tidak terucap");
+    // satuan sesudah angka ("10rb", "5 jt", "2M", "1,5x"); yang berupa kata bilangan ("10 ribu") sudah terbaca bersama angkanya,
+    // "kali" (bukan kata bilangan) dicari di ucapan
+    const unitTxt = /^(?:rp\.?\s*)?\d[\d.,]*\s*(\p{L}+)$/iu.exec(from.trim())?.[1] ?? "";
+    const unit = NUM_UNIT.get(unitTxt.toLowerCase()) ?? [];
+    let unitSaid = !unit.length || numWords(unitTxt).length > 0 || unit.some((u) => !NUM_WORDS.has(u) && tw.includes(u));
+    let same = false;
+    // tulisan apa adanya, per digit, dan angka utuh dipisah dari huruf di kiri / kanannya ("10rb" → "10 rb", "LQ45" → "LQ 45")
+    for (const r of [from, from.replace(/(\d)/g, " $1 "), from.replace(/(\d)(?=\p{L})/gu, "$1 ").replace(/(\p{L})(?=\d)/gu, "$1 ")]) {
       const c = numSeq(r);
-      return c === said || (!!c && said.startsWith(`${c} `) && unit.includes(said.slice(c.length + 1)));
-    });
-    if (!same) return { kind: "number", text: `Angka “${from}” diucapkan “${to}” — angkanya beda dari tulisannya. Subtitle tetap “${from}”.` };
-    // isinya hanya angka (+ Rp / % / satuan "rb", "jt", "x" = kali, "Q" = kuartal) dan angkanya sama → aman
-    const bare = from.toLowerCase().replace(/^rp\.?\s*/, "").replace(/[\d.,:/%\s]/g, "");
-    if (!bare || NUM_UNIT[bare] || (bare === "x" && toWords.includes("kali")) || (bare === "q" && /^(kuartal|kwartal|kuarter|quarter)$/.test(toWords[0] ?? "")))
-      return null;
+      if (!c) continue;
+      if (c === said) same = true;
+      else if (unit.some((u) => said === `${c} ${u}`)) same = unitSaid = true;
+    }
+    if (!same) return no("angkanya beda dari tulisannya");
+    // satuan tidak terucap sebagai kata: boleh dieja per huruf ("4K" → "for kei"), selain itu nilainya berubah ("10rb" → "sepuluh")
+    if (!unitSaid) {
+      const rest = tw.filter((w) => !isNumWord(w) && w !== "rupiah");
+      const ls = [...unitTxt];
+      if (rest.length !== ls.length || !ls.every((c, i) => letterOk(c, rest[i]))) return no(`satuannya (“${unitTxt}”) tidak terucap, nilainya beda dari tulisannya`);
+    }
+    if (/^rp\.?\s*\d/i.test(from.trim()) && !tw.includes("rupiah")) return no("mata uangnya (rupiah) tidak terucap");
+    // isinya hanya angka (+ Rp / % / satuan / "Q" = kuartal) dan angkanya sama → aman
+    const bare = from.toLowerCase().replace(/^rp\.?\s*(?=\d)/, "").replace(/[\d.,:/%\s]/g, "");
+    if (!bare || unit.length || (bare === "q" && /^(kuartal|kwartal|kuarter|quarter)$/.test(tw[0] ?? ""))) return null;
   }
   const knownKey = known ? soundKey(known) : "";
   const nearKnown = !!knownKey && editDistance(knownKey, target) / Math.max(knownKey.length, target.length) <= 0.34;
-  // singkatan dieja per huruf: tiap kata ucapan = nama huruf yang sama (Indonesia / Inggris). Huruf yang diganti ("BBRI" → "be be
-  // en i") atau kepanjangan ("OJK" → "omong jual kosong", tidak bisa dicek dari hurufnya) = risiko, kecuali mirip ejaan tepercaya.
+  // singkatan dieja per huruf: tiap kata ucapan = nama huruf yang sama (Indonesia / Inggris), angka di tempatnya (sudah dicek di
+  // atas: "LQ45" → "el kyu" + "empat puluh lima"). Huruf yang diganti ("BBRI" → "be be en i") atau kepanjangan ("OJK" → "omong
+  // jual kosong", tidak bisa dicek dari hurufnya) = risiko, kecuali mirip ejaan tepercaya.
   if (one && acro(one)) {
     const chars = [...one].filter((c) => /[\p{L}\d]/u.test(c));
-    if (toWords.length === chars.length) {
-      if (chars.every((c, i) => letterOk(c, toWords[i]))) return null;
-      if (isAcronym(one) && !nearKnown)
-        return toWords.every((x, i) => x[0] === chars[i].toLowerCase())
+    // urutan huruf / angka harus sama (deret angka dihitung satu: "LQ45" = "aa9" = "el kyu empat puluh lima")
+    const shape = (xs: readonly string[], num: (x: string) => boolean) => xs.map((x) => (num(x) ? "9" : "a")).join("").replace(/9+/g, "9");
+    if (shape(chars, (c) => /\d/.test(c)) === shape(tw, isNumWord)) {
+      const ls = chars.filter((c) => !/\d/.test(c));
+      const ws = tw.filter((w) => !isNumWord(w));
+      if (ls.every((c, i) => letterOk(c, ws[i]))) return null;
+      if (isAcronym(one) && !nearKnown) {
+        // kata ucapan yang nama huruf LAIN ("BBRI" → "be be en i") = huruf diganti, walau huruf depannya kebetulan sama ("SK" → "se ka")
+        const swapped = ls.some((c, i) => !letterOk(c, ws[i]) && ALPHA.some((o) => o !== c.toLowerCase() && letterOk(o, ws[i])));
+        return !swapped && ws.every((x, i) => x[0] === ls[i].toLowerCase())
           ? { kind: "acronym", text: `Singkatan “${from}” diucapkan kepanjangannya “${to}” — pastikan kepanjangannya benar. Subtitle tetap “${from}”.` }
           : { kind: "acronym", text: `Singkatan “${from}” diucapkan “${to}” — hurufnya beda dari tulisannya. Subtitle tetap “${from}”.` };
+      }
     }
   }
   // bacaan yang wajar untuk tulisan ini: apa adanya, cara baca Inggris, singkatan per huruf (Indonesia / Inggris), angka jadi kata
