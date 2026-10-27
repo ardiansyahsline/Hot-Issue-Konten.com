@@ -32,4 +32,4 @@ Hanya 2 nama file ini yang dikenali (nama lain = 404):
 - Ukuran: usahakan tiap file < 50 MB (GitHub menolak > 100 MB). Kalau kebesaran, kecilkan dulu, misalnya:
   `ffmpeg -i in.mp4 -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 192k -movflags +faststart out.mp4`
 - Selama file belum ada, menu 🧩 Template menyembunyikan tombol download file itu. Tombol **Bikin file video** di menu itu
-  tetap jalan (versi tanpa VO, dengan musik + SFX).
+  tetap jalan (versi tanpa VO: SFX + teks, tanpa musik latar).

@@ -27,7 +27,7 @@ Video teaser internal tim, gaya trailer produk premium.
 - **Reveal:** cue sheet minta riser + braam + impact bersamaan di 3,0. Aturan "maks 2 SFX keras bersamaan" → riser & impact di 3,0, braam masuk sebagai ombak di 3,3.
 - **Video Review:** status memakai status asli website (Menunggu → Diproses → Disetujui), bukan contoh "Rilis/Banding" di cue sheet.
 - **Chat tim:** level musik "groove" (agak turun karena musik otomatis turun saat VO bicara) — berlaku kalau musik ditambah sendiri.
-- **Tanpa musik & suara latar:** trailer bed (groove, braam/boom/riser cadangan) dan `ambience-gelap` di hook dibuang atas permintaan Alif. SFX efek per adegan tetap.
+- **Tanpa musik & suara latar:** trailer bed (groove, braam/boom/riser cadangan) dan `ambience-gelap` di hook dibuang atas permintaan Alif. SFX efek per adegan tetap. Proyek teaser lama yang musiknya belum diubah ikut otomatis jadi tanpa musik (dan tanpa `ambience-gelap`) saat dibuka.
 - **VO** mulai di "waktu target" naskah tiap adegan (mis. VO montage mulai 51,0 sesuai catatan "di akhir"). Naskah tidak diubah: kalimat yang sedikit kepanjangan otomatis dipercepat maksimal 30% (nada suara tetap) supaya selesai sebelum VO adegan berikutnya; hening di ujung file suara tidak dihitung menabrak.
 
 ## Berita asli di adegan 7 (dan angka IHSG di adegan 6)
