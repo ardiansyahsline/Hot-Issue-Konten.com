@@ -349,7 +349,7 @@ export default function VoSpellTry({
         </p>
       )}
       {ask && (
-        <div className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-300" role="alertdialog" aria-labelledby={`${uid}-ask`} data-spell-ask>
+        <div className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-300" role="alertdialog" aria-labelledby={`${uid}-ask`} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAsk(null); } }} data-spell-ask>
           <p id={`${uid}-ask`}>
             “{wordKey}” sudah ada di 📖 Kamus ({wordKey} → {ask.before}) dan dipakai juga oleh suara cadangan Edge.{" "}
             {ask.row.text.trim().toLowerCase() === wordKey ? "Kalau dilepas" : `Kalau diganti ${ask.row.text.trim()} (khusus bank suara)`}, Edge jadi membaca “{ask.after}”.
@@ -358,7 +358,7 @@ export default function VoSpellTry({
             <button type="button" className="rounded-lg px-2 py-1 text-[11.5px] font-semibold text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300" onClick={() => use(ask.row, true)} data-spell-ask-yes>
               {ask.row.text.trim().toLowerCase() === wordKey ? "Ya, lepas" : "Ya, ganti"}
             </button>
-            <button type="button" className="btn-ghost px-2 py-1 text-[11.5px]" onClick={() => setAsk(null)} data-spell-ask-no>
+            <button type="button" className="btn-ghost px-2 py-1 text-[11.5px]" onClick={() => setAsk(null)} autoFocus data-spell-ask-no>
               Batal
             </button>
           </div>

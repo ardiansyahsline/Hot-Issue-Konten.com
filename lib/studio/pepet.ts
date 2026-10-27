@@ -85,7 +85,9 @@ const TALING =
 /** campuran: é = taling, e = pepet */
 const CAMPUR =
   "meréka keréta bendéra sepéda keméja merdéka kecéwa jelék persén seléra tempél celotéh terompét cengéng gedé gemés ceréwét mentéga " +
-  "pécel méter séptémber désémber novémber lengkét pesantrén geréja pendéta rékening émber";
+  "pécel méter séptémber désémber novémber lengkét pesantrén geréja pendéta rékening émber " +
+  // turunan "lebar" (taling) — kata utuh menang supaya tidak terbaca sebagai pe-/per-/ke- + "lebaran" (hari raya)
+  "pelébaran perlébaran kelébaran pelébarannya perlébarannya";
 /** bunyinya bisa dua / tidak yakin → tidak ditebak */
 const RAGU = "apel serang teras per kecap bela seram sendok dewasa setan metode seret geger personal personel persona performa pentil perban semester generasi " +
   // medan perang = mədan, kota Medan = médan
@@ -320,11 +322,14 @@ const capInitial = (w: string) => w[0] !== w[0].toLowerCase() && w !== w.toUpper
 /** tanda kutip / kurung pembuka di antara akhir kalimat dan kata berikutnya ("Halo." “Berlin …) */
 const OPENERS = `"'“”‘’()[]{}«»*`;
 /** kata di `at` ada di awal kalimat: sebelumnya (lewati spasi, kutip, kurung) awal teks, baris baru, atau . ! ? … */
+/** singkatan gelar / sapaan bertitik ("Dr. Bertha", "Bpk. Mendoza") — titiknya bukan akhir kalimat */
+const TITLE_ABBR = /(?:^|[\s"'“‘(\[])(?:dr|drs|dra|prof|bpk|bp|ibu|ir|h|hj|kh|st|sdr|sdri|tn|ny|nn|mr|mrs|ms|jl|no|pt|cv|tbk)$/i;
 function sentenceStart(s: string, at: number): boolean {
   for (let i = at - 1; i >= 0; i--) {
     const c = s[i];
     if (c === "\n") return true;
     if (/\s/.test(c) || OPENERS.includes(c)) continue;
+    if (c === "." && TITLE_ABBR.test(s.slice(Math.max(0, i - 6), i))) return false;
     return ".!?…".includes(c);
   }
   return true;
