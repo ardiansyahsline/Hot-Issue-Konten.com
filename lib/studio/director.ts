@@ -677,7 +677,18 @@ export function mergeRevision(prev: Timeline | null, next: Timeline, raw: Record
     return keepUserGain(scene, old);
   });
   // adegan premium teaser: visual, durasi, kamera, latar & teks layar animasi dikembalikan dari versi lama (yang tersimpan ke DB juga)
-  out.scenes = keepTeaserVisual(prev, out).scenes;
+  const merged = out.scenes;
+  out.scenes = keepTeaserVisual(prev, out).scenes.map((s, i) => {
+    // id adegan teaser yang ditulis ulang AI baru dikembalikan di sini (dipasangkan lewat shot / urutan) → volume mixer & kecepatan
+    // VO milik user dari adegan lama itu dipasang sekarang (di atas belum ketemu karena id-nya beda)
+    const old = s.id !== merged[i]?.id ? prevById.get(s.id) : undefined;
+    if (!old) return s;
+    const rs = (rawScenes[i] && typeof rawScenes[i] === "object" ? rawScenes[i] : {}) as Record<string, unknown>;
+    const rv = rs.vo && typeof rs.vo === "object" ? rs.vo : null;
+    let scene = s;
+    if (scene.vo && old.vo?.tempo !== undefined && scene.vo.tempo === undefined && !has(rv, "tempo")) scene = { ...scene, vo: { ...scene.vo, tempo: old.vo.tempo } };
+    return keepUserGain(scene, old);
+  });
   out.vo = keepVo(prev, out);
   return out;
 }

@@ -62,7 +62,8 @@ export async function resolveDirector(want: Director | null | undefined, load: C
   if (!d) return builtin(DIRECTOR_HERO, notes, null);
   if (d.hero.startsWith(CHAR_PREFIX)) {
     const id = d.hero.slice(CHAR_PREFIX.length);
-    const who = d.name ? `"${d.name}" ` : "";
+    // tanda kutip sama dengan catatan di browser (activeDirector di DirectorPicker.tsx)
+    const who = d.name ? `“${d.name}” ` : "";
     try {
       const { char, memory } = await load(id);
       if (char && String(char.id).toLowerCase() === id) {
@@ -83,5 +84,5 @@ export async function resolveDirector(want: Director | null | undefined, load: C
     return builtin(DIRECTOR_HERO, notes, `Karakter ${who}tidak ditemukan — sementara pakai ${DIRECTOR_HERO}.`);
   }
   if (HERO_NAMES.includes(d.hero)) return builtin(d.hero, notes, null);
-  return builtin(DIRECTOR_HERO, notes, `Sutradara "${d.hero}" tidak dikenal — pakai ${DIRECTOR_HERO}.`);
+  return builtin(DIRECTOR_HERO, notes, `Sutradara “${d.hero}” tidak dikenal — pakai ${DIRECTOR_HERO}.`);
 }

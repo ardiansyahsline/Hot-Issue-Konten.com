@@ -20,6 +20,10 @@ export const GROUPS: Record<Group, { name: string; icon: string; color: string; 
 /** sifat = 3–5 kata gaya kerja (ditampilkan di keterangan "Kamu dibantu oleh …") */
 type TypeInfo = { label: string; tag: string; traits: string[]; sifat: string[]; anim: Anim; act: Act; style: string; say: string };
 
+/** isi tabel untuk kunci ini — hanya kunci milik tabel sendiri (nama hero / karakter / tipe dari data user seperti "constructor"
+ * atau "toString" tidak membaca bawaan Object.prototype) */
+const own = <T,>(o: Readonly<Record<string, T>>, k: string): T | undefined => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+
 /** 16 tipe: label sendiri + gaya bicara yang dimasukkan ke prompt */
 export const TYPES: Record<string, TypeInfo> = {
   ENTJ: {
@@ -309,7 +313,7 @@ export function registerCustom(name: string, look: CustomLook) {
   if (isBuiltinHero(name.trim())) return;
   CUSTOM.set(name, look);
 }
-export const isBuiltinHero = (name: string) => name in LOOKS || name === "Layla" || !!heroRole(name);
+export const isBuiltinHero = (name: string) => !!own(LOOKS, name) || name === "Layla" || !!heroRole(name);
 export const CHIBI_SKINS = ["#f5c9a8", "#e8b48f", "#f1c27d", "#d9a27c", "#fbe3d0", "#c98b66", "#f6d2b3"];
 export const CHIBI_HAIRS = ["#111827", "#3b2a1e", "#7c2d12", "#e5e7eb", "#f59e0b", "#6366f1", "#0ea5e9", "#dc2626", "#0f766e", "#db2777"];
 export const CHIBI_PROPS: Prop[] = ["orb", "staff", "bow", "sword", "dagger", "shield", "gun", "umbrella", "spear", "fist"];
@@ -325,7 +329,7 @@ export function personaOf(heroIn: string, opts?: { builtinOnly?: boolean }): Per
   const custom = opts?.builtinOnly ? undefined : (CUSTOM.get(heroIn.trim()) ?? CUSTOM.get(hero));
   if (custom) {
     const hero = heroIn.trim();
-    const t = TYPES[custom.type] ?? TYPES.INFJ;
+    const t = own(TYPES, custom.type) ?? TYPES.INFJ;
     return {
       ...t,
       label: custom.label || t.label,
@@ -344,15 +348,15 @@ export function personaOf(heroIn: string, opts?: { builtinOnly?: boolean }): Per
       custom: true,
     };
   }
-  const look: Look = LOOKS[hero] ?? {
+  const look: Look = own(LOOKS, hero) ?? {
     type: TYPE_KEYS[h % TYPE_KEYS.length],
     hair: h % 10,
     skin: SKINS[(h >> 3) % SKINS.length],
     hc: HAIRS[(h >> 5) % HAIRS.length],
   };
   const info = TYPES[look.type];
-  const f = HERO_FLAVOR[hero];
-  return { ...info, ...(f ? { label: f.label, tag: f.tag, traits: f.sifat, sifat: f.sifat } : {}), hero, type: look.type, group: typeGroup(look.type), hair: look.hair, skin: look.skin, hc: look.hc, prop: look.prop ?? ROLE_PROP[role] ?? "orb", role };
+  const f = own(HERO_FLAVOR, hero);
+  return { ...info, ...(f ? { label: f.label, tag: f.tag, traits: f.sifat, sifat: f.sifat } : {}), hero, type: look.type, group: typeGroup(look.type), hair: look.hair, skin: look.skin, hc: look.hc, prop: look.prop ?? own(ROLE_PROP, role) ?? "orb", role };
 }
 
 /** potongan prompt gaya menjawab untuk hero yang sedang menjawab */
@@ -377,7 +381,7 @@ export const groupVoices = (type: string) => {
   const g = typeGroup(type);
   return { table: TABLE_VOICE[g], analyst: ANALYST_VOICE[g] };
 };
-export const typeInfo = (type: string) => TYPES[type] ?? TYPES.INFJ;
+export const typeInfo = (type: string) => own(TYPES, type) ?? TYPES.INFJ;
 export const MBTI_TYPES = Object.keys(TYPES);
 
 export function personaPrompt(hero: string, opts?: { builtinOnly?: boolean }) {
@@ -484,5 +488,5 @@ export function personaTagline(heroIn: string): { name: string; kind: string; si
   return { name: p.hero, kind: `${p.type} ${p.label}`, sifat: p.sifat.slice(0, 5).join(", ") };
 }
 
-export const personaIntro = (hero: string) => INTRO[personaOf(hero).type] ?? "Sebentar ya…";
+export const personaIntro = (hero: string) => own(INTRO, personaOf(hero).type) ?? "Sebentar ya…";
 export const stepLabel = (hero: string, e: StepInfo, done = false) => STEP_WORDS[personaOf(hero).group](e, done);

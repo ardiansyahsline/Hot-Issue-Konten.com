@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import HeroArt from "@/components/ai/HeroArt";
 import { HERO_NAMES, personaOf } from "@/lib/aiPersona";
 import { CHAR_PREFIX, registerChar, type CustomChar } from "@/lib/customChar";
@@ -10,10 +10,22 @@ import { createClient } from "@/lib/supabase/client";
 /** sutradara bawaan Studio (sama dengan DIRECTOR_HERO di lib/studio/director.ts — file itu tidak diimpor ke browser) */
 export const DEFAULT_DIRECTOR = "Harley";
 
-// ---------- karakter buatan user (ai_characters, RLS: hanya milik sendiri) — dimuat sekali per user per halaman ----------
-// cache dikaitkan ke user yang login (ganti akun di tab yang sama tidak melihat karakter user sebelumnya);
-// hasil gagal tidak di-cache (muat berikutnya mencoba lagi)
-let charsCache: { uid: string; p: Promise<CustomChar[] | null> } | null = null;
+// ---------- karakter buatan user (ai_characters, RLS: hanya milik sendiri) ----------
+// Satu daftar bersama untuk semua pemakai di halaman (header chat, panel Suara VO, Skill), selalu disegarkan: tiap kali dipasang,
+// dropdown dibuka, dan tab kembali terlihat — karakter yang baru dibuat / dihapus di tab AI langsung ikut tanpa muat ulang halaman.
+// Selama disegarkan daftar lama tetap tampil; gagal → daftar lama tetap. Daftar dikaitkan ke user yang login: ganti akun → kosong
+// dulu (karakter user sebelumnya tidak pernah tampil).
+type CharState = { uid: string | null; chars: CustomChar[]; loaded: boolean };
+const EMPTY: CharState = { uid: null, chars: [], loaded: false };
+let charState: CharState = EMPTY;
+const charSubs = new Set<() => void>();
+let inflight: Promise<void> | null = null;
+let authHooked = false;
+const setChars = (next: CharState) => {
+  charState = next;
+  charSubs.forEach((f) => f());
+};
+
 async function fetchChars(sb: ReturnType<typeof createClient>): Promise<CustomChar[] | null> {
   try {
     const { data, error } = await sb.from("ai_characters").select("id, name, mbti, avatar, profile, created_at").order("created_at");
@@ -30,33 +42,88 @@ async function fetchChars(sb: ReturnType<typeof createClient>): Promise<CustomCh
     return null;
   }
 }
-async function loadChars(): Promise<CustomChar[]> {
-  try {
-    const sb = createClient();
-    const uid = (await sb.auth.getSession()).data.session?.user?.id ?? "";
-    if (!uid) return [];
-    if (charsCache?.uid !== uid) {
-      const p = fetchChars(sb);
-      charsCache = { uid, p };
-      void p.then((r) => {
-        if (!r && charsCache?.p === p) charsCache = null;
-      });
+
+/** muat ulang daftar karakter (permintaan yang sedang jalan dipakai bersama) */
+export function refreshChars(): Promise<void> {
+  if (inflight) return inflight;
+  inflight = (async () => {
+    try {
+      const sb = createClient();
+      const uid = (await sb.auth.getSession()).data.session?.user?.id ?? "";
+      if (!uid) return setChars({ uid: "", chars: [], loaded: true });
+      if (charState.uid !== uid) setChars({ uid, chars: [], loaded: false });
+      const list = await fetchChars(sb);
+      if (charState.uid !== uid) return; // akun berganti selama memuat
+      if (list) setChars({ uid, chars: list, loaded: true });
+      else if (!charState.loaded) setChars({ ...charState, loaded: true }); // tabel belum ada / gagal pertama → [] (hero bawaan tetap jalan)
+    } catch {
+      if (!charState.loaded) setChars({ ...charState, loaded: true });
     }
-    return (await charsCache.p) ?? [];
-  } catch {
-    return [];
-  }
+  })().finally(() => {
+    inflight = null;
+  });
+  return inflight;
 }
+
+/**
+ * Server tidak bisa memakai karakter ini (dihapus / bukan milik user) → anggap benar: karakter dikeluarkan dari daftar sekarang
+ * juga (header, panel Suara VO & Skill langsung menampilkan Harley), lalu daftar disegarkan.
+ */
+export function charUnavailable(hero: string | null | undefined) {
+  if (!hero?.startsWith(CHAR_PREFIX)) return;
+  const id = hero.slice(CHAR_PREFIX.length).toLowerCase();
+  if (charState.chars.some((c) => c.id.toLowerCase() === id)) setChars({ ...charState, chars: charState.chars.filter((c) => c.id.toLowerCase() !== id) });
+  void refreshChars();
+}
+
+let lastWake = 0;
+let unwake: (() => void) | null = null;
+function subscribeChars(f: () => void) {
+  charSubs.add(f);
+  if (charSubs.size === 1) {
+    // tab kembali terlihat / jendela fokus lagi (mis. karakter dibuat di tab lain) → segarkan (maks sekali per 2 dtk)
+    const wake = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastWake < 2000) return;
+      lastWake = Date.now();
+      void refreshChars();
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    unwake = () => {
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }
+  if (!authHooked) {
+    authHooked = true;
+    try {
+      // login / logout di tab yang sama → daftar akun lama dibuang
+      createClient().auth.onAuthStateChange((_e, session) => {
+        const uid = session?.user?.id ?? "";
+        if (charState.uid !== null && charState.uid !== uid) {
+          setChars({ uid, chars: [], loaded: !uid });
+          if (uid) void refreshChars();
+        }
+      });
+    } catch {}
+  }
+  return () => {
+    charSubs.delete(f);
+    if (!charSubs.size) {
+      unwake?.();
+      unwake = null;
+    }
+  };
+}
+const getChars = () => charState;
+const getServerChars = () => EMPTY;
 
 /** karakter buatan user yang bisa dipilih jadi sutradara. Tabel belum ada / gagal -> [] (pilihan hero bawaan tetap jalan) */
 export function useMyChars(): { chars: CustomChar[]; loaded: boolean } {
-  const [s, setS] = useState<{ chars: CustomChar[]; loaded: boolean }>({ chars: [], loaded: false });
+  const s = useSyncExternalStore(subscribeChars, getChars, getServerChars);
+  // tiap kali dipasang (mis. kembali ke Studio dari tab AI) → daftar disegarkan; daftar lama tampil selama memuat
   useEffect(() => {
-    let dead = false;
-    void loadChars().then((chars) => !dead && setS({ chars, loaded: true }));
-    return () => {
-      dead = true;
-    };
+    void refreshChars();
   }, []);
   return s;
 }
@@ -142,7 +209,11 @@ export default function DirectorPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Ganti sutradara (sekarang ${act.name})`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // daftar karakter disegarkan tiap dropdown dibuka (karakter baru / yang dihapus di tab AI langsung ikut)
+          if (!open) void refreshChars();
+          setOpen((v) => !v);
+        }}
         className="flex w-full min-w-0 items-center gap-2 rounded-xl py-0.5 pl-0.5 pr-1.5 text-left transition hover:bg-zinc-800/60"
       >
         <span className="flex h-8 w-8 shrink-0 items-end justify-center overflow-hidden rounded-full bg-orange-500/10">
@@ -156,9 +227,14 @@ export default function DirectorPicker({
               ▾
             </span>
           </span>
-          <span className="block truncate text-[11.5px] text-zinc-500">
-            {shownNote ? <span className="text-amber-400">⚠️ {shownNote}</span> : notes ? `✍️ ${notes} catatan gaya · ketik ide → cek rencana → preview` : "Ketik ide → cek rencana → preview → download"}
-          </span>
+          {shownNote ? (
+            // peringatan dibaca utuh: boleh 2 baris di HP (+ title untuk teks lengkap)
+            <span title={shownNote} className="line-clamp-2 block whitespace-normal break-words text-[11.5px] leading-snug text-amber-400">
+              ⚠️ {shownNote}
+            </span>
+          ) : (
+            <span className="block truncate text-[11.5px] text-zinc-500">{notes ? `✍️ ${notes} catatan gaya · ketik ide → cek rencana → preview` : "Ketik ide → cek rencana → preview → download"}</span>
+          )}
         </span>
       </button>
 

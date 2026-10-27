@@ -6,7 +6,8 @@
  * normLexicon (maks 60), catatan maks 20 × 300 huruf tanpa HTML, angka dibatasi rentangnya, field asing dibuang.
  * Aman dipakai di server & browser (tanpa import server-only).
  */
-import { MAX_LEXICON, normLexicon, type LexEntry } from "./pronounce";
+import { lexiconRisk, type LexRisk } from "./heard";
+import { DEFAULT_LEXICON, MAX_LEXICON, normLexicon, type LexEntry } from "./pronounce";
 import {
   isDirectorHero,
   mixDb,
@@ -259,7 +260,48 @@ export function mergeNotes(cur: readonly string[] | undefined, add: readonly str
 export type ApplyOpts = {
   /** bank suara yang siap: voiceName dari skill dicocokkan ke id bank di database ini */
   voices?: readonly { id: string; name: string }[];
+  /**
+   * entri kamus skill yang dipilih di pratinjau (kunci `LexChange.key`); entri lain yang mengubah ucapan tidak dipakai, entri yang
+   * tidak mengubah ucapan (sama dengan kamus proyek / bawaan) tetap ikut. Tidak diisi → semua entri.
+   */
+  lexicon?: readonly string[];
 };
+
+/** satu perubahan kamus ejaan dari skill (pratinjau impor) */
+export type LexChange = {
+  /** kunci entri (huruf kecil, spasi & strip diabaikan) — dipakai ApplyOpts.lexicon */
+  key: string;
+  from: string;
+  to: string;
+  /** ejaan yang diganti: milik proyek, atau ejaan bawaan Studio (`builtin`) */
+  old?: string;
+  builtin?: boolean;
+  /** entri yang mengganti kata dengan kata lain (bukan sekadar cara baca) — tidak dicentang otomatis */
+  risk: LexRisk | null;
+};
+
+/**
+ * semua entri kamus skill yang benar-benar mengubah ejaan proyek ini; entri yang sudah sama tidak ikut. Entri bertanda risiko
+ * di depan (terlihat tanpa menggulir daftar), selebihnya urutan skill.
+ */
+export function lexiconChanges(cur: readonly LexEntry[] | undefined, add: readonly LexEntry[]): LexChange[] {
+  const base = new Map(normLexicon(cur ?? []).map((e) => [lexKey(e.from), e] as const));
+  const builtin = new Map(DEFAULT_LEXICON.map((e) => [lexKey(e.from), e] as const));
+  const out: LexChange[] = [];
+  for (const e of normLexicon(add)) {
+    const key = lexKey(e.from);
+    const mine = base.get(key);
+    if (mine && mine.to === e.to && mine.from === e.from) continue;
+    const def = builtin.get(key);
+    const sameDef = !!def && def.to.toLowerCase() === e.to.toLowerCase();
+    // belum ada di kamus proyek tapi sama dengan kamus bawaan Studio → ucapannya tidak berubah, tidak perlu ditampilkan
+    if (!mine && sameDef) continue;
+    // sama / mirip dengan kamus bawaan Studio → bukan kata baru yang mencurigakan
+    const risk = sameDef ? null : lexiconRisk(e.from, e.to, def?.to);
+    out.push({ key, from: e.from, to: e.to, ...(mine ? { old: mine.to } : def ? { old: def.to, builtin: true } : {}), risk });
+  }
+  return [...out.filter((e) => e.risk), ...out.filter((e) => !e.risk)];
+}
 
 /**
  * Terapkan skill ke proyek — hanya bagian yang dicentang. Kamus & catatan digabung (tanpa dobel); suara, volume & sutradara
@@ -271,9 +313,15 @@ export function applySkill<T extends SkillTarget>(target: T, skill: StudioSkill,
   const out: T = { ...target };
   if (out.voice) {
     let voice: VoiceLike = { ...out.voice };
-    if (want.has("lexicon") && sec.lexicon?.length) {
-      const { lexicon } = mergeLexicon(voice.lexicon, sec.lexicon);
-      voice = { ...voice, lexicon: lexicon.length ? lexicon : undefined };
+    const pick = opts.lexicon ? new Set(opts.lexicon) : null;
+    // entri yang tidak mengubah ucapan (sama dengan kamus proyek / bawaan, tidak tampil di pratinjau) tetap ikut seperti dulu
+    const changed = pick && sec.lexicon ? new Set(lexiconChanges(voice.lexicon, sec.lexicon).map((e) => e.key)) : null;
+    const lex = pick && changed ? (sec.lexicon ?? []).filter((e) => pick.has(lexKey(e.from)) || !changed.has(lexKey(e.from))) : sec.lexicon;
+    if (want.has("lexicon") && lex?.length) {
+      let m = mergeLexicon(voice.lexicon, lex);
+      // kamus penuh: entri yang dipilih di pratinjau didahulukan dari entri yang tidak mengubah ucapan
+      if (m.skipped && pick) m = mergeLexicon(voice.lexicon, [...lex.filter((e) => pick.has(lexKey(e.from))), ...lex.filter((e) => !pick.has(lexKey(e.from)))]);
+      voice = { ...voice, lexicon: m.lexicon.length ? m.lexicon : undefined };
     }
     if (want.has("voice") && sec.voice) {
       const sv = sec.voice;
@@ -335,19 +383,28 @@ export function sectionSummary(src: SkillTarget, key: SkillSection, dirName?: st
 /**
  * Pratinjau perubahan per bagian sebelum diterapkan (kalimat awam singkat). `ok` = bagian bisa diterapkan ke proyek ini.
  */
-export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: ApplyOpts = {}): { key: SkillSection; ok: boolean; lines: string[] }[] {
+export type SkillPreviewItem = {
+  key: SkillSection;
+  ok: boolean;
+  lines: string[];
+  /** kamus: SEMUA entri yang mengubah ejaan (dari → ke), dipilih per entri di pratinjau */
+  entries?: LexChange[];
+};
+export function skillPreview(target: SkillTarget, skill: StudioSkill, opts: ApplyOpts = {}): SkillPreviewItem[] {
   const sec = skill.sections;
-  const out: { key: SkillSection; ok: boolean; lines: string[] }[] = [];
+  const out: SkillPreviewItem[] = [];
   const noPlan = !target.voice;
   if (sec.lexicon) {
     if (noPlan) out.push({ key: "lexicon", ok: false, lines: [`${sec.lexicon.length} kata — butuh rencana video dulu.`] });
     else {
-      const m = mergeLexicon(target.voice?.lexicon, sec.lexicon);
-      const lines = [m.added || m.replaced ? `${m.added} kata baru, ${m.replaced} ejaan diganti.` : "Semua kata sudah sama — tidak ada yang berubah."];
-      if (m.skipped) lines.push(`${m.skipped} kata tidak muat (kamus maks ${MAX_LEXICON}).`);
-      const sample = sec.lexicon.slice(0, 4).map((e) => `${e.from} → ${e.to}`);
-      if (sample.length) lines.push(`Contoh: ${sample.join(", ")}${sec.lexicon.length > 4 ? ", …" : ""}`);
-      out.push({ key: "lexicon", ok: true, lines });
+      const entries = lexiconChanges(target.voice?.lexicon, sec.lexicon);
+      const fresh = entries.filter((e) => !e.old || e.builtin).length;
+      const risky = entries.filter((e) => e.risk).length;
+      const lines = [entries.length ? `${fresh} kata baru, ${entries.length - fresh} ejaan diganti.` : "Semua kata sudah sama — tidak ada yang berubah."];
+      if (risky) lines.push(`⚠️ ${risky} entri bisa mengganti kata jadi kata lain (suara VO beda dari subtitle) — tidak dicentang otomatis, cek dulu.`);
+      const room = Math.max(0, MAX_LEXICON - normLexicon(target.voice?.lexicon ?? []).length);
+      if (fresh > room) lines.push(`Kamus proyek muat ${room} kata baru lagi (maks ${MAX_LEXICON}) — sisanya dilewati.`);
+      out.push({ key: "lexicon", ok: true, lines, entries });
     }
   }
   if (sec.voice) {
