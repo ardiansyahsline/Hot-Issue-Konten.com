@@ -844,6 +844,11 @@ export function musicHeadSec(m: Pick<Music, "src" | "offset" | "dur"> | undefine
   const off = musicOffsetOf(m);
   return off > 0 ? Math.max(0, Math.round((Number(m?.dur) - off - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
 }
+/**
+ * Batas putaran ulang lagu (ketukan musicFileBeats & bagian crossfade musicParts di audio.tsx — harus sama supaya ketukan = bunyi).
+ * Lagu terpendek yang boleh pakai offset (0,6 dtk, maxMusicOffset) di video terpanjang (MAX_TOTAL + TAIL_SEC) = ±348 putaran.
+ */
+export const MAX_MUSIC_CYCLES = 400;
 /** jarak antar putaran ulang (detik) kalau offset dipakai = panjang lagu − crossfade. 0 = tanpa offset (loop biasa, jarak = panjang lagu) */
 export function musicCycleSec(m: Pick<Music, "src" | "offset" | "dur"> | undefined): number {
   return musicOffsetOf(m) > 0 ? Math.max(0.1, Math.round((Number(m?.dur) - MUSIC_XFADE_SEC) * 1000) / 1000) : 0;
@@ -872,8 +877,8 @@ export function musicFileBeats(m: Pick<Music, "src" | "beats" | "bpm" | "offset"
   const cycle = off > 0 ? musicCycleSec(m) : dur;
   const out: number[] = [];
   for (const b of song) if (b >= off && b - off <= until + 1e-6 && (off === 0 || b - off < head - 1e-6)) out.push(r3(b - off));
-  // putaran ulang: lagu dari awal (maks 400 putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
-  for (let st = head, k = 0; st <= until + 1e-6 && k < 400; st += cycle, k++) {
+  // putaran ulang: lagu dari awal (maks MAX_MUSIC_CYCLES putaran supaya lagu sangat pendek tidak membuat daftar raksasa)
+  for (let st = head, k = 0; st <= until + 1e-6 && k < MAX_MUSIC_CYCLES; st += cycle, k++) {
     for (const b of song) {
       if (st + b > until + 1e-6 || (off > 0 && b >= cycle - 1e-6)) break;
       out.push(r3(st + b));

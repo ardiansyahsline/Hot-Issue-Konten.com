@@ -561,10 +561,9 @@ export default function TimelineEditor(p: {
     if (!cue) return;
     const picked = pick?.kind === "sfx" && pick.sceneId === sc.id && pick.ci === ci;
     const can = !locked && (e.pointerType !== "touch" || picked);
-    if (can) {
-      e.preventDefault();
-      e.currentTarget.setPointerCapture(e.pointerId);
-    }
+    if (!can) return; // dikunci / belum dipilih di HP → pilih di onClick saja (lihat onMusicDown)
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     sfxDrag.current = { si, ci, x0: e.clientX, at0: cue.at, at: cue.at, start: starts[si], dur: sc.dur, can, moved: false };
   };
   const onSfxMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -734,10 +733,11 @@ export default function TimelineEditor(p: {
     if (e.button !== undefined && e.button > 0) return;
     const picked = pick?.kind === "music";
     const can = fileMusic && !!mDur && (e.pointerType !== "touch" || picked);
-    if (can) {
-      e.preventDefault();
-      e.currentTarget.setPointerCapture(e.pointerId);
-    }
+    // tidak bisa digeser (trailer bed / belum dipilih di HP) → pilih di onClick saja; ref tidak diisi karena tanpa capture
+    // pointerup di luar blok tidak sampai ke sini → ref tertinggal & auto-scroll playhead berhenti
+    if (!can) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     musicDrag.current = { x0: e.clientX, off0: offNow, off: offNow, max: maxMusicOffset(mDur ?? 0), can, moved: false };
   };
   const onMusicMove = (e: PointerEvent<HTMLDivElement>) => {

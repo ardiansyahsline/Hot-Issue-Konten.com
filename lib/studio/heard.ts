@@ -360,11 +360,60 @@ const COMMON: ReadonlySet<string> = new Set(
     "asli nyata fakta bohong jujur percaya terbukti positif negatif setuju tolak terima lulus gagal berhasil sukses rusak " +
     "penuh kosong habis sisa mulai awal akhir pertama terakhir semua tanpa harus pasti mungkin jarang setuju aktif mati nyala " +
     // istilah pasar (Inggris) yang artinya mudah dibalik
-    "bullish bearish buy sell long short profit loss cuan boncos hold up down"
+    "bullish bearish buy sell long short profit loss cuan boncos hold up down " +
+    // nama hari & bulan ("Oktober" → "November" mengganti tanggalnya)
+    "senin selasa rabu kamis jumat sabtu minggu januari februari maret april mei juni juli agustus september oktober november desember"
   ).split(" "),
 );
 
-export type LexRisk = { kind: "common" | "word" | "acronym"; text: string };
+export type LexRisk = { kind: "common" | "word" | "acronym" | "number"; text: string };
+
+/** kata bilangan (untuk membandingkan angka tulisan dengan angka yang diucapkan) */
+const NUM_WORDS: ReadonlySet<string> = new Set(
+  "nol satu dua tiga empat lima enam tujuh delapan sembilan sepuluh sebelas seratus seribu belas puluh ratus ribu juta miliar triliun koma persen".split(" "),
+);
+/** singkatan satuan sesudah angka → kata satuan yang boleh ditambahkan ucapan ("10rb" → "sepuluh ribu", "5jt" → "lima juta") */
+const NUM_UNIT: Readonly<Record<string, readonly string[]>> = {
+  rb: ["ribu"], ribu: ["ribu"], k: ["ribu"], jt: ["juta"], juta: ["juta"], m: ["juta", "miliar"], b: ["miliar"], bn: ["miliar"],
+  miliar: ["miliar"], milyar: ["miliar"], t: ["triliun"], tn: ["triliun"], triliun: ["triliun"],
+};
+/** angka cara baca Inggris di ejaan ("GPT-4" → "ji pi ti for", "Web3" → "web tri") */
+const EN_NUM: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    zero: "nol", ziro: "nol", one: "satu", wan: "satu", two: "dua", tu: "dua", three: "tiga", tri: "tiga", thri: "tiga", four: "empat",
+    for: "empat", fo: "empat", five: "lima", faif: "lima", faiv: "lima", six: "enam", siks: "enam", seven: "tujuh", sefen: "tujuh",
+    eight: "delapan", eit: "delapan", nine: "sembilan", nain: "sembilan", ten: "sepuluh",
+  }),
+);
+/** deret kata bilangan dalam teks (angka ditulis jadi kata dulu; "ketiga" = "tiga", "pertama" = "satu", "four" = "empat") */
+function numSeq(s: string): string {
+  return numbersToWords(s)
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .map((x) => (x === "pertama" ? "satu" : x.startsWith("ke") && NUM_WORDS.has(x.slice(2)) ? x.slice(2) : (EN_NUM.get(x) ?? x)))
+    .filter((x) => NUM_WORDS.has(x))
+    .join(" ");
+}
+/** nama huruf lain yang lazim ditulis (selain LETTER / LETTER_EN) */
+const LETTER_ALT: Readonly<Record<string, readonly string[]>> = {
+  a: ["e", "ey"], c: ["ce", "ci"], h: ["eich", "eits", "ech"], i: ["ay"], j: ["jey"], k: ["ke"], o: ["ou", "ow"], q: ["kyu"],
+  u: ["you"], x: ["ex", "iks"], y: ["way", "ey"], z: ["zed", "zi"],
+};
+/**
+ * satu kata ucapan = nama huruf / angka ini? Huruf mati: kerangka konsonannya sama dengan salah satu nama hurufnya ("be" / "bi",
+ * "se" / "si" / "ce") — "en" untuk R tidak. Huruf hidup: persis salah satu nama hurufnya. Angka: kata bilangannya.
+ */
+function letterOk(c: string, word: string): boolean {
+  const t = word.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/\d/.test(c)) return t === c || (EN_NUM.get(t) ?? t) === numbersToWords(c).trim();
+  const ch = c.toLowerCase();
+  if (t === ch) return true;
+  const names = [LETTER.get(ch), LETTER_EN.get(ch), ...(LETTER_ALT[ch] ?? [])].filter((n): n is string => !!n);
+  if (names.includes(t)) return true;
+  if (/[aeiou]/.test(ch)) return false;
+  const skel = (x: string) => x.replace(/[aeiou]/g, "");
+  return !!skel(t) && names.some((n) => skel(n) === skel(t));
+}
 
 /** kode mata uang yang biasa dibaca nama uangnya (bukan per huruf) */
 const CURRENCY: ReadonlyMap<string, readonly string[]> = new Map(
@@ -403,8 +452,11 @@ function enReading(w: string): string {
  * "naik" → "anjlok", "aman" → "berbahaya", "BBCA" → "be be er i". Dipakai pratinjau impor skill (file dari luar, tidak dipercaya):
  * subtitle tetap tulisan aslinya tapi suara VO mengucapkan kata lain, dan pengecek ucapan menganggap ejaan kamus itu benar.
  * Bukan risiko: cara baca istilah asing ("download" → "daunlod", "share" → "syer"), singkatan dieja per huruf cara Indonesia /
- * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu") atau kepanjangannya ("OJK" → "otoritas jasa keuangan"), kode uang
- * ("IDR" → "rupiah"), singkatan tanpa huruf hidup ("dll" → "dan lain lain", "yg" → "yang"), angka jadi kata ("MP3" → "em pe tiga").
+ * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu"), kode uang ("IDR" → "rupiah"), singkatan tanpa huruf hidup ("dll" →
+ * "dan lain lain", "yg" → "yang"), angka jadi kata yang sama ("MP3" → "em pe tiga", "11%" → "sebelas persen", "10rb" → "sepuluh ribu").
+ * Risiko juga: angka yang diucapkan beda ("11%" → "satu persen"), huruf singkatan diganti ("BBRI" → "be be en i"), dan kepanjangan
+ * singkatan ("OJK" → "omong jual kosong") — kepanjangan tidak bisa dicek dari hurufnya, jadi tidak dicentang otomatis (kecuali
+ * mirip ejaan yang sudah dipercaya).
  * `known` = ejaan lain yang sudah dipercaya untuk tulisan yang sama (mis. kamus bawaan Studio) — ejaan yang mirip itu aman.
  * null = aman.
  */
@@ -419,24 +471,52 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
   // kata umum: bunyinya berubah sedikit pun (selain ragam lisan nggak = gak) → kata lain ("halal" → "haram", "naik" → "anjlok")
   if (one && COMMON.has(one.toLowerCase()) && soundKey(one) !== target && soundKey(enReading(one)) !== target)
     return { kind: "common", text: `Kata umum “${from}” diucapkan “${to}” — artinya bisa berubah. Subtitle tetap “${from}”.` };
-  // kode uang dibaca nama uangnya; singkatan dibaca kepanjangannya (huruf depan tiap kata = huruf singkatannya)
+  // kode uang dibaca nama uangnya
   if (one && (CURRENCY.get(one.toLowerCase()) ?? []).includes(toWords.join(" "))) return null;
-  if (one && isAcronym(one) && toWords.length === one.length && toWords.every((x, i) => x[0] === one[i].toLowerCase())) return null;
+  // angka: ucapan harus membaca angka yang sama — utuh ("11%" → "sebelas persen"), per digit ("MP3" → "em pe tiga"), atau angka +
+  // satuan ("10rb" → "sepuluh ribu", bukan "sepuluh juta"). "11%" → "satu persen" mengubah isinya walau bunyinya mirip.
+  if (/\d/.test(from)) {
+    const said = numSeq(to);
+    const unit = NUM_UNIT[/\d\s*(\p{L}+)/u.exec(from)?.[1]?.toLowerCase() ?? ""] ?? [];
+    const same = [from, from.replace(/(\d)/g, " $1 "), from.replace(/(\d)(?=\p{L})/gu, "$1 ")].some((r) => {
+      const c = numSeq(r);
+      return c === said || (!!c && said.startsWith(`${c} `) && unit.includes(said.slice(c.length + 1)));
+    });
+    if (!same) return { kind: "number", text: `Angka “${from}” diucapkan “${to}” — angkanya beda dari tulisannya. Subtitle tetap “${from}”.` };
+    // isinya hanya angka (+ Rp / % / satuan "rb", "jt", atau "x" = kali) dan angkanya sama → aman
+    const bare = from.toLowerCase().replace(/^rp\.?\s*/, "").replace(/[\d.,:/%\s]/g, "");
+    if (!bare || NUM_UNIT[bare] || (bare === "x" && toWords.includes("kali"))) return null;
+  }
+  const knownKey = known ? soundKey(known) : "";
+  const nearKnown = !!knownKey && editDistance(knownKey, target) / Math.max(knownKey.length, target.length) <= 0.34;
+  // singkatan dieja per huruf: tiap kata ucapan = nama huruf yang sama (Indonesia / Inggris). Huruf yang diganti ("BBRI" → "be be
+  // en i") atau kepanjangan ("OJK" → "omong jual kosong", tidak bisa dicek dari hurufnya) = risiko, kecuali mirip ejaan tepercaya.
+  if (one && acro(one)) {
+    const chars = [...one].filter((c) => /[\p{L}\d]/u.test(c));
+    if (toWords.length === chars.length) {
+      if (chars.every((c, i) => letterOk(c, toWords[i]))) return null;
+      if (isAcronym(one) && !nearKnown)
+        return toWords.every((x, i) => x[0] === chars[i].toLowerCase())
+          ? { kind: "acronym", text: `Singkatan “${from}” diucapkan kepanjangannya “${to}” — pastikan kepanjangannya benar. Subtitle tetap “${from}”.` }
+          : { kind: "acronym", text: `Singkatan “${from}” diucapkan “${to}” — hurufnya beda dari tulisannya. Subtitle tetap “${from}”.` };
+    }
+  }
   // bacaan yang wajar untuk tulisan ini: apa adanya, cara baca Inggris, singkatan per huruf (Indonesia / Inggris), angka jadi kata
-  const reading = (letters: ReadonlyMap<string, string> | null, en = false) =>
+  // (per digit, atau utuh: "2026" → "dua ribu dua puluh enam")
+  const reading = (letters: ReadonlyMap<string, string> | null, en = false, whole = false) =>
     soundKey(
       words
         .map((w) => {
-          const n = /\d/.test(w) ? numbersToWords(w.replace(/(\d)/g, " $1 ")) : w;
+          const n = /\d/.test(w) ? numbersToWords(whole ? w : w.replace(/(\d)/g, " $1 ")) : w;
           if (letters && acro(w)) return [...n].map((c) => (/[a-z]/i.test(c) ? letters.get(c.toLowerCase()) ?? c : c)).join(" ");
           return en && !acro(w) && !/\d/.test(w) ? enReading(w) : n;
         })
         .join(" "),
     );
-  const cands = [reading(null), reading(null, true), ...(hasAcro ? [reading(LETTER), reading(LETTER_EN)] : [])].filter(Boolean);
-  const ratio = Math.min(...cands.map((c) => editDistance(c, target) / Math.max(c.length, target.length)));
-  const knownKey = known ? soundKey(known) : "";
-  const nearKnown = !!knownKey && editDistance(knownKey, target) / Math.max(knownKey.length, target.length) <= 0.34;
+  const cands = [reading(null), reading(null, true), ...(/\d/.test(from) ? [reading(null, false, true)] : []), ...(hasAcro ? [reading(LETTER), reading(LETTER_EN)] : [])].filter(Boolean);
+  // angka cara baca Inggris di ejaan dibandingkan sebagai angka Indonesia ("GPT-4" → "ji pi ti for" ≈ "ji pi ti empat")
+  const said = /\d/.test(from) ? soundKey(toWords.map((x) => EN_NUM.get(x) ?? x).join(" ")) : target;
+  const ratio = Math.min(...cands.map((c) => editDistance(c, said) / Math.max(c.length, said.length)));
   // singkatan tanpa huruf hidup ("dll", "yg", "tdk"): huruf-hurufnya muncul berurutan di ejaannya, huruf pertama sama
   const abbrev = !!one && !isAcronym(one) && acro(one) && target[0] === soundKey(one)[0] && isSubsequence(soundKey(one), target);
   if (nearKnown || abbrev || ratio <= (hasAcro ? 0.34 : 0.5)) return null;

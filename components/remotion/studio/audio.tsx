@@ -45,6 +45,7 @@ import {
   dbToGain,
   DUCK_DB,
   isLoudSfx,
+  MAX_MUSIC_CYCLES,
   musicCycleSec,
   musicFileBeats,
   musicHeadSec,
@@ -644,8 +645,11 @@ export function voGuardDb(plan: AudioPlan, sceneId?: string): number {
  * pecahan → akurat sampel), `dur` = panjang Audio. `fadeIn` / `fadeOut` = [awal, akhir] crossfade (frame pecahan; null = tidak ada).
  */
 export type MusicPart = { from: number; trim: number; dur: number; fadeIn: [number, number] | null; fadeOut: [number, number] | null };
-/** lagu sangat pendek + video panjang → bagian sebanyak ini atau lebih diputar dengan loop biasa (tanpa crossfade) */
-const MAX_MUSIC_PARTS = 64;
+/**
+ * batas bagian putaran ulang = batas ketukan (MAX_MUSIC_CYCLES): semua lagu yang boleh pakai offset di video ≤ MAX_TOTAL muat, jadi
+ * periode bunyi selalu = periode ketukan (panjang − crossfade). Cadangan loop biasa di MusicOffset hanya untuk data di luar batas itu.
+ */
+const MAX_MUSIC_PARTS = MAX_MUSIC_CYCLES;
 /**
  * Bagian-bagian musik file dengan offset: [0] = sisa lagu dari detik ke-offset sampai file habis; [k ≥ 1] = lagu dari awal, detik 0
  * file tepat di frame s0 = head + (k−1)·cycle (pecahan, lewat trim). Tiap bagian mulai ±`xf` frame sebelum file bagian sebelumnya
@@ -688,7 +692,7 @@ export function musicPartGain(p: Pick<MusicPart, "fadeIn" | "fadeOut">, f: numbe
 function MusicOffset({ l, src, pre }: { l: Loop; src: string; pre: number }) {
   const parts = musicParts(l);
   if (!parts) {
-    // cadangan (lagu sangat pendek): loop biasa sesudah putaran pertama, tanpa crossfade
+    // cadangan (di luar MAX_MUSIC_PARTS putaran, tidak terjadi di video ≤ MAX_TOTAL): loop biasa sesudah putaran pertama, tanpa crossfade
     const head = Math.max(1, Math.round(l.head ?? 1));
     return (
       <>
