@@ -13,6 +13,7 @@ import {
   type StudioVoice,
 } from "@/lib/studio/client";
 import { STUDIO_BUCKET, storageSrc } from "@/lib/studio/urls";
+import { ModelsHint, WarmBadge, warmOf } from "./JobEta";
 
 const MAX_MB = 50;
 const AUDIO_EXT = new Set(["wav", "mp3", "m4a"]);
@@ -190,12 +191,18 @@ export default function VoiceBank({ active = true }: { active?: boolean }) {
       {/* daftar suara */}
       <div className="min-w-0 space-y-3">
         <div className="card space-y-2 p-4">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm" aria-live="polite" data-bank-laptop>
             <span className={`h-2.5 w-2.5 flex-none rounded-full ${online ? "bg-emerald-400" : "bg-zinc-500"}`} />
             <span className="font-semibold">
-              {status === null ? "Cek mesin suara laptop…" : online ? `Mesin suara laptop: nyala${status.worker.gpu ? ` (GPU ${status.worker.gpu})` : ""}` : "Mesin suara laptop: mati"}
+              {status === null
+                ? "Cek mesin suara laptop…"
+                : online
+                  ? `Mesin suara laptop${warmOf(status) === undefined ? ": nyala" : ""}${status.worker.gpu ? ` (GPU ${status.worker.gpu})` : ""}`
+                  : "Mesin suara laptop: mati"}
             </span>
+            <WarmBadge warm={warmOf(status)} />
           </div>
+          <ModelsHint status={status} className="text-xs" />
           <p className="text-xs text-zinc-500">
             {online ? "Rekaman baru langsung dibersihkan otomatis." : "Rekaman tetap bisa disimpan — dibersihkan otomatis saat laptop nyala. Selama mati, VO pakai suara cadangan."}
           </p>

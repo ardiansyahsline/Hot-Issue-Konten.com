@@ -4,10 +4,14 @@
 - klaim job atomik: PATCH ...?id=eq.<id>&status=eq.antri + Prefer return=representation → baris kosong = sudah diambil worker lain
 - storage bucket privat "studio": upload (upsert) / download
 - semua request di-retry saat jaringan putus / server 5xx / 429
+- aman dipakai bersama dari beberapa thread (httpx.Client thread-safe, pool koneksi cukup untuk UploadPool + progres + detak):
+  UploadPool mengunggah file di latar sementara baris VO berikutnya dibuat
 """
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -46,7 +50,9 @@ class Supa:
         self.url = url.rstrip("/")
         self.worker = worker_id
         self.retries = retries
-        self.http = client or httpx.Client(timeout=httpx.Timeout(60, connect=15))
+        # satu Client dipakai bersama oleh thread utama, pengirim progres & UploadPool (httpx.Client thread-safe); koneksi keep-alive
+        # dipakai ulang → tiap request tidak perlu jabat tangan TLS baru
+        self.http = client or httpx.Client(timeout=httpx.Timeout(60, connect=15), limits=httpx.Limits(max_connections=16, max_keepalive_connections=8))
         self.h = {"apikey": key, "Authorization": f"Bearer {key}"}
         self.sleep: Callable[[float], None] = time.sleep  # bisa dipalsukan saat tes
 
@@ -175,3 +181,66 @@ class Supa:
 
     def close(self) -> None:
         self.http.close()
+
+
+class UploadPool:
+    """
+    Unggah ke storage di thread latar (paralel, maks `workers` sekaligus) supaya GPU tidak menunggu jaringan:
+      pool.submit(path, data, ctype) → Future (hasil = path storage); data boleh bytes / Path / fungsi tanpa argumen yang membalikan
+      bytes atau Path (mis. encode mp3 dulu di latar). pool.wait() → tunggu semua, lempar error PERTAMA (urut submit), balikan daftar path.
+    `supa` cukup punya upload(path, data, content_type) — klien Supa asli aman dipakai bersama antar thread. Dipakai dengan `with`:
+    keluar karena error → unggahan yang belum mulai dibatalkan, yang sedang jalan ditunggu (file sementara jangan dihapus duluan).
+    """
+
+    def __init__(self, supa, workers: int = 3):
+        self.supa = supa
+        self.workers = max(1, int(workers or 1))
+        self._ex = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="unggah")
+        self._futs: list[Future] = []
+        self._lock = threading.Lock()
+
+    def _one(self, path: str, data, ctype: str) -> str:
+        if callable(data):  # kerja berat (encode mp3) ikut di latar
+            data = data()
+        got = self.supa.upload(path, data, ctype)
+        return got if isinstance(got, str) else path
+
+    def submit(self, path: str, data, ctype: str) -> Future:
+        f = self._ex.submit(self._one, path, data, ctype)
+        with self._lock:
+            self._futs.append(f)
+        return f
+
+    def pending(self) -> int:
+        with self._lock:
+            return sum(1 for f in self._futs if not f.done())
+
+    def check(self) -> None:
+        """lempar error unggahan yang SUDAH selesai & gagal (tanpa menunggu yang masih jalan)"""
+        with self._lock:
+            futs = list(self._futs)
+        for f in futs:
+            if f.done() and not f.cancelled() and f.exception() is not None:
+                raise f.exception()  # type: ignore[misc]
+
+    def wait(self) -> list[str]:
+        with self._lock:
+            futs = list(self._futs)
+        out, first = [], None
+        for f in futs:
+            try:
+                out.append(f.result())
+            except Exception as e:  # semua ditunggu dulu (file sementara masih dibaca), baru error pertama dilempar
+                first = first or e
+        if first is not None:
+            raise first
+        return out
+
+    def close(self, cancel: bool = False) -> None:
+        self._ex.shutdown(wait=True, cancel_futures=cancel)
+
+    def __enter__(self) -> "UploadPool":
+        return self
+
+    def __exit__(self, et, ev, tb) -> None:
+        self.close(cancel=et is not None)

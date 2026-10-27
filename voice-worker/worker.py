@@ -31,8 +31,13 @@ from studio_worker import config  # noqa: E402  (harus pertama: batas thread & f
 
 CFG = config.load()
 
-from studio_worker import VERSION, jobs_beats, jobs_clean, jobs_render, jobs_tts, seed  # noqa: E402
 from studio_worker import log as vlog  # noqa: E402
+
+# log bersih (QUIET_LOG=1): peringatan library yang tidak penting & progress bar disenyapkan SEBELUM torch / transformers /
+# chatterbox di-import (semuanya dimuat malas sesudah baris ini). Hanya proses worker — siapkan-model tetap menampilkan progres.
+vlog.quiet(bool(getattr(CFG, "quiet_log", True)))
+
+from studio_worker import VERSION, jobs_beats, jobs_clean, jobs_render, jobs_tts, seed  # noqa: E402
 from studio_worker.asr import Asr  # noqa: E402
 from studio_worker.engines import Engines  # noqa: E402
 from studio_worker.jobctx import Cancelled, JobCtx, JobError, Runtime, owner_can_use_studio  # noqa: E402
@@ -50,6 +55,12 @@ FAIL = {
 REVOKED = "Akses Studio pemilik job sudah dicabut."
 stop = threading.Event()
 _hits = {"n": 0}
+# cek antrian: cepat (1 dtk) selama 60 dtk sesudah job / klaim terakhir (job susulan dari website biasanya datang beruntun),
+# lalu POLL_SEC, dan sesudah 30 menit menganggur cukup tiap max(POLL_SEC, 10) dtk
+FAST_POLL_SEC, FAST_POLL_FOR = 1.0, 60.0
+SLOW_POLL_SEC, SLOW_POLL_AFTER = 10.0, 30 * 60.0
+# status unduhan model di latar (detak jantung info.models)
+DL: dict = {"active": False, "names": [], "done": {}}
 
 
 def on_sigint(signum, frame) -> None:  # noqa: ARG001
@@ -124,6 +135,12 @@ class Heartbeat(threading.Thread):
             "asr": self.rt.asr.device if self.rt.asr and self.rt.asr.model is not None else None,
             "render": bool(self.rt.render_ok),
             "versi": VERSION,
+            # kecepatan mesin suara (website memperkirakan lama job yang masih antri), status model, mesin sudah dipanaskan
+            "speed": speed_summary(self.rt),
+            "models": models_brief(CFG),
+            "warm": bool(getattr(self.rt, "warm", False)),
+            # GPU yang benar-benar dipakai Chrome render (hasil cek sekali per sesi: NVIDIA / Intel / SwiftShader)
+            "render_gpu": jobs_render.render_gpu_info(),
             **self.rt.status,
         }
 
@@ -193,6 +210,316 @@ def recover_stale(rt: Runtime, idle: bool = False) -> None:
             log.info("Job tertunda %s → %s", r["id"], patch["status"])
 
 
+def poll_wait(now: float, last_active: float, poll_sec: float) -> float:
+    """jeda cek antrian berikutnya (detik): 1 dtk selama 60 dtk sesudah job / klaim terakhir, lalu POLL_SEC, lalu max(POLL_SEC, 10)
+    sesudah 30 menit menganggur (fungsi murni: waktu dari pemanggil)"""
+    idle = max(0.0, now - last_active)
+    if idle < FAST_POLL_FOR:
+        return min(FAST_POLL_SEC, poll_sec)
+    if idle < SLOW_POLL_AFTER:
+        return poll_sec
+    return max(poll_sec, SLOW_POLL_SEC)
+
+
+# ---------------------------------------------------------------- model & pemanasan (thread latar, tidak menahan antrian)
+def models_mod():
+    """studio_worker/models.py (unduh & cek model lokal); belum ada di cabang lama → None (semua dianggap siap)"""
+    try:
+        import importlib
+
+        return importlib.import_module("studio_worker.models")  # lewat sys.modules (tes bisa memasang models palsu)
+    except ImportError:
+        return None
+
+
+_MB: dict = {"t": 0.0, "v": None}
+
+
+def models_brief(cfg, max_age: float = 60.0) -> dict | None:
+    """status model untuk detak jantung (info.models), disimpan sebentar (cek file tiap 60 dtk cukup); yang sedang diunduh ditandai"""
+    now = time.monotonic()
+    if _MB["v"] is None or now - _MB["t"] > max_age:
+        m = models_mod()
+        v = None
+        if m is not None:
+            try:
+                v = dict(m.status_brief(cfg))
+            except Exception as e:  # status model tidak boleh mengganggu detak
+                log.debug("status model gagal dibaca: %s", e)
+        _MB.update(t=now, v=v)
+    v = dict(_MB["v"]) if isinstance(_MB["v"], dict) else None
+    if v is not None and DL["active"]:
+        for n in DL["names"]:
+            if v.get(n) != "siap":
+                v[n] = "sedang diunduh"
+    return v
+
+
+def speed_summary(rt: Runtime) -> dict | None:
+    sp = getattr(rt, "speed", None)
+    try:
+        return sp.summary() if sp is not None else None
+    except Exception:
+        return None
+
+
+class _LogFn:
+    """logger yang juga bisa dipanggil sebagai fungsi: models.prepare(log=…) boleh memakai log("…") atau log.info("…")"""
+
+    def __init__(self, lg):
+        self._lg = lg
+
+    def __call__(self, msg, *args) -> None:
+        self._lg.info(str(msg), *args)
+
+    def __getattr__(self, k):
+        return getattr(self._lg, k)
+
+
+ABSENT = {
+    "chatterbox": "model Chatterbox belum diunduh",
+    "pocket": "model pocket-tts belum diunduh",
+    "whisper": "model cek ucapan (faster-whisper) belum diunduh",
+    "deepfilter": "model DeepFilterNet3 belum diunduh",
+    "utmos": "penilai kealamian UTMOS belum diunduh",
+}
+
+
+def set_absent(rt: Runtime, names: list[str], auto: bool) -> None:
+    """model yang belum ada di laptop → komponennya dilewati dulu (TIDAK diunduh di tengah job): Chatterbox → pocket-tts / Edge di
+    website, faster-whisper → cek audio saja, DeepFilterNet → pembersih ffmpeg, UTMOS → pilih versi dari kejelasan + nada"""
+    tail = " — diunduh otomatis di latar" if auto else " — jalankan siapkan-model (lihat README)"
+    for n in names:
+        why = ABSENT.get(n, f"model {n} belum diunduh") + tail
+        # tanda "belum diunduh" (bukan "rusak"): faster-whisper, DeepFilterNet & UTMOS tetap mengecek file lagi tiap 60 dtk / sesudah
+        # unduhan selesai, jadi model yang diunduh lewat SIAPKAN-MODEL.bat saat worker hidup juga langsung dipakai
+        try:
+            now = time.monotonic()
+            if n in ("chatterbox", "pocket") and rt.engines is not None and n in CFG.engine_order:
+                rt.engines.mark_down(n, why)
+            elif n == "whisper" and rt.asr is not None and rt.asr.model is None:
+                rt.asr.error = why
+                if hasattr(rt.asr, "_missing_at"):
+                    rt.asr._missing_at = now
+            elif n == "deepfilter":
+                from studio_worker import clean
+
+                if getattr(clean, "_DF", None) is None:
+                    clean._DF_ERR = why
+                    miss = getattr(clean, "_DF_MISSING", None)
+                    if isinstance(miss, dict):
+                        miss.update(on=True, at=now)
+            elif n == "utmos":
+                from studio_worker import natural
+
+                off = getattr(natural, "_not_downloaded", None) or getattr(natural, "_disable", None)
+                if callable(off):
+                    with getattr(natural, "_lock", threading.RLock()):
+                        off() if off is getattr(natural, "_not_downloaded", None) else off(why)
+        except Exception as e:
+            log.debug("tanda %s belum siap gagal: %s", n, e)
+
+
+def set_ready(rt: Runtime, names: list[str]) -> None:
+    """model selesai diunduh → tanda gagal / mati komponennya dihapus supaya dipakai lagi (job berikutnya / pemanasan)"""
+    for n in names:
+        try:
+            if n in ("chatterbox", "pocket") and rt.engines is not None:
+                with rt.engines.lock:
+                    rt.engines._down.pop(n, None)
+            elif n == "whisper" and rt.asr is not None and rt.asr.model is None:
+                fn = getattr(rt.asr, "refresh", None)
+                if callable(fn):
+                    fn()
+                rt.asr.error = None
+            elif n == "deepfilter":
+                from studio_worker import clean
+
+                if getattr(clean, "_DF", None) is None:
+                    clean._DF_ERR = None
+                    miss = getattr(clean, "_DF_MISSING", None)
+                    if isinstance(miss, dict):
+                        miss.update(on=False)
+            elif n == "utmos":
+                from studio_worker import natural
+
+                fn = getattr(natural, "refresh", None)
+                if callable(fn):
+                    fn()
+                elif isinstance(getattr(natural, "_mos", None), dict):
+                    with natural._lock:
+                        natural._mos["off"] = None
+        except Exception as e:
+            log.debug("reset %s gagal: %s", n, e)
+    _MB["v"] = None  # status model dibaca ulang di detak berikutnya
+
+
+def _num(d: dict, *keys: str) -> float | None:
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, (int, float)) and v == v and v > 0:
+            return float(v)
+    return None
+
+
+def warm_engine(rt: Runtime, skip: set[str]) -> str | None:
+    """muat mesin suara pertama yang bisa (+ pemanasan Engines.warmup bila ada) & catat waktu muat / kecepatannya. Balikan nama mesin."""
+    eng = rt.engines
+    for name in CFG.engine_order:
+        if name in skip or eng.is_down(name):
+            continue
+        try:
+            was = name in eng.loaded()
+        except Exception:
+            was = False
+        t0 = time.monotonic()
+        try:
+            w = getattr(eng, "warmup", None)
+            info = w(name) if callable(w) else None
+            if not callable(w):
+                eng.get(name)
+        except Exception as e:  # EngineDown sudah dicatat pengelola mesin → coba mesin berikutnya
+            log.warning("Pemanasan mesin %s gagal: %s", name, str(e)[:200])
+            continue
+        took = time.monotonic() - t0
+        sp = getattr(rt, "speed", None)
+        if sp is not None:
+            d = info if isinstance(info, dict) else {}
+            gen = _num(d, "wall_sec", "gen_sec", "wall")
+            audio0, ratio = _num(d, "audio_sec", "audio"), _num(d, "ratio")
+            if gen is None and audio0 and ratio:  # mesin cepat: ratio = detik proses per detik suara (n versi sekaligus)
+                gen = audio0 * ratio
+            load = _num(d, "load_sec", "load")
+            if load is None and not was and _num(d, "sec"):  # waktu pemanasan sendiri bukan waktu muat model
+                load = max(0.0, took - float(d["sec"]))
+            if load is None and not was:
+                load = max(0.0, took - (gen or 0.0))
+            if load:
+                sp.record_load(name, load)
+            audio = _num(d, "audio_sec", "audio")
+            if audio and gen:
+                sp.record(name, audio, gen, int(d.get("takes") or d.get("n") or 1))
+        log.info("Mesin %s siap & dipanaskan (%.0f dtk) — job berikutnya tidak perlu menunggu muat model.", name, took)
+        return name
+    return None
+
+
+def warm_utmos(rt: Runtime) -> None:
+    """penilai kealamian UTMOS dimuat sekali di latar — HANYA kalau filenya sudah ada di laptop (tidak pernah mengunduh di sini)"""
+    if not getattr(CFG, "natural_mos", True):
+        return
+    m = models_mod()
+    if m is None:
+        return  # cabang lama tanpa models.py: UTMOS dimuat saat pertama dibutuhkan seperti dulu
+    try:
+        if not m.utmos_ready(CFG):
+            return
+        from studio_worker import natural
+
+        natural.configure(True, CFG.models / "torch-hub")
+        fn = getattr(natural, "preload", None) or getattr(natural, "warm", None) or getattr(natural, "warmup", None)
+        if callable(fn):
+            fn()
+        else:
+            natural._predictor()
+    except Exception as e:
+        log.warning("Penilai kealamian UTMOS belum bisa dimuat (%s) — versi dipilih dari kejelasan + nada.", str(e)[:200])
+
+
+def warm_up(rt: Runtime, skip: set[str], engines: bool = True) -> None:
+    """pemanasan sekali: mesin suara → faster-whisper → UTMOS. Kunci mesin dipegang selama pemanasan: job yang datang menunggu
+    (pesannya "Menyiapkan mesin suara…") dan tidak memuat model yang sama dua kali."""
+    lock = getattr(rt.engines, "lock", None)
+    rt.loading = True
+    try:
+        if lock is not None:
+            lock.acquire()
+        try:
+            if engines:
+                rt.warm = (warm_engine(rt, skip) is not None) or bool(rt.warm)
+            if "whisper" not in skip and rt.asr is not None:
+                try:
+                    _ = rt.asr.available
+                except Exception as e:
+                    log.warning("faster-whisper belum bisa dimuat: %s", str(e)[:200])
+            if "utmos" not in skip:
+                warm_utmos(rt)
+        finally:
+            if lock is not None:
+                lock.release()
+    finally:
+        rt.loading = False
+
+
+def download_bg(rt: Runtime, hb: "Heartbeat", names: list[str], warm: bool) -> None:
+    """unduh model yang kurang (models.prepare: cepat, bisa dilanjutkan) di thread latar; selesai → komponennya dipakai lagi"""
+    m = models_mod()
+    if m is None:
+        return
+    DL.update(active=True, names=list(names))
+    hb.wake.set()
+    t0 = time.time()
+    log.info("Model belum lengkap (%s) — diunduh di latar. Job tetap jalan tanpa model itu dulu.", ", ".join(names))
+    try:
+        got = m.prepare(CFG, names=list(names), log=_LogFn(vlog.get("unduh")))
+    except Exception as e:
+        log.warning("Unduh model di latar gagal: %s — dicoba lagi saat worker dinyalakan ulang (atau jalankan siapkan-model).", str(e)[:300])
+        got = {}
+    finally:
+        DL["active"] = False
+    got = got if isinstance(got, dict) else {}
+    ready = [n for n in names if got.get(n) == "siap"]
+    DL["done"] = dict(got)
+    bad = {n: s for n, s in got.items() if s != "siap"}
+    if bad:
+        log.warning("Sebagian model belum terunduh: %s", "; ".join(f"{n}: {s}" for n, s in bad.items())[:500])
+    if ready:
+        log.info("Model siap dipakai (%s) dalam %.0f dtk.", ", ".join(ready), time.time() - t0)
+        set_ready(rt, ready)
+        if warm:
+            warm_up(rt, skip=set(names) - set(ready), engines=any(n in ready for n in ("chatterbox", "pocket")))
+    hb.wake.set()
+
+
+def prepare_bg(rt: Runtime, hb: "Heartbeat") -> list[str]:
+    """
+    saat worker mulai: cek model lokal (cepat, hanya cek file) → yang belum ada ditandai dilewati SEBELUM job / isi bank suara jalan,
+    lalu di thread latar (antrian tetap dicek): unduh yang kurang (AUTO_DOWNLOAD) & pemanasan mesin (PRELOAD). Balikan model yang kurang.
+    """
+    missing: list[str] = []
+    m = models_mod()
+    if m is not None:
+        try:
+            missing = [n for n in m.missing(CFG) if isinstance(n, str)]
+        except Exception as e:
+            log.warning("Cek model lokal gagal: %s", str(e)[:200])
+    auto = bool(getattr(CFG, "auto_download", True))
+    if missing:
+        set_absent(rt, missing, auto)
+        if auto:
+            threading.Thread(target=download_bg, args=(rt, hb, missing, bool(CFG.preload)), daemon=True, name="unduh-model").start()
+        else:
+            log.warning("Model belum diunduh: %s (AUTO_DOWNLOAD=0). Jalankan siapkan-model — sementara komponen itu dilewati.", ", ".join(missing))
+
+    def go() -> None:
+        log.info("Menyiapkan mesin suara di latar… (job yang datang menunggu sebentar)")
+        warm_up(rt, skip=set(missing))
+        hb.wake.set()
+
+    if CFG.preload:
+        threading.Thread(target=go, daemon=True, name="pemanasan").start()
+    return missing
+
+
+def keep_absent(rt: Runtime) -> None:
+    """mesin yang modelnya MASIH diunduh tetap ditandai belum siap (tanda gagal biasa kedaluwarsa 30 menit, unduhan bisa lebih lama)"""
+    if not DL["active"] or rt.engines is None:
+        return
+    for n in DL["names"]:
+        if n in ("chatterbox", "pocket") and n in CFG.engine_order and not rt.engines.is_down(n) and n not in rt.engines.loaded():
+            rt.engines.mark_down(n, ABSENT[n] + " — masih diunduh di latar")
+
+
 def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
     ctx = JobCtx(rt, table, job)
     kind = job.get("kind", "tts") if table == VOICE else "render"
@@ -226,6 +553,7 @@ def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
         log.exception("Job %s %s error tak terduga", kind, job["id"])
         ctx.fail(FAIL.get(kind, "Tugas gagal di laptop."))
     finally:
+        ctx.close()  # pengirim progres latar berhenti (patch yang belum terkirim dibuang)
         rt.status = {"status": "siap", "job": None}
         hb.wake.set()
 
@@ -249,9 +577,17 @@ def main() -> int:
         signal.signal(signal.SIGBREAK, on_sigint)  # type: ignore[attr-defined]
 
     log.info("voice-worker %s mulai — id %s, %d thread CPU, data di %s", VERSION, CFG.worker_id, CFG.cpu_threads, CFG.data)
+    if getattr(CFG, "preload_old_default", False):
+        log.info("PRELOAD=0 di .env adalah bawaan lama → sekarang mesin suara dipanaskan di latar saat mulai (matikan: PRELOAD=mati).")
     rt = Runtime(cfg=CFG, supa=Supa(CFG.supabase_url, CFG.service_key, CFG.worker_id))
     rt.engines = Engines(CFG)
     rt.asr = Asr(CFG)
+    try:  # catatan kecepatan mesin suara: batas waktu per baris, jumlah versi, perkiraan selesai (disimpan antar sesi)
+        from studio_worker.speed import Speed
+
+        rt.speed = Speed(CFG.data / "speed.json")
+    except ImportError:
+        rt.speed = None
     rt.render_ok, why = jobs_render.check(CFG)
     log.info("Render MP4 di laptop: %s", "siap" if rt.render_ok else f"tidak aktif ({why})")
     g = gpu_info()
@@ -262,18 +598,13 @@ def main() -> int:
 
     try:
         recover_stale(rt)
+        # cek model lokal, unduh yang kurang & panaskan mesin di LATAR — antrian langsung dicek (job yang datang saat pemanasan
+        # menunggu kunci mesin; model yang belum ada dilewati, tidak pernah diunduh di tengah job)
+        prepare_bg(rt, hb)
         seed.seed_bank(rt)
-        if CFG.preload:
-            for name in CFG.engine_order:
-                try:
-                    rt.engines.get(name)
-                    break
-                except Exception:
-                    continue
-            _ = rt.asr.available
         log.info("Menunggu antrian dari website… (Ctrl+C untuk berhenti)")
         last_err = 0.0
-        last_check = last_sweep = time.time()
+        last_check = last_sweep = last_active = time.time()
         while not stop.is_set():
             try:
                 job = rt.supa.claim(VOICE)
@@ -287,16 +618,20 @@ def main() -> int:
                 stop.wait(min(60, CFG.poll_sec * 3))
                 continue
             if job:
+                keep_absent(rt)
                 handle(rt, hb, table, job)
+                last_active = time.time()
                 continue
             if time.time() - last_sweep > 120:  # job 'proses' milik laptop ini padahal sedang menganggur = yatim → diulang / gagal
                 recover_stale(rt, idle=True)
                 last_sweep = time.time()
-            if time.time() - last_check > 600:  # cek ulang kesiapan render & lepas model kalau lama menganggur
+            if time.time() - last_check > 600:  # cek ulang kesiapan render & lepas model kalau lama menganggur (IDLE_UNLOAD_MIN)
                 rt.render_ok, _ = jobs_render.check(CFG)
                 rt.engines.maybe_idle_unload()
+                if not rt.engines.loaded():
+                    rt.warm = False
                 last_check = time.time()
-            stop.wait(CFG.poll_sec)
+            stop.wait(poll_wait(time.time(), last_active, CFG.poll_sec))
     except KeyboardInterrupt:
         log.info("Dihentikan.")
     finally:

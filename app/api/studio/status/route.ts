@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { studioGuard } from "@/lib/studio/access.server";
 import { elevenEnabled } from "@/lib/studio/elevenlabs.server";
 import { studioAdmin } from "@/lib/studio/storage.server";
+import { workerExtra } from "@/lib/studio/eta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,10 +10,12 @@ export const dynamic = "force-dynamic";
 /**
  * Status mesin suara: worker laptop dianggap online kalau detak terakhirnya < 60 dtk.
  * Semua error (tabel belum ada, Supabase lambat) -> nilai aman: offline, antrian 0.
+ * Worker baru juga melaporkan `speed` (catatan kecepatan → perkiraan job antri), `models` (model siap / belum diunduh) dan `warm`
+ * (mesin suara utama sudah dipanaskan) — diteruskan setelah dirapikan (workerExtra: hanya angka / teks pendek); worker lama → tidak ada.
  */
 
 const ONLINE_MS = 60_000;
-type Info = { gpu?: unknown; engine?: unknown; render?: unknown };
+type Info = { gpu?: unknown; engine?: unknown; render?: unknown } & Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 80) : null);
 
 export async function GET() {
@@ -41,7 +44,7 @@ export async function GET() {
 
   return NextResponse.json(
     {
-      worker: { online, lastSeen, gpu: str(info.gpu), engine: str(info.engine), queue },
+      worker: { online, lastSeen, gpu: str(info.gpu), engine: str(info.engine), queue, ...workerExtra(info) },
       // bank suara hanya kalau worker melaporkan mesin yang siap (engine kosong = chatterbox & pocket sama-sama mati)
       engines: { bank: online && !!str(info.engine), edge: true, elevenlabs: elevenEnabled() },
       freesound: !!process.env.FREESOUND_API_KEY?.trim(),

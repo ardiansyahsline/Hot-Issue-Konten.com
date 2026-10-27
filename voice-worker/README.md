@@ -66,7 +66,8 @@ Pemasang otomatis:
 - memasang **PyTorch CUDA 12.8 (cu128)** — wajib untuk RTX 50xx (Blackwell / sm_120),
 - memasang Chatterbox (tanpa dependensi lama yang mengunci PyTorch versi lama), pocket-tts, DeepFilterNet, faster-whisper, librosa, dll.,
 - memasang Remotion untuk render (`npm i --no-save @remotion/cli@4.0.535` di root repo, tidak mengubah package.json),
-- membuat file `.env`.
+- membuat file `.env`,
+- **mengunduh semua model suara sekali** (±4–5 GB, banyak koneksi sekaligus & bisa dilanjutkan — lihat *Siapkan model suara*).
 
 Butuh 10–30 menit tergantung internet. Kalau ada tulisan **GAGAL**, baca pesannya lalu jalankan ulang (aman diulang).
 
@@ -91,13 +92,13 @@ Ambil dari **Supabase Dashboard → Project Settings → API** (`Project URL` da
 ```
 Yang dicek: GPU terbaca PyTorch, versi CUDA cocok untuk RTX 50xx, tes 1 kalimat Chatterbox di GPU,
 ffmpeg, faster-whisper, DeepFilterNet, Node + Remotion. Hasil suara tes disimpan di `data\tes-chatterbox.wav` — dengarkan.
-Pertama kali akan **mengunduh model ±3–5 GB** (sekali saja).
+Model sudah diunduh `install.ps1` / `SIAPKAN-MODEL.bat` (lihat *Siapkan model suara*); belum? jalankan `SIAPKAN-MODEL.bat` dulu.
 
 Kalau muncul **"pindah ke pocket-tts"**: GPU belum bisa dipakai (lihat *Masalah umum*). Worker tetap jalan pakai CPU.
 
 ### 8. Jalankan
 **Paling gampang:** klik dua kali **`NYALAKAN-MESIN-SUARA.bat`** di folder utama repo (boleh juga disalin ke Desktop).
-Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → nyalakan worker.
+Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → unduh model yang belum ada → nyalakan worker.
 
 Atau manual: klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
 - `Ctrl+C` sekali = berhenti setelah tugas yang sedang jalan selesai.
@@ -123,6 +124,45 @@ Menghapusnya: `powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1 -H
 3. **Task Scheduler** (kalau pakai nyala otomatis): Start → *Task Scheduler* → *Task Scheduler Library* →
    **Konten Studio voice-worker** → kolom *Status* harus *Running*.
 
+## Alur kerja worker (supaya cepat) & log
+- **Saat mulai**: worker mengecek model di laptop (hanya cek file, sekejap). Model yang belum ada **tidak pernah diunduh di tengah
+  job** — komponennya dilewati dulu (Chatterbox → pocket-tts / Edge di website, cek ucapan → cek audio saja, DeepFilterNet → pembersih
+  ffmpeg, UTMOS → versi dipilih dari kejelasan + nada) lalu diunduh di latar (`AUTO_DOWNLOAD=1`); begitu selesai langsung dipakai lagi.
+- **Pemanasan** (`PRELOAD=1`, bawaan): mesin suara, cek ucapan (faster-whisper) & UTMOS dimuat **sekali** di latar dan tetap di GPU
+  selama worker hidup. Antrian tetap dicek; job yang datang saat pemanasan menunggu sebentar ("Menyiapkan mesin suara…").
+  `.env` lama yang masih berisi `PRELOAD=0` bawaan dulu otomatis dianggap 1 (mematikan: `PRELOAD=mati`).
+- **Selama job**: progres dikirim ke website di latar (paling sering 1× per detik, GPU tidak menunggu internet); mp3 tiap kalimat dibuat
+  & diunggah sambil kalimat berikutnya dibuat (`UPLOAD_WORKERS`, bawaan 3 sekaligus); `full.mp3` & SRT diunggah bersamaan. Tombol batal
+  di website menghentikan job di batas kalimat berikutnya.
+- **Perkiraan selesai**: pesan job di Studio diakhiri `· sisa ±40 dtk` / `· sisa ±2 mnt`, dihitung dari catatan kecepatan laptop ini
+  (`data/speed.json`, makin tepat setelah beberapa job) dan diperbarui tiap kalimat selesai. Render MP4 juga (perkiraan muncul setelah
+  ±10%). Detak jantung mengirim kecepatan (`info.speed`), status model (`info.models`) dan `info.warm` (mesin sudah panas).
+- **Cek antrian**: tiap 1 dtk selama 1 menit sesudah job (job susulan langsung terambil), lalu tiap `POLL_SEC`, dan tiap ≥ 10 dtk kalau
+  sudah 30 menit menganggur.
+- **Log bersih** (`QUIET_LOG=1`, bawaan): peringatan library yang tidak penting (FutureWarning / DeprecationWarning torch, torchaudio,
+  transformers, diffusers, pkg_resources, librosa, DeepFilterNet; "EOS token detected", "Detected 2x repetition", "forcing EOS" dari
+  Chatterbox) dan progress bar per langkah disembunyikan. Peringatan & error dari worker sendiri tetap tampil. Tiap job ditutup ringkasan,
+  mis. `Job selesai: 5 kalimat, 32 dtk suara, 41 dtk proses (perkiraan awal 45 dtk)`. Mencari masalah? Isi `QUIET_LOG=0` → semua tampil lagi.
+
+## Render MP4 pakai GPU NVIDIA
+Laptop ini punya 2 GPU (Intel bawaan + NVIDIA RTX). Tanpa diatur, Windows memberi Chrome render (Remotion) GPU **Intel** dan
+video di-encode CPU → render lambat. Dengan `RENDER_GPU=auto` (bawaan) worker otomatis:
+1. mendeteksi NVIDIA (`nvidia-smi`),
+2. mengunduh Chrome render kalau belum ada (`remotion browser ensure`) lalu mengatur exe-nya ke GPU **High performance** di
+   pengaturan Windows (registry pengguna `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, sama dengan menu Settings > Graphics,
+   tanpa hak admin) — exe-nya: `node_modules\.remotion\chrome-headless-shell\win64\chrome-headless-shell-win64\chrome-headless-shell.exe`
+   di folder repo (atau `REMOTION_BROWSER` kalau diisi),
+3. merender dengan `--gl=angle` (gambar di GPU) + `--hardware-acceleration=if-possible --video-bitrate=10M` (encode video NVENC),
+4. kalau render seperti itu gagal → diulang sekali dengan cara lama (encode CPU) dan sampai worker dinyalakan ulang NVENC tidak dipakai lagi.
+
+Cek di log (sekali per sesi, saat worker mulai — atau saat render pertama kalau Chrome render belum diunduh):
+**`Render memakai GPU: NVIDIA GeForce RTX 5050 Laptop GPU (ANGLE, D3D11)`** = sudah benar.
+Kalau tertulis Intel / SwiftShader, atur manual sekali: **Settings > System > Display > Graphics** → *Add desktop app* (*Browse*) →
+pilih `chrome-headless-shell.exe` di atas → *Options* → **High performance** → *Save*, lalu nyalakan ulang worker.
+Matikan semuanya dengan `RENDER_GPU=off`; `RENDER_GPU=nvidia`
+memaksa walau `nvidia-smi` tidak terbaca. `RENDER_BITRATE` (bawaan `10M`) = kualitas video saat encode NVENC.
+`RENDER_CONCURRENCY=auto` = jumlah tab Chrome render sesuai core CPU (2–4; bawaan tetap 2).
+
 ## Update setelah ada perubahan di repo
 ```powershell
 cd C:\Konten.com\Hot-Issue-Konten.com
@@ -131,6 +171,56 @@ cd voice-worker
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 Lalu restart worker (tutup jendela `jalankan.bat` dan buka lagi, atau restart laptop kalau pakai nyala otomatis).
+
+## Siapkan model suara (unduh sekali di depan)
+
+Semua model diunduh **sebelum** membuat suara — tidak pernah lagi di tengah job VO. (Dulu penilai kealamian UTMOS 392 MB baru
+diunduh saat job berjalan, dari GitHub ±115 KB/s → job tertahan ±1 jam.)
+
+| Model | Untuk | Ukuran | Sumber | Disimpan di |
+|---|---|---|---|---|
+| `chatterbox` | mesin suara utama (GPU) — **wajib** | ±3 GB | HuggingFace `grandhigh/Chatterbox-TTS-Indonesian` (+ `ResembleAI/chatterbox`) | `data\hf` |
+| `whisper` | cek ucapan — **wajib** | ±480 MB (`small`) | HuggingFace `Systran/faster-whisper-small` | `data\models\whisper` |
+| `deepfilter` | pembersih rekaman bank suara | ±8 MB | GitHub `Rikorose/DeepFilterNet` | `%LOCALAPPDATA%\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3` |
+| `utmos` | penilai kealamian (opsional) | 392 MB | mirror `UTMOS_URLS` dulu, cadangan GitHub Releases `tarepan/SpeechMOS` | `data\models\torch-hub` |
+| `pocket` | mesin cadangan CPU | ±0,5 GB | HuggingFace `tryzz889/pocket-tts-indonesian` (+ `kyutai/pocket-tts`) | `data\hf` |
+
+Kapan diunduh:
+- **`install.ps1`** langkah 9/9 (lewati dengan `-TanpaModel`).
+- **`NYALAKAN-MESIN-SUARA.bat`** tiap dinyalakan: `siapkan_model.py --cepat` — hanya yang belum ada (kalau semua sudah ada:
+  selesai dalam hitungan detik, tanpa internet). Gagal pun mesin suara tetap dinyalakan.
+- **Manual**: klik dua kali **`SIAPKAN-MODEL.bat`** (atau dari PowerShell, dengan pilihan):
+  ```powershell
+  .\SIAPKAN-MODEL.bat                    # cek semua + unduh yang kurang + lengkapi yang setengah jadi
+  .\SIAPKAN-MODEL.bat --cek              # status saja (kode keluar 1 kalau model wajib belum ada)
+  .\SIAPKAN-MODEL.bat --cepat            # hanya yang belum ada
+  .\SIAPKAN-MODEL.bat --tanpa-utmos      # lewati UTMOS
+  .\SIAPKAN-MODEL.bat --hanya whisper,utmos --koneksi 16
+  ```
+  Tidak butuh `.env` Supabase (boleh dijalankan sebelum `.env` diisi).
+
+Kenapa cepat & aman:
+- **Banyak koneksi sekaligus**: file dibagi bagian 8 MB yang diunduh paralel (`DOWNLOAD_CONNECTIONS`, bawaan 8). GitHub membatasi
+  kecepatan *per koneksi*, jadi 8 koneksi ≈ 8× lebih cepat. HuggingFace memakai mode cepat Xet (`HF_XET_HIGH_PERFORMANCE`) +
+  `max_workers` = jumlah koneksi.
+- **Bisa dilanjutkan**: internet putus / jendela ditutup / Ctrl+C → jalankan lagi, bagian yang sudah ada tidak diulang
+  (`<file>.part` + `<file>.part.json`). Macet 30 dtk tanpa data → disambung ulang otomatis; tiap bagian dicoba ulang dengan jeda.
+- **Dicek dulu**: ukuran, sha256 (UTMOS) atau CRC isi zip (DeepFilterNet, kode SpeechMOS) — file baru dipindah ke nama akhir
+  kalau sudah lengkap & benar. Halaman error / file lain dari mirror ditolak, lalu sumber berikutnya dicoba.
+- Progres jelas tiap ±2 dtk, contoh: `UTMOS  37% · 145/392 MB · 5,2 MB/s · sisa ±48 dtk`.
+
+Kalau ada model yang belum siap saat mesin suara jalan, job **tetap jalan tanpa menunggu**: UTMOS → versi dipilih dari kejelasan
+(ASR) + nada; DeepFilterNet → pembersih ffmpeg; whisper → cek audio saja; Chatterbox → mesin cadangan. Dengan `AUTO_DOWNLOAD=1`
+(bawaan) yang kurang diunduh di latar, dan begitu selesai langsung dipakai (dicek ulang tiap ±60 dtk).
+
+**Mirror UTMOS** (opsional): isi `UTMOS_URLS` di `.env`, mis. `UTMOS_URLS=hf://<pemilik>/<repo>/utmos22_strong_step7459_v1.pt`
+(atau alamat `https://…`, beberapa dipisah koma). Isinya harus persis file resmi (411.179.119 byte, sha256 `38aa51ab…9bff`);
+kalau beda otomatis ditolak lalu GitHub dipakai.
+
+Angka uji (`selftest_unduh.py`, server tes dibatasi 200 KB/s per koneksi): 1 koneksi 0,20 MB/s → 8 koneksi 1,32 MB/s (6,6×).
+Unduhan UTMOS asli dari GitHub Releases di server uji: 1 koneksi 14,3 MB/s → 8 koneksi 67,8 MB/s (392 MB dalam 6 dtk, sha256
+cocok). Di laptop (±115 KB/s per koneksi) perkiraannya ±0,9 MB/s → 392 MB ±7 menit (dulu ±1 jam). Masih lambat?
+Coba `--koneksi 16` atau `DOWNLOAD_CONNECTIONS=16`.
 
 ---
 
@@ -161,19 +251,26 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `GPU tidak terdeteksi` / "pindah ke pocket-tts" | Update driver NVIDIA (≥ 570), restart, jalankan `install.ps1` lagi, lalu `cek_gpu.py`. |
 | `butuh PyTorch CUDA 12.8+` | PyTorch terpasang versi lama. Jalankan `install.ps1` lagi (memasang ulang torch cu128). |
 | `VRAM GPU penuh` | Tutup game / aplikasi berat lain. Worker otomatis mencoba sekali lagi lalu pindah ke pocket-tts. |
-| Unduh model gagal / lambat | Cek internet. Kalau sering kena batas unduh HuggingFace, buat token gratis di huggingface.co → isi `HF_TOKEN` di `.env`. |
-| `DeepFilterNet tidak bisa dipakai` | Model pembersih diunduh dari GitHub saat pertama dipakai. Kalau gagal, worker memakai pembersih ffmpeg (hasil sedikit kurang bersih). |
+| Unduh model gagal / lambat | Jalankan `SIAPKAN-MODEL.bat` lagi — unduhan **dilanjutkan**, bukan diulang. Lambat: `--koneksi 16` / `DOWNLOAD_CONNECTIONS=16`. Sering kena batas unduh HuggingFace: buat token gratis di huggingface.co → isi `HF_TOKEN` di `.env`. |
+| `DeepFilterNet3 belum diunduh` / `tidak bisa dipakai` | Jalankan `SIAPKAN-MODEL.bat`. Sementara itu worker memakai pembersih ffmpeg (hasil sedikit kurang bersih), lalu otomatis pindah ke DeepFilterNet begitu modelnya ada. |
+| `Model whisper belum diunduh` | Jalankan `SIAPKAN-MODEL.bat`. Sementara itu versi suara dipilih dari cek audio saja. |
 | Bot WAHA jadi lambat | Turunkan `CPU_THREADS` di `.env` (mis. 2). Worker sudah jalan dengan prioritas rendah & satu tugas sekaligus. |
 | VRAM ingin dilepas saat menganggur | Isi `IDLE_UNLOAD_MIN=30` (model dilepas setelah 30 menit tanpa tugas, dimuat lagi saat ada tugas). |
 | Render gagal | Pastikan Node.js 20 terpasang lalu `install.ps1` lagi. Render pertama mengunduh Chrome khusus render (±100 MB). Kalau unduhan itu diblokir jaringan, unduh *chrome-headless-shell* (Chrome for Testing) sendiri lalu isi path-nya di `REMOTION_BROWSER` (`.env`). |
+| Render lambat / Task Manager menunjukkan GPU Intel | Lihat log: `Render memakai GPU: …`. Kalau bukan NVIDIA, ikuti langkah manual di bagian *Render MP4 pakai GPU NVIDIA*. Pastikan `RENDER_GPU` bukan `off`. |
+| Log `NVENC … tidak bisa dipakai` | Driver NVIDIA lama / ffmpeg Remotion tanpa NVENC. Render tetap jalan (encode CPU). Update driver NVIDIA lalu nyalakan ulang worker. |
 | Upload video gagal (file besar) | Paket gratis Supabase membatasi ukuran file (±50 MB). Render video lebih pendek atau naikkan batas di Supabase. |
-| `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada. Biasanya karena unduhan pertama (±410 MB dari GitHub) gagal / tanpa internet. Coba lagi dengan menyalakan ulang worker, atau matikan dengan `NATURAL_MOS=0`. |
+| `UTMOS belum diunduh` / `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada, job tidak menunggu. Jalankan `SIAPKAN-MODEL.bat` (392 MB, bisa dilanjutkan) — begitu selesai UTMOS otomatis dipakai. Atau matikan dengan `NATURAL_MOS=0`. |
 | `Worker sudah jalan` | Sudah ada worker lain (mis. dari nyala otomatis). Cukup satu. |
 
 **Tes tanpa GPU / model** (memastikan pemasangan benar):
 ```powershell
 .venv\Scripts\python selftest.py
 .venv\Scripts\python selftest_natural.py
+.venv\Scripts\python selftest_runtime.py
+.venv\Scripts\python selftest_unduh.py      # pengunduh model: paralel, lanjut setelah putus, cek sha, tanpa internet
+.venv\Scripts\python selftest_cepat.py      # jalur cepat Chatterbox (bobot acak di CPU; --ringan = tanpa torch)
+.venv\Scripts\python selftest_render_gpu.py  # render MP4 pakai GPU NVIDIA
 ```
 
 ---
@@ -186,17 +283,57 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `jalankan.bat` / `pasang-otomatis.ps1` | Menjalankan manual / otomatis lewat Task Scheduler |
 | `install.ps1`, `requirements.txt`, `requirements-gpu.txt` | Pemasang (urutan paket penting — pakai `install.ps1`) |
 | `cek_gpu.py` | Cek GPU + tes suara |
-| `selftest.py`, `selftest_natural.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo) |
+| `SIAPKAN-MODEL.bat` / `siapkan_model.py` | Unduh / cek model suara di depan (cepat, bisa dilanjutkan) |
+| `selftest.py`, `selftest_natural.py`, `selftest_unduh.py`, `selftest_runtime.py`, `selftest_cepat.py`, `selftest_render_gpu.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_unduh.py`: pengunduh model; `selftest_runtime.py`: alur worker; `selftest_cepat.py`: jalur cepat Chatterbox; `selftest_render_gpu.py`: render pakai NVIDIA) |
 | `tambah_sfx.py`, `freesound_cc0.py` | Tambah SFX |
-| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
+| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `models.py` + `unduh.py` (cek & unduh model), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
 | `bank-suara/` | Rekaman referensi suara Alif (jangan diubah) |
 | `data/` | Dibuat otomatis: log, cache suara, model, file sementara (tidak masuk Git) |
 
 ## Pengaturan `.env` lain
 Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris untuk job yang tidak membawa
 setelan, 1–4, bawaan 3 — website Studio sekarang selalu meminta 3 versi, jadi angka ini tidak mengubah job dari website; laptop lambat
-tidak perlu diatur: versi ke-3 otomatis dilewati kalau batas waktu per baris terlewati, minimal 2 versi), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
-berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`.
+tidak perlu diatur: jumlah versi otomatis dikurangi kalau tidak sempat, lihat **Kecepatan mesin suara** di bawah), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
+berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`, `PRELOAD` (1 = panaskan mesin di latar saat mulai), `UPLOAD_WORKERS` (unggahan
+bersamaan, bawaan 3), `QUIET_LOG` (1 = log bersih, 0 = semua peringatan tampil).
+
+## Kecepatan mesin suara
+Kenapa dulu lambat (6,5 detik suara butuh ±32 detik) dan apa yang diubah:
+- **Hook yang bocor.** Chatterbox bawaan memasang 3 "penyadap" attention baru di setiap kalimat tanpa pernah melepasnya — tiap
+  penyadap menyalin data ke CPU di setiap langkah, jadi worker makin lama makin lambat. Sekarang dipasang **sekali** saja.
+- **Semua 30 layer dipaksa ke mode attention lambat** (eager) hanya untuk mengecek keselarasan teks. Sekarang hanya 3 layer yang
+  dicek memakai mode itu, 27 sisanya memakai SDPA (cepat).
+- **Versi dibuat satu-satu.** 3 versi = 3× waktu. Sekarang 3 versi dibuat **sekaligus** di GPU (konteks suara + teks dihitung sekali);
+  GPU mengerjakan beberapa baris hampir sama cepatnya dengan satu baris. Tiap versi tetap punya benih acaknya sendiri.
+- **bf16** (RTX 30xx ke atas, termasuk RTX 50xx): transformer dijalankan bf16, bagian lain tetap fp32. Kalau muncul angka tidak wajar,
+  otomatis kembali ke fp32 untuk sesi itu.
+- **Batas panjang dari teks.** Dulu tiap versi boleh sampai 40 detik suara; versi yang "nyasar" membuang waktu sampai batas itu.
+  Sekarang batasnya ±2,5× perkiraan panjang kalimat.
+- **Muat model lebih cepat**: model dicari di laptop dulu (tanpa cek internet), modul dibangun langsung di GPU, bobot dibaca langsung
+  ke GPU. Model belum diunduh → pesan "jalankan SIAPKAN-MODEL.bat" (tidak pernah mengunduh di tengah job).
+- **Cek ucapan tiap versi** memakai faster-whisper beam 1 langsung dari memori (tanpa tulis file); timestamp kata hasil akhir tetap
+  teliti (beam 5).
+- **Batas waktu per kalimat dihitung dari panjang kalimat** (bawaan `max(20 dtk, 8 × panjang ucapan)`, dulu minimal 45 dtk tetap).
+  Jumlah versi otomatis disesuaikan dari kecepatan laptop yang tercatat (`data/speed.json`): kalau 3 versi diperkirakan tidak sempat,
+  dibuat 2 atau 1 (alasannya tertulis di log). Semua versi salah ucap → dicoba sekali lagi maksimal 2 versi kalau waktunya cukup.
+
+Contoh baris log per potongan: `6,5 dtk suara dalam 9,8 dtk (3 versi sekaligus)` (angkanya tergantung laptop).
+
+Ukur sendiri di laptop: matikan worker, lalu klik dua kali **`UKUR-KECEPATAN.bat`** (±2–4 menit). Hasilnya tabel cara lama vs cara
+baru (detik suara per detik proses, langkah/detik, VRAM puncak), file `data/bench-<tanggal>.json`, dan contoh suara
+`data/bench-A.wav` (lama) / `data/bench-C.wav` (baru) untuk didengar.
+
+Pengaturan (`.env`, biarkan bawaan kecuali ada masalah):
+
+| Nama | Bawaan | Arti |
+|---|---|---|
+| `TTS_DTYPE` | `auto` | `auto` = bf16 kalau GPU mendukung; `fp32` = paling aman (lebih lambat) |
+| `TTS_BATCH` | `1` | `1` = versi satu kalimat dibuat sekaligus; `0` = satu-satu |
+| `ASR_BEAM_TAKES` | `1` | ketelitian cek ucapan tiap versi (1 = cepat) |
+| `LINE_BUDGET_PER_SEC` | `8` | batas waktu per kalimat = detik ucapan × angka ini … |
+| `LINE_BUDGET_MIN` | `20` | … tapi minimal sekian detik |
+
+Tes mandiri jalur cepat (bobot acak di CPU, tanpa GPU/internet): `.venv\Scripts\python selftest_cepat.py` (`--ringan` = tanpa torch).
 
 ---
 

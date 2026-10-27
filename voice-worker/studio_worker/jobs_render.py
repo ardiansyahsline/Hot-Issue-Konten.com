@@ -8,6 +8,8 @@ Langkah:
   2. `remotion bundle remotion/index.ts --public-dir=<tmp>` lalu SFX bawaan juga ditaruh di <bundle>/api/studio/asset/<dir>/
      (komposisi menghitung alamat SFX bawaan sendiri lewat sfxSrc(), jadi alamat itu harus tetap bisa dibuka server render)
   3. `remotion render <bundle> StudioVideo out.mp4 --props=props.json --concurrency=2` (progres dibaca dari output CLI)
+     laptop dengan GPU NVIDIA (RENDER_GPU=auto): Chrome render diarahkan ke NVIDIA (gpu_pref.py) + `--gl=angle
+     --hardware-acceleration=if-possible --video-bitrate=10M` (encode NVENC); gagal → diulang sekali dengan argumen lama (encode CPU)
   4. ffmpeg loudnorm 2 tahap → -14 LUFS / TP -1 dBTP (video di-copy), upload renders/<id>.mp4
 """
 from __future__ import annotations
@@ -27,7 +29,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import ff, mix
+from . import ff, gpu_pref, mix
 from . import log as vlog
 from .jobctx import Cancelled, JobCtx, JobError
 from .supa import norm_path
@@ -42,6 +44,8 @@ EXT_OF = {"mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav", "png": 
 SHARED_DIRS = {"voices", "sfx", "tts", "vo"}  # folder storage yang boleh dibaca semua user Studio
 # logo brand bawaan (BRANDS di lib/studio/timeline.ts) → file di folder public repo; remotion/Root.tsx memetakannya ke <public>/brand/<file>
 PRESET_LOGOS = {"/konten-logo.png": "konten-logo.png", "/brand/tws-logo.svg": "brand/tws-logo.svg"}
+# perkiraan sisa waktu render (linear dari waktu berjalan) baru ditampilkan sesudah progres sekian — di awal masih terlalu meleset
+ETA_MIN_FRAC = 0.10
 
 
 # ---------------------------------------------------------------- cek kesiapan
@@ -65,7 +69,165 @@ def check(cfg) -> tuple[bool, str]:
         return False, "@remotion/cli belum terpasang (jalankan install.ps1)"
     if not ff.available():
         return False, "ffmpeg belum terpasang"
+    start_gpu_check(cfg)  # sekali per sesi, di latar (tidak menahan worker)
     return True, "siap"
+
+
+# ---------------------------------------------------------------- GPU NVIDIA untuk render (RENDER_GPU)
+# Laptop hybrid (Intel + NVIDIA): tanpa pengaturan, Chrome render memakai GPU Intel & ffmpeg encode di CPU (libx264).
+# Dengan NVIDIA: exe Chrome render diberi preferensi "High performance" di Windows + --gl=angle (ANGLE D3D11 di adapter itu),
+# encode video lewat NVENC (--hardware-acceleration=if-possible; NVENC tidak memakai CRF → --video-bitrate wajib, kalau tidak
+# ffmpeg memakai bitrate bawaannya yang rendah). Kalau ffmpeg bawaan Remotion tidak punya NVENC / driver menolak, render GAGAL
+# (if-possible hanya mengecek opsi kualitas) → diulang sekali dengan argumen lama & sesi ini tidak memakai NVENC lagi.
+_gpu_lock = threading.Lock()
+_gpu: dict = {"prepared": False, "nvenc_bad": False, "angle_bad": False, "thread": None, "said": False}
+# hasil cek GPU terakhir (sekali per sesi) → detak jantung info.render_gpu lewat render_gpu_info()
+last_probe: dict = {}
+NVENC_ERR = re.compile(r"nvenc|nvcuda|nvEncodeAPI|OpenEncodeSession|No capable devices|CUDA_ERROR|cuInit", re.I)
+FAIL_LINE = re.compile(r"error|gagal|failed|cannot|could not|unable|not supported|invalid", re.I)
+
+
+def gpu_mode(cfg) -> str:
+    m = str(getattr(cfg, "render_gpu", "auto") or "auto").lower()
+    return m if m in ("auto", "nvidia", "off") else "auto"
+
+
+def want_nvidia(cfg) -> bool:
+    """argumen GPU NVIDIA dipakai? off → tidak; nvidia → selalu; auto → kalau nvidia-smi / torch menemukan GPU NVIDIA"""
+    m = gpu_mode(cfg)
+    if m == "off":
+        return False
+    return m == "nvidia" or bool(gpu_pref.nvidia_name())
+
+
+def gpu_args(cfg) -> list[str]:
+    """argumen tambahan `remotion render` untuk NVIDIA (kosong = render persis seperti dulu)"""
+    if not want_nvidia(cfg):
+        return []
+    nvenc = not _gpu["nvenc_bad"]
+    out: list[str] = []
+    # --gl=angle selalu bersama NVENC; setelah NVENC ditandai tidak bisa, hanya kalau Chrome terbukti memakai NVIDIA
+    if not _gpu["angle_bad"] and (nvenc or last_probe.get("kind") == "nvidia"):
+        out.append("--gl=angle")
+    if nvenc:
+        out += ["--hardware-acceleration=if-possible", f"--video-bitrate={getattr(cfg, 'render_bitrate', '') or '10M'}"]
+    return out
+
+
+def render_gpu_info() -> dict:
+    """ringkasan untuk detak jantung (info.render_gpu): GPU Chrome render + cara encode render berikutnya"""
+    info = dict(last_probe)
+    if info.get("aktif"):
+        info["encode"] = "cpu" if _gpu["nvenc_bad"] else "nvenc"
+        info["gl"] = "bawaan" if _gpu["angle_bad"] or (_gpu["nvenc_bad"] and info.get("kind") != "nvidia") else "angle"
+    return info
+
+
+def prepare_gpu(cfg, ensure: Callable[[], None] | None = None) -> dict:
+    """sekali per sesi (aman dipanggil berkali-kali): Chrome render ada (ensure = `remotion browser ensure`, hanya dari job render)
+    → preferensi GPU performa tinggi di Windows → cek GPU yang benar-benar dipakai Chrome. Error apa pun selain batal → peringatan saja."""
+    global last_probe
+    with _gpu_lock:
+        if _gpu["prepared"]:
+            return last_probe
+        mode = gpu_mode(cfg)
+        nv = gpu_pref.nvidia_name() if mode != "off" else None
+        if not want_nvidia(cfg):
+            last_probe = {"mode": mode, "aktif": False, "nvidia": nv, "status": "RENDER_GPU=off" if mode == "off" else "GPU NVIDIA tidak terdeteksi"}
+            _gpu["prepared"] = True
+            log.info("Render MP4: %s — Chrome & encode video memakai pengaturan bawaan.", last_probe["status"])
+            return last_probe
+        if not _gpu["said"]:
+            _gpu["said"] = True
+            log.info("Render MP4 pakai GPU NVIDIA (%s): gambar lewat ANGLE, encode video NVENC %s.", nv or "dipaksa RENDER_GPU=nvidia", getattr(cfg, "render_bitrate", "10M"))
+        browser = getattr(cfg, "render_browser", "") or ""
+        exe = gpu_pref.chrome_path(cfg.repo, browser)
+        if not exe.exists() and ensure is not None and not browser:
+            try:
+                ensure()
+            except (Cancelled, JobError):
+                raise
+            except Exception as e:
+                log.warning("Chrome render belum bisa diunduh (%s) — Remotion mencoba lagi saat render.", str(e)[:200])
+            exe = gpu_pref.chrome_path(cfg.repo, browser)
+        if not exe.exists():  # belum diunduh: dicoba lagi sebelum render berikutnya
+            last_probe = {"mode": mode, "aktif": True, "nvidia": nv, "status": "REMOTION_BROWSER tidak ditemukan" if browser else "Chrome render belum diunduh"}
+            return last_probe
+        reg = gpu_pref.set_preference(exe)
+        res = gpu_pref.probe(exe)
+        gpu_pref.report(res, nv, exe)
+        last_probe = {
+            "mode": mode, "aktif": True, "nvidia": nv, "status": "dicek", "chrome": res.get("name") or None, "kind": res.get("kind"),
+            "api": res.get("api") or None, "error": res.get("error"), "windows_pref": reg, "sec": res.get("sec"),
+        }
+        _gpu["prepared"] = True
+        return last_probe
+
+
+def start_gpu_check(cfg) -> None:
+    """dari check(): siapkan GPU di thread latar (nvidia-smi + cek Chrome ±1–20 dtk), sekali per sesi, TANPA mengunduh Chrome"""
+    if _gpu["prepared"]:
+        return
+    t = _gpu.get("thread")
+    if t is not None and t.is_alive():
+        return
+
+    def go() -> None:
+        try:
+            prepare_gpu(cfg)
+        except Exception as e:  # cek GPU tidak boleh bikin worker crash
+            log.warning("Cek GPU render gagal: %s", str(e)[:200])
+
+    _gpu["thread"] = threading.Thread(target=go, daemon=True, name="render-gpu")
+    _gpu["thread"].start()
+
+
+def fail_reason(tail: list[str]) -> str:
+    for line in reversed(tail):
+        if FAIL_LINE.search(line):
+            return line[:200]
+    return (tail[-1] if tail else "tanpa pesan")[:200]
+
+
+def _mark_bad(what: str) -> None:
+    if _gpu[what]:
+        return
+    _gpu[what] = True
+    if what == "nvenc_bad":
+        log.warning("NVENC (encode video di GPU NVIDIA) tidak bisa dipakai di laptop ini — sampai worker dinyalakan ulang, render langsung encode di CPU.")
+    else:
+        log.warning("--gl=angle bermasalah di laptop ini — sampai worker dinyalakan ulang, render memakai pengaturan GL bawaan Chrome.")
+
+
+def render_cli(cfg, args: list[str], raw: Path, run: Callable[[list[str], float], tuple[int, list[str]]], on_retry: Callable[[], None] | None = None) -> tuple[int, list[str]]:
+    """`remotion render` dengan argumen GPU (gpu_args). Gagal (kode keluar ≠ 0) → ulang SEKALI dengan argumen lama
+    (tanpa --hardware-acceleration / --gl / --video-bitrate = encode CPU, kualitas CRF bawaan). Batal & kelamaan tidak diulang.
+    Tanda "tidak bisa" untuk sesi ini: NVENC langsung kalau pesan error menyebut NVENC/CUDA; selain itu hanya kalau ulangan
+    tanpa GPU berhasil (render yang gagal karena hal lain tidak mematikan NVENC). Yang ditandai: NVENC dulu, --gl=angle kalau
+    NVENC sudah tidak dipakai."""
+    extra = gpu_args(cfg)
+    limit = float(cfg.render_timeout_min * 60)
+    t0 = time.time()
+    code, tail = run([*args, *extra], limit)
+    if not extra or (code == 0 and raw.exists()):
+        return code, tail
+    hw = any(a.startswith("--hardware-acceleration") for a in extra)
+    if hw and NVENC_ERR.search("\n".join(tail)):
+        _mark_bad("nvenc_bad")
+    log.warning("Render dengan GPU (%s) gagal: %s — diulang sekali tanpa --hardware-acceleration & tanpa --gl (encode CPU).\n%s",
+                " ".join(extra), fail_reason(tail), "\n".join(tail[-8:]))
+    try:
+        raw.unlink()
+    except OSError:
+        pass
+    if on_retry:
+        on_retry()
+    code, tail = run(list(args), max(300.0, limit - (time.time() - t0)))
+    if code == 0 and raw.exists():
+        _mark_bad("nvenc_bad" if hw else "angle_bad")
+    else:
+        log.warning("Render tanpa GPU juga gagal — penyebabnya bukan GPU.")
+    return code, tail
 
 
 # ---------------------------------------------------------------- tulis ulang alamat file di timeline
@@ -374,6 +536,13 @@ def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_s
 
 
 # ---------------------------------------------------------------- job
+def render_left(elapsed: float, frac: float) -> float | None:
+    """perkiraan sisa render (detik) untuk pesan "· sisa ±N": linear dari waktu berjalan, baru dipercaya sesudah ≥ 10% progres"""
+    if frac < ETA_MIN_FRAC or frac <= 0 or elapsed < 0:
+        return None
+    return max(0.0, elapsed * (1.0 - min(1.0, frac)) / frac)
+
+
 def run(ctx: JobCtx) -> None:
     rt = ctx.rt
     cfg = rt.cfg
@@ -402,6 +571,13 @@ def run(ctx: JobCtx) -> None:
         except Exception:  # internet putus sebentar: render jalan terus, dicek lagi 3 dtk kemudian
             return False
 
+    t_start = getattr(ctx, "t0", None) or time.monotonic()
+
+    def eta(frac: float) -> None:
+        left = render_left(time.monotonic() - t_start, frac)
+        if left is not None:
+            ctx.eta(left)
+
     def on_line(line: str) -> None:
         log.debug("remotion: %s", line)
         pr = parse_progress(line)
@@ -409,6 +585,7 @@ def run(ctx: JobCtx) -> None:
             return
         st, f = pr
         base, span, label = {"bundle": (0.08, 0.1, "Menyiapkan komposisi…"), "render": (0.2, 0.6, "Merender gambar…"), "encode": (0.8, 0.08, "Menyusun video…")}[st]
+        eta(base + span * f)
         ctx.progress(base + span * f, f"{label} {int(f * 100)}%")
 
     try:
@@ -434,17 +611,34 @@ def run(ctx: JobCtx) -> None:
             raise JobError("Komposisi video gagal disiapkan di laptop (cek log worker).")
         stage_builtin_assets(cfg.repo, bundle)
 
+        def ensure_browser() -> None:  # Chrome render belum ada → unduh dulu supaya preferensi GPU & cek GPU terpasang sebelum render
+            ctx.progress(0.19, "Menyiapkan Chrome render…", force=True)
+            c, t = run_cli([node, str(cli), "browser", "ensure", "--log=info"], cfg.repo, lambda ln: log.debug("remotion: %s", ln), stop, 15 * 60)
+            if c != 0:
+                log.warning("remotion browser ensure gagal:\n%s", "\n".join(t[-8:]))
+
+        try:
+            prepare_gpu(cfg, ensure_browser)
+        except (Cancelled, JobError):
+            raise
+        except Exception as e:  # persiapan GPU tidak boleh menggagalkan render
+            log.warning("Persiapan GPU render gagal (%s) — render tetap jalan.", str(e)[:200])
+
         raw = work / "raw.mp4"
+        eta(0.2)
         ctx.progress(0.2, "Merender gambar…", force=True)
         args = [node, str(cli), "render", str(bundle), "StudioVideo", str(raw), f"--props={props}", f"--concurrency={cfg.render_concurrency}", "--codec=h264", "--log=info", *conf_arg]
         browser = getattr(cfg, "render_browser", "")
         if browser:  # Chrome headless sendiri (kalau unduhan otomatis Remotion diblokir jaringan)
             args.append(f"--browser-executable={browser}")
-        code, tail = run_cli(args, cfg.repo, on_line, stop, cfg.render_timeout_min * 60)
+        code, tail = render_cli(
+            cfg, args, raw, lambda a, limit: run_cli(a, cfg.repo, on_line, stop, limit), lambda: ctx.progress(0.2, "Merender ulang (encode CPU)…", force=True)
+        )
         if code != 0 or not raw.exists():
             log.error("remotion render gagal:\n%s", "\n".join(tail))
             raise JobError("Render video gagal di laptop (cek log worker).")
 
+        eta(0.9)
         ctx.progress(0.9, "Menyamakan volume akhir (-14 LUFS)…", force=True)
         final = work / "final.mp4"
         if ff.has_audio(raw):
@@ -454,6 +648,7 @@ def run(ctx: JobCtx) -> None:
         size = final.stat().st_size
         if size > MAX_UPLOAD:
             raise JobError("File video terlalu besar untuk penyimpanan (maks 200 MB). Coba durasi lebih pendek.")
+        eta(0.95)
         ctx.progress(0.95, "Mengunggah video…", force=True)
         path = rt.supa.upload(f"renders/{ctx.id}.mp4", final, "video/mp4", timeout=1800)
         msg = "Video siap diunduh" + (f" ({len(missing)} file tidak ketemu, dilewati)" if missing else "")

@@ -6,10 +6,16 @@ Pemuat tangguh — isi repo model tidak selalu sama:
   2. repo format multilingual (t3_mtl*.safetensors + grapheme_mtl*.json) → ChatterboxMultilingualTTS
   3. repo HANYA berisi bobot t3 (hasil fine-tune) → model dasar ResembleAI/chatterbox dimuat, lalu state dict t3 diganti
 Semua langkah dicatat jelas di log.
+
+Muat cepat: file dicari di cache lokal dulu (tanpa cek jaringan); worker TIDAK pernah mengunduh di tengah job — model belum ada →
+EngineDown("… jalankan SIAPKAN-MODEL.bat"); unduh hanya lewat allow_download=True (perintah siapkan-model). Modul dibangun langsung
+di GPU (bobot acak awal tidak dihitung di CPU dulu), bobot dibaca langsung ke GPU, waktu tiap tahap dicatat.
+Membuat suara: jalur cepat t3fast (bf16, SDPA, beberapa versi sekaligus, hook tidak bocor) dengan cadangan cara bawaan.
 """
 from __future__ import annotations
 
 import inspect
+import logging
 import time
 from pathlib import Path
 
@@ -64,21 +70,97 @@ def scan(folder: Path) -> dict:
     return out
 
 
+
+
+MISSING_MSG = "model Chatterbox belum diunduh — jalankan SIAPKAN-MODEL.bat"
+
+
 def _download(repo: str, token: str | None, patterns: list[str]) -> Path:
     from huggingface_hub import snapshot_download
 
     return Path(snapshot_download(repo_id=repo, token=token or None, allow_patterns=patterns))
 
 
-def _state(path: Path) -> dict:
+def _local(repo: str, token: str | None, patterns: list[str]) -> Path | None:
+    """snapshot yang SUDAH ada di cache HuggingFace laptop (tanpa cek jaringan sama sekali), atau None"""
+    try:
+        from .. import models as vmodels  # pemuat model bersama (siapkan-model) bila ada
+
+        fn = getattr(vmodels, "hf_local", None)
+        if callable(fn):
+            p = fn(repo, patterns, token or None)
+            return Path(p) if p else None
+    except ImportError:
+        pass
+    except Exception as e:
+        log.debug("models.hf_local %s gagal: %s", repo, e)
+    try:
+        from huggingface_hub import snapshot_download
+
+        return Path(snapshot_download(repo_id=repo, token=token or None, allow_patterns=patterns, local_files_only=True))
+    except Exception:
+        return None
+
+
+def _source(repo: str, token: str | None, patterns: list[str], allow_download: bool, need=None) -> Path:
+    """folder model: lokal dulu; tidak ada / tidak lengkap (`need(scan)` False) → unduh HANYA kalau allow_download (siapkan-model)"""
+    p = _local(repo, token, patterns)
+    if p is not None and (need is None or need(scan(p))):
+        return p
+    if not allow_download:
+        raise EngineDown(MISSING_MSG)
+    log.info("Mengunduh model %s (sekali saja, ±3 GB)…", repo)
+    try:
+        return _download(repo, token, patterns)
+    except Exception as e:
+        raise EngineDown(f"model {repo} tidak bisa diunduh: {e}") from e
+
+
+def resolve_files(cfg, allow_download: bool = False) -> tuple[dict, str, str]:
+    """
+    Cari (atau unduh, kalau allow_download) file komponen Chatterbox → (scan dict, mode "lengkap"/"hanya-t3", sumber).
+    Tanpa torch — dipakai juga oleh perintah siapkan-model untuk mengunduh.
+    """
+    if cfg.chatterbox_dir:
+        src = Path(cfg.chatterbox_dir).expanduser()
+        if not src.exists():
+            raise EngineDown(f"CHATTERBOX_DIR tidak ada: {src}")
+        log.info("Pakai model lokal %s", src)
+        f = scan(src)
+    else:
+        f = scan(_source(cfg.chatterbox_repo, cfg.hf_token, PATTERNS, allow_download, need=lambda s: bool(s["t3"])))
+    log.info(
+        "Isi repo: t3=%s ve=%s s3gen=%s tokenizer=%s format=%s",
+        f["t3"] and f["t3"].name, f["ve"] and f["ve"].name, f["s3gen"] and f["s3gen"].name, f["tok"] and f["tok"].name, "multilingual" if f["mtl"] else "standar",
+    )
+    if not f["t3"]:
+        raise EngineDown(f"bobot t3 tidak ditemukan di {cfg.chatterbox_repo}")
+    mode = "lengkap"
+    if not (f["ve"] and f["s3gen"] and f["tok"]):
+        mode = "hanya-t3"
+        log.info("Repo hanya berisi sebagian komponen → ambil sisanya dari model dasar %s", cfg.chatterbox_base_repo)
+        pats = BASE_MTL if f["mtl"] else BASE_EN
+        base = scan(_source(cfg.chatterbox_base_repo, cfg.hf_token, pats, allow_download, need=lambda s: bool(s["ve"] and s["s3gen"] and s["tok"])))
+        for k in ("ve", "s3gen", "tok", "conds"):
+            f[k] = f[k] or base[k]
+        if not (f["ve"] and f["s3gen"] and f["tok"]):
+            raise EngineDown("komponen model dasar Chatterbox tidak lengkap")
+    return f, mode, f"{cfg.chatterbox_dir or cfg.chatterbox_repo} ({mode})"
+
+
+def _state(path: Path, device: str = "cpu") -> dict:
+    """state dict langsung ke `device` (safetensors load_file(device=…) / torch.load(map_location=…, weights_only=True))"""
     import torch
 
     if path.suffix == ".safetensors":
         from safetensors.torch import load_file
 
-        sd = load_file(str(path))
+        try:
+            sd = load_file(str(path), device=str(device))
+        except Exception:  # versi safetensors lama / device tidak dikenal → CPU dulu
+            sd = load_file(str(path))
     else:
-        sd = torch.load(str(path), map_location="cpu", weights_only=True)
+        sd = torch.load(str(path), map_location=device, weights_only=True)
     if isinstance(sd, dict) and "model" in sd and isinstance(sd["model"], (list, tuple)):
         sd = sd["model"][0]
     if isinstance(sd, dict) and "state_dict" in sd and isinstance(sd["state_dict"], dict):
@@ -94,54 +176,75 @@ def _clean_t3(sd: dict) -> dict:
     return sd
 
 
-def load_model(cfg, device: str = "cuda"):
-    """balikan (model, mtl: bool, sumber: str)"""
+def _build(ctor, device: str, what: str):
+    """bangun modul langsung di `device` (bobot acak awal tidak dihitung di CPU dulu); gagal → bangun di CPU"""
+    import torch
+
+    if device != "cpu":
+        try:
+            with torch.device(device):
+                return ctor()
+        except Exception as e:
+            log.warning("Membangun %s langsung di %s gagal (%s) — dibangun di CPU", what, device, str(e)[:200])
+    return ctor()
+
+
+def mtl_tokenizer(path: Path):
+    """
+    MTLTokenizer bawaan memanggil hf_hub_download (tabel Cangjie, hanya untuk bahasa Mandarin) setiap kali dibuat = request
+    internet tiap worker start. Di sini dipaksa lokal saja (tanpa jaringan); tidak ada → konversi Mandarin mati (tidak dipakai).
+    """
+    from chatterbox.models.tokenizers import tokenizer as tk
+
+    orig = getattr(tk, "hf_hub_download", None)
+    tlog = logging.getLogger(tk.__name__)
+    lvl = tlog.level
+
+    def local_only(*a, **k):
+        k["local_files_only"] = True
+        return orig(*a, **k)
+
+    if orig is not None:
+        tk.hf_hub_download = local_only
+    tlog.setLevel(logging.ERROR)  # "Could not load Cangjie mapping" / "pkuseg not available": tidak penting untuk bahasa Indonesia
+    try:
+        return tk.MTLTokenizer(str(path))
+    finally:
+        if orig is not None:
+            tk.hf_hub_download = orig
+        tlog.setLevel(lvl)
+
+
+def load_model(cfg, device: str = "cuda", allow_download: bool = False):
+    """balikan (model, mtl: bool, sumber: str). Info tambahan di atribut model: _vw_t3_path, _vw_conds_path, _vw_times."""
+    import gc
+
     import torch
     from chatterbox.models.s3gen import S3Gen
     from chatterbox.models.t3 import T3
     from chatterbox.models.t3.modules.t3_config import T3Config
-    from chatterbox.models.tokenizers import EnTokenizer, MTLTokenizer
+    from chatterbox.models.tokenizers import EnTokenizer
     from chatterbox.models.voice_encoder import VoiceEncoder
 
-    if cfg.chatterbox_dir:
-        src = Path(cfg.chatterbox_dir).expanduser()
-        if not src.exists():
-            raise EngineDown(f"CHATTERBOX_DIR tidak ada: {src}")
-        log.info("Pakai model lokal %s", src)
-    else:
-        log.info("Mengunduh / mengecek model %s (pertama kali bisa lama, ±3 GB)…", cfg.chatterbox_repo)
-        try:
-            src = _download(cfg.chatterbox_repo, cfg.hf_token, PATTERNS)
-        except Exception as e:
-            raise EngineDown(f"model {cfg.chatterbox_repo} tidak bisa diunduh: {e}") from e
-    f = scan(src)
-    log.info(
-        "Isi repo: t3=%s ve=%s s3gen=%s tokenizer=%s format=%s",
-        f["t3"] and f["t3"].name, f["ve"] and f["ve"].name, f["s3gen"] and f["s3gen"].name, f["tok"] and f["tok"].name, "multilingual" if f["mtl"] else "standar",
-    )
-    if not f["t3"]:
-        raise EngineDown(f"bobot t3 tidak ditemukan di {cfg.chatterbox_repo}")
-    mode = "lengkap"
-    if not (f["ve"] and f["s3gen"] and f["tok"]):
-        mode = "hanya-t3"
-        log.info("Repo hanya berisi sebagian komponen → ambil sisanya dari model dasar %s", cfg.chatterbox_base_repo)
-        try:
-            base = scan(_download(cfg.chatterbox_base_repo, cfg.hf_token, BASE_MTL if f["mtl"] else BASE_EN))
-        except Exception as e:
-            raise EngineDown(f"model dasar {cfg.chatterbox_base_repo} tidak bisa diunduh: {e}") from e
-        for k in ("ve", "s3gen", "tok"):
-            f[k] = f[k] or base[k]
-        if not (f["ve"] and f["s3gen"] and f["tok"]):
-            raise EngineDown("komponen model dasar Chatterbox tidak lengkap")
+    times: dict[str, float] = {}
+    t = time.time()
+    f, mode, src = resolve_files(cfg, allow_download)
+    times["cari"] = time.time() - t
 
-    ve = VoiceEncoder()
-    ve.load_state_dict(_state(f["ve"]))
+    t = time.time()
+    ve = _build(VoiceEncoder, device, "VoiceEncoder")
+    sd = _state(f["ve"], device)
+    ve.load_state_dict(sd)
+    del sd
     ve.to(device).eval()
+    times["ve"] = time.time() - t
 
-    t3_sd = _clean_t3(_state(f["t3"]))
+    t = time.time()
+    t3_sd = _clean_t3(_state(f["t3"], device))
     n_text = int(t3_sd["text_emb.weight"].shape[0]) if "text_emb.weight" in t3_sd else (2454 if f["mtl"] else 704)
-    t3 = T3(T3Config(text_tokens_dict_size=n_text))
+    t3 = _build(lambda: T3(T3Config(text_tokens_dict_size=n_text)), device, "T3")
     missing, unexpected = t3.load_state_dict(t3_sd, strict=False)
+    del t3_sd
     real_missing = [k for k in missing if not k.endswith("rotary_emb.inv_freq")]
     if real_missing:
         if len(real_missing) > 4 or any(k.startswith(("tfmr.", "speech_head", "text_emb", "speech_emb")) for k in real_missing):
@@ -150,16 +253,21 @@ def load_model(cfg, device: str = "cuda"):
     if unexpected:
         log.info("t3: %d tensor tambahan diabaikan", len(unexpected))
     t3.to(device).eval()
+    times["t3"] = time.time() - t
 
-    s3 = S3Gen()
-    s3.load_state_dict(_state(f["s3gen"]), strict=False)
+    t = time.time()
+    s3 = _build(S3Gen, device, "S3Gen")
+    sd = _state(f["s3gen"], device)
+    s3.load_state_dict(sd, strict=False)
+    del sd
     s3.to(device).eval()
+    times["s3gen"] = time.time() - t
 
-    tok = MTLTokenizer(str(f["tok"])) if f["mtl"] else EnTokenizer(str(f["tok"]))
+    t = time.time()
+    tok = mtl_tokenizer(f["tok"]) if f["mtl"] else EnTokenizer(str(f["tok"]))
     vsize = tok.tokenizer.get_vocab_size()
     if vsize > n_text:
         log.warning("Ukuran kosakata tokenizer (%d) > tabel teks t3 (%d) — kemungkinan tokenizer salah pasangan", vsize, n_text)
-
     if f["mtl"]:
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
@@ -168,9 +276,14 @@ def load_model(cfg, device: str = "cuda"):
         from chatterbox.tts import ChatterboxTTS
 
         model = ChatterboxTTS(t3, s3, ve, tok, device)
-    del t3_sd
-    torch.cuda.empty_cache() if device == "cuda" else None
-    return model, bool(f["mtl"]), f"{cfg.chatterbox_repo} ({mode})"
+    times["lain"] = time.time() - t
+    model._vw_t3_path = f["t3"]
+    model._vw_conds_path = f.get("conds")
+    model._vw_times = {k: round(v, 1) for k, v in times.items()}
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+    return model, bool(f["mtl"]), src
 
 
 def sampling_kwargs(fn) -> dict:
@@ -222,6 +335,44 @@ def check_gpu() -> tuple[str, float]:
     return name, vram
 
 
+
+def fast_sampling(fn) -> dict:
+    """
+    Setelan sampling jalur cepat = yang dipakai cara lama: min_p 0,05; repetition_penalty 1,2 kecuali bawaan generate() lebih ketat
+    (multilingual: 2,0); top_p = bawaan generate() (1,0 di chatterbox 0.1.7).
+    """
+    out = {"min_p": SAMPLING["min_p"], "repetition_penalty": SAMPLING["repetition_penalty"], "top_p": 1.0}
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return out
+    d = getattr(params.get("repetition_penalty"), "default", None)
+    if isinstance(d, (int, float)) and not isinstance(d, bool) and float(d) > out["repetition_penalty"]:
+        out["repetition_penalty"] = float(d)
+    tp = getattr(params.get("top_p"), "default", None)
+    if isinstance(tp, (int, float)) and not isinstance(tp, bool) and 0 < float(tp) <= 1:
+        out["top_p"] = float(tp)
+    return out
+
+
+def want_dtype(name: str | None) -> str:
+    """TTS_DTYPE auto|bf16|fp32 → "bf16"/"fp32" (auto = bf16 kalau GPU mendukung)"""
+    import torch
+
+    name = (name or "auto").lower()
+    if name in ("fp32", "float32"):
+        return "fp32"
+    ok = torch.cuda.is_available() and bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)())
+    if name in ("bf16", "bfloat16"):
+        if not ok:
+            log.warning("TTS_DTYPE=bf16 tapi GPU tidak mendukung bf16 → fp32")
+        return "bf16" if ok else "fp32"
+    return "bf16" if ok else "fp32"
+
+
+WARM_TEXT = "Halo, ini pemanasan mesin suara."
+
+
 class ChatterboxEngine:
     name = "chatterbox"
     label = "Bank suara · Chatterbox (GPU laptop)"
@@ -230,7 +381,7 @@ class ChatterboxEngine:
     # sebelum di-atempo (jobs_tts.native_fit)
     native_tempo = True
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, allow_download: bool = False):
         import torch
 
         self.cfg = cfg
@@ -241,13 +392,49 @@ class ChatterboxEngine:
             raise EngineDown("paket resemble-perth tidak lengkap (butuh setuptools<81) — jalankan ulang install.ps1")
         gpu, vram = check_gpu()
         log.info("GPU: %s (%.1f GB VRAM), PyTorch %s CUDA %s", gpu, vram, torch.__version__, torch.version.cuda)
-        self.model, self.mtl, src = load_model(cfg, "cuda")
+        # TF32 untuk matmul fp32 (S3Gen, speech_head, cadangan fp32) — aman untuk inferensi, jauh lebih cepat di RTX 30xx ke atas
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        t0 = time.time()
+        self.model, self.mtl, src = load_model(cfg, "cuda", allow_download=allow_download)
         self.sr = int(self.model.sr)
         self.lang = self._lang(cfg.chatterbox_lang) if self.mtl else None
         self._ref: tuple[str, float] | None = None
-        self._sampling = sampling_kwargs(self.model.generate)
-        log.info("Chatterbox dimuat dari %s%s", src, f", bahasa={self.lang}" if self.lang else "")
-        log.info("Sampling: temperature dari setelan%s", "".join(f", {k}={v}" for k, v in self._sampling.items()) or " (versi lama: min_p/repetition_penalty bawaan)")
+        self._sampling = sampling_kwargs(self.model.generate)  # cara lama (cadangan)
+        self._fast_kw = fast_sampling(self.model.generate)
+        self.batch = bool(getattr(cfg, "tts_batch", True))
+        self._max_batch = 6
+        self._fast_fail = 0
+        self.builtin = None  # suara bawaan model (conds.pt) — hanya untuk pemanasan
+        cp = getattr(self.model, "_vw_conds_path", None)
+        if cp:
+            try:
+                from chatterbox.mtl_tts import Conditionals
+
+                self.builtin = Conditionals.load(cp, map_location="cuda").to("cuda")
+            except Exception as e:
+                log.info("conds.pt tidak bisa dimuat (%s) — pemanasan T3 dilewati", str(e)[:160])
+        self.fast = None
+        try:
+            from .t3fast import Fast
+
+            self.fast = Fast(self.model, language_id=self.lang, dtype=want_dtype(getattr(cfg, "tts_dtype", "auto")), log=log)
+        except Exception as e:
+            log.warning("Jalur cepat tidak bisa dipakai (%s) — pakai cara bawaan Chatterbox", str(e)[:200])
+        tm = getattr(self.model, "_vw_times", {})
+        log.info(
+            "Chatterbox dimuat dari %s%s dalam %.1f dtk (cari file %s · VE %s · T3 %s · S3Gen %s dtk)",
+            src, f", bahasa={self.lang}" if self.lang else "", time.time() - t0, tm.get("cari"), tm.get("ve"), tm.get("t3"), tm.get("s3gen"),
+        )
+        fk = self._fast_kw
+        if self.fast is not None:
+            log.info(
+                "Jalur cepat: transformer %s, attention SDPA%s, %s; min_p=%s, repetition_penalty=%s, top_p=%s",
+                self.fast.name_dtype, " (+3 layer eager untuk cek keselarasan)" if self.fast.analyzer else "",
+                "versi dibuat sekaligus" if self.batch else "versi dibuat satu-satu", fk["min_p"], fk["repetition_penalty"], fk["top_p"],
+            )
+        else:
+            log.info("Sampling: temperature dari setelan%s", "".join(f", {k}={v}" for k, v in self._sampling.items()) or " (versi lama: min_p/repetition_penalty bawaan)")
 
     def _lang(self, want: str) -> str:
         from chatterbox import mtl_tts
@@ -262,29 +449,110 @@ class ChatterboxEngine:
         log.warning("Token bahasa [%s] tidak ada di model multilingual → pakai 'ms' (Melayu, paling mirip)", want)
         return "ms"
 
-    def synth(self, text: str, ref: Path, st: dict, seed: int) -> np.ndarray:
+    # ------------------------------------------------------------------ bantu
+    def _prepare(self, ref: Path, ex: float) -> None:
+        key = (str(ref), ex)
+        if self._ref != key:  # klip referensi cukup diproses sekali per suara
+            self.model.prepare_conditionals(str(ref), exaggeration=ex)
+            self._ref = key
+
+    def _reload_fp32(self) -> dict | None:
+        """bobot asli transformer T3 (fp32) dari file — untuk kembali dari bf16 tanpa membawa pembulatan"""
+        p = getattr(self.model, "_vw_t3_path", None)
+        if not p:
+            return None
+        sd = _clean_t3(_state(Path(p), "cpu"))  # lewat CPU: tidak menambah VRAM sementara ±2 GB
+        return {k[len("tfmr.") :]: v for k, v in sd.items() if k.startswith("tfmr.")}
+
+    def _upstream(self, text: str, ex: float, cw: float, temp: float, seed: int) -> np.ndarray:
+        """cara bawaan model.generate() — hook baru dari pengecek keselarasan bawaan dilepas lagi sesudahnya"""
+        import torch
+
+        from .t3fast import no_leak
+
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        extra = self._sampling
+        with no_leak(self.model.t3):
+            if self.mtl:
+                wav = self.model.generate(text, language_id=self.lang, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
+            else:
+                wav = self.model.generate(text, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
+        return to_mono(wav)
+
+    def _fast_once(self, text: str, ex: float, cw: float, temp: float, seeds: list[int], max_sec, conds=None) -> list[np.ndarray]:
+        from .t3fast import NonFinite, max_tokens_for
+
+        kw = dict(exaggeration=ex, cfg_weight=cw, temperature=temp, max_new_tokens=max_tokens_for(text, max_sec), conds=conds, **self._fast_kw)
+        try:
+            ys = self.fast.generate(text, len(seeds), seeds, **kw)
+        except NonFinite:
+            if self.fast.name_dtype != "bf16":
+                raise
+            log.warning("bf16 menghasilkan angka tidak wajar (NaN/inf) → transformer pindah ke fp32 untuk sesi ini, diulang sekali")
+            self.fast.set_dtype("fp32", reload=self._reload_fp32)
+            ys = self.fast.generate(text, len(seeds), seeds, **kw)
+        return [to_mono(y) for y in ys]
+
+    def _fast_run(self, text: str, ex: float, cw: float, temp: float, seeds: list[int], max_sec, conds=None) -> list[np.ndarray]:
+        """n versi sekaligus (TTS_BATCH=1, maks _max_batch per batch) atau satu-satu (TTS_BATCH=0)"""
+        if not self.batch:
+            return [y for s in seeds for y in self._fast_run_batch(text, ex, cw, temp, [s], max_sec, conds)]
+        out: list[np.ndarray] = []
+        step = max(1, self._max_batch)
+        for i in range(0, len(seeds), step):
+            out += self._fast_run_batch(text, ex, cw, temp, seeds[i : i + step], max_sec, conds)
+        return out
+
+    def _fast_run_batch(self, text, ex, cw, temp, seeds, max_sec, conds) -> list[np.ndarray]:
+        """VRAM penuh → kosongkan cache, belah batch (sampai satu-satu); batas batch diingat untuk potongan berikutnya"""
+        import torch
+
+        try:
+            return self._fast_once(text, ex, cw, temp, seeds, max_sec, conds)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(seeds) <= 1:
+                raise
+            h = len(seeds) // 2
+            self._max_batch = max(1, min(self._max_batch, h))
+            log.warning("VRAM penuh untuk %d versi sekaligus → dibelah jadi %d + %d", len(seeds), h, len(seeds) - h)
+            return self._fast_run_batch(text, ex, cw, temp, seeds[:h], max_sec, conds) + self._fast_run_batch(text, ex, cw, temp, seeds[h:], max_sec, conds)
+
+    # ------------------------------------------------------------------ dipakai jobs_tts
+    def synth_batch(self, text: str, ref: Path, st: dict, seeds: list[int], max_sec: float | None = None) -> list[np.ndarray]:
+        """beberapa versi untuk satu teks (benih per versi); jalur cepat bila bisa, cadangan cara bawaan satu-satu"""
         import torch
 
         ex = float(st.get("exaggeration", 0.6))
         cw = float(st.get("cfg_weight", 0.35))
         temp = float(st.get("temperature", 0.8))
+        seeds = [int(s) for s in seeds] or [0]
         for attempt in range(2):
             try:
-                key = (str(ref), ex)
-                if self._ref != key:  # klip referensi cukup diproses sekali per suara
-                    self.model.prepare_conditionals(str(ref), exaggeration=ex)
-                    self._ref = key
-                torch.manual_seed(seed)
-                torch.cuda.manual_seed_all(seed)
+                self._prepare(ref, ex)
                 t0 = time.time()
-                extra = getattr(self, "_sampling", {})
-                if self.mtl:
-                    wav = self.model.generate(text, language_id=self.lang, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
-                else:
-                    wav = self.model.generate(text, exaggeration=ex, cfg_weight=cw, temperature=temp, **extra)
-                y = to_mono(wav)
-                log.debug("chatterbox %.1f dtk audio dalam %.1f dtk", len(y) / self.sr, time.time() - t0)
-                return y
+                if self.fast is not None:
+                    try:
+                        ys = self._fast_run(text, ex, cw, temp, seeds, max_sec)
+                        self._fast_fail = 0
+                        log.debug("chatterbox cepat: %d versi, %.1f dtk (%s)", len(ys), time.time() - t0, self.fast.last)
+                        return ys
+                    except torch.cuda.OutOfMemoryError:
+                        raise
+                    except Exception as e:
+                        self._fast_fail += 1
+                        log.warning("Jalur cepat error (%s: %s) — potongan ini memakai cara bawaan", type(e).__name__, str(e)[:200])
+                        if self._fast_fail >= 3:
+                            log.warning("Jalur cepat gagal 3× berturut-turut → dimatikan untuk sesi ini")
+                            try:
+                                self.fast.remove()
+                            except Exception:
+                                pass
+                            self.fast = None
+                ys = [self._upstream(text, ex, cw, temp, s) for s in seeds]
+                log.debug("chatterbox bawaan: %d versi, %.1f dtk", len(ys), time.time() - t0)
+                return ys
             except torch.cuda.OutOfMemoryError as e:
                 torch.cuda.empty_cache()
                 if attempt:
@@ -297,5 +565,47 @@ class ChatterboxEngine:
                 log.warning("Chatterbox error (%s), coba sekali lagi…", e)
         raise EngineFailed("Chatterbox gagal")
 
+    def synth(self, text: str, ref: Path, st: dict, seed: int) -> np.ndarray:
+        return self.synth_batch(text, ref, st, [seed])[0]
+
+    def warmup(self) -> dict:
+        """
+        Pemanasan sekali saat worker hidup: kernel CUDA, pengecek keselarasan, S3Gen & watermark (panggilan pertama librosa/Perth
+        bisa belasan detik) — kalimat pendek 1 versi lalu n versi sekaligus memakai suara bawaan model (conds.pt). Tanpa conds.pt
+        → T3 dilewati, watermark tetap dipanaskan. Balikan {"sec", "ratio"} (ratio = detik proses per detik suara, n versi).
+        """
+        t0 = time.time()
+        out: dict = {"sec": 0.0, "ratio": None}
+        try:
+            self.model.watermarker.apply_watermark(np.zeros(self.sr // 2, np.float32), sample_rate=self.sr)
+        except Exception as e:
+            log.debug("pemanasan watermark gagal: %s", e)
+        if self.builtin is None or self.fast is None:
+            out["sec"] = round(time.time() - t0, 1)
+            out["skip"] = "tanpa conds.pt" if self.builtin is None else "jalur cepat mati"
+            return out
+        try:
+            ex = float(self.builtin.t3.emotion_adv.view(-1)[0].item())
+            n = max(1, min(self._max_batch, int(getattr(self.cfg, "takes", 3) or 3))) if self.batch else 1
+            self._fast_once(WARM_TEXT, ex, 0.5, 0.8, [1], 3.0, conds=self.builtin)
+            t1 = time.time()
+            ys = self._fast_once(WARM_TEXT, ex, 0.5, 0.8, list(range(1, n + 1)), 3.0, conds=self.builtin)
+            wall = time.time() - t1
+            audio = sum(len(y) for y in ys) / max(1, len(ys)) / self.sr
+            out.update({"n": n, "ratio": round(wall / audio, 2) if audio > 0.3 else None, "audio": round(audio, 2), "dtype": self.fast.name_dtype})
+            out["steps_per_sec"] = self.fast.last.get("steps_per_sec")
+        except Exception as e:
+            log.warning("Pemanasan Chatterbox gagal (%s) — tidak apa-apa, job tetap jalan", str(e)[:200])
+            out["error"] = str(e)[:200]
+        out["sec"] = round(time.time() - t0, 1)
+        return out
+
     def close(self) -> None:
+        if getattr(self, "fast", None) is not None:
+            try:
+                self.fast.remove()
+            except Exception:
+                pass
+        self.fast = None
+        self.builtin = None
         self.model = None  # type: ignore[assignment]

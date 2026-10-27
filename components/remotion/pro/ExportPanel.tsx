@@ -23,6 +23,8 @@ import { storyboardHtml } from "@/lib/studio/exportDoc";
 import type { SfxMeta } from "@/lib/studio/sfxMeta";
 import { subtitleCues, toSrt, voClashes, voCutoffs, voDbOf, voGainOn, type Timeline } from "@/lib/studio/timeline";
 import { storagePathOf, storageSrc } from "@/lib/studio/urls";
+import { estimateRender, etaText, queuedText } from "@/lib/studio/eta";
+import { EtaChip } from "./JobEta";
 
 // Remotion gratis untuk perorangan / tim ≤ 3 orang. Perusahaan > 3 orang: isi key lisensi di env Vercel.
 const LICENSE = process.env.NEXT_PUBLIC_REMOTION_LICENSE_KEY || "free-license";
@@ -302,6 +304,8 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
 
   const pct = render.s === "run" ? Math.round(render.p * 100) : 0;
   const jobPct = Math.round((job?.progress ?? 0) * 100);
+  // render antri: perkiraan hanya kalau laptop mencatat kecepatan render (info.speed.engines.render)
+  const queuedMsg = job?.status === "antri" ? queuedText(estimateRender(secs, status?.worker)) : null;
 
   return (
     <div className="card min-w-0 space-y-4 p-4">
@@ -424,7 +428,10 @@ export default function ExportPanel({ timeline: tl, projectId, sfxExtra }: { tim
               <div className={`h-full rounded-full bg-orange-500 transition-[width] ${jobPct ? "" : "w-1/12 animate-pulse"}`} style={jobPct ? { width: `${jobPct}%` } : undefined} />
             </div>
             <div className="flex items-center justify-between gap-2 text-xs text-zinc-400">
-              <span className="min-w-0">{job?.status === "proses" ? `${job.message || "Laptop lagi render…"} ${jobPct ? `${jobPct}%` : ""}` : "Menunggu giliran di laptop…"}</span>
+              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-render-progress>
+                <span className="min-w-0">{job?.status === "proses" ? `${etaText(job.message, "Laptop lagi render…")} ${jobPct ? `${jobPct}%` : ""}` : (queuedMsg ?? "Menunggu giliran di laptop…")}</span>
+                <EtaChip job={job} />
+              </span>
               <button type="button" className="flex-none font-semibold text-red-400 hover:text-red-300" onClick={cancelLaptop}>
                 Batal
               </button>

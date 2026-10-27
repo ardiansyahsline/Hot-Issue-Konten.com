@@ -101,6 +101,35 @@ class Config:
     sfx_dir: str
     # skor kealamian UTMOS saat memilih take (NATURAL_MOS=0 → hanya kejelasan + nada)
     natural_mos: bool = True
+    # --- RUNTIME --- (alur worker: unggah paralel, log bersih)
+    # jumlah unggahan ke Supabase Storage yang jalan bersamaan (mp3 per baris diunggah sementara baris berikutnya dibuat)
+    upload_workers: int = 3
+    # 1 = sembunyikan peringatan library yang tidak penting (FutureWarning torch, "forcing EOS" Chatterbox, progress bar);
+    # 0 = semua tampil (untuk mencari masalah)
+    quiet_log: bool = True
+    # "PRELOAD=0" dari .env lama (nilai bawaan dulu) diabaikan → dicatat di log saat worker mulai
+    preload_old_default: bool = False
+    # --- RENDER-GPU ---
+    # render MP4 di GPU NVIDIA: auto (ada NVIDIA → Chrome render ke NVIDIA + --gl=angle + encode NVENC) | nvidia (paksa) | off (seperti dulu)
+    render_gpu: str = "auto"
+    # bitrate video saat encode NVENC (NVENC tidak memakai CRF), format Remotion: angka + K/M
+    render_bitrate: str = "10M"
+    # --- CEPAT ---
+    # transformer Chatterbox: auto (bf16 kalau GPU mendukung) / bf16 / fp32
+    tts_dtype: str = "auto"
+    # versi (takes) satu potongan dibuat sekaligus dalam satu batch GPU (0 = satu-satu)
+    tts_batch: bool = True
+    # beam faster-whisper untuk cek tiap take (timestamp kata baris final tetap beam 5)
+    asr_beam_takes: int = 1
+    # batas waktu membuat versi per potongan = max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan detik ucapan)
+    line_budget_per_sec: float = 8.0
+    line_budget_min: float = 20.0
+    # --- UNDUH ---
+    # model diunduh di depan (SIAPKAN-MODEL.bat / install.ps1 / latar), TIDAK PERNAH di tengah job
+    download_connections: int = 8  # koneksi paralel per file (GitHub ±115 KB/s per koneksi → 8× lebih cepat)
+    utmos_urls: tuple[str, ...] = ()  # mirror checkpoint UTMOS (dicoba sebelum GitHub); boleh hf://pemilik/repo/file.pt
+    auto_download: bool = True  # model yang kurang diunduh di thread latar saat worker hidup (job tidak menunggu)
+    # --- /UNDUH ---
 
     @property
     def cache(self) -> Path:
@@ -138,11 +167,31 @@ def apply_thread_limits(n: int) -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
+# --- RUNTIME ---
+# .env lama = salinan .env.example versi dulu: "PRELOAD=0" persis di bawah komentar bawaannya adalah NILAI BAWAAN LAMA (bukan pilihan
+# pemakai) → dianggap kosong supaya bawaan baru berlaku (1 = mesin dipanaskan di latar saat worker mulai, job pertama tidak menunggu
+# muat model ±30 dtk). Yang memang ingin mematikan: ubah jadi PRELOAD=mati (atau hapus komentar bawaan di atasnya).
+_OLD_PRELOAD = "# muat model suara saat worker mulai (1) atau saat job pertama (0)\nPRELOAD=0"
+
+
+def _preload(env_file: Path) -> tuple[bool, bool]:
+    """(PRELOAD, True kalau "PRELOAD=0" bawaan .env lama diabaikan)"""
+    if _env("PRELOAD") == "0":
+        try:
+            txt = env_file.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+        except OSError:
+            txt = ""
+        if _OLD_PRELOAD in txt:
+            return True, True
+    return _bool("PRELOAD", True), False
+
+
 def load(env_file: Path | None = None) -> Config:
+    env_file = env_file or ROOT / ".env"
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(env_file or ROOT / ".env", override=False)
+        load_dotenv(env_file, override=False)
     except ImportError:  # python-dotenv belum terpasang: pakai env sistem saja
         pass
 
@@ -156,7 +205,13 @@ def load(env_file: Path | None = None) -> Config:
     hf_token = _env("HF_TOKEN")
     if hf_token:
         os.environ.setdefault("HF_TOKEN", hf_token)
+    # --- UNDUH --- (harus sebelum huggingface_hub di-import: nilainya dibaca sekali saat import)
+    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")  # unduhan Xet (HF) memakai banyak koneksi sekaligus
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")  # bawaan 10 dtk terlalu pendek untuk internet yang tersendat
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "20")
+    # --- /UNDUH ---
 
+    preload, preload_old = _preload(env_file)
     order = [e.strip().lower() for e in _env("ENGINE_ORDER", "chatterbox,pocket").split(",")]
     order = [e for e in order if e in ("chatterbox", "pocket")] or ["chatterbox", "pocket"]
 
@@ -185,11 +240,58 @@ def load(env_file: Path | None = None) -> Config:
         render_browser=_env("REMOTION_BROWSER"),
         df_atten_db=_float("DF_ATTEN_DB", 18, 6, 30),
         takes=_int("TAKES", 3, 1, 4),
-        preload=_bool("PRELOAD", False),
+        preload=preload,
         idle_unload_min=_int("IDLE_UNLOAD_MIN", 0, 0, 1440),
         freesound_key=_env("FREESOUND_API_KEY"),
         sfx_dir=_env("SFX_DIR", r"C:\Konten.com\STUDIO-FX"),
         natural_mos=_bool("NATURAL_MOS", True),
+        # --- RUNTIME ---
+        upload_workers=_int("UPLOAD_WORKERS", 3, 1, 8),
+        quiet_log=_bool("QUIET_LOG", True),
+        preload_old_default=preload_old,
+        # --- CEPAT ---
+        tts_dtype=_env("TTS_DTYPE", "auto").lower() if _env("TTS_DTYPE", "auto").lower() in ("auto", "bf16", "fp32") else "auto",
+        tts_batch=_bool("TTS_BATCH", True),
+        asr_beam_takes=_int("ASR_BEAM_TAKES", 1, 1, 5),
+        line_budget_per_sec=_float("LINE_BUDGET_PER_SEC", 8.0, 1.0, 60.0),
+        line_budget_min=_float("LINE_BUDGET_MIN", 20.0, 5.0, 600.0),
+        # --- UNDUH ---
+        download_connections=_int("DOWNLOAD_CONNECTIONS", 8, 1, 32),
+        utmos_urls=tuple(u.strip() for u in re.split(r"[,\s]+", _env("UTMOS_URLS")) if u.strip()),
+        auto_download=_bool("AUTO_DOWNLOAD", True),
+        # --- /UNDUH ---
     )
+    # --- RENDER-GPU ---
+    cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))
+    cfg.render_bitrate = render_bitrate(_env("RENDER_BITRATE", "10M"))
+    if _env("RENDER_CONCURRENCY").lower() == "auto":  # _int() di atas memberi 2 untuk "auto" → diganti sesuai jumlah core
+        cfg.render_concurrency = auto_render_concurrency()
     cfg.ensure_dirs()
     return cfg
+
+
+# --- RENDER-GPU ---
+def render_gpu_mode(raw: str) -> str:
+    """RENDER_GPU → "auto" | "nvidia" | "off" (salah ketik → auto)"""
+    v = (raw or "").strip().lower()
+    if v in ("off", "0", "mati", "false", "no", "tidak", "cpu"):
+        return "off"
+    if v in ("nvidia", "paksa", "force", "nvenc"):
+        return "nvidia"
+    return "auto"
+
+
+def render_bitrate(raw: str) -> str:
+    """RENDER_BITRATE → format yang diterima Remotion (angka + "K"/"k"/"M"): "10m" / "10 Mbps" / "10" → "10M"; salah → "10M" """
+    m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*([kKmM])?\s*(?:b|bps|bit/?s)?\s*", raw or "", re.I)
+    if not m or float(m.group(1).replace(",", ".")) <= 0:
+        return "10M"
+    num = m.group(1).replace(",", ".")
+    unit = (m.group(2) or "M").upper()
+    return f"{num}{unit}"
+
+
+def auto_render_concurrency(cpus: int | None = None) -> int:
+    """RENDER_CONCURRENCY=auto → tab Chrome render paralel = setengah core CPU, 2..4 (laptop juga dipakai bot WAHA)"""
+    n = cpus if cpus is not None else (os.cpu_count() or 4)
+    return min(4, max(2, n // 2))

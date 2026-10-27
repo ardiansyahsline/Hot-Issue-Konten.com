@@ -7,7 +7,9 @@ import { heardFromResult } from "@/lib/studio/heard";
 import { bankSettings } from "@/lib/studio/voiceStyle";
 import { normTempo, tempoRate, TEMPOS, voStartOf, type Scene, type Timeline, type VoLine, type VoTrack } from "@/lib/studio/timeline";
 import { storageSrc } from "@/lib/studio/urls";
+import { estimateQueued, etaText, queuedText } from "@/lib/studio/eta";
 import { isTeaserScene } from "./teaserLock";
+import { EtaChip } from "./JobEta";
 import { cleanWords, DEFAULT_VOICE, fitVo, fmtTempo, movedText, names, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
 
 type Made = { line: VoLine; engine: VoTrack["engine"]; temp: boolean; label: string };
@@ -15,7 +17,21 @@ type Made = { line: VoLine; engine: VoTrack["engine"]; temp: boolean; label: str
 export type TempoRun =
   | { s: "tts" }
   | { s: "start" }
-  | { s: "job"; id: string; voice: string; sig: string; tempo: number | undefined; status?: VoiceJob["status"]; progress?: number; message?: string | null }
+  | {
+      s: "job";
+      id: string;
+      voice: string;
+      sig: string;
+      tempo: number | undefined;
+      status?: VoiceJob["status"];
+      progress?: number;
+      message?: string | null;
+      /** updated_at job (hitung mundur " · sisa ±…") */
+      updated_at?: string | null;
+      /** naskah & setelan yang dikirim (perkiraan lama pembuatan selagi antri) */
+      lines?: VoiceJobLine[];
+      settings?: Record<string, unknown>;
+    }
   | { s: "error"; msg: string; fallback?: boolean; tempo: number | undefined };
 export type TempoEngine = "bank" | "edge";
 
@@ -210,10 +226,11 @@ export function useVoTempo(timeline: Timeline, onApply: (fn: (t: Timeline) => Ti
       const voice = voices.find((x) => x.id === t.voice.voiceId) ?? voices.find((x) => x.name === DEFAULT_VOICE) ?? voices[0];
       if (!voice) return void (await viaEdge(sid, tempo));
       const line: VoiceJobLine = { id: sid, scene_id: sid, text: p.text, spell: p.spell, start: 0, ...(tempo !== undefined ? { speed: tempo } : win !== undefined ? { max: win } : {}) };
-      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings: bankSettings(t) });
+      const settings = bankSettings(t);
+      const j = await createVoiceJob({ kind: "tts", project_id: null, voice_id: voice.id, engine: "auto", lines: [line], settings });
       // editor ditutup / dibatalkan selagi antrian dibuat → job-nya langsung dibatalkan
       if (!alive.current || runsRef.current[sid]?.s !== "start") return void cancelVoiceJob(j.id).catch(() => {});
-      setRun(sid, { s: "job", id: j.id, voice: voice.name, sig, tempo });
+      setRun(sid, { s: "job", id: j.id, voice: voice.name, sig, tempo, lines: [line], settings });
     } catch (e) {
       if (!alive.current) return;
       fail(sid, errMsg(e), true, tempo);
@@ -258,8 +275,8 @@ export function useVoTempo(timeline: Timeline, onApply: (fn: (t: Timeline) => Ti
       fail(sid, `Mesin suara di laptop gagal bikin ulang kalimat ini${job.message ? ` (${job.message.slice(0, 120)})` : ""}.`, true, r.tempo);
     } else if (job.status === "batal") {
       setRun(sid, null);
-    } else if (r.status !== job.status || r.progress !== job.progress || r.message !== job.message) {
-      setRun(sid, { ...r, status: job.status, progress: job.progress, message: job.message });
+    } else if (r.status !== job.status || r.progress !== job.progress || r.message !== job.message || r.updated_at !== job.updated_at) {
+      setRun(sid, { ...r, status: job.status, progress: job.progress, message: job.message, updated_at: job.updated_at ?? null });
     }
   };
 
@@ -319,6 +336,7 @@ export default function VoLineTools({ scene, timeline, tools }: { scene: Scene; 
   if (!scene.vo?.text || v.mode === "none") return null;
   const job = st?.s === "job" ? st : null;
   const pct = job ? Math.round((job.progress ?? 0) * 100) : 0;
+  const queuedMsg = job && (job.status ?? "antri") === "antri" ? queuedText(estimateQueued(job.lines, job.settings, status?.worker)) : null;
 
   return (
     <div className="space-y-1.5" data-vo-tempo>
@@ -344,9 +362,18 @@ export default function VoLineTools({ scene, timeline, tools }: { scene: Scene; 
         </select>
         {busy ? (
           <>
-            <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-zinc-400" role="status" data-vo-tempo-busy>
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-zinc-400" role="status" data-vo-tempo-busy>
               <span className="h-2 w-2 flex-none animate-pulse rounded-full bg-orange-500" />
-              {st?.s === "tts" ? "Bikin ulang kalimat ini…" : st?.s === "start" ? "Menyiapkan antrian…" : job?.status === "proses" ? `${job.message || "Laptop lagi bikin suara…"}${pct ? ` ${pct}%` : ""}` : "Menunggu giliran di laptop…"}
+              <span className="min-w-0">
+                {st?.s === "tts"
+                  ? "Bikin ulang kalimat ini…"
+                  : st?.s === "start"
+                    ? "Menyiapkan antrian…"
+                    : job?.status === "proses"
+                      ? `${etaText(job.message, "Laptop lagi bikin suara…")}${pct ? ` ${pct}%` : ""}`
+                      : (queuedMsg ?? "Menunggu giliran di laptop…")}
+              </span>
+              {job && <EtaChip job={job} />}
             </span>
             {st?.s !== "start" && (
               <button type="button" className="text-[12px] font-semibold text-red-400 hover:text-red-300" onClick={() => tools.cancel(scene.id)} data-vo-tempo-cancel>

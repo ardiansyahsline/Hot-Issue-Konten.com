@@ -3,7 +3,8 @@ rem ============================================================================
 rem  Klik dua kali untuk menyalakan mesin suara laptop (Studio Pro):
 rem    1) ambil update terbaru dari GitHub (git pull)
 rem    2) pasang ulang paket mesin suara HANYA kalau isinya berubah
-rem    3) nyalakan worker (jendela ini biarkan terbuka)
+rem    3) unduh model suara yang belum ada (cepat, bisa dilanjutkan) - gagal pun worker tetap menyala
+rem    4) nyalakan worker (jendela ini biarkan terbuka)
 rem  Boleh ditaruh di folder utama repo ATAU di Desktop.
 rem  Kalau repo kamu ada di folder lain, ganti baris "set REPO=" di bawah.
 rem ==========================================================================================
@@ -26,7 +27,7 @@ echo Folder repo: %CD%
 echo.
 
 rem ---------------------------------------------------------------- 1. update kode
-echo [1/3] Ambil update terbaru dari GitHub...
+echo [1/4] Ambil update terbaru dari GitHub...
 where git >nul 2>nul
 if errorlevel 1 goto tanpagit
 git pull --ff-only
@@ -46,7 +47,7 @@ echo.
 rem ---------------------------------------------------------------- 2. pasang ulang kalau perlu
 :cekpasang
 echo.
-echo [2/3] Cek paket mesin suara...
+echo [2/4] Cek paket mesin suara...
 set "VW=%REPO%voice-worker"
 set "SNAP=%VW%\.venv\terpasang"
 set "PERLU=0"
@@ -58,7 +59,7 @@ for %%F in (requirements.txt requirements-gpu.txt install.ps1) do (
 )
 if "%PERLU%"=="1" goto pasang
 echo     Paket sudah terbaru.
-goto nyalakan
+goto model
 
 :pasang
 echo     Ada paket baru / belum terpasang. Memasang (bisa beberapa menit, sekali saja)...
@@ -72,7 +73,7 @@ if not "%KODEPASANG%"=="0" goto gagalpasang
 if not exist "%SNAP%\" mkdir "%SNAP%" >nul 2>nul
 for %%F in (requirements.txt requirements-gpu.txt install.ps1) do copy /y "%VW%\%%F" "%SNAP%\%%F" >nul 2>nul
 echo     Paket siap.
-goto nyalakan
+goto model
 
 :gagalpasang
 echo.
@@ -80,10 +81,22 @@ echo GAGAL memasang paket mesin suara (kode %KODEPASANG%). Baca pesan merah di a
 pause
 exit /b 1
 
-rem ---------------------------------------------------------------- 3. nyalakan worker
+rem ---------------------------------------------------------------- 3. model suara (unduh di depan, bukan di tengah job)
+:model
+echo.
+echo [3/4] Cek model suara (yang belum ada diunduh sekarang; Ctrl+C = lewati, lalu jawab N)...
+pushd "%VW%"
+set PYTHONUTF8=1
+set PYTHONUNBUFFERED=1
+".venv\Scripts\python.exe" siapkan_model.py --cepat
+set "KODEMODEL=%ERRORLEVEL%"
+popd
+if not "%KODEMODEL%"=="0" echo     Model belum lengkap - mesin suara tetap dinyalakan; sisanya diunduh otomatis di latar.
+
+rem ---------------------------------------------------------------- 4. nyalakan worker
 :nyalakan
 echo.
-echo [3/3] Menyalakan mesin suara...
+echo [4/4] Menyalakan mesin suara...
 echo     Tunggu tulisan "Menunggu antrian dari website" lalu BIARKAN jendela ini terbuka.
 echo     Berhenti: tekan Ctrl+C.
 echo.

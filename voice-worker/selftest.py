@@ -477,9 +477,9 @@ def t_job_tts_lengkap():
     a2.cur = ""
     orig = jobs_tts.pick_take
 
-    def pick(engine, sentence, ref, st, asr_, tmp, on_take=None):
+    def pick(engine, sentence, ref, st, asr_, tmp, on_take=None, **kw):
         a2.cur = sentence
-        return orig(engine, sentence, ref, st, asr_, tmp, on_take)
+        return orig(engine, sentence, ref, st, asr_, tmp, on_take, **kw)
 
     jobs_tts.pick_take = pick
     rt.asr = a2
