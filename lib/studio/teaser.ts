@@ -1,7 +1,9 @@
 /**
  * Teaser resmi CS Tracker (premium trailer, 9:16, 30 fps, ±60 dtk) — mengikuti assets/audio/teaser/cue-sheet.md (11 baris)
- * & naskah-vo.md apa adanya. Semua batas adegan jatuh di ketukan trailer bed 100 BPM (kelipatan 0,6 dtk); musik berhenti
- * di ketukan terakhir (59,4 dtk) lalu hening ±0,5 dtk (ekor komposisi).
+ * & naskah-vo.md apa adanya. Semua batas adegan jatuh di grid 100 BPM (kelipatan 0,6 dtk); isi berakhir di ketukan terakhir
+ * (59,4 dtk) lalu hening ±0,5 dtk (ekor komposisi).
+ * Suara: HANYA SFX efek + VO — tanpa musik / suara latar apa pun (permintaan Alif: musik ditambah sendiri lewat ＋Musik;
+ * level musik per adegan tetap disimpan supaya musik tambahan langsung ikut naik-turun per adegan).
  * Isi visual tiap adegan = components/remotion/studio/teaser (layout.kind "teaser").
  */
 import { BRANDS, normalizeTimeline, type MusicLevel, type SfxCue, type TeaserShot, type Timeline, type TransitionKind, type Dir } from "./timeline";
@@ -38,7 +40,7 @@ const ROWS: Row[] = [
     voAt: 0.3,
     text: ["Hot issue numpuk?", "Chat tim berantakan?"],
     visual: "Potongan cepat masalah: hot issue numpuk, chat berantakan, data kececer",
-    sfx: [["glitch-error", 0], ["ambience-gelap", 0], ["ui-snap", 0.6], ["braam-transisi-gelap", 1.2], ["ui-snap", 1.8], ["ui-snap", 2.4]],
+    sfx: [["glitch-error", 0], ["ui-snap", 0.6], ["braam-transisi-gelap", 1.2], ["ui-snap", 1.8], ["ui-snap", 2.4]],
     music: "low",
     tr: "cut",
   },
@@ -194,7 +196,8 @@ export function teaserTimelineRaw(): Record<string, unknown> {
     mood: "trailer premium, energik, percaya diri",
     // gaya bicara Promo energik (lib/studio/voiceStyle.ts): cfg 0,5 = tempo asli lebih cepat → jarang perlu dipercepat atempo
     voice: { mode: "bank", voiceName: "Alif - Energik", preset: "promo", exaggeration: 0.65, cfg: 0.5, temperature: 0.85, edgeVoice: "id-ID-ArdiNeural" },
-    music: { src: "bed", name: "Trailer bed (100 BPM)", bpm: 100 },
+    // tanpa musik latar (juga tanpa trailer bed cadangan): user menambah musiknya sendiri
+    music: { src: "none", name: "Tanpa musik" },
     grain: true,
     vignette: true,
     scenes: ROWS.map((r, i) => ({
