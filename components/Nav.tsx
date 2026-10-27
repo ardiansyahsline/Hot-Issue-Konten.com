@@ -6,19 +6,25 @@ import { useEffect, useRef, useState } from "react";
 import { canWriteIssues } from "@/lib/roles";
 import type { TabId } from "@/lib/tabs";
 import MusicButton from "./MusicButton";
+import { useClosedTabs } from "./TabAccessProvider";
 import { createClient } from "@/lib/supabase/client";
 
 /**
  * Jumlah Video Review berstatus "menunggu" (belum dicek tim video review).
  * Realtime: berubah langsung saat review baru masuk / status diubah; cadangan: cek ulang tiap 60 detik & tiap pindah halaman.
- * `enabled` false (tab Video Review ditutup admin) -> tidak query & tidak berlangganan realtime sama sekali.
+ * `enabled` false (tab Video Review ditutup admin) -> tidak query & tidak berlangganan realtime sama sekali;
+ * dibuka lagi (tanpa muat ulang) -> langsung dihitung, karena angka awal dari server tadi 0.
  */
 function usePendingVr(initial: number, path: string, enabled: boolean) {
   const [n, setN] = useState(initial);
   const sb = useRef<ReturnType<typeof createClient> | null>(null);
   const refresh = useRef<() => void>(() => {});
+  const wasOff = useRef(!enabled);
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      wasOff.current = true;
+      return;
+    }
     const supabase = (sb.current ??= createClient());
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
@@ -35,6 +41,10 @@ function usePendingVr(initial: number, path: string, enabled: boolean) {
       .on("postgres_changes", { event: "*", schema: "public", table: "video_reviews" }, () => refresh.current())
       .subscribe();
     const iv = setInterval(load, 60_000);
+    if (wasOff.current) {
+      wasOff.current = false;
+      void load();
+    }
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -55,15 +65,14 @@ export default function Nav({
   role,
   pendingVr = 0,
   studio = false,
-  closed = [],
 }: {
   role: string | null;
   pendingVr?: number;
   studio?: boolean;
-  /** tab yang ditutup admin untuk user ini (dihitung di server oleh layout) -> menunya disembunyikan */
-  closed?: TabId[];
 }) {
   const path = usePathname();
+  // tab yang ditutup admin untuk user ini -> menunya disembunyikan (daftar terbaru di browser, ikut berubah tanpa muat ulang)
+  const closed = useClosedTabs();
   const open = (t: TabId) => !closed.includes(t);
   const vrPending = usePendingVr(pendingVr, path, open("video_review"));
   const music = open("musik");

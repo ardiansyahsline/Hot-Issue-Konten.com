@@ -30,18 +30,20 @@ export async function addAttachments(target: AttachTarget, page: string, _prev: 
 
 /** Hapus satu lampiran (pengunggah / admin) */
 export async function deleteAttachment(id: number, page: string): Promise<AttachState> {
-  const { supabase } = await getCurrentUser();
-  // ada tab yang ditutup -> cek dulu lampiran ini milik tab apa (kolom target yang terisi)
-  const { blocked } = await getTabAccess();
-  if (blocked.size) {
+  const [{ supabase }, access] = await Promise.all([getCurrentUser(), getTabAccess()]);
+  // ada tab yang ditutup -> cek dulu lampiran ini milik tab apa (kolom target yang terisi, termasuk lampiran chat)
+  if (access.blocked.size) {
     const { data: row } = await supabase
       .from("attachments")
-      .select("issue_id, issue_note_id, issue_report_id, suggestion_id, suggestion_comment_id")
+      .select("issue_id, issue_note_id, issue_report_id, suggestion_id, suggestion_comment_id, chat_message_id")
       .eq("id", id)
       .maybeSingle();
-    const kind = (Object.keys(TARGET_COLUMN) as (keyof typeof TARGET_COLUMN)[]).find((k) => row?.[TARGET_COLUMN[k]] != null);
-    const tab = kind ? await assertTab(TARGET_TAB[kind]) : null;
-    if (tab && !tab.ok) return { error: tab.error };
+    const cols = { ...TARGET_COLUMN, chat_message: "chat_message_id" } as const;
+    const kind = (Object.keys(cols) as (keyof typeof cols)[]).find((k) => row?.[cols[k]] != null);
+    // pemilik lampiran tidak dikenali (tidak terlihat / jenis baru) -> tolak saja, jangan dihapus
+    if (!kind) return { error: "Lampiran tidak ditemukan atau tabnya ditutup admin untuk akunmu." };
+    const tab = await assertTab(TARGET_TAB[kind], access);
+    if (!tab.ok) return { error: tab.error };
   }
   const { data, error } = await supabase.from("attachments").delete().eq("id", id).select("path");
   if (error) return { error: error.message };

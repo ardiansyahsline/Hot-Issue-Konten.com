@@ -20,7 +20,7 @@ import HeatMeter from "@/components/reports/HeatMeter";
 import ReportForm from "@/components/reports/ReportForm";
 import { addReport, deleteReport } from "../reportActions";
 import type { IssueContact } from "@/lib/types";
-import { requireTab } from "@/lib/tabs.server";
+import { startTab } from "@/lib/tabs.server";
 
 type Note = CommentRow & { files: AttachmentRow[] | null };
 type Report = { id: number; note: string; created_at: string; created_by: string | null; files: AttachmentRow[] | null };
@@ -50,13 +50,15 @@ export default async function IssueDetail({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ lapor?: string; lapor_error?: string }>;
 }) {
-  await requireTab("dashboard");
+  // cek tab dashboard bareng query di bawah (tidak menambah satu putaran ke Supabase)
+  const gate = startTab("dashboard");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   const sp = await searchParams;
 
   const { supabase, user } = await getCurrentUser();
-  const [{ data }, { data: notesData }, profile, { data: filesData }, { data: reactData }, { data: peopleData }, { data: reportsData }] = await Promise.all([
+  const [, { data }, { data: notesData }, profile, { data: filesData }, { data: reactData }, { data: peopleData }, { data: reportsData }] = await Promise.all([
+    gate,
     supabase.from("issue_list").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("issue_notes")

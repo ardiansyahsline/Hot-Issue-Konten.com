@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { currentSubscription, pushSupported } from "@/lib/push.client";
 import { audio, normalizeSoundPrefs, notifySound, setSoundPrefs, type SoundKind } from "@/lib/sounds";
-import type { TabId } from "@/lib/tabs";
+import { useClosedTabs } from "./TabAccessProvider";
 
 const CACHE = "cs-sound-prefs";
 
@@ -13,10 +13,10 @@ const CACHE = "cs-sound-prefs";
  *  - notifikasi push dari service worker (Hot Issue, laporan, chat, mention)
  *  - pesan chat baru dari widget / halaman Chat (event "cs-sound")
  *  - perangkat tanpa push: cek Hot Issue & laporan baru tiap 30 detik
- * Tab ditutup admin (`closed`): Chat -> bunyi chat/mention diam; Dashboard -> bunyi Hot Issue diam & tidak cek berkala.
+ * Tab ditutup admin (daftar terbaru dari TabAccessProvider): Chat -> bunyi chat/mention diam; Dashboard -> bunyi Hot Issue diam & tidak cek berkala.
  */
-export default function SoundNotifier({ meId, closed = [] }: { meId: string; closed?: TabId[] }) {
-  const closedKey = closed.join(",");
+export default function SoundNotifier({ meId }: { meId: string }) {
+  const closedKey = useClosedTabs().join(",");
   useEffect(() => {
     const chatOff = closedKey.split(",").includes("chat");
     const issueOff = closedKey.split(",").includes("dashboard");

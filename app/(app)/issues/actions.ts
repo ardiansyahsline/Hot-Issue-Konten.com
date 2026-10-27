@@ -5,8 +5,8 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { headers } from "next/headers";
 import { notifyNewIssue } from "@/lib/notify.server";
-import { getCurrentUser, getProfile, requireAdmin } from "@/lib/auth";
-import { assertTab } from "@/lib/tabs.server";
+import { getCurrentUser, requireAdmin } from "@/lib/auth";
+import { getTabAccess, requireTab, tabDenied } from "@/lib/tabs.server";
 import { canWriteIssues } from "@/lib/roles";
 import { CATEGORIES, PRIORITIES, STATUSES } from "@/lib/constants";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
@@ -57,16 +57,16 @@ function parseContacts(formData: FormData): ContactInput[] {
 
 const NO_ACCESS = "Role kamu hanya bisa melihat (read-only). Minta admin ubah role kalau perlu input.";
 
-/** Context Supabase kalau user boleh input/edit Hot Issues (tab Dashboard terbuka + role penulis), null kalau tidak */
-async function writer() {
-  const [ctx, profile, tab] = await Promise.all([getCurrentUser(), getProfile(), assertTab("dashboard")]);
-  return tab.ok && canWriteIssues(profile?.role) ? { ...ctx, isAdmin: profile?.role === "admin" } : null;
-}
-
-/** Alasan ditolak: tab ditutup admin, atau role hanya bisa melihat */
-async function noAccess() {
-  const tab = await assertTab("dashboard");
-  return tab.ok ? NO_ACCESS : tab.error;
+/**
+ * Context Supabase kalau user boleh input/edit Hot Issues (tab Dashboard terbuka + role penulis); kalau tidak = teks alasannya.
+ * `closed: "redirect"` = aksi tanpa pesan (ganti status dll.): tab ditutup -> pindah ke tab yang boleh (halaman basi ikut tertutup).
+ */
+async function writer(closed: "error" | "redirect" = "error") {
+  const [ctx, access] = await Promise.all([getCurrentUser(), getTabAccess()]);
+  const no = tabDenied(access, "dashboard", { redirect: closed === "redirect" });
+  if (no) return no;
+  const role = access.profile?.role;
+  return canWriteIssues(role) ? { ...ctx, isAdmin: role === "admin" } : NO_ACCESS;
 }
 
 export async function createIssue(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -75,7 +75,7 @@ export async function createIssue(_prev: FormState, formData: FormData): Promise
   const contacts = parseContacts(formData);
 
   const w = await writer();
-  if (!w) return { error: await noAccess() };
+  if (typeof w === "string") return { error: w };
   const { supabase } = w;
   // selain admin: PIC otomatis = yang input (dropdown PIC hanya untuk admin)
   const payload = w.isAdmin ? parsed.data : { ...parsed.data, pic_id: w.user.id };
@@ -108,7 +108,7 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
   const contacts = parseContacts(formData);
 
   const w = await writer();
-  if (!w) return { error: await noAccess() };
+  if (typeof w === "string") return { error: w };
   const { supabase } = w;
   // selain admin: PIC tidak diubah lewat form (pakai tombol "Saya yang pegang")
   const { pic_id, ...rest } = parsed.data;
@@ -150,8 +150,8 @@ export async function updateIssue(id: number, _prev: FormState, formData: FormDa
 
 export async function setStatus(id: number, status: string) {
   if (!(status in STATUSES)) return;
-  const w = await writer();
-  if (!w) return;
+  const w = await writer("redirect");
+  if (typeof w === "string") return;
   const { supabase } = w;
   await supabase.from("issues").update({ status }).eq("id", id);
   revalidatePath(`/issues/${id}`);
@@ -159,8 +159,8 @@ export async function setStatus(id: number, status: string) {
 }
 
 export async function toggleHot(id: number, isHot: boolean) {
-  const w = await writer();
-  if (!w) return;
+  const w = await writer("redirect");
+  if (typeof w === "string") return;
   const { supabase } = w;
   await supabase.from("issues").update({ is_hot: isHot }).eq("id", id);
   revalidatePath(`/issues/${id}`);
@@ -168,8 +168,8 @@ export async function toggleHot(id: number, isHot: boolean) {
 }
 
 export async function takeIssue(id: number) {
-  const w = await writer();
-  if (!w) return;
+  const w = await writer("redirect");
+  if (typeof w === "string") return;
   const { supabase, user } = w;
   await supabase.from("issues").update({ pic_id: user.id }).eq("id", id);
   revalidatePath(`/issues/${id}`);
@@ -178,8 +178,9 @@ export async function takeIssue(id: number) {
 
 /** Komentar / update issue — semua role boleh (termasuk User). `parent_id` = balasan. */
 export async function addNote(id: number, formData: FormData) {
-  if (!(await assertTab("dashboard")).ok) return;
-  const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
+  const [{ supabase, user }, access] = await Promise.all([getCurrentUser(), getTabAccess()]);
+  tabDenied(access, "dashboard", { redirect: true });
+  const profile = access.profile;
   const files = parseAttachments(formData, user.id);
   const body = String(formData.get("body") ?? "").trim().slice(0, 5000) || (files.length ? "📎 Lampiran bukti" : "");
   if (!body) return;
@@ -198,7 +199,7 @@ export async function addNote(id: number, formData: FormData) {
 }
 
 export async function deleteNote(issueId: number, noteId: number) {
-  if (!(await assertTab("dashboard")).ok) return;
+  await requireTab("dashboard");
   const { supabase } = await getCurrentUser();
   const { data: replies } = await supabase.from("issue_notes").select("id").eq("parent_id", noteId);
   const paths = await attachmentPaths(supabase, [{ column: "issue_note_id", ids: [noteId, ...(replies ?? []).map((r) => r.id as number)] }]);

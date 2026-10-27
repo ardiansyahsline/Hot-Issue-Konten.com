@@ -5,13 +5,15 @@ import NotificationSettings from "./NotificationSettings";
 import SoundSettings from "./SoundSettings";
 import { normalizeSoundPrefs } from "@/lib/sounds";
 import { getTabAccess } from "@/lib/tabs.server";
-import { TABS, firstOpenHome } from "@/lib/tabs";
+import { TABS, TAB_IDS, firstOpenHome } from "@/lib/tabs";
 
 export default async function AkunPage() {
   const [{ user, supabase }, profile, access] = await Promise.all([getCurrentUser(), getProfile(), getTabAccess()]);
   // halaman Akun selalu boleh dibuka; di sini user diberi tahu tab mana yang ditutup admin
   const closedNames = TABS.filter((t) => access.blocked.has(t.id)).map((t) => t.label);
-  const allClosed = closedNames.length > 0 && !firstOpenHome(access.blocked);
+  // semua tab ditutup / semua halaman ditutup tapi tombol 🎵 Musik masih boleh
+  const allClosed = access.blocked.size === TAB_IDS.length;
+  const pagesClosed = !allClosed && closedNames.length > 0 && !firstOpenHome(access.blocked);
   const { data: prefs } = await supabase.from("notification_prefs").select("*").eq("user_id", user.id).maybeSingle();
   const initial = {
     push_issue: prefs?.push_issue ?? true,
@@ -29,9 +31,12 @@ export default async function AkunPage() {
         <p className="text-sm text-zinc-400">{user.email} · {profile?.role}</p>
       </div>
       {closedNames.length > 0 && (
-        <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-300">
-          {allClosed ? (
-            <>🔒 Semua tab ditutup admin untuk akunmu. Kamu masih bisa mengatur akun di sini. Hubungi admin kalau perlu akses.</>
+        <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-200">
+          {allClosed || pagesClosed ? (
+            <>
+              🔒 {allClosed ? "Semua tab ditutup admin untuk akunmu." : "Semua halaman ditutup admin untuk akunmu (tombol 🎵 Musik masih boleh)."} Kamu masih
+              bisa mengatur akun di sini. Hubungi admin kalau perlu akses.
+            </>
           ) : (
             <>🔒 Tab yang ditutup admin untuk akunmu: <b className="font-semibold">{closedNames.join(", ")}</b>. Hubungi admin kalau perlu akses.</>
           )}

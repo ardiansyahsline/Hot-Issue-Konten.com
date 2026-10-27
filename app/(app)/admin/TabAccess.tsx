@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ROLES, isRole } from "@/lib/roles";
-import { TABS, firstOpenHome, type TabId } from "@/lib/tabs";
+import { TABS, TAB_IDS, firstOpenHome, type TabId } from "@/lib/tabs";
 import { saveTabBlocks } from "./tabActions";
 
 export type TabUser = { id: string; name: string; email: string | null; role: string; admin: boolean; self: boolean; blocked: TabId[] };
@@ -88,7 +88,11 @@ export default function TabAccess({
             const blocked = blockedOf(u);
             const st = status[u.id];
             const role = isRole(u.role) ? ROLES[u.role] : null;
-            const allClosed = blocked.length > 0 && !firstOpenHome(blocked);
+            // semua tab ditutup, atau semua HALAMAN ditutup tapi tombol 🎵 Musik masih boleh
+            const allClosed = blocked.length === TAB_IDS.length;
+            const pagesClosed = !allClosed && blocked.length > 0 && !firstOpenHome(blocked);
+            // "Buka semua" tidak memakai `disabled` (fokus keyboard tidak hilang ke <body> sesudah diklik)
+            const openAllOff = !blocked.length || st?.kind === "saving";
             return (
               // HP: nama -> chip -> ringkasan + "Buka semua"; layar lebar: nama + ringkasan sebaris, chip di bawahnya
               <li key={u.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3">
@@ -114,9 +118,9 @@ export default function TabAccess({
                       </span>
                       <button
                         type="button"
-                        onClick={() => save(u, [])}
-                        disabled={!blocked.length || st?.kind === "saving"}
-                        className="btn-ghost px-2.5 py-1 text-xs"
+                        onClick={() => !openAllOff && save(u, [])}
+                        aria-disabled={openAllOff}
+                        className={`btn-ghost px-2.5 py-1 text-xs ${openAllOff ? "cursor-not-allowed opacity-50" : ""}`}
                       >
                         Buka semua
                       </button>
@@ -147,7 +151,12 @@ export default function TabAccess({
                   </>
                 )}
                 {st?.kind === "error" && <p role="alert" className="order-4 basis-full text-xs text-red-400">{st.text}</p>}
-                {allClosed && <p className="order-4 basis-full text-xs text-amber-400">Semua tab ditutup — user ini hanya bisa membuka halaman Akun (dan Studio kalau diberi akses).</p>}
+                {(allClosed || pagesClosed) && (
+                  <p className="order-4 basis-full text-xs text-amber-400">
+                    {allClosed ? "Semua tab ditutup" : "Semua halaman ditutup (tombol 🎵 Musik masih boleh)"} — user ini hanya bisa membuka halaman
+                    Akun (dan Studio kalau diberi akses).
+                  </p>
+                )}
               </li>
             );
           })}

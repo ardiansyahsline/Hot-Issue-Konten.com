@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { assertTab, canTab, getTabAccess } from "@/lib/tabs.server";
-import { getCurrentUser, getProfile } from "@/lib/auth";
+import { assertTab } from "@/lib/tabs.server";
+import { getCurrentUser } from "@/lib/auth";
 import { aiConfig, aiHeaders, healthMap, healthRank, isDeadModel, listCatalog, loadHealth, markHealth, sessionPrompt, systemPrompt } from "@/lib/ai.server";
 import { buildSiteContext, looksAboutSite } from "@/lib/aiContext.server";
 import { TRADE_INTENT, analysisGuide, buildWebContext, newsPlan, chartSymbol, compactGuide, detectTimeframe, ensureTradePlan, extractUrls, looksNeedWeb, mentionsAsset, planWebSearch, sourcesFooter, webConfig, type WebPlan } from "@/lib/aiWeb.server";
@@ -55,9 +55,13 @@ export async function POST(req: NextRequest) {
   const cfg = aiConfig();
   if (!cfg.ok) return err(503, "AI belum disetel. Admin perlu melengkapi pengaturan AI di Vercel.");
 
-  const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
-  const gate = await assertTab("ai");
+  // cek tab AI + profile sekali saja (dipakai ulang di bawah: data CS Tracker & musik)
+  const [{ supabase, user }, gate] = await Promise.all([getCurrentUser(), assertTab("ai")]);
   if (!gate.ok) return gate.res;
+  const access = gate.access;
+  const profile = access.profile;
+  // tab data (Dashboard / Video Review / Catatan) ada yang ditutup -> jawaban lama yang memakai data tidak ikut riwayat
+  const dataClosed = (["dashboard", "video_review", "catatan"] as const).some((t) => access.blocked.has(t));
   // info teknis (hero pengganti, daftar error) hanya untuk pemilik (Alif); user lain melihat hero pilihannya saja
   const owner = isAiOwner(user.email);
   let body: Body;
@@ -106,7 +110,13 @@ export async function POST(req: NextRequest) {
   const hist = ((histRes.data ?? []) as Row[])
     .reverse()
     .filter((m) => !m.error && (m.content || (m.images?.length ?? 0) > 0))
-    .map((m) => ({ ...m, content: splitVia(m.content ?? "").content }));
+    .map((m) => ({
+      ...m,
+      content:
+        dataClosed && m.role === "assistant" && m.used_data
+          ? "(Jawaban lama ini memakai data CS Tracker — disembunyikan karena sebagian tab datanya sekarang ditutup admin untuk user ini. Jangan membahas isinya.)"
+          : splitVia(m.content ?? "").content,
+    }));
   const lastUser = [...hist].reverse().find((m) => m.role === "user");
   const lastText = lastUser?.content ?? content;
   // gambar hanya ikut dikirim kalau ada di 3 pesan user terakhir (maks 2 pesan bergambar)
@@ -330,9 +340,8 @@ export async function POST(req: NextRequest) {
   const marketOnly = !webOn && !hasImages && !folder ? ensureTradePlan(null, lastText, hist.filter((m) => m.content).map((m) => ({ role: m.role, content: m.content })), assetAsk) : null;
   const [context, web] = await Promise.all([
     useData
-      ? getTabAccess()
-          // data tab yang ditutup admin untuk user ini tidak ikut dikirim ke AI
-          .then((a) => buildSiteContext(supabase, a.blocked))
+      ? // data tab yang ditutup admin untuk user ini tidak ikut dikirim ke AI
+        buildSiteContext(supabase, access.blocked)
           .catch(() => "")
           .finally(() => step("data", "done"))
       : Promise.resolve(""),
@@ -440,7 +449,7 @@ export async function POST(req: NextRequest) {
   // (tab Musik AI ditutup admin -> pemutar tidak dipasang, jadi AI tidak boleh mengirim perintah musik)
   if (MUSIC_INTENT.test(lastText)) {
     turnRules.push(
-      (await canTab("musik"))
+      !access.blocked.has("musik")
         ? MUSIC_RULES
         : "🎵 Pemutar musik website DITUTUP admin untuk user ini. JANGAN kirim blok ```music```; bilang singkat bahwa tab Musik AI ditutup admin untuk akunnya."
     );

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
-import { assertTab } from "@/lib/tabs.server";
+import { assertTab, requireTab } from "@/lib/tabs.server";
 import { isContactType, normalizeContact, type ContactType } from "@/lib/contacts";
 import { attachmentPaths, parseAttachments, removeFiles, saveAttachments } from "@/lib/attachments.server";
 import { notifyNewReport } from "@/lib/notify.server";
@@ -113,7 +113,8 @@ export async function addAsReport(issueId: number, formData: FormData) {
 }
 
 export async function deleteReport(issueId: number, reportId: number) {
-  if (!(await assertTab("dashboard")).ok) return;
+  // tab ditutup -> pindah ke tab yang boleh (bukan diam saja di halaman basi)
+  await requireTab("dashboard");
   const { supabase } = await getCurrentUser();
   const paths = await attachmentPaths(supabase, [{ column: "issue_report_id", ids: [reportId] }]);
   const { data } = await supabase.from("issue_reports").delete().eq("id", reportId).select("id");
