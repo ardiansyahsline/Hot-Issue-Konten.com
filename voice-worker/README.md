@@ -96,7 +96,10 @@ Pertama kali akan **mengunduh model ±3–5 GB** (sekali saja).
 Kalau muncul **"pindah ke pocket-tts"**: GPU belum bisa dipakai (lihat *Masalah umum*). Worker tetap jalan pakai CPU.
 
 ### 8. Jalankan
-Klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
+**Paling gampang:** klik dua kali **`NYALAKAN-MESIN-SUARA.bat`** di folder utama repo (boleh juga disalin ke Desktop).
+Isinya otomatis: `git pull` → pasang ulang paket hanya kalau ada yang berubah → nyalakan worker.
+
+Atau manual: klik dua kali **`jalankan.bat`** (atau dari PowerShell: `.\jalankan.bat`). Biarkan jendelanya terbuka.
 - `Ctrl+C` sekali = berhenti setelah tugas yang sedang jalan selesai.
 - `Ctrl+C` dua kali = berhenti sekarang (tugas dikembalikan ke antrian).
 

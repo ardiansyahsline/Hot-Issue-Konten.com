@@ -1,0 +1,2 @@
+# file .bat Windows wajib CRLF (cmd.exe bisa salah membaca label/goto kalau LF)
+*.bat text eol=crlf
