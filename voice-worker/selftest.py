@@ -832,6 +832,14 @@ def t_tulis_ulang_url_render():
     out3, miss3 = jobs_render.rewrite_timeline({"brand": {"logo": "/konten-logo.png"}, "scenes": []}, TMP / "render" / "public-x", TMP, fetch)
     assert out3["brand"]["logo"] is None and miss3 == ["/konten-logo.png"], (out3, miss3)
     assert (pub / "brand" / "konten-logo.png").exists() and (pub / "brand" / "tws-logo.svg").exists(), "copy_assets juga menyalin logo bawaan"
+    # musik user hilang: proyek biasa → trailer bed cadangan, proyek teaser (sengaja tanpa musik latar) → tanpa musik
+    def fetch404(p: str, dst: Path) -> None:
+        raise RuntimeError("404")
+
+    lagu = "/api/studio/file?p=uploads/u1/musik.mp3"
+    out4, _ = jobs_render.rewrite_timeline({"music": {"src": lagu}, "scenes": [{"layout": {"kind": "title"}}]}, TMP / "render" / "public-m1", REPO, fetch404)
+    out5, _ = jobs_render.rewrite_timeline({"music": {"src": lagu}, "scenes": [{"layout": {"kind": "teaser", "shot": "hook"}}]}, TMP / "render" / "public-m2", REPO, fetch404)
+    assert out4["music"]["src"] == "bed" and out5["music"]["src"] == "none", (out4["music"], out5["music"])
     bundle = TMP / "render" / "bundle"
     n = jobs_render.stage_builtin_assets(REPO, bundle)
     assert n >= 40 and (bundle / "api" / "studio" / "asset" / "sfx" / "ui-pop.mp3").exists()

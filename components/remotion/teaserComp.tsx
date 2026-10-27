@@ -5,7 +5,7 @@
  * Ukuran, fps & durasi dihitung dengan studioMeta — sama dengan Studio Pro & remotion/Root.tsx (komposisi TeaserCsTracker).
  *
  * Timeline bawaan TIDAK punya suara VO (tl.vo kosong: file VO dibuat per proyek di Studio Pro & disimpan di storage Studio),
- * jadi preview & render browser di menu ini = versi tanpa VO (musik + SFX + teks). Versi dengan VO:
+ * jadi preview & render browser di menu ini = versi tanpa VO (SFX + teks, tanpa musik latar). Versi dengan VO:
  * Studio Pro → 🎞️ Buka Teaser CS Tracker → Bikin suara VO → Download (ExportPanel).
  */
 import type { FC } from "react";
@@ -18,7 +18,7 @@ const TIMELINE = teaserTimeline();
 export const TEASER_META = studioMeta(TIMELINE);
 
 export type TeaserCompProps = {
-  /** true = suara VO + subtitle KALAU timeline punya VO (timeline bawaan tidak punya); false = musik + SFX + teks */
+  /** true = suara VO + subtitle KALAU timeline punya VO (timeline bawaan tidak punya); false = SFX + teks */
   vo?: boolean;
 };
 export const TEASER_DEFAULTS: TeaserCompProps = { vo: false };

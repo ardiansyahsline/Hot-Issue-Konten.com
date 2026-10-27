@@ -309,7 +309,7 @@ export default function RemotionStudio({ active = true }: { active?: boolean }) 
           )}
           {render.s === "error" && <p className="text-xs text-red-400">Gagal bikin video: {render.msg}</p>}
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop), {comp.studio ? "dengan musik + SFX" : "tanpa suara"}. {comp.note}
+            Video dibikin langsung di browser (paling lancar di Chrome / Edge laptop), {comp.studio ? "dengan SFX (tanpa musik latar)" : "tanpa suara"}. {comp.note}
           </p>
         </div>
       </div>

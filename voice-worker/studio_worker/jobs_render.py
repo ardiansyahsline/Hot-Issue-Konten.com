@@ -264,7 +264,8 @@ def owner_can_read(supa, owner: str | None) -> Callable[[str], bool]:
 def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], None], can_read: Callable[[str], bool] | None = None) -> tuple[object, list[str]]:
     """ganti semua alamat /api/studio/... di timeline dengan /public/... dan siapkan filenya. Balikan (timeline baru, daftar file gagal).
     File storage yang tidak boleh dibaca pemilik job (can_read) dianggap gagal. Media yang gagal disiapkan dibuang dari timeline
-    (logo/klip/latar/VO → null, musik → "bed") supaya render tidak batal karena file 404."""
+    (logo/klip/latar/VO → null, musik → "bed"; proyek teaser → "none" karena teaser sengaja tanpa musik latar) supaya render tidak
+    batal karena file 404."""
     missing: list[str] = []
     bad: set[str] = set()  # alamat asli yang gagal disiapkan
     done: dict[str, str] = {}
@@ -355,7 +356,8 @@ def rewrite_timeline(tl, public: Path, repo: Path, fetch: Callable[[str, Path], 
                     o[field] = None
         music = out.get("music")
         if isinstance(music, dict) and gone(music.get("src")):
-            music["src"] = "bed"
+            teaser = any(isinstance(sc, dict) and isinstance(sc.get("layout"), dict) and sc["layout"].get("kind") == "teaser" for sc in out.get("scenes") or [])
+            music["src"] = "none" if teaser else "bed"
         vo = out.get("vo")
         if isinstance(vo, dict):
             if gone(vo.get("full")):
