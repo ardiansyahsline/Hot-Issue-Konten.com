@@ -139,6 +139,8 @@ class Heartbeat(threading.Thread):
             "speed": speed_summary(self.rt),
             "models": models_brief(CFG),
             "warm": bool(getattr(self.rt, "warm", False)),
+            # GPU yang benar-benar dipakai Chrome render (hasil cek sekali per sesi: NVIDIA / Intel / SwiftShader)
+            "render_gpu": jobs_render.render_gpu_info(),
             **self.rt.status,
         }
 

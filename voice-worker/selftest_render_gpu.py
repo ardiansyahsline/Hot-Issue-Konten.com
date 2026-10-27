@@ -654,7 +654,17 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     job = {"id": "r1", "status": "proses", "timeline": {"scenes": [{"id": "s1", "dur": 2}]}, "created_by": None}
     sb = MiniSupa(job)
     rt = Runtime(cfg=c, supa=sb)  # type: ignore[arg-type]
-    jobs_render.run(JobCtx(rt, "studio_render_jobs", job, min_gap=0))
+    ctx = JobCtx(rt, "studio_render_jobs", job, min_gap=0)
+    asked: list[str] = []  # pesan yang DIMINTA job (pengirim progres latar menggabung kiriman: yang terbaru menang)
+    orig_progress = ctx.progress
+
+    def spy(p, msg=None, force=False):
+        if msg:
+            asked.append(msg)
+        return orig_progress(p, msg, force)
+
+    ctx.progress = spy  # type: ignore[method-assign]
+    jobs_render.run(ctx)
     assert job["status"] == "selesai" and job["result_path"] == "renders/r1.mp4" and "renders/r1.mp4" in sb.files, job
     kinds = [a[2] if a[2] != "browser" else "ensure" for a in calls]
     assert kinds == ["bundle", "ensure", "render", "render"], kinds
@@ -663,7 +673,7 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     assert not any(a.startswith(("--gl", "--hardware-acceleration", "--video-bitrate")) for a in r2), r2
     assert "--codec=h264" in r2 and "--concurrency=2" in r2
     assert reg.values[str(exe)] == ("GpuPreference=2;", 1), reg.values
-    msgs = [p.get("message") for p in sb.patches if p.get("message")]
+    msgs = [m.split(" · sisa ±")[0] for m in asked]
     assert "Menyiapkan Chrome render…" in msgs and "Merender ulang (encode CPU)…" in msgs, msgs
     assert jobs_render._gpu["nvenc_bad"] and jobs_render.render_gpu_info()["encode"] == "cpu"
     assert any(x.startswith(f"Render memakai GPU: {NV}") for x in logs())
