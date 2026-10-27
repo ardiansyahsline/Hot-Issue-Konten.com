@@ -5,16 +5,19 @@ import { ROLES, isRole } from "@/lib/roles";
 import { STUDIO_MAX, studioErrorText } from "@/lib/studio/access.server";
 import { CreateUserForm, DeleteUserButton, ResetPasswordForm, RoleSelect } from "./AdminForms";
 import StudioAccess, { type StudioCandidate, type StudioLogItem, type StudioMember } from "./StudioAccess";
+import TabAccess, { type TabUser } from "./TabAccess";
+import { normalizeTabs, tabErrorText } from "@/lib/tabs";
 
 type AccessRow = { user_id: string; granted_by: string | null; granted_at: string };
 type LogRow = { id: number; user_id: string | null; user_name: string | null; action: "grant" | "revoke"; by_id: string | null; by_name: string | null; at: string };
 
 export default async function AdminPage() {
   const { supabase, user } = await requireAdmin();
-  const [{ data }, acc, logs] = await Promise.all([
+  const [{ data }, acc, logs, tabRes] = await Promise.all([
     supabase.from("profiles").select("*").order("created_at"),
     supabase.from("studio_access").select("user_id, granted_by, granted_at").order("granted_at"),
     supabase.from("studio_access_log").select("id, user_id, user_name, action, by_id, by_name, at").order("at", { ascending: false }).limit(20),
+    supabase.from("user_tab_blocks").select("user_id, blocked"),
   ]);
   const profiles = (data ?? []) as Profile[];
   const hasServiceKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -45,6 +48,19 @@ export default async function AdminPage() {
     at: fmtDate(l.at),
   }));
   const studioSetup = acc.error ? studioErrorText(acc.error, "Data akses Studio gagal dimuat. Coba muat ulang halaman.") : null;
+
+  // Akses tab per user: tidak ada baris = semua tab boleh; admin selalu semua tab
+  const tabBlocks = new Map(((tabRes.data ?? []) as { user_id: string; blocked: unknown }[]).map((r) => [r.user_id, normalizeTabs(r.blocked)]));
+  const tabUsers: TabUser[] = profiles.map((p) => ({
+    id: p.id,
+    name: p.full_name?.trim() || p.email || "Tanpa nama",
+    email: p.email,
+    role: p.role,
+    admin: p.role === "admin",
+    self: p.id === user.id,
+    blocked: p.role === "admin" ? [] : (tabBlocks.get(p.id) ?? []),
+  }));
+  const tabSetup = tabRes.error ? tabErrorText(tabRes.error, "Data akses tab gagal dimuat. Coba muat ulang halaman.") : null;
 
   return (
     <div className="space-y-5">
@@ -108,6 +124,8 @@ export default async function AdminPage() {
           </tbody>
         </table>
       </div>
+
+      <TabAccess users={tabUsers} setup={tabSetup} />
 
       <StudioAccess members={members} candidates={candidates} log={studioLog} max={STUDIO_MAX} setup={studioSetup} />
     </div>

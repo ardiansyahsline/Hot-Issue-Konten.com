@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import Nav from "@/components/Nav";
 import Logo from "@/components/Logo";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import { canUseStudio } from "@/lib/studio/access.server";
+import { getTabAccess } from "@/lib/tabs.server";
 import { signOut } from "@/app/login/actions";
 import { ROLES, isRole } from "@/lib/roles";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -13,25 +15,38 @@ import Presence from "@/components/Presence";
 import NotifPrompt from "@/components/NotifPrompt";
 import UpdateNotice from "@/components/UpdateNotice";
 import SoundNotifier from "@/components/SoundNotifier";
+import TabNotice from "@/components/TabNotice";
+import TabAccessProvider from "@/components/TabAccessProvider";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const [{ user }, profile, theme, pendingVr, studio] = await Promise.all([
+  const [{ user }, profile, theme, access, pendingVr, studio] = await Promise.all([
     getCurrentUser(),
     getProfile(),
     getTheme(),
-    // jumlah Video Review yang masih "menunggu" (bubble angka di tab Video Review)
-    getCurrentUser()
-      .then(({ supabase }) => supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu"))
-      .then((r) => r.count ?? 0, () => 0),
+    // tab yang ditutup admin untuk user ini (tabel belum ada -> tidak ada yang ditutup)
+    getTabAccess(),
+    // jumlah Video Review yang masih "menunggu" (bubble angka di tab Video Review). Dihitung BARENG cek tab
+    // (tidak menunggu), hasilnya dibuang kalau tab Video Review ditutup
+    (async () => {
+      const { supabase } = await getCurrentUser();
+      const [r, a] = await Promise.all([
+        supabase.from("video_reviews").select("id", { count: "exact", head: true }).eq("status", "menunggu"),
+        getTabAccess(),
+      ]);
+      return a.blocked.has("video_review") ? 0 : (r.count ?? 0);
+    })().catch(() => 0),
     // menu Studio: admin atau user yang diberi akses (gagal cek -> disembunyikan)
     canUseStudio().catch(() => false),
   ]);
   const name = profile?.full_name || user.email;
   const role = profile && isRole(profile.role) ? ROLES[profile.role] : null;
+  const closed = [...access.blocked];
 
   return (
+    // daftar tab yang ditutup ikut diperbarui di browser (pindah halaman / kembali ke tab) -> menu & chat melayang ikut berubah
+    <TabAccessProvider initial={closed}>
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-zinc-800/70 bg-zinc-950/75 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-x-3 gap-y-2.5 px-4 py-2.5 sm:gap-3 sm:px-6 sm:py-3">
@@ -69,12 +84,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-8">{children}</main>
+      <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-8">
+        <Suspense fallback={null}>
+          <TabNotice />
+        </Suspense>
+        {children}
+      </main>
+      {/* chat melayang hanya kalau tab Chat terbuka (dicek di ChatWidgetLazy; tidak berlangganan pesan kalau ditutup) */}
       <ChatWidget meId={user.id} />
       <Presence />
       <NotifPrompt />
       <UpdateNotice />
       <SoundNotifier meId={user.id} />
     </div>
+    </TabAccessProvider>
   );
 }

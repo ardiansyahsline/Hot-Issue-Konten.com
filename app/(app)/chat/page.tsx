@@ -1,9 +1,11 @@
 import { getCurrentUser } from "@/lib/auth";
 import ChatPage from "@/components/chat/ChatPage";
+import { requireTab } from "@/lib/tabs.server";
 
 type SP = Promise<Record<string, string | undefined>>;
 
 export default async function Chat({ searchParams }: { searchParams: SP }) {
+  await requireTab("chat");
   const [{ user }, sp] = await Promise.all([getCurrentUser(), searchParams]);
   const room = sp.room && /^[0-9a-f-]{36}$/i.test(sp.room) ? sp.room : null;
   return (

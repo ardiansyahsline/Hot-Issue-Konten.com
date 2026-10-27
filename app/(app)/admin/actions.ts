@@ -40,6 +40,8 @@ export async function setRole(userId: string, role: string): Promise<AdminState>
   const { error } = await admin.from("profiles").update({ role }).eq("id", userId);
   if (error) return { error: error.message };
   await admin.auth.admin.updateUserById(userId, { app_metadata: { role } });
+  // jadi admin -> daftar tab yang ditutup dibuang (admin selalu semua tab; tabel belum ada -> error diabaikan)
+  if (role === "admin") await admin.from("user_tab_blocks").delete().eq("user_id", userId);
   revalidatePath("/admin");
   return { ok: "Role disimpan" };
 }

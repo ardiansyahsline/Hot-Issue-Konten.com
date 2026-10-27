@@ -7,10 +7,13 @@ import { VrLinks, VrStatusBadge } from "@/components/VrBits";
 import { cleanSearch, fmtDate, isAutoHot, timeAgo } from "@/lib/utils";
 import { HotBadge, PriorityBadge, StatusBadge } from "@/components/Badges";
 import ContactChip from "@/components/ContactChip";
+import { startTab } from "@/lib/tabs.server";
 
 type SP = Promise<Record<string, string | undefined>>;
 
 export default async function ContactsPage({ searchParams }: { searchParams: SP }) {
+  // cek tab dashboard bareng query di bawah (tidak menambah satu putaran ke Supabase)
+  const gate = startTab("dashboard");
   const sp = await searchParams;
   const { supabase } = await getCurrentUser();
   const q = (sp.q ?? "").trim();
@@ -71,7 +74,8 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
   // Kasus Video Review yang email/link-nya mengandung kata yang dicari
   let vrCases: VideoReviewRow[] = [];
   const vrTerm = cleanSearch(q).toLowerCase().replace(/^@/, "");
-  if (vrTerm.length >= 4) {
+  // tab Video Review ditutup admin -> kasus Video Review tidak ikut dicari
+  if (vrTerm.length >= 4 && !(await gate).blocked.has("video_review")) {
     const { data: vrLinks } = await supabase
       .from("video_review_links")
       .select("review_id")
@@ -89,15 +93,18 @@ export default async function ContactsPage({ searchParams }: { searchParams: SP 
   }
 
   // Tanpa pencarian: tampilkan semua kontak hot
-  const { data: hotData } = q
-    ? { data: null }
-    : await supabase
-        .from("contact_stats")
-        .select("*")
-        .gte("issue_count_30d", HOT_THRESHOLD)
-        .order("issue_count_30d", { ascending: false })
-        .order("last_seen", { ascending: false })
-        .limit(100);
+  const [, { data: hotData }] = await Promise.all([
+    gate,
+    q
+      ? { data: null }
+      : supabase
+          .from("contact_stats")
+          .select("*")
+          .gte("issue_count_30d", HOT_THRESHOLD)
+          .order("issue_count_30d", { ascending: false })
+          .order("last_seen", { ascending: false })
+          .limit(100),
+  ]);
   const hot = (hotData ?? []) as ContactStat[];
 
   return (

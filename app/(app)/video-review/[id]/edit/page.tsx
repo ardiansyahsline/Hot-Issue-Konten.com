@@ -4,8 +4,10 @@ import type { VideoReviewRow } from "@/lib/types";
 import { todayWib } from "@/lib/utils";
 import VrForm from "@/components/VrForm";
 import { updateReview } from "../../actions";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function EditReviewPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireTab("video_review");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
   await requireWriter("reviews-edit", `/video-review/${id}`);

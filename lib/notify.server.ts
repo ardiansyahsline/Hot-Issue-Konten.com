@@ -3,6 +3,7 @@ import webpush from "web-push";
 import nodemailer from "nodemailer";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isOnline } from "@/components/UserAvatar";
+import { normalizeTabs, type TabId } from "@/lib/tabs";
 
 /**
  * Pengiriman notifikasi (push browser + email lewat Resend).
@@ -45,6 +46,24 @@ async function prefsFor(db: Admin, ids: string[]) {
   const { data } = await db.from("notification_prefs").select("*").in("user_id", ids);
   for (const p of (data ?? []) as (Prefs & { user_id: string })[]) map.set(p.user_id, { ...DEFAULT_PREFS, ...p });
   return map;
+}
+
+/**
+ * User (bukan admin) yang tab-nya ditutup admin (Admin → Akses tab per user) -> tidak dikirimi notifikasi tab itu.
+ * Tabel belum ada (migration-22) / error -> kosong (semua tetap dikirimi).
+ */
+async function closedFor(db: Admin, tab: TabId): Promise<Set<string>> {
+  try {
+    const { data, error } = await db.from("user_tab_blocks").select("user_id, blocked").contains("blocked", [tab]);
+    if (error || !data?.length) return new Set();
+    const ids = data.filter((r) => normalizeTabs(r.blocked).includes(tab)).map((r) => r.user_id as string);
+    if (!ids.length) return new Set();
+    const { data: admins } = await db.from("profiles").select("id").in("id", ids).eq("role", "admin");
+    const adm = new Set((admins ?? []).map((a) => a.id as string));
+    return new Set(ids.filter((id) => !adm.has(id)));
+  } catch {
+    return new Set();
+  }
 }
 
 async function sendPush(db: Admin, userIds: string[], payload: Payload) {
@@ -151,9 +170,9 @@ export async function notifyNewIssue(issueId: number, actorId: string, origin: s
   if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
   const { data: issue } = await db.from("issues").select("id, title, category, priority, description, created_by").eq("id", issueId).maybeSingle();
   if (!issue) return;
-  const { data: people } = await db.from("profiles").select("id, email, full_name");
+  const [{ data: people }, closed] = await Promise.all([db.from("profiles").select("id, email, full_name"), closedFor(db, "dashboard")]);
   const actor = (people ?? []).find((p) => p.id === actorId);
-  const others = (people ?? []).filter((p) => p.id !== actorId);
+  const others = (people ?? []).filter((p) => p.id !== actorId && !closed.has(p.id));
   const prefs = await prefsFor(db, others.map((p) => p.id));
   const url = `${appOrigin(origin)}/issues/${issue.id}`;
   const who = actor?.full_name || "Seseorang";
@@ -191,10 +210,11 @@ export async function notifyNewReport(reportId: number, actorId: string, origin:
   if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
   const { data: rep } = await db.from("issue_reports").select("id, issue_id, note").eq("id", reportId).maybeSingle();
   if (!rep) return;
-  const [{ data: issue }, { count }, { data: people }] = await Promise.all([
+  const [{ data: issue }, { count }, { data: people }, closed] = await Promise.all([
     db.from("issues").select("id, title, category, pic_id, created_by, is_hot, status").eq("id", rep.issue_id).maybeSingle(),
     db.from("issue_reports").select("id", { count: "exact", head: true }).eq("issue_id", rep.issue_id),
     db.from("profiles").select("id, email, full_name"),
+    closedFor(db, "dashboard"),
   ]);
   if (!issue) return;
   const total = 1 + (count ?? 0);
@@ -203,7 +223,7 @@ export async function notifyNewReport(reportId: number, actorId: string, origin:
   const actor = (people ?? []).find((p) => p.id === actorId);
   const who = actor?.full_name || "Seseorang";
   const url = `${appOrigin(origin)}/issues/${issue.id}#laporan`;
-  const others = (people ?? []).filter((p) => p.id !== actorId);
+  const others = (people ?? []).filter((p) => p.id !== actorId && !closed.has(p.id));
   const prefs = await prefsFor(db, others.map((p) => p.id));
   const note = String(rep.note ?? "").slice(0, 140);
 
@@ -230,7 +250,7 @@ export async function notifyNewReport(reportId: number, actorId: string, origin:
     return log(`laporan #${reportId}: topik #${issue.id} jadi HOT · push ${pushed}, email ${emailed}`);
   }
 
-  const owners = [...new Set([issue.pic_id, issue.created_by].filter((x): x is string => !!x && x !== actorId))];
+  const owners = [...new Set([issue.pic_id, issue.created_by].filter((x): x is string => !!x && x !== actorId && !closed.has(x)))];
   const pushed = await sendPush(
     db,
     owners.filter((id) => prefs.get(id)?.push_issue),
@@ -251,18 +271,20 @@ export async function notifyChat(messageId: number, origin: string) {
   if (!db) return log("lewati: SUPABASE_SERVICE_ROLE_KEY belum di-set");
   const { data: m } = await db.from("chat_messages").select("*").eq("id", messageId).maybeSingle();
   if (!m) return;
-  const [{ data: room }, { data: members }, { data: people }, { count: fileCount }, { data: replied }] = await Promise.all([
+  const [{ data: room }, { data: members }, { data: people }, { count: fileCount }, { data: replied }, closed] = await Promise.all([
     db.from("chat_rooms").select("id, name, kind").eq("id", m.room_id).maybeSingle(),
     db.from("chat_members").select("user_id, last_read_at, last_emailed_at").eq("room_id", m.room_id),
     db.from("profiles").select("id, email, full_name, last_seen_at"),
     db.from("attachments").select("id", { count: "exact", head: true }).eq("chat_message_id", m.id),
     m.reply_to ? db.from("chat_messages").select("sender_id").eq("id", m.reply_to).maybeSingle() : Promise.resolve({ data: null }),
+    closedFor(db, "chat"),
   ]);
   if (!room) return;
   const sender = (people ?? []).find((p) => p.id === m.sender_id);
   const senderName = sender?.full_name || "Seseorang";
   const memberSet = new Set((members ?? []).map((x) => x.user_id));
-  const targets = (people ?? []).filter((p) => p.id !== m.sender_id && (room.kind === "public" || memberSet.has(p.id)));
+  // tab Chat ditutup admin -> tidak dikirimi push / email chat
+  const targets = (people ?? []).filter((p) => p.id !== m.sender_id && !closed.has(p.id) && (room.kind === "public" || memberSet.has(p.id)));
   const prefs = await prefsFor(db, targets.map((p) => p.id));
   const direct = room.kind === "direct";
   const text = m.body?.trim() || (fileCount ? `📎 ${fileCount} lampiran` : "");

@@ -3,8 +3,10 @@ import IssueForm from "@/components/IssueForm";
 import { getCurrentUser, getProfile, requireWriter } from "@/lib/auth";
 import type { IssueRow } from "@/lib/types";
 import { updateIssue } from "../../actions";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function EditIssuePage({ params }: { params: Promise<{ id: string }> }) {
+  await requireTab("dashboard");
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
 

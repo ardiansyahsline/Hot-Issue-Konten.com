@@ -6,10 +6,12 @@ import { Avatar, SgCategoryBadge, SgStatusBadge } from "@/components/SgBits";
 import SgForm from "@/components/SgForm";
 import { createSuggestion } from "./actions";
 import StatCard, { type Tone } from "@/components/StatCard";
+import { requireTab } from "@/lib/tabs.server";
 
 type SP = Promise<Record<string, string | undefined>>;
 
 export default async function CatatanPage({ searchParams }: { searchParams: SP }) {
+  await requireTab("catatan");
   const sp = await searchParams;
   const [{ supabase, user }, profile] = await Promise.all([getCurrentUser(), getProfile()]);
   const isAdmin = profile?.role === "admin";

@@ -26,7 +26,10 @@ export default function TopTabs({
   range,
   vrMore,
   agentMore,
+  vrOff = false,
 }: {
+  /** tab Video Review ditutup admin -> pilihan "Video Review" disembunyikan */
+  vrOff?: boolean;
   vr: TopCardData[];
   agent: TopCardData[];
   range: string;
@@ -48,6 +51,7 @@ export default function TopTabs({
             </Link>
           </p>
         </div>
+        {!vrOff && (
         <div role="tablist" className="flex rounded-full border border-zinc-800/80 bg-zinc-900 p-1 text-[13px] font-semibold" style={{ boxShadow: "var(--shadow-sm)" }}>
           {(
             [
@@ -67,6 +71,7 @@ export default function TopTabs({
             </button>
           ))}
         </div>
+        )}
       </div>
 
       {items.length === 0 ? (

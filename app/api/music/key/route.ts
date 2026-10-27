@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertTab } from "@/lib/tabs.server";
 import { getCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   await getCurrentUser();
+  const gate = await assertTab("musik");
+  if (!gate.ok) return gate.res;
   const key = (process.env.GEMINI_MUSIC_API_KEY ?? "").trim();
   if (!key) return NextResponse.json({ error: "Musik AI belum disetel (GEMINI_MUSIC_API_KEY)." }, { status: 503, headers: { "Cache-Control": "no-store" } });
   return NextResponse.json({ key, model: (process.env.GEMINI_MUSIC_MODEL ?? "models/lyria-realtime-exp").trim() }, { headers: { "Cache-Control": "no-store, private" } });

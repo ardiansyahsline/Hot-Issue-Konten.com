@@ -79,6 +79,14 @@ Web internal tim CS untuk mencatat hot issue clipper. Login email + password den
 - Bucket `avatar` (foto profil, publik, maks 2 MB), status online / terakhir dilihat, dan lampiran di chat (room & pesan pribadi — file pesan pribadi hanya bisa dibuka 2 orang itu).
 - Tabel notifikasi (langganan push browser & pengaturan per orang).
 
+**Langkah 1r — Update 22 (🔐 Akses tab per user):** buka Supabase → **SQL Editor** → **New query**, paste semua isi `supabase/migration-22-akses-tab.sql`, lalu **Run** (jalankan **setelah** migration-21; aman dijalankan ulang). Isinya tabel `user_tab_blocks` (daftar tab yang **ditutup** per user) + aturan aksesnya (user hanya bisa membaca barisnya sendiri, yang bisa mengubah hanya admin) + fungsi `tab_allowed()` + **kunci di database**: data tab yang ditutup (Hot Issue, Video Review, Catatan, Chat termasuk realtime & lampiran/reaksinya, riwayat ✨ AI) juga tidak bisa dibaca / diubah user itu walau dipanggil langsung ke Supabase, bukan hanya disembunyikan dari menu. Lalu buka **Admin → 🔐 Akses tab per user**: tiap user punya chip **Dashboard & Hot Issue, Video Review, Catatan & Saran, Chat, AI, Musik AI** — klik chip untuk menutup / membuka, langsung tersimpan; **Buka semua** mengembalikan ke bawaan.
+- Bawaan = semua tab terbuka (user yang belum pernah diatur tidak berubah apa-apa). Admin selalu bisa membuka semua tab.
+- Tab yang ditutup hilang dari menu (HP & laptop); kalau link-nya dibuka langsung, user dialihkan ke tab lain yang masih boleh dengan pesan "Tab … ditutup admin untuk akunmu." Kalau semua ditutup, user hanya bisa membuka halaman **Akun**.
+- User yang sedang membuka web ikut berubah tanpa refresh: daftar tab dicek ulang saat pindah halaman, saat kembali ke tab browser, dan tiap 1 menit (menu, chat melayang & bunyi ikut hilang / muncul).
+- Chat ditutup = chat melayang, bunyi & notifikasi chat ikut mati. Video Review ditutup = angka "menunggu" di menu dan ranking Video Review di Dashboard ikut hilang. Musik AI ditutup = tombol 🎵 hilang. Data tab yang ditutup juga tidak dikirim ke ✨ AI.
+- Izin tulis tetap ikut role (mis. **+ Issue Baru** butuh tab Dashboard **dan** role CS / Video Review / Discord Moderator). 🎬 Studio tetap diatur di **Akses Studio** (maks 3 orang).
+- Tanpa migration ini website tetap jalan seperti biasa (semua tab terbuka); bagian Admin menampilkan "Jalankan supabase/migration-22-akses-tab.sql dulu".
+
 **Langkah 1q — Update 21 (🧠 Skill Studio: Library tim):** jalankan `supabase/migration-21-studio-skills.sql` **setelah** migration-20 (Langkah 1p); aman dijalankan ulang. Isinya tabel `studio_skills` + aturan aksesnya: semua yang punya akses Studio bisa melihat & memakai skill tim, yang bisa menghapus hanya pembuatnya (atau admin). Tanpa migration ini 🧠 Skill tetap jalan lewat file (**Simpan → Unduh .json** dan **Impor**); hanya tab **Library tim** yang menampilkan "Library tim belum aktif — jalankan migration-21".
 
 **Langkah 1p — Update 20 (🎬 Studio Pro):** jalankan `supabase/migration-20-studio.sql` (kalau belum, jalankan dulu `migration-15` sampai `migration-19` berurutan). Lalu:
@@ -214,6 +222,7 @@ npm run dev                  # buka http://localhost:3000
 - **Daftar kategori Hot Issues:** `lib/constants.ts` → `CATEGORIES`
 - **Daftar kategori Video Review:** `lib/videoReview.ts` → `VR_CATEGORIES`
 - **Hak akses role:** `lib/roles.ts` dan fungsi `can_write_issues()` / `can_write_reviews()` di migration-02
+- **Daftar tab yang bisa diatur per user:** `lib/tabs.ts` → `TAB_IDS` / `TABS` (id baru juga ditambahkan di check `user_tab_blocks_known` di migration-22)
 - **Batas HOT:** env `NEXT_PUBLIC_HOT_THRESHOLD`. Window 30 hari ada di `supabase/schema.sql` (view `contact_stats`).
 
 ## Troubleshooting
@@ -227,6 +236,8 @@ npm run dev                  # buka http://localhost:3000
 | Admin gagal buat akun | `SUPABASE_SERVICE_ROLE_KEY` belum di-set di Vercel. Tambahkan lalu redeploy. |
 | Build gagal di Vercel | Cek 2 env `NEXT_PUBLIC_…` sudah terisi, lalu redeploy. |
 | Studio error "Jalankan supabase/migration-20-studio.sql dulu" | Jalankan `migration-20-studio.sql` (Langkah 1p), lalu refresh halaman. |
+| Admin → Akses tab per user: "Jalankan supabase/migration-22-akses-tab.sql dulu" | Jalankan `migration-22-akses-tab.sql` (Langkah 1r), lalu refresh halaman. Sebelum itu semua tab tetap terbuka untuk semua user. |
+| Menu Video Review / Chat / AI dll. hilang untuk user tertentu | Tab itu ditutup di **Admin → 🔐 Akses tab per user**. Klik chip-nya (atau **Buka semua**); menu user ikut berubah saat ia pindah halaman / dalam ±1 menit (atau refresh halaman). |
 | Menu 🎬 Studio tidak muncul | Hanya admin dan user yang diberi akses di **Admin → 🎬 Akses Studio**. Setelah diberi akses, refresh halaman. |
 | Studio → 🧠 Skill → Library tim: "Library tim belum aktif — jalankan migration-21" | Jalankan `migration-21-studio-skills.sql` (Langkah 1q), lalu refresh halaman. Unduh / Impor file .json tetap bisa dipakai tanpa ini. |
 | Studio: "⚠️ Karakter … tidak ditemukan — sementara pakai Harley" | Karakter sutradara itu sudah dihapus (atau milik akun lain). Pilih sutradara lain di dropdown, atau buat lagi di ✨ AI → Train your AI. |

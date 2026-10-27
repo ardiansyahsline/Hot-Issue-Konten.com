@@ -1,8 +1,10 @@
 import IssueForm from "@/components/IssueForm";
 import { getCurrentUser, getProfile, requireWriter } from "@/lib/auth";
 import { createIssue } from "../actions";
+import { requireTab } from "@/lib/tabs.server";
 
 export default async function NewIssuePage({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
+  await requireTab("dashboard");
   const { category } = await searchParams;
   await requireWriter("issues");
   const { supabase, user } = await getCurrentUser();

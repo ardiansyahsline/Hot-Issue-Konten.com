@@ -3,11 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import { REACTION_COLUMN, isEmoji, type ReactionTarget } from "@/lib/reactions";
+import { assertTab } from "@/lib/tabs.server";
+import { TARGET_TAB } from "@/lib/tabs";
 
 /** Kasih / tarik reaksi emoji. Klik emoji yang sama lagi = batal. */
 export async function toggleReaction(target: ReactionTarget, emoji: string, page?: string): Promise<{ on?: boolean; error?: string }> {
   if (!(target.kind in REACTION_COLUMN) || !Number.isInteger(target.id)) return { error: "Target tidak valid" };
   if (!isEmoji(emoji)) return { error: "Emoji tidak valid" };
+  const tab = await assertTab(TARGET_TAB[target.kind]);
+  if (!tab.ok) return { error: tab.error };
   const col = REACTION_COLUMN[target.kind];
   const { supabase, user } = await getCurrentUser();
   const { data: existing } = await supabase
