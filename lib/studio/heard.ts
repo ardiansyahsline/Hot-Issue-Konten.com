@@ -452,8 +452,9 @@ function enReading(w: string): string {
  * "naik" → "anjlok", "aman" → "berbahaya", "BBCA" → "be be er i". Dipakai pratinjau impor skill (file dari luar, tidak dipercaya):
  * subtitle tetap tulisan aslinya tapi suara VO mengucapkan kata lain, dan pengecek ucapan menganggap ejaan kamus itu benar.
  * Bukan risiko: cara baca istilah asing ("download" → "daunlod", "share" → "syer"), singkatan dieja per huruf cara Indonesia /
- * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu"), kode uang ("IDR" → "rupiah"), singkatan tanpa huruf hidup ("dll" →
- * "dan lain lain", "yg" → "yang"), angka jadi kata yang sama ("MP3" → "em pe tiga", "11%" → "sebelas persen", "10rb" → "sepuluh ribu").
+ * Inggris ("IHSG" → "i ha es ge", "GPU" → "ji pi yu", "ChatGPT" → "cet ji pi ti"), kode uang ("IDR" → "rupiah"), singkatan tanpa
+ * huruf hidup ("dll" → "dan lain lain", "yg" → "yang"), angka jadi kata yang sama ("MP3" → "em pe tiga", "11%" → "sebelas persen",
+ * "10rb" → "sepuluh ribu", "Q3" → "kuartal tiga").
  * Risiko juga: angka yang diucapkan beda ("11%" → "satu persen"), huruf singkatan diganti ("BBRI" → "be be en i"), dan kepanjangan
  * singkatan ("OJK" → "omong jual kosong") — kepanjangan tidak bisa dicek dari hurufnya, jadi tidak dicentang otomatis (kecuali
  * mirip ejaan yang sudah dipercaya).
@@ -483,9 +484,10 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
       return c === said || (!!c && said.startsWith(`${c} `) && unit.includes(said.slice(c.length + 1)));
     });
     if (!same) return { kind: "number", text: `Angka “${from}” diucapkan “${to}” — angkanya beda dari tulisannya. Subtitle tetap “${from}”.` };
-    // isinya hanya angka (+ Rp / % / satuan "rb", "jt", atau "x" = kali) dan angkanya sama → aman
+    // isinya hanya angka (+ Rp / % / satuan "rb", "jt", "x" = kali, "Q" = kuartal) dan angkanya sama → aman
     const bare = from.toLowerCase().replace(/^rp\.?\s*/, "").replace(/[\d.,:/%\s]/g, "");
-    if (!bare || NUM_UNIT[bare] || (bare === "x" && toWords.includes("kali"))) return null;
+    if (!bare || NUM_UNIT[bare] || (bare === "x" && toWords.includes("kali")) || (bare === "q" && /^(kuartal|kwartal|kuarter|quarter)$/.test(toWords[0] ?? "")))
+      return null;
   }
   const knownKey = known ? soundKey(known) : "";
   const nearKnown = !!knownKey && editDistance(knownKey, target) / Math.max(knownKey.length, target.length) <= 0.34;
@@ -503,9 +505,9 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
   }
   // bacaan yang wajar untuk tulisan ini: apa adanya, cara baca Inggris, singkatan per huruf (Indonesia / Inggris), angka jadi kata
   // (per digit, atau utuh: "2026" → "dua ribu dua puluh enam")
-  const reading = (letters: ReadonlyMap<string, string> | null, en = false, whole = false) =>
+  const reading = (letters: ReadonlyMap<string, string> | null, en = false, whole = false, ws: readonly string[] = words) =>
     soundKey(
-      words
+      ws
         .map((w) => {
           const n = /\d/.test(w) ? numbersToWords(whole ? w : w.replace(/(\d)/g, " $1 ")) : w;
           if (letters && acro(w)) return [...n].map((c) => (/[a-z]/i.test(c) ? letters.get(c.toLowerCase()) ?? c : c)).join(" ");
@@ -513,7 +515,10 @@ export function lexiconRisk(from: string, to: string, known?: string | null): Le
         })
         .join(" "),
     );
-  const cands = [reading(null), reading(null, true), ...(/\d/.test(from) ? [reading(null, false, true)] : []), ...(hasAcro ? [reading(LETTER), reading(LETTER_EN)] : [])].filter(Boolean);
+  // nama gabungan berhuruf besar di tengah ("ChatGPT" → "Chat" + "GPT" → "cet ji pi ti"): tiap bagian dibaca sendiri
+  const parts = words.flatMap((w) => w.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").split(" "));
+  const camel = parts.length > words.length && parts.some(acro) ? [reading(LETTER, true, false, parts), reading(LETTER_EN, true, false, parts)] : [];
+  const cands = [reading(null), reading(null, true), ...(/\d/.test(from) ? [reading(null, false, true)] : []), ...(hasAcro ? [reading(LETTER), reading(LETTER_EN)] : []), ...camel].filter(Boolean);
   // angka cara baca Inggris di ejaan dibandingkan sebagai angka Indonesia ("GPT-4" → "ji pi ti for" ≈ "ji pi ti empat")
   const said = /\d/.test(from) ? soundKey(toWords.map((x) => EN_NUM.get(x) ?? x).join(" ")) : target;
   const ratio = Math.min(...cands.map((c) => editDistance(c, said) / Math.max(c.length, said.length)));

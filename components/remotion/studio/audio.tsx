@@ -20,7 +20,7 @@
  *   volume dikalikan SESUDAH limiter: musik (file & trailer bed) ikut campuran + adegan, VO per kalimat, SFX per adegan — jadi
  *   menurunkan musik saat VO bicara tetap terdengar turun (limiter tidak menaikkannya lagi). Pengaman puncak per jalur (applyMixer):
  *   bagian yang tanpa mixer pun sudah ≥ -2 dBFS ("panas", hampir semua saat VO bicara) tidak boleh lebih keras dari tanpa mixer,
- *   bagian lain boleh naik sampai -2 dBFS (perkiraan).
+ *   bagian lain boleh naik sampai -2 dBFS (perkiraan; SFX sekali-putar dihitung dari selubung frame f−1 & f, oneShotPkSafe).
  *   · VO hanya ditahan oleh kenaikannya SENDIRI, satu angka per kalimat (tidak dipompa): menaikkan musik / SFX tidak pernah
  *     menurunkan VO (VO tetap paling jelas, sama dengan limiter lama).
  *   · Musik & SFX menyerap sisanya per frame: di bagian panas dibagi kenaikan terbesar yang bunyi (yang dinaikkan menonjol karena
@@ -148,6 +148,14 @@ const at = (a: Float32Array, f: number) => (a.length ? a[Math.max(0, Math.min(a.
  * Tanpa geser ini limiter lepas tepat di frame klik / pukulan berbunyi (teaser tanpa VO: -0,86 dBTP, sekarang -1,14).
  */
 const oneShotPk = (env: Float32Array, idx: number, prev: boolean) => (prev && idx > 0 ? env[idx - 1] : env[idx]) ?? 0;
+/**
+ * Versi aman untuk pengaman puncak mixer: frame video idx memuat ¾ akhir selubung idx−1 DAN ¼ awal selubung idx (klik / pukulan di
+ * awal frame selubung terdengar di frame yang sama). Limiter tanpa mixer menutup ¼ itu lewat lihat-depan, tapi volume mixer per
+ * frame bisa berubah dari f ke f+1 (gate / limiter turun tepat sesudahnya) — jadi pengaman bus menghitung keduanya dengan volume
+ * frame f. Render CLI teaser tanpa VO + SFX +6: dengan oneShotPk saja klik ui-readout-panjang di 27,8 dtk lewat jadi -0,68 dBTP,
+ * dengan ini -1,04 dBTP (tanpa mixer -1,14). Kenaikan SFX yang terdengar (planAudioLift) turun ≤ 0,2 dB.
+ */
+const oneShotPkSafe = (env: Float32Array, idx: number, prev: boolean) => (prev && idx > 0 ? Math.max(env[idx - 1] ?? 0, env[idx] ?? 0) : env[idx]) ?? 0;
 
 /** gain limiter per frame dari gain mentah: lihat-depan 2 frame (turun sebelum pukulan), lepas pelan ±0,3 dtk. Selalu ≤ gain mentah */
 function follow(raw: Float32Array, fps: number): Float32Array {
@@ -237,7 +245,9 @@ function withoutMixer(tl: Timeline): Timeline {
 }
 
 /**
- * perkiraan puncak musik & SFX per frame dari rencana jadi (p-norm selubung puncak, sama dengan limiter; VO tidak termasuk).
+ * perkiraan puncak musik & SFX per frame dari rencana jadi (p-norm selubung puncak seperti limiter; VO tidak termasuk) untuk pengaman
+ * bus mixer. SFX sekali-putar memakai oneShotPkSafe (selubung frame idx−1 & idx). Musik file dengan offset: bagian-bagian crossfade
+ * (musicParts) jumlah gain-nya 1 di tiap frame, jadi cukup volume loop × puncak lagu (tidak dihitung dobel).
  * `bus` = hanya musik (loop + aksen trailer bed) atau hanya SFX.
  */
 function estimateRest(p: AudioPlan, extra: SfxMeta[], fps: number, N: number, bus?: "music" | "sfx"): Float32Array {
@@ -248,7 +258,7 @@ function estimateRest(p: AudioPlan, extra: SfxMeta[], fps: number, N: number, bu
       const f = from + k;
       if (f >= N) break;
       const idx = offset + k;
-      const pk = env ? (loop ? env[idx % cycle] : oneShotPk(env, idx, k > 0)) : tpLin;
+      const pk = env ? (loop ? env[idx % cycle] : oneShotPkSafe(env, idx, k > 0)) : tpLin;
       const a = pk * vol(f);
       if (a > 0) rest[f] += Math.pow(a, PNORM);
     }
