@@ -207,6 +207,8 @@ Panduan lengkap: [`docs/suara-natural.md`](../docs/suara-natural.md). Ringkasnya
 - Worker memilih potongan rekaman yang paling hidup, membaca tiap baris satu tarikan, membuat beberapa versi (bawaan 3), lalu memilih yang paling jelas
   dan paling natural (**skor kealamian**: nada tidak datar + perkiraan MOS 1–5 dari UTMOS).
 - Skor kealamian bisa dimatikan: isi `NATURAL_MOS=0` di `.env` lalu jalankan ulang worker. Suara tetap dibuat, dipilih dari kejelasan + nada.
+- Huruf e salah bunyi ("bareng" jadi "baréng")? Pakai **🎧 Coba ejaan huruf e** di panel Suara VO: satu job berisi kalimat yang sama
+  dengan beberapa ejaan (`settings.purpose = "coba-ejaan"`, 1 versi, benih `seed` sama untuk semua) → dengar, pilih yang pas.
 
 ---
 

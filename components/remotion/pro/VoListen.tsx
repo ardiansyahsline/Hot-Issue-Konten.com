@@ -10,6 +10,7 @@ import { storageSrc } from "@/lib/studio/urls";
 import { isTeaserScene } from "./teaserLock";
 import { cleanWords, DEFAULT_VOICE, fitVo, fmtTempo, sceneVoAt, speedUpToFit, teaserWindows } from "./VoPanel";
 import VoHeard, { upsertLexicon } from "./VoHeard";
+import VoSpellTry from "./VoSpellTry";
 
 type Ready = { s: "ready"; line: VoLine; label: string; engine: VoTrack["engine"]; temp: boolean; sig: string; used?: boolean };
 type St =
@@ -278,6 +279,12 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
   // `src` = kunci suara: suara baru (walau teks terdengarnya sama) → isian & catatan perbaikan di panel mulai dari awal
   const heardSrc =
     st.s === "ready" && sampleHeard ? { heard: sampleHeard, sample: true, src: st.line.src } : lineNow?.heard && lineFresh ? { heard: lineNow.heard, sample: false, src: lineNow.src } : null;
+  // 🎧 Coba ejaan (dari kata yang disorot di 👂 Terdengar): hanya mode bank suara
+  const [tryWord, setTryWord] = useState<string | null>(null);
+  const setLexicon = (lexicon: LexEntry[] | undefined) => {
+    if (lexBefore.current === null) lexBefore.current = tlRef.current.voice.lexicon;
+    onTimeline?.((t) => ({ ...t, voice: { ...t.voice, lexicon: lexicon?.length ? lexicon : undefined } }));
+  };
   const fixWord = (e: LexEntry): string | null => {
     if (!onTimeline) return "Kamus tidak bisa diubah dari sini.";
     const next = upsertLexicon(tlRef.current.voice.lexicon, e);
@@ -313,7 +320,11 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
           onRebuild={onTimeline ? () => listen(true) : undefined}
           rebuildBusy={busy}
           rebuildNote={rebuildNote ?? (engine === "bank" ? null : `Laptop mati — dibuat ulang pakai ${engineName}.`)}
+          onTry={v.mode === "bank" ? setTryWord : undefined}
         />
+      )}
+      {tryWord && v.mode === "bank" && scene.vo?.text && (
+        <VoSpellTry key={tryWord} scene={scene} timeline={timeline} word={tryWord} onLexicon={onTimeline ? setLexicon : undefined} onClose={() => setTryWord(null)} />
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {busy ? (

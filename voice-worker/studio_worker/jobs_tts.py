@@ -16,6 +16,8 @@ Job kind 'tts': VO dari bank suara.
     ulang SEKALI dengan cfg_weight + 0,2 (maks 0,85) dan dipakai versi yang butuh atempo paling sedikit (native_fit)
   → baris punya `speed` (kecepatan diatur sendiri di website, mis. 0,85–1,3×) → atempo persis faktor itu, `max` diabaikan
     (apply_speed); job lama tanpa `speed` / `max` hasilnya sama persis seperti dulu
+  → baris punya `seed` (🎧 Coba ejaan di website: kalimat sama dengan beberapa ejaan, settings.purpose = "coba-ejaan", takes 1) → semua
+    versinya memakai benih acak itu, jadi beda suaranya hanya dari ejaan; tanpa `seed` benih dari teks seperti dulu
   → upload vo/<job>/<baris>.mp3, vo/<job>/full.mp3 (tiap baris di detik `start`), vo/<job>/full.srt
   → ringkasan kealamian per baris (row.natural: MOS, variasi nada, persen dipercepat asli vs atempo) + per job (result.natural)
   → teks yang terdengar ASR per baris (row.heard, gabungan take terpilih per potongan / kalimat, maks 400 huruf; kosong kalau ASR
@@ -96,6 +98,14 @@ def norm_settings(raw: dict | None, default_takes: int = DEFAULT_TAKES) -> dict:
     }
 
 
+# penanda job 🎧 Coba ejaan dari website (settings.purpose) — sama dengan TRY_PURPOSE di lib/studio/client.ts
+TRY_PURPOSE = "coba-ejaan"
+
+
+def is_trial(raw) -> bool:
+    return isinstance(raw, dict) and raw.get("purpose") == TRY_PURPOSE
+
+
 # batas teks ucapan akhir per kalimat (sama dengan SPELL_MAX di lib/studio/pronounce.ts)
 SPELL_MAX = 4000
 
@@ -126,7 +136,15 @@ def parse_lines(raw) -> list[dict]:
         # `speed` (opsional) = kecepatan diatur sendiri (× normal); kosong / bukan angka = otomatis (job lama)
         sp = x.get("speed")
         sp = round(_num(sp, 0, SPEED_MIN, SPEED_MAX), 3) if sp not in (None, "") and _num(sp, 0, 0, 10) > 0 else None
-        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None, "max": mx if mx > 0 else None, "speed": sp})
+        # `seed` (opsional) = benih acak dasar semua versi baris ini (🎧 Coba ejaan: semua kandidat ejaan memakai benih yang sama supaya
+        # bedanya hanya dari ejaan); kosong = benih dari teks (job lama)
+        sd = x.get("seed")
+        try:
+            sd = int(sd) if isinstance(sd, (int, float, str)) and not isinstance(sd, bool) and str(sd).strip() else None
+        except (TypeError, ValueError, OverflowError):
+            sd = None
+        sd = sd if sd is not None and 0 <= sd <= 2**31 - 2 else None
+        out.append({"id": lid, "scene_id": str(x.get("scene_id") or ""), "text": text, "spell": spell, "start": start if start >= 0 else None, "max": mx if mx > 0 else None, "speed": sp, "seed": sd})
     return out
 
 
@@ -168,11 +186,12 @@ def _sha(obj) -> str:
 
 
 def line_key(engine: str, vhash: str, ln: dict, st: dict) -> str:
-    return _sha([CACHE_V, engine, vhash, ln["text"], ln["spell"] or "", st])
+    # `seed` hanya ikut kalau ada → kunci baris lama tetap sama
+    return _sha([CACHE_V, engine, vhash, ln["text"], ln["spell"] or "", st] + ([{"seed": ln["seed"]}] if ln.get("seed") is not None else []))
 
 
 def job_key(engine: str, vhash: str, lines: list[dict], st: dict) -> str:
-    # `max` & `speed` hanya ikut kalau ada → kunci job lama (tanpa keduanya) tetap sama
+    # `max`, `speed` & `seed` hanya ikut kalau ada → kunci job lama (tanpa ketiganya) tetap sama
     return _sha(
         [
             CACHE_V,
@@ -180,7 +199,10 @@ def job_key(engine: str, vhash: str, lines: list[dict], st: dict) -> str:
             vhash,
             st,
             [
-                [x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]] + ([x["max"]] if x.get("max") else []) + ([{"speed": x["speed"]}] if x.get("speed") else [])
+                [x["id"], x["scene_id"], x["text"], x["spell"] or "", x["start"]]
+                + ([x["max"]] if x.get("max") else [])
+                + ([{"speed": x["speed"]}] if x.get("speed") else [])
+                + ([{"seed": x["seed"]}] if x.get("seed") is not None else [])
                 for x in lines
             ],
         ]
@@ -242,8 +264,10 @@ def score_take(y: np.ndarray, sr: int, expected: str, heard: str | None) -> dict
     return {"score": round(0.7 * w + 0.3 * c + pen, 4), "wer": round(w, 3), "heard": heard, "dur": round(dur, 2)}
 
 
-def take_seed(sentence: str, k: int) -> int:
-    return (int(hashlib.sha1(sentence.encode("utf-8")).hexdigest()[:8], 16) + 7919 * k) % (2**31 - 1)
+def take_seed(sentence: str, k: int, base: int | None = None) -> int:
+    """benih versi ke-k: dari teks (bawaan) atau dari `base` (baris punya `seed`: sama untuk semua kandidat 🎧 Coba ejaan)"""
+    b = int(hashlib.sha1(sentence.encode("utf-8")).hexdigest()[:8], 16) if base is None else int(base)
+    return (b + 7919 * k) % (2**31 - 1)
 
 
 def take_budget(sentence: str) -> float:
@@ -265,14 +289,14 @@ def choose_take(takes: list[tuple[np.ndarray, dict]], sr: int) -> int:
     return natural.choose([sc for _, sc in takes])
 
 
-def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None) -> tuple[np.ndarray, dict]:
+def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None, seed: int | None = None) -> tuple[np.ndarray, dict]:
     takes: list[tuple[np.ndarray, dict]] = []
     n = st["takes"]
     k = 0
     t0 = time.monotonic()
     budget = take_budget(sentence)
     while k < n:
-        y = engine.synth(sentence, ref, st, take_seed(sentence, k))
+        y = engine.synth(sentence, ref, st, take_seed(sentence, k, seed))
         # hening awal/akhir dibuang tanpa memakan ekor napas / nada turun akhir kalimat (sisa 150 ms + fade 30 ms)
         y = natural.trim_take(y, engine.sr)
         heard = None
@@ -289,7 +313,7 @@ def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_tak
             on_take(k)
         k += 1
         # semua versi jelek (salah ucap > 35%) → coba maksimal 2 versi tambahan
-        if k == n and n < st["takes"] + 2 and min(t[1]["score"] for t in takes) > 0.35 and heard is not None:
+        if k == n and n < st["takes"] + 2 and min(t[1]["score"] for t in takes) > 0.35 and heard is not None and not st.get("trial"):
             n += 1
         # batas waktu wajar: minimal 2 versi, versi berikutnya hanya kalau perkiraan selesainya masih di dalam batas
         if k < n and k >= MIN_TAKES:
@@ -321,11 +345,11 @@ def _joined(parts: list[np.ndarray], labels: list[str], sr: int, bed, key: str) 
     return natural.join(parts, gaps, sr, bed, seed=int(hashlib.sha1(key.encode("utf-8")).hexdigest()[:6], 16))
 
 
-def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path, tick, bed, key: str) -> tuple[np.ndarray, dict]:
+def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path, tick, bed, key: str, **kw) -> tuple[np.ndarray, dict]:
     """mode lama per kalimat untuk satu potongan: tiap kalimat dipilih sendiri lalu disambung room tone. Skor = rata-rata berbobot huruf."""
     ys, infos = [], []
     for s in sents:
-        y, info = pick_take(engine, s, ref, st, asr, work, tick)
+        y, info = pick_take(engine, s, ref, st, asr, work, tick, **kw)
         ys.append(y)
         infos.append(info)
     w = [max(1, len(s)) for s in sents]
@@ -343,6 +367,8 @@ def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path,
 def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=None) -> tuple[Path, dict]:
     spoken = ln["spell"] or ln["text"]
     chunks = T.chunk_text(spoken, ONE_PASS_CHARS) or [spoken]
+    # benih dasar dari website (hanya dikirim kalau ada → pemanggilan lama pick_take tetap sama)
+    kw = {"seed": ln["seed"]} if ln.get("seed") is not None else {}
     sr = engine.sr
     bed = natural.ref_bed(ref, sr)
     parts: list[np.ndarray] = []
@@ -360,14 +386,14 @@ def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=No
     for ci, ch in enumerate(chunks):
         sents = T.split_sentences(ch) or [ch]
         n_sents += len(sents)
-        y, info = pick_take(engine, ch, ref, st, asr, work, tick)
+        y, info = pick_take(engine, ch, ref, st, asr, work, tick, **kw)
         info["mode"] = "satu-tarikan"
         # cadangan per kalimat hanya kalau SEMUA versi satu tarikan salah ucap (WER terkecil > 0,35), bukan cuma versi terpilih
         wer_min = info.get("wer_min", info.get("wer"))
-        if wer_min is not None and float(wer_min) > ONE_PASS_BAD and len(sents) > 1:
+        if wer_min is not None and float(wer_min) > ONE_PASS_BAD and len(sents) > 1 and not st.get("trial"):
             log.info("Baris %s: satu tarikan masih salah ucap (WER terkecil %.2f) → coba per kalimat", ln["id"], wer_min)
             total_takes += len(sents) * st["takes"]
-            y2, info2 = per_sentence(engine, sents, ref, st, asr, work, tick, bed, f"{ln['text']}|{ci}")
+            y2, info2 = per_sentence(engine, sents, ref, st, asr, work, tick, bed, f"{ln['text']}|{ci}", **kw)
             # intonasi per kalimat ter-reset (kurang natural) → dipakai hanya kalau JELAS lebih jelas (bukan selisih derau ASR)
             if info2["score"] is not None and float(info2["score"]) < float(info["score"]) - natural.NEAR:
                 log.info("Baris %s: mode per kalimat lebih jelas (skor %.2f < %.2f) → dipakai", ln["id"], info2["score"], info["score"])
@@ -689,6 +715,10 @@ def run(ctx: JobCtx) -> None:
         raise JobError("Tidak ada kalimat VO untuk dibuat.")
     # takes bila website tidak menentukan: TAKES di .env (bawaan 3, 1–4) — dihormati apa adanya, termasuk 1–2 untuk laptop lambat
     st = norm_settings(job.get("settings"), int(getattr(rt.cfg, "takes", DEFAULT_TAKES) or DEFAULT_TAKES))
+    # 🎧 Coba ejaan: 1 versi apa adanya per kandidat (tanpa versi tambahan / mode per kalimat yang dipilih dari cek ASR — ASR tidak
+    # bisa membedakan ə dan é, jadi pemilihan itu justru membuat perbandingan antar-ejaan tidak adil)
+    if is_trial(job.get("settings")):
+        st = {**st, "takes": 1, "trial": True}
     natural.configure(bool(getattr(rt.cfg, "natural_mos", True)), Path(rt.cfg.models) / "torch-hub" if getattr(rt.cfg, "models", None) else None)
     voice, ref, vhash = voice_ref(rt, job.get("voice_id"), ctx)
     order = rt.engines.order(job.get("engine"))

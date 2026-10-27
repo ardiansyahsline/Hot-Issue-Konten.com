@@ -678,6 +678,55 @@ def t_job_tts_speed_eksplisit():
 
 
 @test
+def t_job_tts_coba_ejaan_seed():
+    """🎧 Coba ejaan: satu job, kalimat sama dengan beberapa ejaan, takes 1, benih sama untuk semua kandidat; job lama tanpa seed tetap sama"""
+    sb, v = _bank_supa()
+
+    class SeedEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.seeds: list[tuple[str, int]] = []
+
+        def synth(self, text, ref, st, seed):
+            self.seeds.append((text, seed))
+            return super().synth(text, ref, st, seed)
+
+    eng = SeedEngine()
+    # ASR palsu sering "salah dengar" → job biasa membuat versi tambahan; job coba ejaan tetap 1 versi per kandidat
+    rt = Runtime(cfg=fake_cfg(), supa=sb, engines=FakeEngines(eng), asr=FakeAsr({"_line": "kerja bareng tim"}))  # type: ignore[arg-type]
+    text = "Kerja bareng tim."
+    cands = ["Kerja bareng tim.", "Kerja barêng tim.", "Kerja barəng tim.", "Kerja bar'ng tim."]
+    lines = [{"id": f"coba-{k + 1}", "scene_id": "s1", "text": text, "spell": None if c == text else c, "start": 0, "seed": 4242} for k, c in enumerate(cands)]
+    st = {"exaggeration": 0.5, "cfg_weight": 0.5, "temperature": 0.8, "takes": 1, "purpose": "coba-ejaan", "word": "bareng"}
+    job = {"id": "job-coba", "kind": "tts", "voice_id": v["id"], "engine": "auto", "lines": lines, "settings": st, "status": "proses"}
+    sb.tables["studio_voice_jobs"] = [job]
+    jobs_tts.run(JobCtx(rt, "studio_voice_jobs", job, min_gap=0))
+    assert job["status"] == "selesai", job.get("message")
+    got = job["result"]["lines"]
+    assert [x["id"] for x in got] == ["coba-1", "coba-2", "coba-3", "coba-4"] and all(x["scene_id"] == "s1" for x in got), got
+    assert [w["w"] for w in got[1]["words"]] == text.split(), "subtitle tetap teks asli"
+    said = [t for t, _ in eng.seeds]
+    assert said[:4] == cands and len(eng.seeds) == 4, eng.seeds
+    assert {sd for _, sd in eng.seeds} == {4242}, f"benih sama untuk semua kandidat: {eng.seeds}"
+    assert jobs_tts.is_trial(st) and not jobs_tts.is_trial({"takes": 1}) and not jobs_tts.is_trial(None)
+    # tanpa seed (job lama) → benih dari teks: tiap ejaan beda benih, kunci cache baris & job tidak berubah dari dulu
+    ln_old = jobs_tts.parse_lines([{**lines[1], "seed": None}])[0]
+    assert ln_old["seed"] is None and jobs_tts.take_seed("Kerja barêng tim.", 0) != jobs_tts.take_seed("Kerja barəng tim.", 0)
+    assert jobs_tts.take_seed("apa saja", 1, 4242) == (4242 + 7919) % (2**31 - 1)
+    stn = jobs_tts.norm_settings(st)
+    assert "purpose" not in stn and stn["takes"] == 1, stn
+    old_key = jobs_tts._sha([jobs_tts.CACHE_V, "chatterbox", "v", ln_old["text"], ln_old["spell"] or "", stn])
+    assert jobs_tts.line_key("chatterbox", "v", ln_old, stn) == old_key, "kunci baris lama tetap"
+    ln_new = jobs_tts.parse_lines([lines[1]])[0]
+    assert ln_new["seed"] == 4242 and jobs_tts.line_key("chatterbox", "v", ln_new, stn) != old_key
+    assert jobs_tts.job_key("chatterbox", "v", [ln_old], stn) != jobs_tts.job_key("chatterbox", "v", [ln_new], stn)
+    # seed aneh diabaikan (job tetap jalan)
+    bad = jobs_tts.parse_lines([{**lines[0], "seed": "x"}, {**lines[1], "id": "b", "seed": -5}, {**lines[2], "id": "c", "seed": True}, {**lines[3], "id": "d", "seed": 2**40}])
+    assert [b["seed"] for b in bad] == [None, None, None, None], bad
+    return f"{len(got)} ejaan dalam 1 job, benih {eng.seeds[0][1]} untuk semua"
+
+
+@test
 def t_job_tts_max_jendela():
     sb, v = _bank_supa()
     eng = FakeEngine()

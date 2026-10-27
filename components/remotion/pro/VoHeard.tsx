@@ -34,6 +34,7 @@ export default function VoHeard({
   onRebuild,
   rebuildBusy,
   rebuildNote,
+  onTry,
 }: {
   text: string;
   heard: string;
@@ -46,6 +47,8 @@ export default function VoHeard({
   onRebuild?: () => void;
   rebuildBusy?: boolean;
   rebuildNote?: string | null;
+  /** 🎧 Coba ejaan kata ini di laptop (beberapa ejaan sekaligus, pilih pakai telinga) — hanya mode bank suara */
+  onTry?: (word: string) => void;
 }) {
   const uid = useId();
   const diff = useMemo(() => heardDiff(text, heard, { spell, lexicon }), [text, heard, spell, lexicon]);
@@ -201,6 +204,19 @@ export default function VoHeard({
                 </button>
               ))}
             </div>
+          )}
+          {onTry && (
+            <button
+              type="button"
+              className="text-[12px] font-semibold text-orange-400 hover:text-orange-300"
+              onClick={() => {
+                onTry(refWord);
+                setOpen(null);
+              }}
+              data-vo-fix-try
+            >
+              🎧 Bingung ejaannya? Coba beberapa sekaligus di laptop
+            </button>
           )}
           <p className="text-[10.5px] text-zinc-500">Masuk 📖 Kamus ejaan proyek — dipakai di semua adegan. Subtitle tetap tulisan asli.</p>
           {err && (

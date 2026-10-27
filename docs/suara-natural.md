@@ -53,6 +53,14 @@ kosong kalau ASR tidak ada). Website menampilkannya di kartu adegan sebagai **�
 (mis. "soal" terdengar "su ul") supaya ejaannya bisa diperbaiki lewat kamus. Bunyi luncur dari ejaan mesin suara (soal → sowal,
 dia → diya) tidak dihitung salah ucap saat memilih versi.
 
+### 🎧 Coba ejaan huruf e (bareng dibaca "baréng"?)
+
+Huruf e punya 2 bunyi: ə (bareng, dengan) dan é (enak, sore). Di panel **Suara VO** (mode 🎙️ Bank suara) buka **🎧 Coba ejaan huruf e**:
+kata yang e-nya dibaca ə diberi garis titik-titik. Ketuk kata yang salah dibaca mesin (bisa juga dari kata yang disorot di 👂 Terdengar) →
+muncul beberapa ejaan (bareng, barêng, barəng, bar'ng …, bisa diubah / ditambah) → **Coba semua di laptop** → putar satu per satu →
+**✓ Pakai ini** pada yang paling pas. Ejaannya masuk 📖 Kamus ejaan khusus bank suara (suara cadangan Edge tidak ikut berubah); lalu klik
+"Generate ulang VO". Laptop harus nyala dulu (klik `NYALAKAN-MESIN-SUARA.bat`); hasil coba tidak pernah menggantikan VO adegan.
+
 ## 4. Mematikan skor MOS
 
 Pertama kali dipakai, UTMOS mengunduh ±410 MB dari GitHub. Kalau tidak mau / internet terbatas:
