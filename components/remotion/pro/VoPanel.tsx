@@ -47,7 +47,7 @@ import { DEFAULT_LEXICON, LEX_FROM_MAX, LEX_TO_MAX, MAX_LEXICON, legacySayKey, n
 import { heardFromResult } from "@/lib/studio/heard";
 import { isTryJob } from "@/lib/studio/spellTry";
 import { estimateQueued, etaText, queuedText } from "@/lib/studio/eta";
-import { EtaChip, ModelsHint, WarmBadge, warmOf } from "./JobEta";
+import { EtaChip, ModelsHint, WarmBadge, loadingOf, warmOf } from "./JobEta";
 import {
   bankSettings,
   CFG_MAX,
@@ -734,7 +734,7 @@ export default function VoPanel({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400" aria-live="polite" data-vo-laptop>
         {warm !== undefined ? (
           <>
-            <WarmBadge warm={warm} />
+            <WarmBadge warm={warm} loading={loadingOf(status)} />
             {(gpu || queue > 0) && (
               <span>
                 {gpu ? `GPU ${gpu}` : ""}

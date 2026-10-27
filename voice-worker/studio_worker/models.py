@@ -5,7 +5,8 @@ Dulu tiap model diunduh saat pertama kali dipakai = di tengah job VO (UTMOS 392 
 Sekarang:
   - runtime hanya mencari file LOKAL (hf_local / *_ready / deepfilter_dir). Belum ada → komponen itu dilewati dulu (UTMOS → take
     dipilih dari ASR + nada; DeepFilterNet → pembersih ffmpeg; whisper → cek audio saja; chatterbox → mesin cadangan) dan worker
-    boleh menyalakan prepare() di thread latar (start_background) yang tidak menahan job.
+    mengunduhnya di latar lewat PROSES ANAK `siapkan_model.py --latar --hanya <nama>` per model (tidak menahan job & bisa
+    dihentikan kapan saja — thread unduhan huggingface_hub tidak bisa dihentikan dari thread lain), lalu note_result().
   - prepare() mengunduh yang kurang: HuggingFace lewat snapshot_download (max_workers = DOWNLOAD_CONNECTIONS, Xet mode cepat,
     timeout 60 dtk, diulang 3×), file GitHub (UTMOS, DeepFilterNet3) lewat unduh.fetch (multi-koneksi, bisa dilanjutkan, cek isi).
     Mirror UTMOS (UTMOS_URLS, boleh hf://pemilik/repo/file.pt) dicoba sebelum GitHub.
@@ -590,15 +591,32 @@ class _FolderMeter(threading.Thread):
         self.halt.set()
 
 
+def _snap_dir(repo: str, cache_dir: Path | None, commit: str | None) -> Path | None:
+    """folder snapshot revisi `commit` di cache (tanpa commit: revisi refs/main) — hanya menyusun jalur, tidak menyentuh jaringan"""
+    st = _storage(repo, cache_dir)
+    rev = (commit or "").strip()
+    if not rev:
+        try:
+            rev = (st / "refs" / "main").read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+    return st / "snapshots" / rev if rev else None
+
+
 def _hf_need(repo: str, patterns, token, cache_dir) -> int | None:
-    """jumlah byte yang masih perlu diunduh (perkiraan; untuk progres saja)"""
+    """
+    jumlah byte yang masih perlu diunduh (perkiraan; untuk progres saja): file yang lolos pola tapi BELUM ada di folder snapshot
+    revisi terbaru. Dicek langsung per file — BUKAN lewat hf_local(repo, None): snapshot_download(local_files_only, tanpa pola)
+    menuntut SEMUA file repo ada (README, .gitattributes, … yang memang tidak pernah diunduh), jadi model yang sudah lengkap pun
+    dulu terhitung "mengunduh ±3 GB" + baris progres 0% palsu.
+    """
     try:
         from huggingface_hub import HfApi
         from huggingface_hub.utils import filter_repo_objects
 
         info = HfApi().model_info(repo, files_metadata=True, token=token or None)
         sibs = list(filter_repo_objects(items=list(info.siblings or []), allow_patterns=patterns, key=lambda s: s.rfilename))
-        snap = hf_local(repo, None, token, cache_dir=cache_dir)
+        snap = _snap_dir(repo, cache_dir, getattr(info, "sha", None))
         need = 0
         for s in sibs:
             if snap is not None and (snap / s.rfilename).is_file():
@@ -607,6 +625,30 @@ def _hf_need(repo: str, patterns, token, cache_dir) -> int | None:
         return need
     except Exception:
         return None
+
+
+def _interruptible(fn, *a, **kw):
+    """
+    jalankan fn di thread daemon & tunggu dengan join bertimeout: Ctrl+C sampai di thread utama dalam ±0,2 dtk (juga di Windows,
+    tempat menunggu kunci tanpa batas waktu tidak bisa diinterupsi) — dulu Ctrl+C di SIAPKAN-MODEL baru terasa setelah file yang
+    sedang diunduh huggingface_hub selesai. Unduhan yang sedang jalan dibiarkan; siapkan_model lalu keluar seketika (os._exit) dan
+    HuggingFace melanjutkan file .incomplete lain kali.
+    """
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["v"] = fn(*a, **kw)
+        except BaseException as e:  # noqa: BLE001  (diteruskan ke pemanggil apa adanya)
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True, name="unduh-hf")
+    t.start()
+    while t.is_alive():
+        t.join(0.2)
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
 
 
 def _hf_get(repo: str, patterns, token, *, label: str, say, conns: int, cache_dir: Path | None = None, name: str | None = None) -> Path:
@@ -634,7 +676,7 @@ def _hf_get(repo: str, patterns, token, *, label: str, say, conns: int, cache_di
     try:
         for attempt in range(1, HF_TRIES + 1):
             try:
-                p = Path(snapshot_download(repo_id=repo, allow_patterns=patterns, token=token or None, cache_dir=str(cache_dir) if cache_dir else None, max_workers=max(1, conns)))
+                p = Path(_interruptible(snapshot_download, repo_id=repo, allow_patterns=patterns, token=token or None, cache_dir=str(cache_dir) if cache_dir else None, max_workers=max(1, conns)))
                 break
             except KeyboardInterrupt:
                 raise
@@ -797,21 +839,33 @@ def prepare(cfg, names: list[str] | None = None, log: Callable[[str], None] | No
             finally:
                 _state["active"] = None
             out[n] = res
+            note_result(n, res)
             if res == "siap":
-                _state["fail"].pop(n, None)
-                _state["gen"] += 1
-                _refresh(n)
                 if time.monotonic() - t0 > 1:
                     say(f"Model {n} siap.")
             else:
-                _state["fail"][n] = res.removeprefix("gagal: ")
                 say(f"Model {n} belum siap — {res}")
     return out
 
 
+def note_result(name: str, res: str) -> None:
+    """
+    catat hasil menyiapkan satu model di proses INI: "siap" → komponen yang tadinya 'belum diunduh' langsung cek ulang (ready_gen naik
+    + refresh); "gagal: …" → status_brief menulis "gagal unduh: …". Dipakai prepare() sendiri dan worker yang mengunduh lewat proses
+    anak (siapkan_model.py --latar): filenya ditulis proses lain, jadi proses worker perlu diberi tahu.
+    """
+    if res == "siap":
+        _state["fail"].pop(name, None)
+        _state["gen"] += 1
+        _refresh(name)
+    else:
+        _state["fail"][name] = str(res).removeprefix("gagal: ")
+
+
 def start_background(cfg, names: list[str] | None = None, log: Callable[[str], None] | None = None, on_done: Callable[[dict], None] | None = None, stop: threading.Event | None = None) -> threading.Thread | None:
     """jalankan prepare() di thread latar (job tidak menunggu; baris progres tiap 15 dtk supaya log worker tidak penuh).
-    Sudah ada yang berjalan → None. `stop` diset (worker berhenti) → unduhan berhenti rapi, dilanjutkan lain kali."""
+    Sudah ada yang berjalan → None. `stop` diset → berhenti di antara model / unduhan GitHub (unduhan HuggingFace yang sedang
+    berjalan TIDAK bisa dihentikan dari thread — karena itu worker sendiri memakai proses anak siapkan_model.py --latar)."""
     t = _state.get("bg")
     if t is not None and t.is_alive():
         return None

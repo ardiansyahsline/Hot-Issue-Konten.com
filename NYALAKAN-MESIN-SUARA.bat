@@ -3,7 +3,9 @@ rem ============================================================================
 rem  Klik dua kali untuk menyalakan mesin suara laptop (Studio Pro):
 rem    1) ambil update terbaru dari GitHub (git pull)
 rem    2) pasang ulang paket mesin suara HANYA kalau isinya berubah
-rem    3) unduh model suara yang belum ada (cepat, bisa dilanjutkan) - gagal pun worker tetap menyala
+rem    3) unduh model suara WAJIB yang belum ada (mesin suara utama + cek ucapan; cepat, bisa dilanjutkan)
+rem       - gagal pun worker tetap menyala. Model opsional (penilai kealamian UTMOS, pembersih DeepFilterNet3,
+rem       mesin cadangan pocket-tts) diunduh worker sendiri di latar, jadi worker cepat menyala.
 rem    4) nyalakan worker (jendela ini biarkan terbuka)
 rem  Boleh ditaruh di folder utama repo ATAU di Desktop.
 rem  Kalau repo kamu ada di folder lain, ganti baris "set REPO=" di bawah.
@@ -64,7 +66,8 @@ goto model
 :pasang
 echo     Ada paket baru / belum terpasang. Memasang (bisa beberapa menit, sekali saja)...
 pushd "%VW%"
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\install.ps1"
+rem -TanpaModel: unduh model di langkah 3 di bawah (hanya yang wajib), sisanya di latar oleh worker
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\install.ps1" -TanpaModel
 set "KODEPASANG=%ERRORLEVEL%"
 popd
 if not "%KODEPASANG%"=="0" goto gagalpasang
@@ -84,11 +87,12 @@ exit /b 1
 rem ---------------------------------------------------------------- 3. model suara (unduh di depan, bukan di tengah job)
 :model
 echo.
-echo [3/4] Cek model suara (yang belum ada diunduh sekarang; Ctrl+C = lewati, lalu jawab N)...
+echo [3/4] Cek model suara WAJIB (mesin suara utama + cek ucapan; yang belum ada diunduh sekarang;
+echo       Ctrl+C = lewati, lalu jawab N). Model opsional diunduh otomatis di latar setelah worker menyala.
 pushd "%VW%"
 set PYTHONUTF8=1
 set PYTHONUNBUFFERED=1
-".venv\Scripts\python.exe" siapkan_model.py --cepat
+".venv\Scripts\python.exe" siapkan_model.py --cepat --wajib
 set "KODEMODEL=%ERRORLEVEL%"
 popd
 if not "%KODEMODEL%"=="0" echo     Model belum lengkap - mesin suara tetap dinyalakan; sisanya diunduh otomatis di latar.

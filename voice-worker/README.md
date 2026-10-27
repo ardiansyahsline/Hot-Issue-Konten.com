@@ -127,16 +127,25 @@ Menghapusnya: `powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1 -H
 ## Alur kerja worker (supaya cepat) & log
 - **Saat mulai**: worker mengecek model di laptop (hanya cek file, sekejap). Model yang belum ada **tidak pernah diunduh di tengah
   job** — komponennya dilewati dulu (Chatterbox → pocket-tts / Edge di website, cek ucapan → cek audio saja, DeepFilterNet → pembersih
-  ffmpeg, UTMOS → versi dipilih dari kejelasan + nada) lalu diunduh di latar (`AUTO_DOWNLOAD=1`); begitu selesai langsung dipakai lagi.
+  ffmpeg, UTMOS → versi dipilih dari kejelasan + nada) lalu diunduh di latar (`AUTO_DOWNLOAD=1`).
+- **Unduhan latar**: satu model per **proses terpisah** (`siapkan_model.py --latar --hanya <nama>`), berurutan. Tiap model yang
+  selesai **langsung** dipakai (mis. Chatterbox hidup lagi tanpa menunggu UTMOS yang lambat). Progresnya masuk log worker paling sering
+  tiap 15 dtk. Worker berhenti (Ctrl+C / jendela ditutup / Task Scheduler) → proses unduhan ikut dihentikan; bagian yang sudah
+  terunduh disimpan & dilanjutkan saat worker menyala lagi.
 - **Pemanasan** (`PRELOAD=1`, bawaan): mesin suara, cek ucapan (faster-whisper) & UTMOS dimuat **sekali** di latar dan tetap di GPU
   selama worker hidup. Antrian tetap dicek; job yang datang saat pemanasan menunggu sebentar ("Menyiapkan mesin suara…").
+  Model yang baru selesai diunduh di latar dipanaskan **sesudah** job yang sedang jalan selesai, dan mesin yang sudah dimuat tidak
+  pernah dipanaskan ulang (tidak berebut GPU dengan job).
   `.env` lama yang masih berisi `PRELOAD=0` bawaan dulu otomatis dianggap 1 (mematikan: `PRELOAD=mati`).
 - **Selama job**: progres dikirim ke website di latar (paling sering 1× per detik, GPU tidak menunggu internet); mp3 tiap kalimat dibuat
   & diunggah sambil kalimat berikutnya dibuat (`UPLOAD_WORKERS`, bawaan 3 sekaligus); `full.mp3` & SRT diunggah bersamaan. Tombol batal
   di website menghentikan job di batas kalimat berikutnya.
-- **Perkiraan selesai**: pesan job di Studio diakhiri `· sisa ±40 dtk` / `· sisa ±2 mnt`, dihitung dari catatan kecepatan laptop ini
-  (`data/speed.json`, makin tepat setelah beberapa job) dan diperbarui tiap kalimat selesai. Render MP4 juga (perkiraan muncul setelah
-  ±10%). Detak jantung mengirim kecepatan (`info.speed`), status model (`info.models`) dan `info.warm` (mesin sudah panas).
+- **Perkiraan selesai**: pesan job di Studio diakhiri `· sisa ±40 dtk` / `· sisa ±85 dtk` / `· sisa ±2 mnt` (di bawah 90 dtk per
+  5 dtk, mulai 90 dtk menit bulat), dihitung dari catatan kecepatan laptop ini (`data/speed.json`, makin tepat setelah beberapa job)
+  dan diperbarui tiap kalimat selesai. Render MP4 juga (perkiraan muncul setelah ±10%). Website menyimpan tenggatnya per job, jadi
+  hitung mundurnya tidak naik-turun tiap pesan baru. Detak jantung mengirim kecepatan (`info.speed`), status model (`info.models`,
+  termasuk `mengunduh 42%`), `info.warm` (mesin yang akan dipakai sudah dimuat) dan `info.loading` (mesin suara sedang dimuat /
+  modelnya masih diunduh di latar).
 - **Cek antrian**: tiap 1 dtk selama 1 menit sesudah job (job susulan langsung terambil), lalu tiap `POLL_SEC`, dan tiap ≥ 10 dtk kalau
   sudah 30 menit menganggur.
 - **Log bersih** (`QUIET_LOG=1`, bawaan): peringatan library yang tidak penting (FutureWarning / DeprecationWarning torch, torchaudio,
@@ -194,14 +203,19 @@ diunduh saat job berjalan, dari GitHub ±115 KB/s → job tertahan ±1 jam.)
 | `pocket` | mesin cadangan CPU | ±0,5 GB | HuggingFace `tryzz889/pocket-tts-indonesian` (+ `kyutai/pocket-tts`) | `data\hf` |
 
 Kapan diunduh:
-- **`install.ps1`** langkah 9/9 (lewati dengan `-TanpaModel`).
-- **`NYALAKAN-MESIN-SUARA.bat`** tiap dinyalakan: `siapkan_model.py --cepat` — hanya yang belum ada (kalau semua sudah ada:
-  selesai dalam hitungan detik, tanpa internet). Gagal pun mesin suara tetap dinyalakan.
+- **`install.ps1`** langkah 9/9: semua model, dengan progres (lewati dengan `-TanpaModel`). Putus / Ctrl+C di langkah ini **tidak**
+  membuat instal gagal — instal tetap selesai, sisanya diunduh otomatis di latar saat mesin suara menyala (atau klik
+  `SIAPKAN-MODEL.bat`, dilanjutkan).
+- **`NYALAKAN-MESIN-SUARA.bat`** tiap dinyalakan: `siapkan_model.py --cepat --wajib` — hanya model **wajib** yang belum ada (mesin
+  suara utama + cek ucapan; kalau sudah ada: selesai dalam hitungan detik, tanpa internet), supaya worker cepat menyala. Model
+  opsional (UTMOS, DeepFilterNet3, pocket-tts) diunduh worker sendiri di latar. Kalau paket berubah, NYALAKAN memanggil
+  `install.ps1 -TanpaModel` (unduh modelnya di langkah 3 tadi). Gagal pun mesin suara tetap dinyalakan.
 - **Manual**: klik dua kali **`SIAPKAN-MODEL.bat`** (atau dari PowerShell, dengan pilihan):
   ```powershell
   .\SIAPKAN-MODEL.bat                    # cek semua + unduh yang kurang + lengkapi yang setengah jadi
   .\SIAPKAN-MODEL.bat --cek              # status saja (kode keluar 1 kalau model wajib belum ada)
   .\SIAPKAN-MODEL.bat --cepat            # hanya yang belum ada
+  .\SIAPKAN-MODEL.bat --cepat --wajib    # hanya model wajib yang belum ada (seperti NYALAKAN-MESIN-SUARA.bat)
   .\SIAPKAN-MODEL.bat --tanpa-utmos      # lewati UTMOS
   .\SIAPKAN-MODEL.bat --hanya whisper,utmos --koneksi 16
   ```
@@ -212,14 +226,16 @@ Kenapa cepat & aman:
   kecepatan *per koneksi*, jadi 8 koneksi ≈ 8× lebih cepat. HuggingFace memakai mode cepat Xet (`HF_XET_HIGH_PERFORMANCE`) +
   `max_workers` = jumlah koneksi.
 - **Bisa dilanjutkan**: internet putus / jendela ditutup / Ctrl+C → jalankan lagi, bagian yang sudah ada tidak diulang
-  (`<file>.part` + `<file>.part.json`). Macet 30 dtk tanpa data → disambung ulang otomatis; tiap bagian dicoba ulang dengan jeda.
+  (`<file>.part` + `<file>.part.json`; HuggingFace: `.incomplete`). Ctrl+C langsung terasa, juga saat unduhan HuggingFace (dulu
+  menunggu file yang sedang diunduh selesai). Macet 30 dtk tanpa data → disambung ulang otomatis; tiap bagian dicoba ulang dengan jeda.
 - **Dicek dulu**: ukuran, sha256 (UTMOS) atau CRC isi zip (DeepFilterNet, kode SpeechMOS) — file baru dipindah ke nama akhir
   kalau sudah lengkap & benar. Halaman error / file lain dari mirror ditolak, lalu sumber berikutnya dicoba.
-- Progres jelas tiap ±2 dtk, contoh: `UTMOS  37% · 145/392 MB · 5,2 MB/s · sisa ±48 dtk`.
+- Progres jelas tiap ±2 dtk (unduhan latar di log worker: tiap 15 dtk), contoh: `UTMOS  37% · 145/392 MB · 5,2 MB/s · sisa ±48 dtk`.
+  Model yang sudah lengkap tidak lagi ditulis "mengunduh ±3 GB".
 
 Kalau ada model yang belum siap saat mesin suara jalan, job **tetap jalan tanpa menunggu**: UTMOS → versi dipilih dari kejelasan
 (ASR) + nada; DeepFilterNet → pembersih ffmpeg; whisper → cek audio saja; Chatterbox → mesin cadangan. Dengan `AUTO_DOWNLOAD=1`
-(bawaan) yang kurang diunduh di latar, dan begitu selesai langsung dipakai (dicek ulang tiap ±60 dtk).
+(bawaan) yang kurang diunduh di latar (satu per satu, proses terpisah), dan tiap model langsung dipakai begitu selesai.
 
 **Mirror UTMOS** (opsional): isi `UTMOS_URLS` di `.env`, mis. `UTMOS_URLS=hf://<pemilik>/<repo>/utmos22_strong_step7459_v1.pt`
 (atau alamat `https://…`, beberapa dipisah koma). Isinya harus persis file resmi (411.179.119 byte, sha256 `38aa51ab…9bff`);

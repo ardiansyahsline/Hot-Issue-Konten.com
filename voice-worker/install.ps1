@@ -3,7 +3,9 @@
 # Opsi:
 #   -CpuSaja      laptop tanpa GPU NVIDIA (pakai pocket-tts CPU saja)
 #   -TanpaRender  lewati pemasangan Remotion (render MP4 di laptop)
-#   -TanpaModel   lewati unduh model suara (bisa nanti lewat SIAPKAN-MODEL.bat)
+#   -TanpaModel   lewati unduh model suara (NYALAKAN-MESIN-SUARA.bat memakainya: model wajib diunduh di langkahnya
+#                 sendiri, sisanya otomatis di latar oleh worker; bisa juga nanti lewat SIAPKAN-MODEL.bat)
+# Langkah unduh model (9) TIDAK PERNAH membuat instal gagal: putus / Ctrl+C = lewati, sisanya diunduh nanti.
 # Aman dijalankan ulang (mis. setelah git pull).
 param([switch]$CpuSaja, [switch]$TanpaRender, [switch]$TanpaModel)
 
@@ -103,13 +105,42 @@ if (-not (Test-Path ".env")) {
 # ---------------------------------------------------------------- 9. model suara (diunduh SEKARANG, bukan di tengah job VO)
 Langkah "9/9 Unduh model suara (Chatterbox, faster-whisper, DeepFilterNet3, UTMOS, pocket-tts)"
 if ($TanpaModel) {
-    Info "dilewati (-TanpaModel). Nanti klik SIAPKAN-MODEL.bat sebelum membuat suara."
+    Info "dilewati (-TanpaModel). Model wajib diunduh NYALAKAN-MESIN-SUARA.bat / SIAPKAN-MODEL.bat, sisanya otomatis di latar oleh worker."
 } else {
-    Info "Banyak koneksi sekaligus & bisa dilanjutkan: kalau putus, jalankan SIAPKAN-MODEL.bat (tidak mengulang dari awal)."
+    Info "Banyak koneksi sekaligus & bisa dilanjutkan. Ctrl+C = lewati (instal tetap selesai, bagian yang sudah terunduh disimpan)."
     $env:PYTHONUTF8 = "1"
     $env:PYTHONUNBUFFERED = "1"
-    & $py siapkan_model.py
-    if ($LASTEXITCODE -ne 0) { Awas "Sebagian model belum terunduh - jalankan SIAPKAN-MODEL.bat lagi (unduhan dilanjutkan). Mesin suara tetap bisa dinyalakan." }
+    # Ctrl+C di langkah ini hanya menghentikan unduhan (python menerima Ctrl+C-nya sendiri), BUKAN skrip pasang: selama langkah ini
+    # penangan Ctrl+C .NET (CancelKeyPress, Cancel = true) dipasang supaya PowerShell tidak ikut menghentikan skrip.
+    $tahanCtrlC = $false
+    try {
+        if (-not ("VwTahanCtrlC" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+public static class VwTahanCtrlC {
+    static void Tahan(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; }
+    static readonly ConsoleCancelEventHandler H = new ConsoleCancelEventHandler(Tahan);
+    public static void Pasang() { Console.CancelKeyPress += H; }
+    public static void Lepas() { Console.CancelKeyPress -= H; }
+}
+'@
+        }
+        [VwTahanCtrlC]::Pasang()
+        $tahanCtrlC = $true
+    } catch { }
+    $kodeModel = 1
+    try {
+        & $py siapkan_model.py
+        $kodeModel = $LASTEXITCODE
+    } catch {
+        $kodeModel = 1
+    } finally {
+        if ($tahanCtrlC) { try { [VwTahanCtrlC]::Lepas() } catch { } }
+    }
+    if ($kodeModel -ne 0) {
+        Awas "Sebagian model belum terunduh (dihentikan / internet putus) - instal tetap SELESAI."
+        Info "Sisanya diunduh otomatis di latar saat mesin suara menyala, atau klik SIAPKAN-MODEL.bat (dilanjutkan, tidak dari awal)."
+    }
 }
 
 Write-Host ""
@@ -119,3 +150,5 @@ Write-Host "  2) Tes suara di GPU:                .venv\Scripts\python cek_gpu.p
 Write-Host "     Cek / lanjutkan unduhan model:    SIAPKAN-MODEL.bat"
 Write-Host "  3) Jalankan worker:                 jalankan.bat"
 Write-Host "  4) Nyala otomatis saat laptop hidup: powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1"
+# instal selesai = kode 0 (kode keluar langkah unduh model tidak ikut terbawa ke NYALAKAN-MESIN-SUARA.bat)
+exit 0
