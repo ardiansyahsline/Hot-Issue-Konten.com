@@ -109,6 +109,11 @@ class Config:
     quiet_log: bool = True
     # "PRELOAD=0" dari .env lama (nilai bawaan dulu) diabaikan → dicatat di log saat worker mulai
     preload_old_default: bool = False
+    # --- RENDER-GPU ---
+    # render MP4 di GPU NVIDIA: auto (ada NVIDIA → Chrome render ke NVIDIA + --gl=angle + encode NVENC) | nvidia (paksa) | off (seperti dulu)
+    render_gpu: str = "auto"
+    # bitrate video saat encode NVENC (NVENC tidak memakai CRF), format Remotion: angka + K/M
+    render_bitrate: str = "10M"
 
     @property
     def cache(self) -> Path:
@@ -224,5 +229,37 @@ def load(env_file: Path | None = None) -> Config:
         quiet_log=_bool("QUIET_LOG", True),
         preload_old_default=preload_old,
     )
+    # --- RENDER-GPU ---
+    cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))
+    cfg.render_bitrate = render_bitrate(_env("RENDER_BITRATE", "10M"))
+    if _env("RENDER_CONCURRENCY").lower() == "auto":  # _int() di atas memberi 2 untuk "auto" → diganti sesuai jumlah core
+        cfg.render_concurrency = auto_render_concurrency()
     cfg.ensure_dirs()
     return cfg
+
+
+# --- RENDER-GPU ---
+def render_gpu_mode(raw: str) -> str:
+    """RENDER_GPU → "auto" | "nvidia" | "off" (salah ketik → auto)"""
+    v = (raw or "").strip().lower()
+    if v in ("off", "0", "mati", "false", "no", "tidak", "cpu"):
+        return "off"
+    if v in ("nvidia", "paksa", "force", "nvenc"):
+        return "nvidia"
+    return "auto"
+
+
+def render_bitrate(raw: str) -> str:
+    """RENDER_BITRATE → format yang diterima Remotion (angka + "K"/"k"/"M"): "10m" / "10 Mbps" / "10" → "10M"; salah → "10M" """
+    m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*([kKmM])?\s*(?:b|bps|bit/?s)?\s*", raw or "", re.I)
+    if not m or float(m.group(1).replace(",", ".")) <= 0:
+        return "10M"
+    num = m.group(1).replace(",", ".")
+    unit = (m.group(2) or "M").upper()
+    return f"{num}{unit}"
+
+
+def auto_render_concurrency(cpus: int | None = None) -> int:
+    """RENDER_CONCURRENCY=auto → tab Chrome render paralel = setengah core CPU, 2..4 (laptop juga dipakai bot WAHA)"""
+    n = cpus if cpus is not None else (os.cpu_count() or 4)
+    return min(4, max(2, n // 2))

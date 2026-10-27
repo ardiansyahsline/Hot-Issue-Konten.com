@@ -143,6 +143,25 @@ Menghapusnya: `powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1 -H
   Chatterbox) dan progress bar per langkah disembunyikan. Peringatan & error dari worker sendiri tetap tampil. Tiap job ditutup ringkasan,
   mis. `Job selesai: 5 kalimat, 32 dtk suara, 41 dtk proses (perkiraan awal 45 dtk)`. Mencari masalah? Isi `QUIET_LOG=0` → semua tampil lagi.
 
+## Render MP4 pakai GPU NVIDIA
+Laptop ini punya 2 GPU (Intel bawaan + NVIDIA RTX). Tanpa diatur, Windows memberi Chrome render (Remotion) GPU **Intel** dan
+video di-encode CPU → render lambat. Dengan `RENDER_GPU=auto` (bawaan) worker otomatis:
+1. mendeteksi NVIDIA (`nvidia-smi`),
+2. mengunduh Chrome render kalau belum ada (`remotion browser ensure`) lalu mengatur exe-nya ke GPU **High performance** di
+   pengaturan Windows (registry pengguna `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, sama dengan menu Settings > Graphics,
+   tanpa hak admin) — exe-nya: `node_modules\.remotion\chrome-headless-shell\win64\chrome-headless-shell-win64\chrome-headless-shell.exe`
+   di folder repo (atau `REMOTION_BROWSER` kalau diisi),
+3. merender dengan `--gl=angle` (gambar di GPU) + `--hardware-acceleration=if-possible --video-bitrate=10M` (encode video NVENC),
+4. kalau render seperti itu gagal → diulang sekali dengan cara lama (encode CPU) dan sampai worker dinyalakan ulang NVENC tidak dipakai lagi.
+
+Cek di log (sekali per sesi, saat worker mulai — atau saat render pertama kalau Chrome render belum diunduh):
+**`Render memakai GPU: NVIDIA GeForce RTX 5050 Laptop GPU (ANGLE, D3D11)`** = sudah benar.
+Kalau tertulis Intel / SwiftShader, atur manual sekali: **Settings > System > Display > Graphics** → *Add desktop app* (*Browse*) →
+pilih `chrome-headless-shell.exe` di atas → *Options* → **High performance** → *Save*, lalu nyalakan ulang worker.
+Matikan semuanya dengan `RENDER_GPU=off`; `RENDER_GPU=nvidia`
+memaksa walau `nvidia-smi` tidak terbaca. `RENDER_BITRATE` (bawaan `10M`) = kualitas video saat encode NVENC.
+`RENDER_CONCURRENCY=auto` = jumlah tab Chrome render sesuai core CPU (2–4; bawaan tetap 2).
+
 ## Update setelah ada perubahan di repo
 ```powershell
 cd C:\Konten.com\Hot-Issue-Konten.com
@@ -186,6 +205,8 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | Bot WAHA jadi lambat | Turunkan `CPU_THREADS` di `.env` (mis. 2). Worker sudah jalan dengan prioritas rendah & satu tugas sekaligus. |
 | VRAM ingin dilepas saat menganggur | Isi `IDLE_UNLOAD_MIN=30` (model dilepas setelah 30 menit tanpa tugas, dimuat lagi saat ada tugas). |
 | Render gagal | Pastikan Node.js 20 terpasang lalu `install.ps1` lagi. Render pertama mengunduh Chrome khusus render (±100 MB). Kalau unduhan itu diblokir jaringan, unduh *chrome-headless-shell* (Chrome for Testing) sendiri lalu isi path-nya di `REMOTION_BROWSER` (`.env`). |
+| Render lambat / Task Manager menunjukkan GPU Intel | Lihat log: `Render memakai GPU: …`. Kalau bukan NVIDIA, ikuti langkah manual di bagian *Render MP4 pakai GPU NVIDIA*. Pastikan `RENDER_GPU` bukan `off`. |
+| Log `NVENC … tidak bisa dipakai` | Driver NVIDIA lama / ffmpeg Remotion tanpa NVENC. Render tetap jalan (encode CPU). Update driver NVIDIA lalu nyalakan ulang worker. |
 | Upload video gagal (file besar) | Paket gratis Supabase membatasi ukuran file (±50 MB). Render video lebih pendek atau naikkan batas di Supabase. |
 | `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada. Biasanya karena unduhan pertama (±410 MB dari GitHub) gagal / tanpa internet. Coba lagi dengan menyalakan ulang worker, atau matikan dengan `NATURAL_MOS=0`. |
 | `Worker sudah jalan` | Sudah ada worker lain (mis. dari nyala otomatis). Cukup satu. |
