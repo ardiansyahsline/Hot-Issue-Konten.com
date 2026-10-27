@@ -53,6 +53,36 @@ def hook_count(module) -> int:
     return sum(len(m._forward_hooks) for m in module.modules())
 
 
+def param_dtype(module):
+    """dtype parameter pertama modul (None kalau tanpa parameter)"""
+    p = next(iter(module.parameters()), None)
+    return None if p is None else p.dtype
+
+
+def convert_params(module, dt) -> None:
+    """
+    Semua parameter `module` → dtype `dt`, ATOMIK: tensor baru dibuat semua dulu, baru ditukar. Gagal di tengah (mis. VRAM penuh)
+    → tensor baru dibuang, semua parameter tetap seperti semula (tidak pernah campuran bf16 + fp32 = RuntimeError dtype di forward).
+    Buffer (mis. rotary inv_freq) tidak diubah.
+    """
+    import torch
+
+    params = [p for p in module.parameters() if p.dtype != dt]
+    if not params:
+        return
+    new: list = []
+    try:
+        with torch.no_grad():
+            for p in params:
+                new.append(p.data.to(dt))
+    except BaseException:
+        new.clear()
+        raise
+    with torch.no_grad():
+        for p, d in zip(params, new):
+            p.data = d
+
+
 def _is_hf_capture(fn) -> bool:
     # hook perekam keluaran milik transformers 5.x (dipasang sekali per model, dibutuhkan output_attentions bawaan) — jangan dilepas
     return getattr(fn, "__name__", "") == "output_capturing_hook"
@@ -181,7 +211,11 @@ class Fast:
         self.last_aligns: list = []
         self.install()
         if str(dtype).lower() in ("bf16", "bfloat16"):
-            self.set_dtype("bf16")
+            try:
+                self.set_dtype("bf16")
+            except BaseException:  # objek ini tidak jadi dipakai → hook & config eager jangan ditinggal terpasang
+                self.remove()
+                raise
 
     @staticmethod
     def _is_mtl(model) -> bool:
@@ -241,23 +275,28 @@ class Fast:
         "bf16" → parameter transformer T3 jadi bfloat16 (buffer rotary tetap fp32); "fp32" → kembali float32. Kembali ke fp32
         memakai `reload()` (state dict tfmr asli, kunci tanpa awalan "tfmr.") supaya tidak membawa pembulatan bf16; tanpa reload
         → bobot bf16 diperbesar ke fp32 apa adanya.
+        Atomik: ganti dtype gagal (mis. VRAM penuh) → error diteruskan, parameter & self.dtype tetap seperti semula. Baca ulang
+        bobot asli gagal → tetap fp32 (bobot bf16 diperbesar), hanya peringatan.
         """
         torch = self.torch
         dt = torch.bfloat16 if str(want).lower() in ("bf16", "bfloat16") else torch.float32
-        if dt == self.dtype:
+        if dt == self.dtype and param_dtype(self.tf) in (None, dt):
             return self.name_dtype
-        with torch.no_grad():
-            for p in self.tf.parameters():
-                p.data = p.data.to(dt)
-            if dt == torch.float32 and reload is not None:
+        convert_params(self.tf, dt)
+        self.dtype = dt
+        if dt == torch.float32 and reload is not None:
+            try:
                 sd = reload()
                 if sd:
-                    missing, _ = self.tf.load_state_dict(sd, strict=False)
+                    with torch.no_grad():
+                        missing, _ = self.tf.load_state_dict(sd, strict=False)
                     bad = [k for k in missing if "rotary_emb" not in k]
                     if bad and self.log:
                         self.log.warning("t3fast: %d bobot tfmr tidak ada di file saat kembali ke fp32", len(bad))
                     del sd
-        self.dtype = dt
+            except Exception as e:  # dtype sudah konsisten fp32; hanya pembulatan bf16 yang tidak bisa dihapus
+                if self.log:
+                    self.log.warning("t3fast: bobot asli fp32 tidak bisa dibaca ulang (%s) — dipakai bobot bf16 yang diperbesar", str(e)[:200])
         return self.name_dtype
 
     @property

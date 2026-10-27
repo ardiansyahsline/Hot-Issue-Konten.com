@@ -355,19 +355,55 @@ def fast_sampling(fn) -> dict:
     return out
 
 
-def want_dtype(name: str | None) -> str:
-    """TTS_DTYPE auto|bf16|fp32 → "bf16"/"fp32" (auto = bf16 kalau GPU mendukung)"""
+def bf16_native() -> bool:
+    """
+    GPU punya bf16 ASLI (compute capability ≥ 8 = RTX 30xx ke atas)? torch 2.8 `is_bf16_supported()` bawaannya juga True untuk
+    bf16 EMULASI di GPU lama (GTX 16xx / RTX 20xx, sm < 80) — di sana bf16 justru lebih lambat dari fp32, jadi tidak dipakai.
+    """
     import torch
 
+    if not torch.cuda.is_available():
+        return False
+    try:
+        if int(torch.cuda.get_device_capability(0)[0]) < 8:
+            return False
+    except Exception:
+        return False
+    fn = getattr(torch.cuda, "is_bf16_supported", None)
+    if not callable(fn):
+        return True
+    try:
+        return bool(fn(including_emulation=False))
+    except TypeError:  # torch lama tanpa parameter itu (belum menghitung emulasi)
+        return bool(fn())
+
+
+def want_dtype(name: str | None) -> str:
+    """TTS_DTYPE auto|bf16|fp32 → "bf16"/"fp32" (auto = bf16 kalau GPU punya bf16 asli, compute capability ≥ 8)"""
     name = (name or "auto").lower()
     if name in ("fp32", "float32"):
         return "fp32"
-    ok = torch.cuda.is_available() and bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)())
-    if name in ("bf16", "bfloat16"):
-        if not ok:
-            log.warning("TTS_DTYPE=bf16 tapi GPU tidak mendukung bf16 → fp32")
-        return "bf16" if ok else "fp32"
+    ok = bf16_native()
+    if name in ("bf16", "bfloat16") and not ok:
+        log.warning("TTS_DTYPE=bf16 tapi GPU tidak punya bf16 asli (butuh RTX 30xx ke atas) → fp32")
     return "bf16" if ok else "fp32"
+
+
+def free_vram() -> None:
+    """
+    Lepas memori GPU yang sudah tidak dipakai (cache KV percobaan yang gagal, dsb.). Dipanggil DI LUAR blok except: selama blok
+    except aktif, traceback error masih menahan frame percobaan yang gagal beserta tensornya.
+    """
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 WARM_TEXT = "Halo, ini pemanasan mesin suara."
@@ -464,6 +500,35 @@ class ChatterboxEngine:
         sd = _clean_t3(_state(Path(p), "cpu"))  # lewat CPU: tidak menambah VRAM sementara ±2 GB
         return {k[len("tfmr.") :]: v for k, v in sd.items() if k.startswith("tfmr.")}
 
+    def _fp32_for_upstream(self) -> None:
+        """
+        Cara bawaan (model.generate → T3.inference) memberi masukan fp32 ke transformer: kalau bobotnya masih bf16 (jalur cepat)
+        → RuntimeError "expected m1 and m2 to have the same dtype" → cadangan ikut gagal. Maka sebelum cara bawaan dipakai,
+        transformer dikembalikan ke fp32 (bobot asli dari file) untuk sisa sesi — juga kalau jalur cepat sudah dimatikan.
+        """
+        import torch
+
+        from .t3fast import convert_params, param_dtype
+
+        if self.fast is not None:
+            ftf = getattr(self.fast, "tf", None)
+            if self.fast.name_dtype != "fp32" or (ftf is not None and param_dtype(ftf) not in (None, torch.float32)):
+                log.warning("Cara bawaan butuh transformer fp32 → pindah dari %s ke fp32 untuk sesi ini", self.fast.name_dtype)
+                self.fast.set_dtype("fp32", reload=self._reload_fp32)
+            return
+        tf = getattr(getattr(self.model, "t3", None), "tfmr", None)
+        if tf is None or param_dtype(tf) in (None, torch.float32):
+            return
+        log.warning("Cara bawaan butuh transformer fp32 → bobot transformer dikembalikan ke fp32")
+        convert_params(tf, torch.float32)
+        try:
+            sd = self._reload_fp32()
+            if sd:
+                with torch.no_grad():
+                    tf.load_state_dict(sd, strict=False)
+        except Exception as e:  # dtype sudah fp32 (konsisten); hanya pembulatan bf16 yang tersisa
+            log.warning("Bobot asli fp32 tidak bisa dibaca ulang (%s) — dipakai bobot bf16 yang diperbesar", str(e)[:200])
+
     def _upstream(self, text: str, ex: float, cw: float, temp: float, seed: int) -> np.ndarray:
         """cara bawaan model.generate() — hook baru dari pengecek keselarasan bawaan dilepas lagi sesudahnya"""
         import torch
@@ -484,12 +549,15 @@ class ChatterboxEngine:
         from .t3fast import NonFinite, max_tokens_for
 
         kw = dict(exaggeration=ex, cfg_weight=cw, temperature=temp, max_new_tokens=max_tokens_for(text, max_sec), conds=conds, **self._fast_kw)
+        ys = None
         try:
             ys = self.fast.generate(text, len(seeds), seeds, **kw)
         except NonFinite:
             if self.fast.name_dtype != "bf16":
                 raise
+        if ys is None:  # NaN di bf16 — diulang di LUAR except supaya cache KV bf16 yang gagal sudah lepas sebelum fp32 (+1 GB) dimuat
             log.warning("bf16 menghasilkan angka tidak wajar (NaN/inf) → transformer pindah ke fp32 untuk sesi ini, diulang sekali")
+            free_vram()
             self.fast.set_dtype("fp32", reload=self._reload_fp32)
             ys = self.fast.generate(text, len(seeds), seeds, **kw)
         return [to_mono(y) for y in ys]
@@ -505,19 +573,22 @@ class ChatterboxEngine:
         return out
 
     def _fast_run_batch(self, text, ex, cw, temp, seeds, max_sec, conds) -> list[np.ndarray]:
-        """VRAM penuh → kosongkan cache, belah batch (sampai satu-satu); batas batch diingat untuk potongan berikutnya"""
+        """
+        VRAM penuh → kosongkan cache, belah batch (sampai satu-satu); batas batch diingat untuk potongan berikutnya. Pembelahan
+        dijalankan di LUAR blok except: di dalamnya traceback masih menahan cache KV percobaan yang gagal, jadi belahannya ikut penuh.
+        """
         import torch
 
         try:
             return self._fast_once(text, ex, cw, temp, seeds, max_sec, conds)
         except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
             if len(seeds) <= 1:
                 raise
-            h = len(seeds) // 2
-            self._max_batch = max(1, min(self._max_batch, h))
-            log.warning("VRAM penuh untuk %d versi sekaligus → dibelah jadi %d + %d", len(seeds), h, len(seeds) - h)
-            return self._fast_run_batch(text, ex, cw, temp, seeds[:h], max_sec, conds) + self._fast_run_batch(text, ex, cw, temp, seeds[h:], max_sec, conds)
+        free_vram()
+        h = len(seeds) // 2
+        self._max_batch = max(1, min(self._max_batch, h))
+        log.warning("VRAM penuh untuk %d versi sekaligus → dibelah jadi %d + %d", len(seeds), h, len(seeds) - h)
+        return self._fast_run_batch(text, ex, cw, temp, seeds[:h], max_sec, conds) + self._fast_run_batch(text, ex, cw, temp, seeds[h:], max_sec, conds)
 
     # ------------------------------------------------------------------ dipakai jobs_tts
     def synth_batch(self, text: str, ref: Path, st: dict, seeds: list[int], max_sec: float | None = None) -> list[np.ndarray]:
@@ -529,41 +600,57 @@ class ChatterboxEngine:
         temp = float(st.get("temperature", 0.8))
         seeds = [int(s) for s in seeds] or [0]
         for attempt in range(2):
+            oom = False
             try:
-                self._prepare(ref, ex)
-                t0 = time.time()
-                if self.fast is not None:
-                    try:
-                        ys = self._fast_run(text, ex, cw, temp, seeds, max_sec)
-                        self._fast_fail = 0
-                        log.debug("chatterbox cepat: %d versi, %.1f dtk (%s)", len(ys), time.time() - t0, self.fast.last)
-                        return ys
-                    except torch.cuda.OutOfMemoryError:
-                        raise
-                    except Exception as e:
-                        self._fast_fail += 1
-                        log.warning("Jalur cepat error (%s: %s) — potongan ini memakai cara bawaan", type(e).__name__, str(e)[:200])
-                        if self._fast_fail >= 3:
-                            log.warning("Jalur cepat gagal 3× berturut-turut → dimatikan untuk sesi ini")
-                            try:
-                                self.fast.remove()
-                            except Exception:
-                                pass
-                            self.fast = None
-                ys = [self._upstream(text, ex, cw, temp, s) for s in seeds]
-                log.debug("chatterbox bawaan: %d versi, %.1f dtk", len(ys), time.time() - t0)
-                return ys
+                return self._synth_once(text, ref, ex, cw, temp, seeds, max_sec)
             except torch.cuda.OutOfMemoryError as e:
-                torch.cuda.empty_cache()
                 if attempt:
                     raise EngineFailed("VRAM GPU penuh") from e
-                log.warning("VRAM penuh, coba sekali lagi…")
+                oom = True
             except Exception as e:  # RuntimeError/AssertionError model, juga error lain (mis. AttributeError) → EngineFailed → pindah ke pocket
                 self._ref = None
                 if attempt:
                     raise EngineFailed(f"Chatterbox error: {e}") from e
                 log.warning("Chatterbox error (%s), coba sekali lagi…", e)
+            # diulang di LUAR except: memori percobaan yang gagal (ditahan traceback) sudah lepas
+            free_vram()
+            if oom:
+                log.warning("VRAM penuh, coba sekali lagi…")
         raise EngineFailed("Chatterbox gagal")
+
+    def _synth_once(self, text: str, ref: Path, ex: float, cw: float, temp: float, seeds: list[int], max_sec) -> list[np.ndarray]:
+        import torch
+
+        self._prepare(ref, ex)
+        t0 = time.time()
+        if self.fast is not None:
+            err = None
+            try:
+                ys = self._fast_run(text, ex, cw, temp, seeds, max_sec)
+            except torch.cuda.OutOfMemoryError:
+                raise
+            except Exception as e:
+                err = f"{type(e).__name__}: {str(e)[:200]}"
+            if err is None:
+                self._fast_fail = 0
+                log.debug("chatterbox cepat: %d versi, %.1f dtk (%s)", len(ys), time.time() - t0, self.fast.last)
+                return ys
+            # di luar except: cache KV jalur cepat yang gagal sudah lepas sebelum cara bawaan (dan bobot fp32) dimuat
+            self._fast_fail += 1
+            log.warning("Jalur cepat error (%s) — potongan ini memakai cara bawaan", err)
+            free_vram()
+            if self._fast_fail >= 3:
+                log.warning("Jalur cepat gagal 3× berturut-turut → dimatikan untuk sesi ini")
+                self._fp32_for_upstream()  # transformer fp32 dulu (remove() tidak mengembalikan dtype)
+                try:
+                    self.fast.remove()
+                except Exception:
+                    pass
+                self.fast = None
+        self._fp32_for_upstream()
+        ys = [self._upstream(text, ex, cw, temp, s) for s in seeds]
+        log.debug("chatterbox bawaan: %d versi, %.1f dtk", len(ys), time.time() - t0)
+        return ys
 
     def synth(self, text: str, ref: Path, st: dict, seed: int) -> np.ndarray:
         return self.synth_batch(text, ref, st, [seed])[0]

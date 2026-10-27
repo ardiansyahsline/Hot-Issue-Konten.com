@@ -980,7 +980,8 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             base = 0.05 + 0.85 * i / n
             ctx.progress(base, f"Membuat suara kalimat {i + 1} dari {n}…", force=True)
             k = keys[i]
-            hit = hits[i]
+            # dicek lagi: baris berteks sama yang baru dibuat di job ini sudah masuk cache (hits dihitung sebelum loop)
+            hit = hits[i] or cache.get(k)
             t_line = time.monotonic()
             if hit:
                 wav, meta = hit

@@ -9,7 +9,8 @@ Langkah:
      (komposisi menghitung alamat SFX bawaan sendiri lewat sfxSrc(), jadi alamat itu harus tetap bisa dibuka server render)
   3. `remotion render <bundle> StudioVideo out.mp4 --props=props.json --concurrency=2` (progres dibaca dari output CLI)
      laptop dengan GPU NVIDIA (RENDER_GPU=auto): Chrome render diarahkan ke NVIDIA (gpu_pref.py) + `--gl=angle
-     --hardware-acceleration=if-possible --video-bitrate=10M` (encode NVENC); gagal → diulang sekali dengan argumen lama (encode CPU)
+     --hardware-acceleration=if-possible --video-bitrate=5M` (encode NVENC); gagal karena GPU → diulang sekali dengan argumen lama
+     (encode CPU); error lain (komposisi, file rusak) langsung gagal
   4. ffmpeg loudnorm 2 tahap → -14 LUFS / TP -1 dBTP (video di-copy), upload renders/<id>.mp4
 """
 from __future__ import annotations
@@ -84,6 +85,12 @@ _gpu: dict = {"prepared": False, "nvenc_bad": False, "angle_bad": False, "thread
 # hasil cek GPU terakhir (sekali per sesi) → detak jantung info.render_gpu lewat render_gpu_info()
 last_probe: dict = {}
 NVENC_ERR = re.compile(r"nvenc|nvcuda|nvEncodeAPI|OpenEncodeSession|No capable devices|CUDA_ERROR|cuInit", re.I)
+# kegagalan yang MUNGKIN karena GPU (encode NVENC / Chrome di ANGLE-GL) → layak diulang dengan encode CPU. Error lain (komposisi,
+# delayRender, file rusak) pasti terulang → tidak diulang. ANGLE / GL huruf besar saja (bukan "triangle" / "rectangle").
+GPU_ERR = re.compile(
+    r"(?i:nvenc|nvcuda|nvEncodeAPI|OpenEncodeSession|No capable devices|cuda|cuInit|\bgpu|webgl|direct3d|\bd3d1[01]\b|\bdriver\b"
+    r"|context lost|hardware[ -]?accel|error while opening encoder)|\bANGLE\b|\bE?GL\b|\bE?GL_[A-Z]|\be?gl[A-Z]\w*"
+)
 FAIL_LINE = re.compile(r"error|gagal|failed|cannot|could not|unable|not supported|invalid", re.I)
 
 
@@ -110,7 +117,7 @@ def gpu_args(cfg) -> list[str]:
     if not _gpu["angle_bad"] and (nvenc or last_probe.get("kind") == "nvidia"):
         out.append("--gl=angle")
     if nvenc:
-        out += ["--hardware-acceleration=if-possible", f"--video-bitrate={getattr(cfg, 'render_bitrate', '') or '10M'}"]
+        out += ["--hardware-acceleration=if-possible", f"--video-bitrate={getattr(cfg, 'render_bitrate', '') or '5M'}"]
     return out
 
 
@@ -139,7 +146,7 @@ def prepare_gpu(cfg, ensure: Callable[[], None] | None = None) -> dict:
             return last_probe
         if not _gpu["said"]:
             _gpu["said"] = True
-            log.info("Render MP4 pakai GPU NVIDIA (%s): gambar lewat ANGLE, encode video NVENC %s.", nv or "dipaksa RENDER_GPU=nvidia", getattr(cfg, "render_bitrate", "10M"))
+            log.info("Render MP4 pakai GPU NVIDIA (%s): gambar lewat ANGLE, encode video NVENC %s.", nv or "dipaksa RENDER_GPU=nvidia", getattr(cfg, "render_bitrate", "5M"))
         browser = getattr(cfg, "render_browser", "") or ""
         exe = gpu_pref.chrome_path(cfg.repo, browser)
         if not exe.exists() and ensure is not None and not browser:
@@ -200,19 +207,23 @@ def _mark_bad(what: str) -> None:
 
 
 def render_cli(cfg, args: list[str], raw: Path, run: Callable[[list[str], float], tuple[int, list[str]]], on_retry: Callable[[], None] | None = None) -> tuple[int, list[str]]:
-    """`remotion render` dengan argumen GPU (gpu_args). Gagal (kode keluar ≠ 0) → ulang SEKALI dengan argumen lama
-    (tanpa --hardware-acceleration / --gl / --video-bitrate = encode CPU, kualitas CRF bawaan). Batal & kelamaan tidak diulang.
-    Tanda "tidak bisa" untuk sesi ini: NVENC langsung kalau pesan error menyebut NVENC/CUDA; selain itu hanya kalau ulangan
-    tanpa GPU berhasil (render yang gagal karena hal lain tidak mematikan NVENC). Yang ditandai: NVENC dulu, --gl=angle kalau
-    NVENC sudah tidak dipakai."""
+    """`remotion render` dengan argumen GPU (gpu_args). Gagal (kode keluar ≠ 0) dengan pesan yang menyebut GPU / NVENC / CUDA /
+    ANGLE / GL / WebGL / driver (GPU_ERR) → ulang SEKALI dengan argumen lama (tanpa --hardware-acceleration / --gl /
+    --video-bitrate = encode CPU, kualitas CRF bawaan). Error lain (komposisi, file rusak) → langsung gagal, tidak dirender dua
+    kali. Batal & kelamaan tidak diulang. Tanda "tidak bisa" untuk sesi ini: NVENC langsung kalau pesan error menyebut NVENC/CUDA;
+    selain itu hanya kalau ulangan tanpa GPU berhasil. Yang ditandai: NVENC dulu, --gl=angle kalau NVENC sudah tidak dipakai."""
     extra = gpu_args(cfg)
     limit = float(cfg.render_timeout_min * 60)
     t0 = time.time()
     code, tail = run([*args, *extra], limit)
     if not extra or (code == 0 and raw.exists()):
         return code, tail
+    text = "\n".join(tail)
+    if not GPU_ERR.search(text):
+        log.warning("Render dengan GPU (%s) gagal bukan karena GPU (%s) — tidak diulang.", " ".join(extra), fail_reason(tail))
+        return code, tail
     hw = any(a.startswith("--hardware-acceleration") for a in extra)
-    if hw and NVENC_ERR.search("\n".join(tail)):
+    if hw and NVENC_ERR.search(text):
         _mark_bad("nvenc_bad")
     log.warning("Render dengan GPU (%s) gagal: %s — diulang sekali tanpa --hardware-acceleration & tanpa --gl (encode CPU).\n%s",
                 " ".join(extra), fail_reason(tail), "\n".join(tail[-8:]))
@@ -571,6 +582,7 @@ def run(ctx: JobCtx) -> None:
         except Exception:  # internet putus sebentar: render jalan terus, dicek lagi 3 dtk kemudian
             return False
 
+    # awal hitungan perkiraan sisa & catatan kecepatan; render GPU yang gagal lalu diulang CPU → digeser sepanjang percobaan itu
     t_start = getattr(ctx, "t0", None) or time.monotonic()
 
     def eta(frac: float) -> None:
@@ -631,9 +643,15 @@ def run(ctx: JobCtx) -> None:
         browser = getattr(cfg, "render_browser", "")
         if browser:  # Chrome headless sendiri (kalau unduhan otomatis Remotion diblokir jaringan)
             args.append(f"--browser-executable={browser}")
-        code, tail = render_cli(
-            cfg, args, raw, lambda a, limit: run_cli(a, cfg.repo, on_line, stop, limit), lambda: ctx.progress(0.2, "Merender ulang (encode CPU)…", force=True)
-        )
+        t_render = time.monotonic()
+
+        def on_retry() -> None:
+            nonlocal t_start
+            t_start += time.monotonic() - t_render  # waktu percobaan GPU yang gagal tidak dihitung
+            ctx.eta(None)  # sisa waktu dari percobaan GPU sudah basi — perkiraan baru menyusul dari progres render ulang
+            ctx.progress(0.2, "Merender ulang (encode CPU)…", force=True)
+
+        code, tail = render_cli(cfg, args, raw, lambda a, limit: run_cli(a, cfg.repo, on_line, stop, limit), on_retry)
         if code != 0 or not raw.exists():
             log.error("remotion render gagal:\n%s", "\n".join(tail))
             raise JobError("Render video gagal di laptop (cek log worker).")
@@ -651,8 +669,31 @@ def run(ctx: JobCtx) -> None:
         eta(0.95)
         ctx.progress(0.95, "Mengunggah video…", force=True)
         path = rt.supa.upload(f"renders/{ctx.id}.mp4", final, "video/mp4", timeout=1800)
+        wall = time.monotonic() - t_start
+        video_sec = ff.duration(final) or timeline_sec(tl2)
         msg = "Video siap diunduh" + (f" ({len(missing)} file tidak ketemu, dilewati)" if missing else "")
         ctx.done({"result_path": path}, msg)
-        log.info("Render %s selesai: %.1f MB", ctx.id, size / 1024 / 1024)
+        log.info("Render %s selesai: %.1f MB, %.0f dtk video dalam %.0f dtk", ctx.id, size / 1024 / 1024, video_sec, wall)
+        record_speed(rt, video_sec, wall)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def timeline_sec(tl) -> float:
+    """panjang video dari timeline (jumlah durasi adegan, = totalSec di lib/studio/timeline.ts) — cadangan kalau ffprobe gagal"""
+    try:
+        return float(sum(float(s.get("dur") or 0) for s in tl.get("scenes") or [] if isinstance(s, dict)))
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+
+
+def record_speed(rt, video_sec: float, wall_sec: float) -> None:
+    """catatan kecepatan render (detik proses per detik video, mesin "render") → info.speed di detak jantung → website menampilkan
+    perkiraan render yang masih antri (lib/studio/eta.ts estimateRender). Gagal → diam saja (tidak boleh mengganggu job)."""
+    sp = getattr(rt, "speed", None)
+    if sp is None:
+        return
+    try:
+        sp.record("render", float(video_sec), float(wall_sec), 1)
+    except Exception as e:
+        log.debug("catat kecepatan render gagal: %s", e)

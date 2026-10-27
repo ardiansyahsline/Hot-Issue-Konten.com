@@ -39,7 +39,11 @@ class Asr:
         self.model = None
         self.device: str | None = None
         self.error: str | None = None
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()  # satu transcribe sekaligus
+        # pemuatan model (available / pindah ke CPU): satu thread saja — pemanasan latar & job bisa memanggil available bersamaan,
+        # tanpa kunci ini WhisperModel dimuat dua kali sekaligus (VRAM ganda). Kunci terpisah dari self.lock: transcribe memanggil
+        # available sambil memegang self.lock (urutan selalu self.lock → _load_lock, tidak pernah sebaliknya → tidak deadlock)
+        self._load_lock = threading.RLock()
         self._missing_at: float | None = None  # waktu cek terakhir saat model belum diunduh
         self._gen = -1
 
@@ -60,8 +64,10 @@ class Asr:
 
     @property
     def available(self) -> bool:
-        if self.model is None and (self.error is None or self._recheck_due()):
-            self._load()
+        if self.model is None:
+            with self._load_lock:  # dicek ulang di dalam kunci: thread lain mungkin baru selesai memuat
+                if self.model is None and (self.error is None or self._recheck_due()):
+                    self._load()
         return self.model is not None
 
     def refresh(self) -> None:
@@ -70,6 +76,10 @@ class Asr:
             self.error, self._missing_at = None, None
 
     def _load(self, force_cpu: bool = False) -> None:
+        with self._load_lock:
+            self._load_locked(force_cpu)
+
+    def _load_locked(self, force_cpu: bool = False) -> None:
         try:
             from faster_whisper import WhisperModel
         except Exception as e:
@@ -149,8 +159,9 @@ class Asr:
                     if attempt or self.device == "cpu":
                         raise
                     log.warning("faster-whisper GPU error (%s) — pindah ke CPU.", str(e)[:200])
-                    self.model = None
-                    self._load(force_cpu=True)
+                    with self._load_lock:  # thread lain (available) tidak memuat versi GPU lagi di sela-sela
+                        self.model = None
+                        self._load(force_cpu=True)
                     if self.model is None:
                         raise
             raise RuntimeError("ASR gagal")

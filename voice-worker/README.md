@@ -152,15 +152,23 @@ video di-encode CPU → render lambat. Dengan `RENDER_GPU=auto` (bawaan) worker 
    pengaturan Windows (registry pengguna `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, sama dengan menu Settings > Graphics,
    tanpa hak admin) — exe-nya: `node_modules\.remotion\chrome-headless-shell\win64\chrome-headless-shell-win64\chrome-headless-shell.exe`
    di folder repo (atau `REMOTION_BROWSER` kalau diisi),
-3. merender dengan `--gl=angle` (gambar di GPU) + `--hardware-acceleration=if-possible --video-bitrate=10M` (encode video NVENC),
-4. kalau render seperti itu gagal → diulang sekali dengan cara lama (encode CPU) dan sampai worker dinyalakan ulang NVENC tidak dipakai lagi.
+3. merender dengan `--gl=angle` (gambar di GPU) + `--hardware-acceleration=if-possible --video-bitrate=5M` (encode video NVENC),
+4. kalau render seperti itu gagal KARENA GPU (pesan error menyebut GPU / NVENC / CUDA / ANGLE / GL / WebGL / driver) → diulang sekali
+   dengan cara lama (encode CPU) dan sampai worker dinyalakan ulang NVENC tidak dipakai lagi. Error lain (mis. komposisi / file rusak)
+   langsung gagal — tidak dirender dua kali.
+
+Sesudah render berhasil, kecepatannya dicatat (`data/speed.json`, mesin `render`: detik proses per detik video) → website bisa
+menampilkan perkiraan lama render untuk video yang masih antri.
 
 Cek di log (sekali per sesi, saat worker mulai — atau saat render pertama kalau Chrome render belum diunduh):
 **`Render memakai GPU: NVIDIA GeForce RTX 5050 Laptop GPU (ANGLE, D3D11)`** = sudah benar.
 Kalau tertulis Intel / SwiftShader, atur manual sekali: **Settings > System > Display > Graphics** → *Add desktop app* (*Browse*) →
 pilih `chrome-headless-shell.exe` di atas → *Options* → **High performance** → *Save*, lalu nyalakan ulang worker.
 Matikan semuanya dengan `RENDER_GPU=off`; `RENDER_GPU=nvidia`
-memaksa walau `nvidia-smi` tidak terbaca. `RENDER_BITRATE` (bawaan `10M`) = kualitas video saat encode NVENC.
+memaksa walau `nvidia-smi` tidak terbaca. `RENDER_BITRATE` (bawaan `5M`) = kualitas video saat encode NVENC (NVENC tidak memakai
+CRF, jadi ukurannya ditentukan bitrate). 5M ≈ ukuran & kualitas render CPU lama (CRF 18; teaser 60 dtk dulu ±3,4 Mbps = 27 MB).
+Jangan dinaikkan ke 10M: MP4 jadi 2–3× lebih besar → video 60 dtk ±77 MB, lewat batas upload paket gratis Supabase (±50 MB per
+file), dan video di atas ±165 dtk lewat batas worker 200 MB. `.env` lama berisi `RENDER_BITRATE=10M`? Ganti jadi `5M` (atau hapus barisnya).
 `RENDER_CONCURRENCY=auto` = jumlah tab Chrome render sesuai core CPU (2–4; bawaan tetap 2).
 
 ## Update setelah ada perubahan di repo
@@ -306,7 +314,8 @@ Kenapa dulu lambat (6,5 detik suara butuh ±32 detik) dan apa yang diubah:
 - **Versi dibuat satu-satu.** 3 versi = 3× waktu. Sekarang 3 versi dibuat **sekaligus** di GPU (konteks suara + teks dihitung sekali);
   GPU mengerjakan beberapa baris hampir sama cepatnya dengan satu baris. Tiap versi tetap punya benih acaknya sendiri.
 - **bf16** (RTX 30xx ke atas, termasuk RTX 50xx): transformer dijalankan bf16, bagian lain tetap fp32. Kalau muncul angka tidak wajar,
-  otomatis kembali ke fp32 untuk sesi itu.
+  atau jalur cepat error sehingga potongan itu dibuat dengan cara bawaan Chatterbox (yang butuh fp32), otomatis kembali ke fp32 untuk
+  sesi itu. GPU lama tanpa bf16 asli (GTX 16xx / RTX 20xx) memakai fp32 — bf16 tiruan di sana malah lebih lambat.
 - **Batas panjang dari teks.** Dulu tiap versi boleh sampai 40 detik suara; versi yang "nyasar" membuang waktu sampai batas itu.
   Sekarang batasnya ±2,5× perkiraan panjang kalimat.
 - **Muat model lebih cepat**: model dicari di laptop dulu (tanpa cek internet), modul dibangun langsung di GPU, bobot dibaca langsung
@@ -327,7 +336,7 @@ Pengaturan (`.env`, biarkan bawaan kecuali ada masalah):
 
 | Nama | Bawaan | Arti |
 |---|---|---|
-| `TTS_DTYPE` | `auto` | `auto` = bf16 kalau GPU mendukung; `fp32` = paling aman (lebih lambat) |
+| `TTS_DTYPE` | `auto` | `auto` = bf16 kalau GPU punya bf16 asli (RTX 30xx ke atas; GTX 16xx / RTX 20xx tetap fp32); `fp32` = paling aman (lebih lambat) |
 | `TTS_BATCH` | `1` | `1` = versi satu kalimat dibuat sekaligus; `0` = satu-satu |
 | `ASR_BEAM_TAKES` | `1` | ketelitian cek ucapan tiap versi (1 = cepat) |
 | `LINE_BUDGET_PER_SEC` | `8` | batas waktu per kalimat = detik ucapan × angka ini … |

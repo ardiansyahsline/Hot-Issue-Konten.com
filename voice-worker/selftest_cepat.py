@@ -7,11 +7,14 @@ Tes mandiri MESIN SUARA CEPAT (jalur cepat Chatterbox t3fast + pemilih versi sek
 
 Tes ringan (tanpa torch): batas waktu dari panjang kalimat, rencana jumlah versi dari catatan kecepatan, pick_take versi sekaligus
 (format info take sama), batch tambahan kalau semua salah ucap, kompatibel mesin lama, make_line meneruskan speed/cfg, ASR dari
-array + beam kecil, Engines.warmup, pemuat model tidak mengunduh di tengah job.
+array + beam kecil, Engines.warmup, pemuat model tidak mengunduh di tengah job, TTS_DTYPE=auto bf16 hanya di GPU bf16 asli (sm ≥ 80),
+whisper dimuat sekali walau dipanggil bersamaan dari banyak thread, baris kembar dalam satu job memakai cache baris sebelumnya.
 Tes berat (torch + chatterbox, bobot ACAK di CPU, model T3 asli 520M parameter): token jalur cepat IDENTIK dengan T3.inference
 bawaan (benih sama), SDPA + 3 layer eager (mask kausal prefill dibuktikan), batch n versi = n kali 1 versi, hook tidak menumpuk,
 bf16 + NaN → NonFinite, EOS & batas token, pengecek keselarasan per versi = AlignmentStreamAnalyzer bawaan, logika mesin
-(VRAM penuh → belah batch, NaN → fp32, error → cara bawaan), ukur langkah/dtk (angka CPU, bukan GPU laptop).
+(VRAM penuh → belah batch, NaN → fp32, error → cara bawaan), cara bawaan tetap jalan saat transformer bf16 (T3 asli kecil),
+belah batch / ulang fp32 di luar except (memori percobaan gagal sudah lepas), ganti dtype atomik, ukur langkah/dtk (angka CPU,
+bukan GPU laptop).
 """
 from __future__ import annotations
 
@@ -484,6 +487,210 @@ def t_ukur_kecepatan_tabel_dan_referensi():
     return "tabel: " + t.splitlines()[2].strip()[:70]
 
 
+class _CudaPatch:
+    """torch.cuda palsu untuk want_dtype: torch asli ditambal sementara; tanpa torch (venv ringan) → modul torch palsu sementara"""
+
+    def __init__(self, avail: bool, cap=(12, 0), emu: bool = True, native: bool = True, old_api: bool = False):
+        def is_bf16_supported(*a, **k):
+            if old_api and (a or k):
+                raise TypeError("is_bf16_supported() takes 0 positional arguments")
+            return native if not k.get("including_emulation", True) else (native or emu)
+
+        self.attrs = {"is_available": lambda: avail, "get_device_capability": lambda *a: cap, "is_bf16_supported": is_bf16_supported}
+
+    def __enter__(self):
+        import types
+
+        self.fake = "torch" not in sys.modules and not HAVE_TORCH
+        if self.fake:
+            sys.modules["torch"] = types.ModuleType("torch")
+            sys.modules["torch"].cuda = SimpleNamespace()  # type: ignore[attr-defined]
+        import torch as _t
+
+        self.old = {k: getattr(_t.cuda, k, None) for k in self.attrs}
+        for k, v in self.attrs.items():
+            setattr(_t.cuda, k, v)
+        return self
+
+    def __exit__(self, *a):
+        import torch as _t
+
+        for k, v in self.old.items():
+            setattr(_t.cuda, k, v)
+        if self.fake:
+            sys.modules.pop("torch", None)
+
+
+@test
+def t_dtype_auto_bf16_hanya_kalau_gpu_asli():
+    from studio_worker.engines import chatterbox_engine as cbe
+
+    got = {}
+    cases = {
+        "RTX 5050 sm_120": dict(avail=True, cap=(12, 0)),
+        "RTX 3060 sm_86": dict(avail=True, cap=(8, 6)),
+        "RTX 2060 sm_75 (bf16 emulasi)": dict(avail=True, cap=(7, 5), native=False, emu=True),
+        "GTX 1650 sm_75 torch lama": dict(avail=True, cap=(7, 5), native=False, emu=True, old_api=True),
+        "tanpa GPU": dict(avail=False),
+        "sm_80 torch lama": dict(avail=True, cap=(8, 0), old_api=True),
+    }
+    for name, kw in cases.items():
+        with _CudaPatch(**kw):
+            got[name] = (cbe.want_dtype("auto"), cbe.want_dtype("bf16"), cbe.want_dtype("fp32"), cbe.want_dtype(None))
+    assert got["RTX 5050 sm_120"] == ("bf16", "bf16", "fp32", "bf16"), got
+    assert got["RTX 3060 sm_86"] == ("bf16", "bf16", "fp32", "bf16"), got
+    # torch 2.8: is_bf16_supported() = True juga untuk emulasi di sm < 80 → tetap fp32 (bf16 tiruan lebih lambat)
+    assert got["RTX 2060 sm_75 (bf16 emulasi)"] == ("fp32", "fp32", "fp32", "fp32"), got
+    assert got["GTX 1650 sm_75 torch lama"] == ("fp32", "fp32", "fp32", "fp32"), got
+    assert got["tanpa GPU"] == ("fp32", "fp32", "fp32", "fp32"), got
+    assert got["sm_80 torch lama"][0] == "bf16", got
+    return "; ".join(f"{k}: {v[0]}" for k, v in got.items())
+
+
+@test
+def t_asr_pemuatan_aman_antar_thread():
+    """available dipanggil bersamaan (pemanasan latar + job + transcribe) → WhisperModel dimuat SEKALI, tanpa deadlock"""
+    import threading
+    import types
+
+    from studio_worker import asr as asrmod
+    from studio_worker import models as vmodels
+
+    made: list[str] = []
+    gate = threading.Event()
+
+    class WM:
+        def __init__(self, name, device, **kw):
+            made.append(device)
+            gate.wait(2.0)  # muat model lama: thread lain pasti datang saat ini masih berjalan
+            time.sleep(0.05)
+
+        def transcribe(self, audio, **kw):
+            seg = SimpleNamespace(text=" halo ", words=None)
+            return iter([seg]), None
+
+    fake_fw = types.ModuleType("faster_whisper")
+    fake_fw.WhisperModel = WM  # type: ignore[attr-defined]
+    old_fw = sys.modules.get("faster_whisper")
+    old = {k: getattr(vmodels, k, None) for k in ("whisper_ready", "whisper_dir")}
+    sys.modules["faster_whisper"] = fake_fw
+    vmodels.whisper_ready = lambda cfg: True  # type: ignore[assignment]
+    vmodels.whisper_dir = lambda cfg: TMP / "whisper"  # type: ignore[assignment]
+    try:
+        a = asrmod.Asr(SimpleNamespace(whisper_device="cpu", whisper_model="small", cpu_threads=2))
+        res: list = []
+        errs: list = []
+
+        def avail():
+            try:
+                res.append(a.available)
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        def trans():
+            try:
+                res.append(a.transcribe(np.zeros(1600, np.float32), words=False, beam=1)[0])
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        ths = [threading.Thread(target=avail) for _ in range(4)] + [threading.Thread(target=trans)]
+        for t in ths:
+            t.start()
+        time.sleep(0.2)
+        gate.set()
+        for t in ths:
+            t.join(10)
+        alive = [t for t in ths if t.is_alive()]
+        assert not alive, "deadlock: thread masih menunggu kunci"
+        assert not errs, errs
+        assert made == ["cpu"], f"WhisperModel dimuat {len(made)}× bersamaan: {made}"
+        assert sorted(map(str, res)) == sorted(["True"] * 4 + ["halo"]), res
+        # GPU error saat transcribe → pindah CPU (tetap lewat kunci muat, tanpa deadlock)
+        a.device = "cuda"
+
+        class Broken:
+            def transcribe(self, audio, **kw):
+                raise RuntimeError("CUDA error palsu")
+
+        a.model = Broken()
+        made.clear()
+        t2 = threading.Thread(target=trans)
+        t2.start()
+        t2.join(10)
+        assert not t2.is_alive() and made == ["cpu"] and a.device == "cpu", (made, a.device, errs)
+    finally:
+        if old_fw is None:
+            sys.modules.pop("faster_whisper", None)
+        else:
+            sys.modules["faster_whisper"] = old_fw
+        for k, v in old.items():
+            setattr(vmodels, k, v)
+    return "5 thread bersamaan → WhisperModel dimuat 1×; GPU error → CPU tanpa deadlock"
+
+
+class _MiniSupa:
+    """Supabase palsu secukupnya untuk synth_job (progres + unggah)"""
+
+    def __init__(self):
+        self.files: dict[str, bytes] = {}
+        self.patches: list[dict] = []
+
+    def update(self, table, filters, patch):
+        self.patches.append(dict(patch))
+        return [{"id": filters.get("id")}]
+
+    def select(self, table, **kw):
+        return [{"status": "proses"}]
+
+    def upload(self, path, data, content_type, timeout=0):
+        self.files[path] = data.read_bytes() if isinstance(data, Path) else data
+        return path
+
+
+class _OneEngine:
+    def __init__(self, eng):
+        self.eng = eng
+        self.lock = __import__("threading").RLock()
+
+    def get(self, name):
+        return self.eng
+
+    def loaded(self):
+        return [self.eng.name]
+
+
+@test
+def t_job_baris_kembar_pakai_cache_baris_sebelumnya():
+    """2 baris berteks sama dalam SATU job: baris ke-2 memakai cache baris ke-1 (dulu dibuat ulang = GPU 2×)"""
+    from studio_worker.jobctx import JobCtx, Runtime
+
+    ref = BANK / "referensi-alif-energik-10dtk.wav"
+    teks = "Follow untuk info lainnya setiap hari."
+
+    def go(sub, raw_lines):
+        d = TMP / sub
+        cfg = SimpleNamespace(cache=d / "cache", tmp=d / "tmp", upload_workers=2, worker_id="tes", tts_batch=True, natural_mos=False)
+        cfg.tmp.mkdir(parents=True, exist_ok=True)
+        eng = BatchEng(cfg)
+        sb = _MiniSupa()
+        rt = Runtime(cfg=cfg, supa=sb, engines=_OneEngine(eng), asr=None, speed=speedmod.Speed(None))  # type: ignore[arg-type]
+        ctx = JobCtx(rt, "studio_voice_jobs", {"id": f"job-{sub}"}, min_gap=0)
+        try:
+            res = jobs_tts.synth_job(ctx, "chatterbox", jobs_tts.parse_lines(raw_lines), {"id": "v1", "name": "Tes"}, ref, "vh", jobs_tts.norm_settings({"takes": 2}))
+        finally:
+            ctx.close()
+        return eng, res, ctx, sb
+
+    eng1, res1, _, _ = go("satu", [{"id": "a", "scene_id": "s1", "text": teks}])
+    eng2, res2, ctx2, sb2 = go("kembar", [{"id": "a", "scene_id": "s1", "text": teks}, {"id": "b", "scene_id": "s2", "text": teks, "start": 5}])
+    assert len(eng1.batches) == 1, eng1.batches
+    assert len(eng2.batches) == len(eng1.batches), f"baris kembar dibuat ulang: {len(eng2.batches)} batch (harusnya {len(eng1.batches)})"
+    a, b = res2["lines"]
+    assert a["dur"] == b["dur"] and a["words"] == b["words"] and b["start"] == 5.0, (a, b)
+    assert {"vo/job-kembar/a.mp3", "vo/job-kembar/b.mp3"} <= set(sb2.files), list(sb2.files)
+    return f"2 baris kembar → {len(eng2.batches)} batch GPU (baris ke-2 dari cache), perkiraan awal {ctx2.est0} dtk"
+
+
 # ---------------------------------------------------------------- tes berat: model T3 acak
 _M: dict = {}
 SAMP = dict(temperature=0.8, repetition_penalty=2.0, min_p=0.05, top_p=1.0)
@@ -892,6 +1099,249 @@ def t_logika_mesin_belah_batch_nan_cadangan():
     assert cbe.fast_sampling(mtl_gen) == {"min_p": 0.05, "repetition_penalty": 2.0, "top_p": 1.0}
     assert cbe.fast_sampling(en_gen) == {"min_p": 0.05, "repetition_penalty": 1.2, "top_p": 1.0}
     return "VRAM penuh → 3 → 1+2 → 1+1+1 (lalu diingat); NaN bf16 → fp32 dari file & ulang; error 3× → cara bawaan lalu jalur cepat dimatikan; warmup 1 + 3 versi"
+
+
+class _ToFails:
+    """Tensor.to gagal (VRAM penuh palsu) mulai panggilan ke-`at` — untuk menguji ganti dtype di tengah jalan"""
+
+    def __init__(self, at: int):
+        self.at, self.n = at, 0
+
+    def __enter__(self):
+        self.orig = torch.Tensor.to
+        me = self
+
+        def to(t, *a, **k):
+            me.n += 1
+            if me.n >= me.at:
+                raise torch.cuda.OutOfMemoryError("CUDA out of memory (palsu, saat ganti dtype)")
+            return me.orig(t, *a, **k)
+
+        torch.Tensor.to = to  # type: ignore[method-assign]
+        return self
+
+    def __exit__(self, *a):
+        torch.Tensor.to = self.orig  # type: ignore[method-assign]
+
+
+@heavy
+def t_cadangan_bawaan_jalan_saat_bf16():
+    """T3 multilingual ASLI versi kecil (14 layer) + transformer bf16: jalur cepat error → cara bawaan (model.generate → T3.inference)
+    tetap menghasilkan suara karena transformer dikembalikan ke fp32 (bobot asli) dulu; dulu: RuntimeError dtype → EngineFailed"""
+    import types
+
+    from chatterbox.models.t3 import llama_configs as LC
+    from chatterbox.models.t3 import t3 as t3mod
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS, Conditionals
+
+    from studio_worker.engines import chatterbox_engine as cbe
+
+    LC.LLAMA_CONFIGS.setdefault("Llama_tes14", dict(LC.LLAMA_520M_CONFIG_DICT, num_hidden_layers=14, intermediate_size=256))
+    hp = T3Config.multilingual()
+    hp.llama_config_name = "Llama_tes14"
+    torch.manual_seed(0)
+    t3 = t3mod.T3(hp).eval()
+    tf = t3.tfmr
+    saved = {k: v.detach().clone() for k, v in tf.state_dict().items()}  # = isi file t3 (bobot asli fp32)
+
+    def own_hooks() -> int:  # hook selain perekam keluaran milik transformers (dipasang sekali oleh cara bawaan, memang dibiarkan)
+        return sum(1 for mod in t3.modules() for h in mod._forward_hooks.values() if not t3fast._is_hf_capture(h))
+
+    base_hooks = own_hooks()
+    cfg0 = [tf.layers[i].self_attn.config for i in (9, 12, 13)]
+
+    class Tok:
+        def text_to_tokens(self, text, language_id=None):
+            return torch.randint(1, 2400, (1, 12), generator=torch.Generator().manual_seed(len(text)), dtype=torch.int32)
+
+    class S3:
+        def __init__(self):
+            self.n = 0
+
+        def inference(self, speech_tokens, ref_dict):
+            self.n += 1
+            return torch.zeros(1, 2400), None
+
+    m = object.__new__(ChatterboxMultilingualTTS)
+    m.sr, m.t3, m.s3gen, m.ve, m.tokenizer, m.device = 24000, t3, S3(), None, Tok(), "cpu"
+    wm: list[int] = []
+    m.watermarker = types.SimpleNamespace(apply_watermark=lambda y, sample_rate: (wm.append(len(y)), y)[1])
+    m.conds = Conditionals(T3Cond(speaker_emb=torch.randn(1, 256), cond_prompt_speech_tokens=torch.randint(0, 6561, (1, 150)), emotion_adv=0.6 * torch.ones(1, 1, 1)), {})
+    m.prepare_conditionals = lambda ref, exaggeration=0.5: None
+    # cara bawaan selalu 1000 langkah (±2 mnt di CPU untuk T3 kecil) → dibatasi 6 langkah; T3.inference & dtype-nya tetap asli
+    orig_inf = t3.inference
+
+    def short_inference(*a, **k):
+        k["max_new_tokens"] = 6
+        return orig_inf(*a, **k)
+
+    t3.inference = short_inference
+
+    def make(dtype):
+        e = object.__new__(cbe.ChatterboxEngine)
+        e.cfg = SimpleNamespace(takes=1, tts_batch=True)
+        e.model, e.sr, e.mtl, e.lang = m, 24000, True, "ms"
+        e._ref, e._sampling, e._fast_kw = None, cbe.sampling_kwargs(m.generate), cbe.fast_sampling(m.generate)
+        e.batch, e._max_batch, e._fast_fail, e.builtin = True, 6, 0, None
+        e.fast = t3fast.Fast(m, language_id="ms", dtype=dtype)
+        e.reloads = 0
+
+        def reload():
+            e.reloads += 1
+            return {k: v.clone() for k, v in saved.items()}
+
+        e._reload_fp32 = reload
+
+        def boom(*a, **k):
+            raise RuntimeError("contoh error jalur cepat (mis. CUBLAS_STATUS_ALLOC_FAILED)")
+
+        e.fast.generate = boom
+        return e
+
+    st = {"exaggeration": 0.6, "cfg_weight": 0.35, "temperature": 0.8}
+    try:
+        e = make("bf16")
+        assert t3fast.param_dtype(tf) == torch.bfloat16 and e.fast.name_dtype == "bf16"
+        ys = e.synth_batch("halo apa kabar semuanya", Path("r.wav"), st, [1])
+        assert len(ys) == 1 and ys[0].size == 2400 and m.s3gen.n == 1 and wm == [2400], (len(ys), m.s3gen.n, wm)
+        assert e._fast_fail == 1 and e.fast is not None and e.fast.name_dtype == "fp32" and e.reloads == 1
+        assert all(p.dtype == torch.float32 for p in tf.parameters())
+        assert all(torch.equal(tf.state_dict()[k], saved[k]) for k in saved), "kembali fp32 harus memakai bobot asli (tanpa pembulatan bf16)"
+        # gagal 3× berturut-turut → jalur cepat dimatikan (hook & config dilepas), cara bawaan tetap jalan di fp32
+        for _ in range(2):
+            assert len(e.synth_batch("halo lagi", Path("r.wav"), st, [2])) == 1
+        assert e.fast is None and e._fast_fail == 3 and e.reloads == 1 and own_hooks() == base_hooks
+        assert [tf.layers[i].self_attn.config for i in (9, 12, 13)] == cfg0
+        # jalur cepat sudah mati tapi transformer masih bf16 (mis. dimatikan sebelum perbaikan ini) → tetap dikembalikan ke fp32
+        t3fast.convert_params(tf, torch.bfloat16)
+        assert len(e.synth_batch("halo ketiga", Path("r.wav"), st, [3])) == 1
+        assert t3fast.param_dtype(tf) == torch.float32 and e.reloads == 2
+        # cabang gagal 3× langsung dari bf16 (tanpa cadangan sebelumnya yang sudah mengembalikan fp32)
+        e2 = make("bf16")
+        e2._fast_fail = 2
+        assert len(e2.synth_batch("halo keempat", Path("r.wav"), st, [4])) == 1
+        assert e2.fast is None and t3fast.param_dtype(tf) == torch.float32 and own_hooks() == base_hooks
+        # Fast gagal pindah ke bf16 saat dibuat (VRAM penuh) → hook & config eager tidak ditinggal terpasang, bobot tetap fp32
+        with _ToFails(at=4):
+            try:
+                t3fast.Fast(m, language_id="ms", dtype="bf16")
+                raise AssertionError("harusnya OutOfMemoryError")
+            except torch.cuda.OutOfMemoryError:
+                pass
+        assert own_hooks() == base_hooks and [tf.layers[i].self_attn.config for i in (9, 12, 13)] == cfg0
+        assert all(p.dtype == torch.float32 for p in tf.parameters())
+    finally:
+        del t3.inference
+        for x in ("e", "e2"):
+            f = locals().get(x)
+            if f is not None and getattr(f, "fast", None) is not None:
+                f.fast.remove()
+        saved.clear()
+        gc.collect()
+    return f"bf16 + jalur cepat error → cara bawaan menghasilkan suara (transformer fp32 dari bobot asli); gagal 3× → dimatikan, hook {base_hooks} kembali; Fast gagal bf16 → tanpa sisa hook"
+
+
+@heavy
+def t_belah_batch_di_luar_except_dan_ganti_dtype_atomik():
+    """
+    VRAM palsu (blok memori yang hanya lepas kalau tidak ada yang memegang): percobaan yang gagal tidak boleh menahan memori saat
+    batch dibelah / diulang fp32. Ganti dtype gagal di tengah → parameter tetap utuh (tidak campuran bf16 + fp32).
+    """
+    import weakref
+
+    from torch import nn
+
+    from studio_worker.engines import chatterbox_engine as cbe
+
+    live = weakref.WeakSet()
+
+    class Blk:
+        pass
+
+    class VramFast:
+        """batch n butuh n blok; blok dipegang variabel lokal `past` (seperti cache KV di Fast.speech_tokens)"""
+
+        analyzer, last = True, {}
+
+        def __init__(self, budget, nan_bf16=False):
+            self.budget, self.nan_bf16, self.log, self.name_dtype = budget, nan_bf16, [], "bf16" if nan_bf16 else "fp32"
+            self.live_at_set: list[int] = []
+
+        def generate(self, text, n, seeds, **kw):
+            past = []
+            for _ in range(n):
+                if len(live) + 1 > self.budget:
+                    self.log.append((n, "OOM"))
+                    raise torch.cuda.OutOfMemoryError("CUDA out of memory (palsu)")
+                b = Blk()
+                live.add(b)
+                past.append(b)
+            if self.nan_bf16 and self.name_dtype == "bf16":
+                self.log.append((n, "NaN"))
+                raise t3fast.NonFinite("nan")
+            self.log.append((n, "ok"))
+            return [np.zeros(2400, np.float32) for _ in seeds]
+
+        def set_dtype(self, want, reload=None):
+            self.live_at_set.append(len(live))
+            self.name_dtype = want
+            return want
+
+        def remove(self):
+            pass
+
+    def make(fast, takes):
+        e = object.__new__(cbe.ChatterboxEngine)
+        e.cfg = SimpleNamespace(takes=takes, tts_batch=True)
+        e.model = SimpleNamespace(prepare_conditionals=lambda *a, **k: None, t3=None)
+        e.sr, e.mtl, e.lang, e._ref, e._sampling, e._fast_kw = 24000, True, "id", None, {}, {}
+        e.batch, e._max_batch, e._fast_fail, e.builtin, e.fast = True, 6, 0, None, fast
+        e._reload_fp32 = lambda: {}
+        return e
+
+    st = {"exaggeration": 0.6, "cfg_weight": 0.35, "temperature": 0.8}
+    # 4 versi, VRAM muat 3: dulu [(4,OOM),(2,OOM),(1,OOM),1,1,1,1] dan batas batch 1 untuk sisa sesi
+    e = make(VramFast(budget=3), 4)
+    assert len(e.synth_batch("halo", Path("r.wav"), st, [1, 2, 3, 4])) == 4
+    first = list(e.fast.log)
+    e.fast.log.clear()
+    assert len(e.synth_batch("potongan dua", Path("r.wav"), st, [1, 2, 3, 4])) == 4
+    assert first == [(4, "OOM"), (2, "ok"), (2, "ok")] and e._max_batch == 2 and e.fast.log == [(2, "ok"), (2, "ok")], (first, e._max_batch, e.fast.log)
+    # NaN di bf16: pindah fp32 + ulang dijalankan sesudah memori percobaan bf16 lepas
+    e2 = make(VramFast(budget=3, nan_bf16=True), 3)
+    assert len(e2.synth_batch("halo", Path("r.wav"), st, [1, 2, 3])) == 3
+    assert e2.fast.log == [(3, "NaN"), (3, "ok")] and e2.fast.live_at_set == [0], (e2.fast.log, e2.fast.live_at_set)
+    # Fast.set_dtype atomik: OOM di tengah konversi → semua parameter & dtype tetap seperti semula, forward tetap jalan
+    f = object.__new__(t3fast.Fast)
+    f.torch, f.log, f.dtype = torch, None, torch.float32
+    f.tf = nn.Sequential(nn.Linear(8, 8), nn.ReLU(), nn.Linear(8, 8), nn.Linear(8, 4))
+    orig = {k: v.clone() for k, v in f.tf.state_dict().items()}
+    with _ToFails(at=3):
+        try:
+            f.set_dtype("bf16")
+            raise AssertionError("harusnya OutOfMemoryError")
+        except torch.cuda.OutOfMemoryError:
+            pass
+    assert f.name_dtype == "fp32" and {p.dtype for p in f.tf.parameters()} == {torch.float32}
+    assert all(torch.equal(f.tf.state_dict()[k], orig[k]) for k in orig)
+    assert f.set_dtype("bf16") == "bf16" and {p.dtype for p in f.tf.parameters()} == {torch.bfloat16}
+    with _ToFails(at=2):
+        try:
+            f.set_dtype("fp32", reload=lambda: orig)
+            raise AssertionError("harusnya OutOfMemoryError")
+        except torch.cuda.OutOfMemoryError:
+            pass
+    assert f.name_dtype == "bf16" and {p.dtype for p in f.tf.parameters()} == {torch.bfloat16}
+    f.tf(torch.zeros(2, 8, dtype=torch.bfloat16))  # tidak campuran → forward jalan
+    # kembali fp32: bobot asli dari reload; reload gagal → tetap fp32 (bobot bf16 diperbesar), tanpa error
+    assert f.set_dtype("fp32", reload=lambda: orig) == "fp32" and all(torch.equal(f.tf.state_dict()[k], orig[k]) for k in orig)
+    f.set_dtype("bf16")
+
+    def bad_reload():
+        raise OSError("file t3 tidak terbaca")
+
+    assert f.set_dtype("fp32", reload=bad_reload) == "fp32" and {p.dtype for p in f.tf.parameters()} == {torch.float32}
+    return f"4 versi di VRAM muat 3 → {first}, batas batch {e._max_batch}; NaN bf16 → fp32 saat memori bebas; set_dtype gagal → utuh"
 
 
 @heavy

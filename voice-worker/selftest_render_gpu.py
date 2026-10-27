@@ -5,8 +5,9 @@ Tes mandiri render MP4 pakai GPU NVIDIA (studio_worker/gpu_pref.py + bagian GPU 
 Yang dites: pengaturan .env (RENDER_GPU / RENDER_BITRATE / RENDER_CONCURRENCY=auto), deteksi NVIDIA (nvidia-smi palsu, torch hanya
 kalau sudah di-import), path Chrome Remotion (dibandingkan langsung dengan kode Remotion lewat node kalau ada), registry Windows palsu
 (winreg ditambal), pembacaan hasil cek GPU (ANGLE NVIDIA / Intel / AMD / SwiftShader), cek GPU dengan Chrome palsu & Chrome headless
-asli (kalau ada, mis. Playwright), susunan argumen render, alur cadangan (render GPU gagal → ulang sekali encode CPU), tanda
-"NVENC tidak bisa" per sesi, dan job render lengkap (Remotion CLI & Supabase dipalsukan).
+asli (kalau ada, mis. Playwright), susunan argumen render, alur cadangan (render GPU gagal karena GPU → ulang sekali encode CPU;
+error lain tidak diulang), pola pesan error GPU, tanda "NVENC tidak bisa" per sesi, dan job render lengkap (Remotion CLI & Supabase
+dipalsukan; perkiraan sisa tidak basi saat render ulang, kecepatan render dicatat untuk perkiraan antri di website).
 """
 from __future__ import annotations
 
@@ -190,7 +191,7 @@ def t_pengaturan_env_render_gpu():
     assert config.render_gpu_mode("") == "auto" and config.render_gpu_mode("AUTO") == "auto" and config.render_gpu_mode("asal") == "auto"
     assert config.render_gpu_mode("off") == "off" and config.render_gpu_mode("0") == "off" and config.render_gpu_mode("mati") == "off"
     assert config.render_gpu_mode("NVIDIA") == "nvidia"
-    for raw, want in (("10M", "10M"), ("10m", "10M"), ("8", "8M"), ("12 Mbps", "12M"), ("8000k", "8000K"), ("7,5M", "7.5M"), ("", "10M"), ("abc", "10M"), ("0", "10M")):
+    for raw, want in (("10M", "10M"), ("10m", "10M"), ("8", "8M"), ("12 Mbps", "12M"), ("8000k", "8000K"), ("7,5M", "7.5M"), ("", "5M"), ("abc", "5M"), ("0", "5M")):
         got = config.render_bitrate(raw)
         assert got == want, (raw, got)
         assert got[-1] in "KkM"  # syarat validateBitrate() Remotion
@@ -206,7 +207,9 @@ def t_pengaturan_env_render_gpu():
         os.environ.pop("RENDER_GPU")
         os.environ.pop("RENDER_BITRATE")
         c = config.load(TMP / "tidak-ada.env")
-        assert c.render_concurrency == 3 and c.render_gpu == "auto" and c.render_bitrate == "10M"
+        # bawaan 5M ≈ ukuran CRF 18 lama (10M = MP4 2–3× lebih besar → lewat batas upload Supabase gratis 50 MB)
+        assert c.render_concurrency == 3 and c.render_gpu == "auto" and c.render_bitrate == "5M"
+        assert config.Config.render_bitrate == "5M"
         os.environ.pop("RENDER_CONCURRENCY")
         assert config.load(TMP / "tidak-ada.env").render_concurrency == 2  # bawaan tetap 2
     finally:
@@ -428,6 +431,7 @@ def t_susun_argumen_render():
     assert jobs_render.gpu_args(c) == []  # tanpa NVIDIA: argumen lama persis
     assert jobs_render.gpu_args(cfg_of(render_gpu="nvidia"))[:2] == ["--gl=angle", "--hardware-acceleration=if-possible"]  # dipaksa
     assert jobs_render.gpu_args(SimpleNamespace(repo=TMP)) == []  # cfg lama tanpa field baru: auto, tanpa NVIDIA → kosong
+    assert jobs_render.gpu_args(SimpleNamespace(repo=TMP, render_gpu="nvidia"))[-1] == "--video-bitrate=5M"  # tanpa RENDER_BITRATE → 5M
     smi(NV)
     jobs_render._gpu["nvenc_bad"] = True
     jobs_render.last_probe = {"aktif": True, "kind": "nvidia"}
@@ -490,18 +494,21 @@ def t_alur_cadangan_encode_cpu():
     calls = []
     jobs_render.render_cli(c, base, raw, _fake_run([(0, [])], raw, calls))
     assert calls == [base]
-    # 4. gagal bukan karena GPU (ulangan juga gagal) → NVENC TIDAK dimatikan
+    # 4. gagal bukan karena GPU (error komposisi) → TIDAK dirender dua kali, NVENC tidak dimatikan
     reset()
     smi(NV)
     raw.unlink(missing_ok=True)
     calls = []
-    code, tail = jobs_render.render_cli(c, base, raw, _fake_run([(1, ["Error: composition StudioVideo not found"]), (1, ["Error: composition StudioVideo not found"])], raw, calls))
-    assert code == 1 and len(calls) == 2 and not jobs_render._gpu["nvenc_bad"] and not jobs_render._gpu["angle_bad"]
-    assert any("bukan GPU" in x for x in logs(logging.WARNING))
-    # 5. pesan tanpa kata NVENC, ulangan tanpa GPU berhasil → NVENC tetap ditandai (bukti dari ulangan)
+    code, tail = jobs_render.render_cli(c, base, raw, _fake_run([(1, ["Error: composition StudioVideo not found"]), (0, [])], raw, calls))
+    assert code == 1 and len(calls) == 1 and not jobs_render._gpu["nvenc_bad"] and not jobs_render._gpu["angle_bad"], calls
+    assert any("bukan karena GPU" in x and "tidak diulang" in x for x in logs(logging.WARNING)), logs(logging.WARNING)
     calls = []
-    jobs_render.render_cli(c, base, raw, _fake_run([(1, ["Error: ffmpeg quit with code 1"]), (0, [])], raw, calls))
-    assert jobs_render._gpu["nvenc_bad"]
+    code, _ = jobs_render.render_cli(c, base, raw, _fake_run([(1, ["Rendered 1500/1800", "Error: A delayRender() \"Loading <Img>\" was called but not cleared after 28000ms", "at Rectangle (bundle.js:1:2)"]), (0, [])], raw, calls))
+    assert code == 1 and len(calls) == 1, calls
+    # 5. pesan menyebut encoder (tanpa kata NVENC) → diulang; ulangan tanpa GPU berhasil → NVENC ditandai (bukti dari ulangan)
+    calls = []
+    jobs_render.render_cli(c, base, raw, _fake_run([(1, ["[h264 @ 0x1] Error while opening encoder for output stream #0:0", "Error: ffmpeg quit with code 1"]), (0, [])], raw, calls))
+    assert len(calls) == 2 and jobs_render._gpu["nvenc_bad"]
     # 6. tanpa NVIDIA: tidak ada argumen tambahan & tidak diulang
     reset()
     smi(None)
@@ -523,7 +530,40 @@ def t_alur_cadangan_encode_cpu():
     except Cancelled:
         pass
     assert len(calls) == 1 and not jobs_render._gpu["nvenc_bad"]
-    return "ulang sekali, tanda per sesi, bukan-GPU tidak mematikan NVENC, batal tidak diulang"
+    return "ulang sekali hanya kalau error GPU, tanda per sesi, bukan-GPU tidak diulang & tidak mematikan NVENC, batal tidak diulang"
+
+
+@test
+def t_pola_error_gpu():
+    gpu = [
+        "[h264_nvenc @ 0000020c] OpenEncodeSessionEx failed: unsupported device (2): (no details)",
+        "No NVENC capable devices found",
+        "Error: GPU process exited unexpectedly: exit_code=34",
+        "[ERROR:gpu_process_host.cc(991)] GPU process exited unexpectedly",
+        "Passthrough is not supported, GL is disabled, ANGLE is",
+        "WebGL context lost",
+        "Failed to create D3D11 device",
+        "Your graphics driver is too old",
+        "CUDA_ERROR_NO_DEVICE",
+        "When using hardware accelerated encoding, the option \"crf\" is not supported",
+        "[h264 @ 0x1] Error while opening encoder for output stream #0:0",
+        "glGetString returned NULL",
+        "eglInitialize failed: EGL_NOT_INITIALIZED",
+    ]
+    other = [
+        "Error: composition StudioVideo not found",
+        "Error: A delayRender() was called but not cleared after 28000ms",
+        "TypeError: Cannot read properties of undefined (reading 'angle') at Rectangle (bundle.js:1:2)",
+        "at Triangle.render (bundle.js:9:9)",
+        "Error: ENOENT: no such file or directory, open '/public/st/abc.mp3'",
+        "Error: ffmpeg quit with code 1",
+        "Rendered 1500/1800",
+        "Error: Target closed",
+    ]
+    miss = [x for x in gpu if not jobs_render.GPU_ERR.search(x)]
+    wrong = [x for x in other if jobs_render.GPU_ERR.search(x)]
+    assert not miss and not wrong, (miss, wrong)
+    return f"{len(gpu)} pesan GPU dikenali, {len(other)} pesan lain tidak (tidak dirender dua kali)"
 
 
 @test
@@ -624,6 +664,8 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     gpu_pref.IS_WIN = True  # jalur Windows: preferensi GPU ditulis ke winreg palsu
     sys.modules["winreg"] = reg = FakeWinreg()
     calls: list[list[str]] = []
+    mode = {"komposisi_rusak": False}
+    GPU_TRY_SEC = 0.6  # lama percobaan GPU yang gagal (tidak boleh ikut perkiraan sisa & catatan kecepatan)
 
     def fake_cli(args, cwd, on_line, should_stop, timeout):
         calls.append(list(args))
@@ -638,8 +680,13 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
             fake_chrome(exe, dump_dom({"v": "Google Inc. (NVIDIA)", "r": R_NV}))
             return 0, [f"Has browser at {exe}"]
         if args[2] == "render":
+            if mode["komposisi_rusak"]:
+                on_line("Rendered 30/300")
+                return 1, ["Rendered 30/300", "Error: A delayRender() \"Loading <Img>\" was called but not cleared after 28000ms"]
             if "--hardware-acceleration=if-possible" in args:
                 on_line("Rendered 12/300")
+                time.sleep(GPU_TRY_SEC)
+                on_line("Rendered 60/300")  # perkiraan sisa sudah ada sebelum gagal
                 return 1, NVENC_FAIL
             Path(args[5]).write_bytes(b"\0\0\0\x18ftypmp42")  # bukan video asli: tanpa audio → loudnorm dilewati
             on_line("Rendered 300/300")
@@ -653,19 +700,33 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     assert not calls and jobs_render.last_probe["status"] == "Chrome render belum diunduh"
     job = {"id": "r1", "status": "proses", "timeline": {"scenes": [{"id": "s1", "dur": 2}]}, "created_by": None}
     sb = MiniSupa(job)
-    rt = Runtime(cfg=c, supa=sb)  # type: ignore[arg-type]
+    from studio_worker.speed import Speed
+
+    sp = Speed(None)
+    rt = Runtime(cfg=c, supa=sb, speed=sp)  # type: ignore[arg-type]
     ctx = JobCtx(rt, "studio_render_jobs", job, min_gap=0)
     asked: list[str] = []  # pesan yang DIMINTA job (pengirim progres latar menggabung kiriman: yang terbaru menang)
+    left_at: dict[str, float | None] = {}  # sisa perkiraan (ctx.left) saat pesan itu diminta = yang ikut terkirim
     orig_progress = ctx.progress
 
     def spy(p, msg=None, force=False):
         if msg:
             asked.append(msg)
+            left_at[msg] = ctx.left()
         return orig_progress(p, msg, force)
 
     ctx.progress = spy  # type: ignore[method-assign]
+    t_job = time.monotonic()
     jobs_render.run(ctx)
+    t_job = time.monotonic() - t_job
     assert job["status"] == "selesai" and job["result_path"] == "renders/r1.mp4" and "renders/r1.mp4" in sb.files, job
+    # sisa waktu percobaan GPU yang gagal tidak ikut di pesan render ulang
+    assert left_at.get("Merender gambar… 20%") is not None, left_at
+    assert left_at["Merender ulang (encode CPU)…"] is None, left_at
+    # kecepatan render tercatat (website: perkiraan render antri = detik video × ratio), tanpa waktu percobaan GPU yang gagal
+    ratio = sp.summary()["engines"]["render"]["ratio"]["1"]
+    wall = sp.data["render"]["r"]["1"] * 2.0  # video 2 dtk (timeline; mp4 palsu tidak bisa dibaca ffprobe)
+    assert 0 < wall <= t_job - GPU_TRY_SEC + 0.05, (wall, t_job)
     kinds = [a[2] if a[2] != "browser" else "ensure" for a in calls]
     assert kinds == ["bundle", "ensure", "render", "render"], kinds
     r1, r2 = calls[2], calls[3]
@@ -681,11 +742,22 @@ def t_job_render_lengkap_nvenc_gagal_lalu_cpu():
     calls.clear()
     job2 = {"id": "r2", "status": "proses", "timeline": {"scenes": [{"id": "s1", "dur": 2}]}, "created_by": None}
     sb2 = MiniSupa(job2)
-    jobs_render.run(JobCtx(Runtime(cfg=c, supa=sb2), "studio_render_jobs", job2, min_gap=0))  # type: ignore[arg-type]
+    jobs_render.run(JobCtx(Runtime(cfg=c, supa=sb2, speed=sp), "studio_render_jobs", job2, min_gap=0))  # type: ignore[arg-type]
     assert job2["status"] == "selesai", job2
     assert [a[2] for a in calls] == ["bundle", "render"] and "--gl=angle" in calls[1] and not any(a.startswith("--hardware") for a in calls[1]), calls
-    assert len(reg.writes) == 1
-    return "bundle → ensure → registry → NVENC gagal → ulang CPU → selesai; job kedua langsung CPU"
+    assert len(reg.writes) == 1 and sp.data["render"]["n"] == 2
+    # job ketiga: error komposisi (bukan GPU) → langsung gagal, tidak dirender dua kali
+    calls.clear()
+    mode["komposisi_rusak"] = True
+    job3 = {"id": "r3", "status": "proses", "timeline": {"scenes": [{"id": "s1", "dur": 2}]}, "created_by": None}
+    try:
+        jobs_render.run(JobCtx(Runtime(cfg=c, supa=MiniSupa(job3), speed=sp), "studio_render_jobs", job3, min_gap=0))  # type: ignore[arg-type]
+        raise AssertionError("harusnya JobError")
+    except jobs_render.JobError as e:
+        assert "Render video gagal" in str(e), e
+    assert [a[2] for a in calls] == ["bundle", "render"], calls
+    assert sp.data["render"]["n"] == 2  # gagal → tidak dicatat
+    return f"bundle → ensure → registry → NVENC gagal → ulang CPU → selesai (kecepatan render {ratio}× tercatat); job kedua langsung CPU; error komposisi tidak diulang"
 
 
 def main() -> int:
