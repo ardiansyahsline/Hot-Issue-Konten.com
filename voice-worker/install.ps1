@@ -3,8 +3,9 @@
 # Opsi:
 #   -CpuSaja      laptop tanpa GPU NVIDIA (pakai pocket-tts CPU saja)
 #   -TanpaRender  lewati pemasangan Remotion (render MP4 di laptop)
+#   -TanpaModel   lewati unduh model suara (bisa nanti lewat SIAPKAN-MODEL.bat)
 # Aman dijalankan ulang (mis. setelah git pull).
-param([switch]$CpuSaja, [switch]$TanpaRender)
+param([switch]$CpuSaja, [switch]$TanpaRender, [switch]$TanpaModel)
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
@@ -17,7 +18,7 @@ function Gagal($t) { Write-Host ""; Write-Host "GAGAL: $t" -ForegroundColor Red;
 function Cek($t) { if ($LASTEXITCODE -ne 0) { Gagal $t } }
 
 # ---------------------------------------------------------------- 1. uv (pengelola Python)
-Langkah "1/8 Cek uv"
+Langkah "1/9 Cek uv"
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Info "uv belum ada, memasang..."
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -27,7 +28,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 Info (uv --version)
 
 # ---------------------------------------------------------------- 2. ffmpeg
-Langkah "2/8 Cek ffmpeg"
+Langkah "2/9 Cek ffmpeg"
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Awas "ffmpeg belum ada. Mencoba memasang lewat winget (Gyan.FFmpeg)..."
     try { winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements } catch { }
@@ -37,7 +38,7 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 }
 
 # ---------------------------------------------------------------- 3. Python 3.11 + .venv
-Langkah "3/8 Siapkan Python 3.11 (.venv)"
+Langkah "3/9 Siapkan Python 3.11 (.venv)"
 uv python install 3.11; Cek "Python 3.11 gagal dipasang"
 if (-not (Test-Path ".venv\Scripts\python.exe")) { uv venv --python 3.11 .venv; Cek "gagal membuat .venv" }
 $py = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
@@ -45,19 +46,19 @@ Info (& $py --version)
 
 # ---------------------------------------------------------------- 4. PyTorch
 if ($CpuSaja) {
-    Langkah "4/8 PyTorch 2.8 (CPU)"
+    Langkah "4/9 PyTorch 2.8 (CPU)"
     uv pip install --python $py torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu; Cek "PyTorch gagal dipasang"
 } else {
-    Langkah "4/8 PyTorch 2.8 CUDA 12.8 (cu128 - wajib untuk RTX 50xx / Blackwell sm_120)"
+    Langkah "4/9 PyTorch 2.8 CUDA 12.8 (cu128 - wajib untuk RTX 50xx / Blackwell sm_120)"
     uv pip install --python $py torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128; Cek "PyTorch cu128 gagal dipasang"
 }
 
 # ---------------------------------------------------------------- 5. paket dasar
-Langkah "5/8 Paket dasar (numpy, librosa, faster-whisper, httpx, ...)"
+Langkah "5/9 Paket dasar (numpy, librosa, faster-whisper, httpx, ...)"
 uv pip install --python $py -r requirements.txt; Cek "paket dasar gagal dipasang"
 
 # ---------------------------------------------------------------- 6. mesin suara
-Langkah "6/8 Mesin suara: Chatterbox (--no-deps), pocket-tts, DeepFilterNet"
+Langkah "6/9 Mesin suara: Chatterbox (--no-deps), pocket-tts, DeepFilterNet"
 # chatterbox-tts mengunci torch 2.6 (belum kenal RTX 50xx) -> dipasang tanpa dependensi, lalu dependensinya satu per satu
 uv pip install --python $py --no-deps chatterbox-tts==0.1.7 s3tokenizer==0.3.0 deepfilternet==0.5.6; Cek "chatterbox/deepfilternet gagal dipasang"
 uv pip install --python $py -r requirements-gpu.txt; Cek "dependensi mesin suara gagal dipasang"
@@ -71,7 +72,7 @@ if ((-not $CpuSaja) -and ($tv -notmatch "cu12[89]|cu13")) {
 }
 
 # ---------------------------------------------------------------- 7. Remotion (render MP4)
-Langkah "7/8 Remotion CLI untuk render MP4 di laptop"
+Langkah "7/9 Remotion CLI untuk render MP4 di laptop"
 if ($TanpaRender) {
     Info "dilewati (-TanpaRender)"
 } elseif (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -92,16 +93,29 @@ if ($TanpaRender) {
 }
 
 # ---------------------------------------------------------------- 8. .env + cek
-Langkah "8/8 Pengaturan & cek"
+Langkah "8/9 Pengaturan & cek"
 if (-not (Test-Path ".env")) {
     Copy-Item ".env.example" ".env"
     Awas "File .env dibuat. Isi SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY:  notepad .env"
 }
 & $py cek_gpu.py --cepat
 
+# ---------------------------------------------------------------- 9. model suara (diunduh SEKARANG, bukan di tengah job VO)
+Langkah "9/9 Unduh model suara (Chatterbox, faster-whisper, DeepFilterNet3, UTMOS, pocket-tts)"
+if ($TanpaModel) {
+    Info "dilewati (-TanpaModel). Nanti klik SIAPKAN-MODEL.bat sebelum membuat suara."
+} else {
+    Info "Banyak koneksi sekaligus & bisa dilanjutkan: kalau putus, jalankan SIAPKAN-MODEL.bat (tidak mengulang dari awal)."
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONUNBUFFERED = "1"
+    & $py siapkan_model.py
+    if ($LASTEXITCODE -ne 0) { Awas "Sebagian model belum terunduh - jalankan SIAPKAN-MODEL.bat lagi (unduhan dilanjutkan). Mesin suara tetap bisa dinyalakan." }
+}
+
 Write-Host ""
 Write-Host "Selesai dipasang." -ForegroundColor Green
 Write-Host "  1) Isi .env (kalau belum):          notepad .env"
 Write-Host "  2) Tes suara di GPU:                .venv\Scripts\python cek_gpu.py"
+Write-Host "     Cek / lanjutkan unduhan model:    SIAPKAN-MODEL.bat"
 Write-Host "  3) Jalankan worker:                 jalankan.bat"
 Write-Host "  4) Nyala otomatis saat laptop hidup: powershell -ExecutionPolicy Bypass -File .\pasang-otomatis.ps1"

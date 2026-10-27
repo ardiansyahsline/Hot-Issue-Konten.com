@@ -76,8 +76,30 @@ def has_audio(path: Path) -> bool:
     return any(s.get("codec_type") == "audio" for s in probe(path).get("streams", []))
 
 
+# wav yang isinya sudah persis seperti yang diminta (sample rate & jumlah kanal sama, tanpa filter) dibaca langsung: sampelnya identik
+# dengan hasil ffmpeg (int16/32768 · float apa adanya) tanpa menyalakan proses ffmpeg (±50–100 ms, di Windows lebih lama)
+_DIRECT_SUBTYPES = frozenset({"PCM_16", "FLOAT"})
+
+
+def _direct_wav(path: Path, sr: int, ch: int) -> np.ndarray | None:
+    if Path(path).suffix.lower() != ".wav":
+        return None
+    try:
+        info = sf.info(str(path))
+        if info.format != "WAV" or info.samplerate != sr or info.channels != ch or info.subtype not in _DIRECT_SUBTYPES:
+            return None
+        y, _ = sf.read(str(path), dtype="float32", always_2d=ch > 1)
+    except Exception:  # bukan wav biasa / rusak → biar ffmpeg yang menangani (dan melaporkan errornya)
+        return None
+    return np.ascontiguousarray(y, dtype=np.float32)
+
+
 def decode(path: Path, sr: int = 48000, mono: bool = True, af: str | None = None, max_sec: float | None = None) -> np.ndarray:
     """file audio/video apa pun → float32 (mono: [n], stereo: [n, 2]) pada sample rate `sr`"""
+    if not af and not max_sec:
+        y = _direct_wav(path, sr, 1 if mono else 2)
+        if y is not None:
+            return y
     args = ["-i", str(path), "-vn"]
     if max_sec:
         args += ["-t", f"{max_sec:.3f}"]

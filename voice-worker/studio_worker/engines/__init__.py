@@ -125,6 +125,26 @@ class Engines:
                 log.info("Kredit: %s", eng.credit)
             return eng
 
+    def warmup(self, name: str) -> dict:
+        """
+        muat mesin (kalau belum) lalu panaskan sekali (engine.warmup bila ada: kernel GPU, pengecek, watermark) — dipanggil saat
+        worker hidup supaya job pertama tidak menanggung waktu muat + pemanasan. Balikan info pemanasan ({} kalau tidak ada).
+        """
+        with self.lock:
+            eng = self.get(name)
+            fn = getattr(eng, "warmup", None)
+            if not callable(fn):
+                return {}
+            t0 = time.time()
+            try:
+                info = fn() or {}
+            except Exception as e:  # pemanasan gagal tidak boleh membuat mesin dianggap rusak
+                log.warning("Pemanasan mesin %s gagal: %s", name, str(e)[:300])
+                return {"error": str(e)[:300]}
+            self.last_used = time.time()
+            log.info("Mesin %s sudah dipanaskan (%.0f dtk)%s", name, time.time() - t0, f" — {info}" if info else "")
+            return info
+
     def _mark(self, name: str, reason: str) -> None:
         self._down[name] = (time.time(), reason[:500])
         log.warning("Mesin %s tidak bisa dipakai: %s", name, reason[:500])

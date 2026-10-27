@@ -14,6 +14,7 @@ Pembersih referensi suara (bank suara):
 from __future__ import annotations
 
 import sys
+import time
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,8 @@ T3_SEC = 6.0  # T3 Chatterbox hanya memakai 6 dtk pertama referensi sebagai cont
 PITCH_HOP = 0.02  # frame analisis nada (detik) untuk seluruh rekaman
 _DF: tuple | None = None
 _DF_ERR: str | None = None
+_DF_MISSING = {"on": False, "at": 0.0, "gen": -1}  # model belum diunduh → dicek ulang (murah) tiap 60 dtk
+DF_RECHECK_SEC = 60.0
 
 
 @dataclass
@@ -67,20 +70,49 @@ def _shim_torchaudio() -> None:
         sys.modules["torchaudio.backend.common"] = mod
 
 
+def refresh() -> None:
+    """dipanggil models.prepare setelah DeepFilterNet3 selesai diunduh → dicoba lagi di pemakaian berikutnya"""
+    global _DF_ERR
+    if _DF is None and _DF_MISSING["on"]:
+        _DF_ERR = None
+        _DF_MISSING.update(on=False, at=0.0)
+
+
 def deepfilter():
-    """muat DeepFilterNet3 sekali (model diunduh otomatis dari GitHub saat pertama kali)"""
+    """muat DeepFilterNet3 sekali dari folder model LOKAL (tidak pernah mengunduh di tengah job — unduhan lewat SIAPKAN-MODEL.bat /
+    unduhan latar). Belum diunduh → None (pakai ffmpeg), dicek ulang tiap 60 dtk."""
     global _DF, _DF_ERR
-    if _DF is not None or _DF_ERR is not None:
+    if _DF is not None:
         return _DF
+    if _DF_ERR is not None and not _DF_MISSING["on"]:
+        return None  # paket / model rusak → cadangan ffmpeg untuk sesi ini
+    from . import models
+
+    if _DF_ERR is not None:  # belum diunduh: cek ulang kalau sudah 60 dtk / ada unduhan baru yang selesai
+        gen = models.ready_gen()
+        if gen == _DF_MISSING["gen"] and time.monotonic() - _DF_MISSING["at"] < DF_RECHECK_SEC:
+            return None
+        _DF_MISSING["gen"] = gen
+    d = models.deepfilter_dir()
+    if d is None:
+        if _DF_ERR is None:
+            log.warning("Model DeepFilterNet3 belum diunduh — pakai pembersih ffmpeg ringan dulu; otomatis dipakai setelah unduhan "
+                        "selesai (SIAPKAN-MODEL.bat / unduhan latar).")
+        _DF_ERR = "model DeepFilterNet3 belum diunduh"
+        _DF_MISSING.update(on=True, at=time.monotonic(), gen=models.ready_gen())
+        return None
     try:
         _shim_torchaudio()
         from df.enhance import enhance, init_df
 
-        model, state, _ = init_df(log_level="ERROR", log_file=None)
-        _DF = (model, state, enhance)
+        # model_base_dir = folder lokal → df tidak memanggil maybe_download_model (tanpa jaringan)
+        model, state, _ = init_df(model_base_dir=str(d), log_level="ERROR", log_file=None)
+        _DF, _DF_ERR = (model, state, enhance), None
+        _DF_MISSING.update(on=False)
         log.info("DeepFilterNet3 siap.")
-    except (Exception, SystemExit) as e:  # paket belum ada / unduh gagal (df memanggil exit(1)!) → pakai cadangan ffmpeg
+    except (Exception, SystemExit) as e:  # paket belum ada / model rusak (df memanggil exit(1)!) → pakai cadangan ffmpeg
         _DF_ERR = f"{type(e).__name__}: {e}"
+        _DF_MISSING.update(on=False)
         log.warning("DeepFilterNet tidak bisa dipakai (%s) — pakai pembersih ffmpeg ringan.", _DF_ERR[:200])
     return _DF
 

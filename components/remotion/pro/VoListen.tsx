@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cancelVoiceJob, createVoiceJob, fetchReadyVoices, requestTts, useStudioJob, useStudioStatus, type VoiceJob, type VoiceJobLine } from "@/lib/studio/client";
+import { estimateQueued, etaText, queuedText } from "@/lib/studio/eta";
+import { EtaChip } from "./JobEta";
 import { voSayKey, voSpeech, type LexEntry } from "@/lib/studio/pronounce";
 import { heardFromResult } from "@/lib/studio/heard";
 import { bankSettings } from "@/lib/studio/voiceStyle";
@@ -299,6 +301,8 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
 
   if (!pay || v.mode === "none") return null;
   const pct = st.s === "job" ? Math.round((job?.progress ?? 0) * 100) : 0;
+  const jobNow = st.s === "job" && job?.id === st.id ? job : null;
+  const queuedMsg = jobNow?.status === "antri" ? queuedText(estimateQueued(jobNow.lines, jobNow.settings, status?.worker)) : null;
   const stale = st.s === "ready" && st.sig !== sigNow;
 
   return (
@@ -329,15 +333,18 @@ export default function VoListen({ scene, timeline, onTimeline }: { scene: Scene
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {busy ? (
           <>
-            <span className="flex min-w-0 items-center gap-1.5 text-zinc-400" role="status">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-zinc-400" role="status" data-vo-listen-progress>
               <span className="h-2 w-2 flex-none animate-pulse rounded-full bg-orange-500" />
-              {st.s === "tts"
-                ? "Bikin contoh suara…"
-                : st.s === "start"
-                  ? "Menyiapkan antrian…"
-                  : job?.status === "proses"
-                    ? `${job.message || "Laptop lagi bikin suara…"}${pct ? ` ${pct}%` : ""}`
-                    : "Menunggu giliran di laptop…"}
+              <span className="min-w-0">
+                {st.s === "tts"
+                  ? "Bikin contoh suara…"
+                  : st.s === "start"
+                    ? "Menyiapkan antrian…"
+                    : job?.status === "proses"
+                      ? `${etaText(job.message, "Laptop lagi bikin suara…")}${pct ? ` ${pct}%` : ""}`
+                      : (queuedMsg ?? "Menunggu giliran di laptop…")}
+              </span>
+              {jobNow && <EtaChip job={jobNow} />}
             </span>
             {st.s !== "start" && (
               <button type="button" className="font-semibold text-red-400 hover:text-red-300" onClick={cancel}>

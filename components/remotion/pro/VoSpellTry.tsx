@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { cancelVoiceJob, createVoiceJob, fetchReadyVoices, useStudioJob, useStudioStatus, type VoiceJob } from "@/lib/studio/client";
+import { estimateQueued, etaText, queuedText } from "@/lib/studio/eta";
+import { EtaChip } from "./JobEta";
 import { LEX_FROM_MAX, LEX_TO_MAX, lexKey, normLexicon, type LexEntry } from "@/lib/studio/pronounce";
 import { guessE, MAX_CAND, spellCandidates, type SpellCand } from "@/lib/studio/pepet";
 import { spellSuggestions } from "@/lib/studio/heard";
@@ -212,6 +214,8 @@ export default function VoSpellTry({
     return res && t && t.text === r.text.replace(/\s+/g, " ").trim().slice(0, LEX_TO_MAX) ? res[r.id] : undefined;
   };
   const pct = st.s === "job" ? Math.round((job?.progress ?? 0) * 100) : 0;
+  const jobNow = st.s === "job" && job?.id === st.id ? job : null;
+  const queuedMsg = jobNow?.status === "antri" ? queuedText(estimateQueued(jobNow.lines, jobNow.settings, status?.worker)) : null;
   const guessTxt =
     guess.kind === "pepet"
       ? "huruf e dibaca ə (pepet, seperti “bareng”)"
@@ -307,8 +311,11 @@ export default function VoSpellTry({
             <div className={`h-full rounded-full bg-orange-500 transition-[width] ${pct ? "" : "w-1/12 animate-pulse"}`} style={pct ? { width: `${pct}%` } : undefined} />
           </div>
           <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400" data-spell-progress>
-            <span className="min-w-0">
-              {st.s === "start" ? "Menyiapkan antrian…" : job?.status === "proses" ? `${job.message || "Laptop lagi bikin suara…"}${pct ? ` ${pct}%` : ""}` : "Menunggu giliran di laptop…"}
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span className="min-w-0">
+                {st.s === "start" ? "Menyiapkan antrian…" : job?.status === "proses" ? `${etaText(job.message, "Laptop lagi bikin suara…")}${pct ? ` ${pct}%` : ""}` : (queuedMsg ?? "Menunggu giliran di laptop…")}
+              </span>
+              {jobNow && <EtaChip job={jobNow} />}
             </span>
             {st.s === "job" && (
               <button type="button" className="flex-none font-semibold text-red-400 hover:text-red-300" onClick={cancel}>

@@ -1,7 +1,8 @@
 """
 Job kind 'tts': VO dari bank suara.
   per baris → SATU TARIKAN: teks ucapan ≤ 260 huruf dibuat sekali jalan (intonasi tidak reset per kalimat); lebih panjang → potongan
-    ≤ 260 huruf berisi kalimat utuh (text.chunk_text) → tiap potongan dibuat beberapa versi (takes, bawaan 3, dibatasi waktu)
+    ≤ 260 huruf berisi kalimat utuh (text.chunk_text) → tiap potongan dibuat beberapa versi (takes, bawaan 3, dibatasi waktu
+    dari panjang kalimat; Chatterbox membuat semua versi SEKALIGUS dalam satu batch, jumlahnya menyesuaikan kecepatan laptop)
   → pilih take: kejelasan (cek ASR: WER/CER + cek durasi/hening) tetap utama; yang hampir sama jelasnya bersaing di kealamian
     (natural.py: MOS UTMOS bila ada − penalti nada datar)
   → semua take satu-tarikan jelek (WER > 0,35) → dicoba mode lama per kalimat, dipakai yang skornya lebih baik
@@ -39,6 +40,7 @@ import numpy as np
 
 from . import VERSION, ff, meter, mix, natural, post
 from . import log as vlog
+from . import speed as speedmod
 from . import text as T
 from .engines import EngineDown, EngineFailed
 from .jobctx import JobCtx, JobError, Runtime
@@ -54,10 +56,16 @@ ONE_PASS_CHARS = 260
 ONE_PASS_BAD = 0.35
 # jumlah versi per potongan bila website tidak menentukan (settings.takes)
 DEFAULT_TAKES = 3
-# batas waktu per potongan: versi ke-3 dst. hanya dibuat kalau masih muat di max(45 dtk, 6 × perkiraan durasi ucapan)
+# batas waktu per potongan dihitung dari panjang kalimat: max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan durasi ucapan)
+# (bawaan max(20 dtk, 8 × durasi); dulu tetap minimal 45 dtk). Jumlah versi direncanakan dari kecepatan laptop yang tercatat
+# (speed.py) supaya muat; mesin tanpa synth_batch (pocket) tetap dibuat satu-satu dengan cek waktu seperti dulu (minimal 2 versi)
 MIN_TAKES = 2
-TAKE_BUDGET_MIN = 45.0
-TAKE_BUDGET_PER_SEC = 6.0
+LINE_BUDGET_MIN = 20.0
+LINE_BUDGET_PER_SEC = 8.0
+TAKE_BUDGET_MIN = LINE_BUDGET_MIN  # nama lama
+TAKE_BUDGET_PER_SEC = LINE_BUDGET_PER_SEC
+# semua versi salah ucap → satu batch tambahan maksimal sekian versi (kalau waktunya masih ada)
+EXTRA_TAKES = 2
 # tempo alami dulu (native_fit): kelebihan sesudah jeda dipadatkan > 4% → buat ulang dengan cfg_weight + 0,2 (maks 0,85);
 # versi cepat dipakai kalau atempo-nya lebih sedikit dan kejelasannya tidak memburuk > 0,05
 NATIVE_OVER = 0.04
@@ -270,9 +278,77 @@ def take_seed(sentence: str, k: int, base: int | None = None) -> int:
     return (b + 7919 * k) % (2**31 - 1)
 
 
+def _cfg_num(cfg, name: str, d: float) -> float:
+    v = getattr(cfg, name, None) if cfg is not None else None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else d
+
+
+def line_budget(sentence: str, cfg=None) -> float:
+    """batas waktu (detik) membuat semua versi untuk satu potongan teks: max(LINE_BUDGET_MIN, LINE_BUDGET_PER_SEC × perkiraan ucapan)"""
+    mn = _cfg_num(cfg, "line_budget_min", LINE_BUDGET_MIN)
+    per = _cfg_num(cfg, "line_budget_per_sec", LINE_BUDGET_PER_SEC)
+    return max(mn, per * speedmod.est_audio_sec(len(sentence)))
+
+
 def take_budget(sentence: str) -> float:
-    """batas waktu (detik) membuat versi untuk satu potongan teks"""
-    return max(TAKE_BUDGET_MIN, TAKE_BUDGET_PER_SEC * max(0.6, len(sentence) / 14.5))
+    """nama lama line_budget (bawaan .env)"""
+    return line_budget(sentence)
+
+
+def plan_takes(name: str, sentence: str, want: int, budget: float, speed, batch: bool) -> int:
+    """
+    jumlah versi terbesar ≤ `want` yang perkiraan waktunya (speed.estimate; batch = sekaligus, selain itu n × 1 versi) masih muat
+    di `budget`; minimal 1. Kecepatan mesin ini belum pernah DIUKUR di laptop ini (hanya perkiraan bawaan) → `want` apa adanya (kualitas
+    tidak dikurangi gara-gara tebakan). Dikurangi → alasannya dicatat di log.
+    """
+    want = max(1, int(want))
+    if speed is None or want <= 1:
+        return want
+    measured = getattr(speed, "measured", None)
+    if callable(measured) and not measured(name):
+        return want
+    chars = len(sentence)
+
+    def est(n: int) -> float:
+        return float(speed.estimate(name, chars, n)) if batch else n * float(speed.estimate(name, chars, 1))
+
+    n = want
+    while n > 1 and est(n) > budget:
+        n -= 1
+    if n < want:
+        log.info(
+            "  laptop: %d versi (bukan %d) supaya muat batas %s dtk — %d versi diperkirakan %s dtk",
+            n, want, _n1(budget, 0), want, _n1(est(want), 0),
+        )
+    return n
+
+
+def _n1(x: float, d: int = 1) -> str:
+    """angka gaya Indonesia (koma desimal) untuk log"""
+    return f"{float(x):.{d}f}".replace(".", ",")
+
+
+def _takes_beam(asr) -> bool:
+    import inspect
+
+    try:
+        return "beam" in inspect.signature(asr.transcribe).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def heard_take(asr, y: np.ndarray, sr: int, tmp: Path, k: int, beam: int = 1) -> str | None:
+    """teks yang terdengar ASR untuk satu take; ASR baru → langsung dari array 16 kHz (tanpa tulis wav), beam kecil"""
+    if asr is None or not asr.available or not y.size:
+        return None
+    try:
+        if _takes_beam(asr):
+            return asr.transcribe(natural.to16k(y, sr), words=False, beam=beam)[0]
+        p = ff.write_wav(tmp / f"take-{k}.wav", y, sr)
+        return asr.transcribe(p, words=False)[0]
+    except Exception as e:
+        log.warning("Cek ASR gagal (%s) — take dinilai dari audio saja.", e)
+        return None
 
 
 def choose_take(takes: list[tuple[np.ndarray, dict]], sr: int) -> int:
@@ -289,38 +365,81 @@ def choose_take(takes: list[tuple[np.ndarray, dict]], sr: int) -> int:
     return natural.choose([sc for _, sc in takes])
 
 
-def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None, seed: int | None = None) -> tuple[np.ndarray, dict]:
+def pick_take(engine, sentence: str, ref: Path, st: dict, asr, tmp: Path, on_take=None, seed: int | None = None, speed=None, cfg=None) -> tuple[np.ndarray, dict]:
+    """
+    Buat beberapa versi satu potongan teks lalu pilih yang paling jelas (+ alami). Mesin dengan synth_batch (Chatterbox) → semua
+    versi dibuat SEKALIGUS dalam satu panggilan (jumlahnya direncanakan dari `speed` supaya muat batas waktu); semua salah ucap →
+    satu batch tambahan maks 2 versi kalau waktunya masih ada. Mesin lain → satu-satu dengan cek waktu seperti dulu.
+    `speed` (speed.Speed) & `cfg` opsional — pemanggil lama tanpa keduanya tetap jalan.
+    """
+    cfg = cfg if cfg is not None else getattr(engine, "cfg", None)
+    name = str(getattr(engine, "name", "") or "mesin")
+    beam = int(_cfg_num(cfg, "asr_beam_takes", 1))
+    budget = take_budget(sentence) if cfg is None else line_budget(sentence, cfg)
+    batch_fn = getattr(engine, "synth_batch", None)
+    batch = callable(batch_fn) and bool(getattr(cfg, "tts_batch", True) if cfg is not None else True)
     takes: list[tuple[np.ndarray, dict]] = []
-    n = st["takes"]
-    k = 0
     t0 = time.monotonic()
-    budget = take_budget(sentence)
-    while k < n:
-        y = engine.synth(sentence, ref, st, take_seed(sentence, k, seed))
+    trial = bool(st.get("trial"))
+    want = 1 if trial else int(st["takes"])
+
+    def add(k: int, y: np.ndarray) -> str | None:
         # hening awal/akhir dibuang tanpa memakan ekor napas / nada turun akhir kalimat (sisa 150 ms + fade 30 ms)
         y = natural.trim_take(y, engine.sr)
-        heard = None
-        if asr is not None and asr.available and y.size:
-            p = ff.write_wav(tmp / f"take-{k}.wav", y, engine.sr)
-            try:
-                heard = asr.transcribe(p, words=False)[0]
-            except Exception as e:
-                log.warning("Cek ASR gagal (%s) — take dinilai dari audio saja.", e)
+        heard = heard_take(asr, y, engine.sr, tmp, k, beam)
         sc = score_take(y, engine.sr, sentence, heard)
         sc["take"] = k + 1
         takes.append((y, sc))
         if on_take:
             on_take(k)
-        k += 1
-        # semua versi jelek (salah ucap > 35%) → coba maksimal 2 versi tambahan
-        if k == n and n < st["takes"] + 2 and min(t[1]["score"] for t in takes) > 0.35 and heard is not None and not st.get("trial"):
-            n += 1
-        # batas waktu wajar: minimal 2 versi, versi berikutnya hanya kalau perkiraan selesainya masih di dalam batas
-        if k < n and k >= MIN_TAKES:
+        return heard
+
+    if batch:
+        n = plan_takes(name, sentence, want, budget, speed, True)
+
+        def run(ks: list[int]) -> tuple[float, bool]:
+            t1 = time.monotonic()
+            ys = batch_fn(sentence, ref, st, [take_seed(sentence, k, seed) for k in ks])
+            wall = time.monotonic() - t1
+            durs = [len(y) / engine.sr for y in ys]
+            avg = sum(durs) / max(1, len(durs))
+            if speed is not None:
+                speed.record(name, avg, wall, len(ks))
+            log.info("  %s dtk suara dalam %s dtk (%s)", _n1(avg), _n1(wall), f"{len(ks)} versi sekaligus" if len(ks) > 1 else "1 versi")
+            got = [add(k, y) for k, y in zip(ks, ys)]
+            return wall, any(h is not None for h in got)
+
+        wall, heard_any = run(list(range(n)))
+        # semua versi salah ucap (> 35%) → satu batch tambahan (maks 2 versi) kalau waktu masih ada
+        if heard_any and not trial and min(t[1]["score"] for t in takes) > ONE_PASS_BAD:
+            extra = EXTRA_TAKES
             spent = time.monotonic() - t0
-            if spent + spent / k > budget:
-                log.info("  batas waktu %.0f dtk: %d versi dalam %.0f dtk — versi lain dilewati", budget, k, spent)
-                break
+            est = float(speed.estimate(name, len(sentence), extra)) if speed is not None else wall
+            if spent + est <= budget:
+                run(list(range(n, n + extra)))
+            else:
+                log.info("  semua versi kurang jelas, tapi versi tambahan tidak muat batas %s dtk (sudah %s dtk)", _n1(budget, 0), _n1(spent, 0))
+    else:
+        n = plan_takes(name, sentence, want, budget, speed, False)
+        min_takes = min(MIN_TAKES, n)
+        k = 0
+        heard = None
+        while k < n:
+            t1 = time.monotonic()
+            y = engine.synth(sentence, ref, st, take_seed(sentence, k, seed))
+            if speed is not None:
+                speed.record(name, len(y) / engine.sr, time.monotonic() - t1, 1)
+            heard = add(k, y)
+            k += 1
+            # semua versi jelek (salah ucap > 35%) → coba maksimal 2 versi tambahan
+            if k == n and n < want + EXTRA_TAKES and min(t[1]["score"] for t in takes) > ONE_PASS_BAD and heard is not None and not trial:
+                n += 1
+            # batas waktu wajar: minimal 2 versi, versi berikutnya hanya kalau perkiraan selesainya masih di dalam batas
+            if k < n and k >= min_takes:
+                spent = time.monotonic() - t0
+                if spent + spent / k > budget:
+                    log.info("  batas waktu %s dtk: %d versi dalam %s dtk — versi lain dilewati", _n1(budget, 0), k, _n1(spent, 0))
+                    break
     i = choose_take(takes, engine.sr)
     best = takes[i]
     info = best[1]
@@ -346,7 +465,10 @@ def _joined(parts: list[np.ndarray], labels: list[str], sr: int, bed, key: str) 
 
 
 def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path, tick, bed, key: str, **kw) -> tuple[np.ndarray, dict]:
-    """mode lama per kalimat untuk satu potongan: tiap kalimat dipilih sendiri lalu disambung room tone. Skor = rata-rata berbobot huruf."""
+    """
+    mode lama per kalimat untuk satu potongan: tiap kalimat dipilih sendiri lalu disambung room tone. Skor = rata-rata berbobot
+    huruf. `kw` diteruskan ke pick_take (seed, dan opsional speed / cfg).
+    """
     ys, infos = [], []
     for s in sents:
         y, info = pick_take(engine, s, ref, st, asr, work, tick, **kw)
@@ -364,11 +486,19 @@ def per_sentence(engine, sents: list[str], ref: Path, st: dict, asr, work: Path,
     return y, info
 
 
-def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=None) -> tuple[Path, dict]:
+def make_line(engine, ln: dict, ref: Path, st: dict, asr, work: Path, on_step=None, speed=None, cfg=None) -> tuple[Path, dict]:
+    """
+    satu baris VO. `speed` (rt.speed: catatan kecepatan → jumlah versi yang muat batas waktu + perkiraan selesai) dan `cfg`
+    (rt.cfg: LINE_BUDGET_*, ASR_BEAM_TAKES, TTS_BATCH) opsional — pemanggil lama tanpa keduanya tetap jalan seperti dulu.
+    """
     spoken = ln["spell"] or ln["text"]
     chunks = T.chunk_text(spoken, ONE_PASS_CHARS) or [spoken]
-    # benih dasar dari website (hanya dikirim kalau ada → pemanggilan lama pick_take tetap sama)
+    # benih dasar dari website (hanya dikirim kalau ada → pemanggilan lama pick_take tetap sama); speed/cfg juga hanya kalau ada
     kw = {"seed": ln["seed"]} if ln.get("seed") is not None else {}
+    if speed is not None:
+        kw["speed"] = speed
+    if cfg is not None:
+        kw["cfg"] = cfg
     sr = engine.sr
     bed = natural.ref_bed(ref, sr)
     parts: list[np.ndarray] = []
@@ -707,6 +837,45 @@ def job_natural(rows: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------- job
+# perkiraan sisa waktu (pesan job "· sisa ±40 dtk"): kerja di luar mesin suara per baris (cek ASR, ffmpeg, cache) & penutup job
+ETA_LINE_EXTRA = 1.0
+ETA_CACHED_LINE = 0.3
+ETA_TAIL = 2.0
+# waktu muat mesin bila belum pernah diukur (detik) — Chatterbox di RTX 5050 ±34 dtk
+ETA_LOAD_DEFAULT = {"chatterbox": 35.0, "pocket": 10.0}
+
+
+def _accepts(fn, name: str) -> bool:
+    """fungsi `fn` menerima argumen kata kunci `name`? (make_line versi baru menerima speed=; versi lama tidak — dicek dari tanda
+    tangannya, bukan dengan menangkap TypeError yang bisa saja berasal dari dalam fungsi)"""
+    import inspect
+
+    try:
+        ps = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in ps or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in ps.values())
+
+
+def _speed(rt: Runtime):
+    """catatan kecepatan worker (rt.speed); tidak ada (tes / pemanggil lama) → catatan sementara berisi perkiraan bawaan"""
+    if getattr(rt, "speed", None) is not None:
+        return rt.speed
+    try:
+        from .speed import Speed
+
+        return Speed(None)
+    except ImportError:
+        return None
+
+
+def _engine_loaded(rt: Runtime, name: str) -> bool:
+    try:
+        return name in rt.engines.loaded()
+    except Exception:  # pengelola mesin palsu / lama tanpa loaded() → anggap sudah siap
+        return True
+
+
 def run(ctx: JobCtx) -> None:
     rt = ctx.rt
     job = ctx.job
@@ -745,12 +914,23 @@ def run(ctx: JobCtx) -> None:
             continue
         msg = "Suara selesai dibuat" + (" (Chatterbox, GPU laptop)" if name == "chatterbox" else f" dengan pocket-tts (CPU laptop). Kredit: {result.get('credit')}")
         ctx.done({"result": result, "engine_used": name, "cache_key": job_key(name, vhash, lines, st)}, msg)
+        rows = result.get("lines") or []
+        voice_sec = sum(float(r.get("dur") or 0) for r in rows)
+        hits = int(getattr(ctx, "cache_hits", 0) or 0)
+        est0 = getattr(ctx, "est0", None)
+        log.info(
+            "Job selesai: %d kalimat%s, %.0f dtk suara, %.0f dtk proses%s",
+            len(rows), f" ({hits} dari cache)" if hits else "", voice_sec, time.monotonic() - getattr(ctx, "t0", time.monotonic()),
+            f" (perkiraan awal {est0:.0f} dtk)" if isinstance(est0, (int, float)) else "",
+        )
         return
     log.error("Semua mesin suara gagal: %s", " | ".join(errors))
     raise JobError(FAIL_MSG)
 
 
 def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path, vhash: str, st: dict) -> dict:
+    from .supa import UploadPool, norm_path
+
     rt = ctx.rt
     cache = LineCache(rt.cfg.cache / "tts")
     work = rt.cfg.tmp / f"tts-{ctx.id}"
@@ -763,20 +943,63 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
     clips: list[tuple[np.ndarray, float]] = []
     cues: list[dict] = []
     t_next = 0.0
+    speed = _speed(rt)
+    # make_line versi baru (mesin cepat) menerima speed= untuk batas waktu & jumlah versi; versi lama tidak → kecepatan dicatat di sini
+    line_kw = {"speed": speed} if speed is not None and _accepts(make_line, "speed") else {}
+    if line_kw and _accepts(make_line, "cfg"):  # batas waktu per baris, beam cek ucapan & TTS_BATCH dari .env
+        line_kw["cfg"] = rt.cfg
+    takes = int(st.get("takes") or 1)
+
+    # perkiraan awal: baris yang belum ada di cache × kecepatan mesin (+ waktu muat mesin kalau belum dimuat)
+    keys = [line_key(name, vhash, ln, st) for ln in lines]
+    hits = [cache.get(k) for k in keys]
+    est = [
+        ETA_CACHED_LINE if hits[i] else (speed.estimate(name, len(ln["spell"] or ln["text"]), takes) if speed is not None else 6.0 * len(ln["spell"] or ln["text"]) / 14.5) + ETA_LINE_EXTRA
+        for i, ln in enumerate(lines)
+    ]
+    need_engine = any(h is None for h in hits)
+    load_left = 0.0
+    if need_engine and not _engine_loaded(rt, name):
+        load_left = (speed.load_sec(name) if speed is not None else None) or ETA_LOAD_DEFAULT.get(name, 30.0)
+    tail = ETA_TAIL + 0.1 * n
+    ctx.est0 = round(sum(est) + load_left + tail, 1)
+    ctx.cache_hits = sum(1 for h in hits if h)
+    ctx.eta(ctx.est0)
+    real_done = est_done = 0.0  # waktu nyata vs perkiraan baris yang sudah dibuat → koreksi perkiraan sisa
+
+    def left_after(i: int) -> float:
+        k = max(0.3, min(5.0, real_done / est_done)) if est_done > 0.5 else 1.0
+        return sum(est[i + 1 :]) * k + load_left + tail
+
+    pool = UploadPool(rt.supa, workers=int(getattr(rt.cfg, "upload_workers", 3) or 3))
     try:
         for i, ln in enumerate(lines):
+            if i:
+                ctx.check_cancel()  # dibatalkan dari website → berhenti di sini (antar baris), bukan di tengah GPU
+                pool.check()  # unggahan baris sebelumnya gagal → jangan buang waktu GPU untuk baris lain
             base = 0.05 + 0.85 * i / n
             ctx.progress(base, f"Membuat suara kalimat {i + 1} dari {n}…", force=True)
-            k = line_key(name, vhash, ln, st)
-            hit = cache.get(k)
+            k = keys[i]
+            hit = hits[i]
+            t_line = time.monotonic()
             if hit:
                 wav, meta = hit
                 log.info("Baris %s: pakai cache", ln["id"])
             else:
                 if engine is None:
                     ctx.progress(base, "Menyiapkan mesin suara…", force=True)
+                    t_load = time.monotonic()
                     engine = rt.engines.get(name)
-                wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"))
+                    took = time.monotonic() - t_load
+                    if took > 0.2 and speed is not None and not getattr(rt, "loading", False):
+                        speed.record_load(name, took)  # dimuat di job ini (PRELOAD=0); saat pemanasan latar dicatat worker
+                    load_left = 0.0
+                    ctx.eta(left_after(i - 1))  # mesin sudah siap: sisa = baris ini dst.
+                    t_line = time.monotonic()
+                t_gen = time.monotonic()
+                wav, meta = make_line(engine, ln, ref, st, asr, work, lambda f, b=base, ix=i: ctx.progress(b + 0.85 / n * 0.9 * f, f"Membuat suara kalimat {ix + 1} dari {n}…"), **line_kw)
+                if not line_kw and speed is not None:
+                    speed.record(name, float(meta.get("dur") or 0), time.monotonic() - t_gen, takes)
                 wav = cache.put(k, wav, meta)
             # kecepatan diatur sendiri → atempo persis; selain itu adegan teaser: ucapan lebih panjang dari jendelanya → jeda
             # dipadatkan, lalu tempo asli dipercepat (buat ulang, cfg_weight naik) dan sisanya baru atempo (maks 1,3×) — cache baris
@@ -801,12 +1024,13 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
                     ctx.progress(base + 0.85 / n * 0.9, f"Kalimat {i + 1} kepanjangan — dibuat ulang dengan tempo bicara lebih cepat…", force=True)
                     wdir = work / "cepat"
                     wdir.mkdir(parents=True, exist_ok=True)
-                    w2, m2 = make_line(engine, ln, ref, st2, asr, wdir)
+                    w2, m2 = make_line(engine, ln, ref, st2, asr, wdir, **line_kw)
                     return cache.put(k2, w2, m2), m2
 
                 wav, meta = native_fit(wav, meta, ln.get("max"), st, work, ln["id"], regen)
-            mp3 = ff.encode_mp3(wav, work / f"{ln['id']}.mp3", 48000, "160k", mono=True)
-            path = rt.supa.upload(f"vo/{ctx.id}/{ln['id']}.mp3", mp3, "audio/mpeg")
+            # mp3 dibuat & diunggah di latar (paralel) sementara baris berikutnya dibuat GPU
+            path = norm_path(f"vo/{ctx.id}/{ln['id']}.mp3")
+            pool.submit(path, lambda w=wav, d=work / f"{ln['id']}.mp3": ff.encode_mp3(w, d, 48000, "160k", mono=True), "audio/mpeg")
             start = ln["start"] if ln["start"] is not None else t_next
             t_next = start + meta["dur"] + 0.3
             y, sr = ff.read_wav(wav)
@@ -825,11 +1049,22 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             if heard:
                 row["heard"] = heard
             out_lines.append(row)
+            # perkiraan sisa diperbarui dari waktu nyata baris yang sudah dibuat
+            if not hit:
+                real_done += time.monotonic() - t_line
+                est_done += est[i]
+            ctx.eta(left_after(i))
         ctx.progress(0.92, "Menyusun VO lengkap…", force=True)
         full = mix.place_clips(clips, 48000, tail=0.5, ceiling_db=-1.0)
         full_wav = ff.write_wav(work / "full.wav", full, 48000)
-        full_path = rt.supa.upload(f"vo/{ctx.id}/full.mp3", ff.encode_mp3(full_wav, work / "full.mp3", 48000, "160k", mono=True), "audio/mpeg")
-        srt_path = rt.supa.upload(f"vo/{ctx.id}/full.srt", T.to_srt(cues).encode("utf-8"), "application/x-subrip")
+        # full.mp3 & srt diunggah bersamaan (sisa mp3 baris yang belum selesai ikut ditunggu)
+        full_path = norm_path(f"vo/{ctx.id}/full.mp3")
+        srt_path = norm_path(f"vo/{ctx.id}/full.srt")
+        pool.submit(full_path, lambda: ff.encode_mp3(full_wav, work / "full.mp3", 48000, "160k", mono=True), "audio/mpeg")
+        pool.submit(srt_path, T.to_srt(cues).encode("utf-8"), "application/x-subrip")
+        ctx.eta(ETA_TAIL)
+        ctx.progress(0.95, "Mengunggah VO…", force=True)
+        pool.wait()
         eng_label = engine.label if engine else ("Bank suara · Chatterbox (GPU laptop)" if name == "chatterbox" else "Bank suara · pocket-tts (CPU laptop)")
         credit = getattr(engine, "credit", None) if engine else None
         if name == "pocket" and not credit:
@@ -851,4 +1086,5 @@ def synth_job(ctx: JobCtx, name: str, lines: list[dict], voice: dict, ref: Path,
             "versi": VERSION,
         }
     finally:
+        pool.close(cancel=True)  # error / batal: unggahan yang belum mulai dibatalkan, yang sedang jalan ditunggu dulu
         shutil.rmtree(work, ignore_errors=True)

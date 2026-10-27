@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
+import { noteServerDate, workerExtra, type StudioWorkerExtra } from "./eta";
 import { SFX_BUILTIN, type SfxMeta } from "./sfxMeta";
 import type { EdgeVoice, Timeline, Word } from "./timeline";
 import { sfxSrc, storageSrc, STUDIO_BUCKET } from "./urls";
@@ -55,8 +56,9 @@ export const isMissingTable = (e: unknown) => {
 // ---------------------------------------------------------------------------------------------
 // Status mesin (GET /api/studio/status tiap 20 dtk + realtime studio_workers). Satu loop untuk semua komponen.
 // ---------------------------------------------------------------------------------------------
+/** worker baru juga melaporkan speed / models / warm (StudioWorkerExtra di lib/studio/eta.ts; worker lama → tidak ada) */
 export type StudioStatus = {
-  worker: { online: boolean; lastSeen: string | null; gpu: string | null; engine: string | null; queue: number };
+  worker: { online: boolean; lastSeen: string | null; gpu: string | null; engine: string | null; queue: number } & StudioWorkerExtra;
   engines: { bank: boolean; edge: boolean; elevenlabs: boolean };
   freesound: boolean;
   renderWorker: boolean;
@@ -80,7 +82,7 @@ function parseStatus(raw: unknown): StudioStatus | null {
   const e = (o.engines && typeof o.engines === "object" ? o.engines : {}) as Record<string, unknown>;
   const online = w.online === true;
   return {
-    worker: { online, lastSeen: txt(w.lastSeen), gpu: txt(w.gpu), engine: txt(w.engine), queue: Math.max(0, Number(w.queue) || 0) },
+    worker: { online, lastSeen: txt(w.lastSeen), gpu: txt(w.gpu), engine: txt(w.engine), queue: Math.max(0, Number(w.queue) || 0), ...workerExtra(w) },
     engines: { bank: e.bank === undefined ? online : e.bank === true, edge: e.edge !== false, elevenlabs: e.elevenlabs === true },
     freesound: o.freesound === true,
     renderWorker: o.renderWorker === true,
@@ -97,7 +99,7 @@ async function statusFromTable(): Promise<StudioStatus> {
     const online = Date.now() - new Date(row.last_seen).getTime() < ONLINE_MS;
     return {
       ...OFFLINE_STATUS,
-      worker: { online, lastSeen: row.last_seen, gpu: txt(info.gpu), engine: txt(info.engine), queue: Math.max(0, Number(info.antrian ?? info.queue) || 0) },
+      worker: { online, lastSeen: row.last_seen, gpu: txt(info.gpu), engine: txt(info.engine), queue: Math.max(0, Number(info.antrian ?? info.queue) || 0), ...workerExtra(info) },
       // sama dengan route status: bank suara hanya kalau worker melaporkan mesin yang siap
       engines: { bank: online && !!txt(info.engine), edge: true, elevenlabs: false },
       renderWorker: online && info.render === true,
@@ -121,6 +123,8 @@ function loadStatus(): Promise<void> {
     let s: StudioStatus | null = null;
     try {
       const r = await fetch("/api/studio/status", { cache: "no-store" });
+      // jam server (header Date) → hitung mundur perkiraan selesai tetap benar walau jam HP / laptop meleset
+      noteServerDate(r.headers.get("date"), Date.now());
       if (r.ok) s = parseStatus(await r.json());
     } catch {
       /* route belum ada / offline -> pakai tabel */
@@ -456,6 +460,8 @@ export type VoiceJob = {
   engine_used: string | null;
   result: VoiceJobResult | null;
   created_at: string;
+  /** berubah tiap patch (trigger studio_touch) → hitung mundur " · sisa ±40 dtk" di pesan (lib/studio/eta.ts etaLeft) */
+  updated_at?: string | null;
 };
 export type RenderJob = {
   id: string;
@@ -466,10 +472,11 @@ export type RenderJob = {
   message: string | null;
   result_path: string | null;
   created_at: string;
+  updated_at?: string | null;
 };
 
-const VOICE_JOB_COLS = "id,kind,project_id,voice_id,lines,settings,status,progress,message,engine_used,result,created_at";
-const RENDER_JOB_COLS = "id,project_id,variant,status,progress,message,result_path,created_at";
+const VOICE_JOB_COLS = "id,kind,project_id,voice_id,lines,settings,status,progress,message,engine_used,result,created_at,updated_at";
+const RENDER_JOB_COLS = "id,project_id,variant,status,progress,message,result_path,created_at,updated_at";
 const colsOf = (t: JobTable) => (t === "studio_voice_jobs" ? VOICE_JOB_COLS : RENDER_JOB_COLS);
 
 /** masukkan job suara ke antrian (status 'antri'). Melempar Error berpesan awam. */
