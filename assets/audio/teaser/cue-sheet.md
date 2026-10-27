@@ -1,5 +1,7 @@
 # Cue Sheet Audio - Teaser CS Tracker (9:16, 30 fps, ±60 detik)
 
+> **Catatan 27 Okt 2026:** teaser sekarang **tanpa musik / suara latar** (termasuk `ambience-gelap` & trailer bed) atas permintaan Alif — musik ditambah sendiri. Kolom "Musik" di bawah = level kalau musik ditambah.
+
 ID SFX merujuk ke `assets/audio/sfx/sfx.json`. Waktu = target; tempel ke ketukan musik terdekat.
 Level awal disarankan: musik -18 LUFS (turun ±8 dB saat VO), SFX aksen -16 s/d -12 LUFS, VO -16 LUFS.
 

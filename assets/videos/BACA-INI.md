@@ -7,7 +7,7 @@ Hanya 2 nama file ini yang dikenali (nama lain = 404):
 
 | File | Isi | Asalnya |
 |---|---|---|
-| `teaser-cs-tracker-tanpa-vo.mp4` | Teaser **tanpa suara VO** (musik + SFX + teks) | Render laptop/CLI komposisi `TeaserCsTracker` dengan `--props='{"audio":"novo"}'` (contoh lengkap di `remotion/Root.tsx`). Bisa juga dari Studio Pro → Download → **Tanpa VO**. |
+| `teaser-cs-tracker-tanpa-vo.mp4` | Teaser **tanpa suara VO** (SFX + teks, tanpa musik latar) | Render laptop/CLI komposisi `TeaserCsTracker` dengan `--props='{"audio":"novo"}'` (contoh lengkap di `remotion/Root.tsx`). Bisa juga dari Studio Pro → Download → **Tanpa VO**. |
 | `teaser-cs-tracker.mp4` | Teaser **dengan suara VO** (suara Alif) | **Harus dari Studio Pro** (langkah di bawah), lalu taruh di folder ini. |
 
 ## Cara bikin versi dengan VO
