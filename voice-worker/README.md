@@ -191,7 +191,8 @@ Yang membuat render video (terutama versi **tanpa VO**) jauh lebih cepat, tanpa 
 - **Tab Chrome paralel otomatis** (`RENDER_CONCURRENCY=auto`, bawaan baru): separuh thread CPU (sisanya untuk bot WAHA), 2–6 tab,
   dibatasi RAM (±0,7 GB per tab, 6 GB disisakan untuk Windows, bot WAHA & mesin suara). Contoh: 12 thread + 16 GB RAM → **6 tab**
   (dulu selalu 2), 12 thread + 8 GB → 2 tab.
-  Log tiap render: `Render: 6 tab paralel (auto: 12 thread, 15,7 GB RAM)`. Mau angka tetap? Tulis angkanya (1–8).
+  Log tiap render: `Render: 6 tab paralel (auto: 12 thread, 15,7 GB RAM)`. Mau angka tetap? Tulis angkanya (1–8). Angka yang lebih
+  besar dari jumlah thread CPU otomatis diturunkan (Remotion menolaknya), tertulis di log: `dibatasi 4 thread CPU`.
   `.env` lama yang masih berisi `RENDER_CONCURRENCY=2` (bawaan lama) diganti **sekali** jadi `auto` saat worker mulai (ada 1 baris
   di log); angka lain yang Anda tulis sendiri tidak diubah. Mau tetap 2? Tulis lagi `RENDER_CONCURRENCY=2` — tidak akan diganti lagi.
 - **Efek grain film lebih ringan saat render MP4 di laptop.** Pola noise-nya sama, tapi dibuat sekali lalu digeser tiap 2 frame

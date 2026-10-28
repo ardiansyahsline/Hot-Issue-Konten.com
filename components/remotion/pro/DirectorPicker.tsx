@@ -146,9 +146,17 @@ export function activeDirector(d: Director | null | undefined, chars: readonly C
   return { name: DEFAULT_DIRECTOR, custom: false, note: `Sutradara “${d.hero}” tidak dikenal — pakai ${DEFAULT_DIRECTOR}.` };
 }
 
-/** keahlian sutradara yang tampil di daftar: hero bawaan = keahlian khasnya, karakter buatan = dari tipe MBTI-nya */
-export const skillLabel = (name: string, custom: boolean, chars: readonly CustomChar[]) =>
-  directorSkillOf(name, custom ? (chars.find((c) => c.name === name)?.mbti ?? null) : null).skill;
+/**
+ * keahlian sutradara yang tampil di header / daftar: hero bawaan = keahlian khasnya, karakter buatan = dari tipe MBTI-nya. Karakter
+ * dicari lewat id-nya (director.hero = "char:<id>"), bukan nama (dua karakter bisa bernama sama); selama daftar karakter masih dimuat
+ * → kosong (bukan keahlian tebakan dari namanya).
+ */
+export function skillLabel(d: Director | null | undefined, act: { name: string; custom: boolean }, chars: readonly CustomChar[]): string {
+  if (!act.custom) return directorSkillOf(act.name).skill;
+  const id = d?.hero.startsWith(CHAR_PREFIX) ? d.hero.slice(CHAR_PREFIX.length).toLowerCase() : "";
+  const c = id ? chars.find((x) => x.id.toLowerCase() === id) : undefined;
+  return c ? directorSkillOf(c.name, c.mbti).skill : "";
+}
 
 /** keterangan karakter buatan: peran yang dilatihkan (Train your AI) atau "Buatanmu" */
 const charSub = (c: CustomChar) => (c.profile?.version === 2 && c.profile.roleLabel ? `Dilatih: ${c.profile.roleLabel}` : "Buatanmu");
@@ -189,7 +197,7 @@ export default function DirectorPicker({
   const hero = value?.hero ?? DEFAULT_DIRECTOR;
   const notes = value?.notes?.length ?? 0;
   const shownNote = act.note ?? note ?? null;
-  const skill = skillLabel(act.name, act.custom, chars);
+  const skill = skillLabel(value, act, chars) || "Memuat…";
 
   useEffect(() => {
     if (!open) return;
@@ -361,20 +369,37 @@ export function DirectorQuickPick({
   const hero = value?.hero ?? DEFAULT_DIRECTOR;
   const act = activeDirector(value, chars, loaded);
   const list = useRef<HTMLUListElement>(null);
+  const shown = useRef("");
   // sutradara terpilih (mis. hero di ujung daftar / karakter yang baru dimuat) digeser ke dalam pandangan, tanpa menggulir halaman
-  // (posisi diukur terhadap daftar itu sendiri — offsetLeft diukur dari elemen ber-posisi terdekat, bisa body di layar lebar)
+  // (posisi diukur terhadap daftar itu sendiri — offsetLeft diukur dari elemen ber-posisi terdekat, bisa body di layar lebar).
+  // Posisi disetel sendiri tiap isi daftar berubah: karakter buatanmu yang baru dimuat / baru dibuat disisipkan di depan, dan
+  // scroll-snap browser menempelkan daftar ke kartu yang tadi di kiri (Harley) — tanpa ini karakter buatanmu terdorong ke luar layar.
   useEffect(() => {
     const ul = list.current;
     const li = ul?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!ul || !li) return;
-    const left = li.getBoundingClientRect().left - ul.getBoundingClientRect().left + ul.scrollLeft;
-    if (left < ul.scrollLeft || left + li.offsetWidth > ul.scrollLeft + ul.clientWidth) ul.scrollLeft = Math.max(0, left - 8);
+    const box = ul.getBoundingClientRect();
+    const pos = (el: Element) => el.getBoundingClientRect().left - box.left + ul.scrollLeft;
+    const left = pos(li);
+    const changed = shown.current !== `${loaded}:${chars.length}`;
+    shown.current = `${loaded}:${chars.length}`;
+    // terpilih muat dari awal → daftar di awal (karakter buatanmu kelihatan)
+    if (left + li.offsetWidth <= ul.clientWidth) ul.scrollLeft = 0;
+    // belum muat: terpilih di tepi kanan (kartu sebelumnya tetap kelihatan), dibulatkan ke awal kartu supaya snap tidak memotongnya
+    else if (changed || left < ul.scrollLeft || left + li.offsetWidth > ul.scrollLeft + ul.clientWidth) {
+      const need = left + li.offsetWidth - ul.clientWidth + 8;
+      ul.scrollLeft = [...ul.children].map(pos).find((x) => x >= need) ?? Math.max(0, left - 8);
+    }
   }, [hero, loaded, chars.length]);
   /** layar lebar (mouse): tombol ‹ › menggeser daftar */
   const slide = (dir: 1 | -1) => list.current?.scrollBy({ left: dir * Math.max(180, list.current.clientWidth * 0.8), behavior: "smooth" });
   const items = [
-    ...chars.map((c) => ({ key: `${CHAR_PREFIX}${c.id.toLowerCase()}`, art: c.name, name: c.name, sub: `🧠 ${charSub(c)}`, custom: c.name })),
-    ...[DEFAULT_DIRECTOR, ...HERO_NAMES.filter((h) => h !== DEFAULT_DIRECTOR)].map((h) => ({ key: h, art: h, name: h, sub: directorSkillOf(h).skill, custom: "" })),
+    ...chars.map((c) => ({ key: `${CHAR_PREFIX}${c.id.toLowerCase()}`, art: c.name, name: c.name, sub: `🧠 ${charSub(c)}`, full: charSub(c), custom: c.name })),
+    // kartu sempit (84 px): label pendek supaya tidak terpotong di tengah frasa; keahlian lengkap di tooltip & baris di bawah daftar
+    ...[DEFAULT_DIRECTOR, ...HERO_NAMES.filter((h) => h !== DEFAULT_DIRECTOR)].map((h) => {
+      const s = directorSkillOf(h);
+      return { key: h, art: h, name: h, sub: s.short ?? s.skill, full: s.skill, custom: "" };
+    }),
   ];
   const pick = (key: string, custom: string) => {
     if (key !== hero || (custom && custom !== value?.name)) onChange(pickDirector(value, key, custom || undefined));
@@ -401,7 +426,7 @@ export function DirectorQuickPick({
               <button
                 type="button"
                 disabled={disabled}
-                title={`${it.name} — ${it.sub.replace(/^🧠 /, "")}`}
+                title={`${it.name} — ${it.full}`}
                 onClick={() => pick(it.key, it.custom)}
                 className={`flex w-[84px] flex-col items-center rounded-xl border px-1 pb-1.5 pt-1 text-center transition disabled:opacity-60 ${sel ? "border-orange-500 bg-orange-500/10" : "border-zinc-800 bg-zinc-900 hover:border-zinc-600"}`}
               >
@@ -421,7 +446,7 @@ export function DirectorQuickPick({
         )}
       </ul>
       <p className="mt-0.5 px-0.5 text-[12px] leading-snug text-zinc-400">
-        <b className="text-zinc-200">{act.name}</b> · {skillLabel(act.name, act.custom, chars)}
+        <b className="text-zinc-200">{act.name}</b> · {skillLabel(value, act, chars) || "Memuat…"}
       </p>
       {loaded && !chars.length && <p className="mt-0.5 px-0.5 text-[11px] leading-snug text-zinc-500">Karakter buatanmu (tab AI → Train your AI) juga bisa jadi sutradara.</p>}
     </div>

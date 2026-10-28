@@ -768,7 +768,7 @@ function keepVo(prev: Timeline, next: Timeline): VoTrack | null {
 // ---------------------------------------------------------------------------------------------
 /** permintaan yang butuh kreativitas besar (rencana / konsep baru) */
 const BIG_EDIT =
-  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video)(nya)?\b|\b(sudut pandang|dari awal|(di)?rombak|remake|versi (baru|lain|kedua)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
+  /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video)(nya)?\b|\b(sudut pandang|dari awal|(di)?rombak|remake|versi (baru|lain|kedua|(buat|untuk) \w+)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
 /** revisi kecil: durasi, teks, hapus/tukar adegan, warna, transisi, SFX, musik */
 const SMALL_EDIT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;

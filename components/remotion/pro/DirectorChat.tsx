@@ -442,9 +442,23 @@ function DirectorChat({ projectId, getTimeline, hasPlan, onProject, onPlan, onEx
           <p className="py-10 text-center text-[13px] text-red-400">{loadErr}</p>
         ) : !msgs.length ? (
           <div className="flex flex-col items-center px-2 py-4 text-center">
-            <HeroArt hero={name} size={onDirector ? 76 : 110} />
-            <p className="mt-2 max-w-[420px] text-[13.5px] leading-relaxed text-zinc-300">
-              Halo! Aku <b className="text-zinc-100">{name}</b>, sutradara videomu 🎬 Ceritain idenya — videonya tentang apa, buat siapa, tayang di mana, berapa detik. Aku riset dulu kalau perlu, lalu bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
+            {/* di HP + ada pilihan sutradara: avatar besar disembunyikan (sudah ada di header) & sapaan diringkas, supaya baris
+                "Pilih sutradara" masuk layar pertama */}
+            <span className={onDirector ? "hidden sm:block" : undefined}>
+              <HeroArt hero={name} size={onDirector ? 76 : 110} />
+            </span>
+            <p className={`max-w-[420px] text-[13.5px] leading-relaxed text-zinc-300 ${onDirector ? "sm:mt-2" : "mt-2"}`}>
+              Halo! Aku <b className="text-zinc-100">{name}</b>, sutradara videomu 🎬{" "}
+              {onDirector ? (
+                <>
+                  <span className="sm:hidden">Ceritain idenya: tentang apa, buat siapa, berapa detik. Aku riset dulu kalau perlu, lalu bikinin rencana lengkap.</span>
+                  <span className="hidden sm:inline">
+                    Ceritain idenya — videonya tentang apa, buat siapa, tayang di mana, berapa detik. Aku riset dulu kalau perlu, lalu bikinin rencana lengkap: naskah VO, adegan, musik & SFX.
+                  </span>
+                </>
+              ) : (
+                "Ceritain idenya — videonya tentang apa, buat siapa, tayang di mana, berapa detik. Aku riset dulu kalau perlu, lalu bikinin rencana lengkap: naskah VO, adegan, musik & SFX."
+              )}
             </p>
             <div className="mt-3 flex max-w-[640px] flex-wrap justify-center gap-1.5">
               {IDEAS.map((t) => (

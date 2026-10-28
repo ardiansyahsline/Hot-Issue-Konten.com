@@ -196,7 +196,7 @@ def t_pengaturan_env_render_gpu():
         assert got == want, (raw, got)
         assert got[-1] in "KkM"  # syarat validateBitrate() Remotion
     # auto: separuh thread CPU 2..6, dibatasi RAM (selftest_render_cache.py menguji lebih lengkap)
-    assert [config.render_tabs(n, 64.0) for n in (1, 4, 6, 8, 16, 32)] == [2, 2, 3, 4, 6, 6]
+    assert [config.render_tabs(n, 64.0) for n in (1, 4, 6, 8, 16, 32)] == [1, 2, 3, 4, 6, 6]  # 1 thread → 1 (Remotion menolak lebih)
     assert config.render_tabs(12, 8.0) == 2 and config.render_tabs(12, None) == 6
     keys = ("RENDER_GPU", "RENDER_BITRATE", "RENDER_CONCURRENCY", "DATA_DIR")
     old = {k: os.environ.get(k) for k in keys}
@@ -210,7 +210,7 @@ def t_pengaturan_env_render_gpu():
         os.environ.pop("RENDER_BITRATE")
         c = config.load(TMP / "tidak-ada.env")
         # bawaan 5M ≈ ukuran CRF 18 lama (10M = MP4 2–3× lebih besar → lewat batas upload Supabase gratis 50 MB)
-        assert c.render_concurrency == 3 and c.render_gpu == "auto" and c.render_bitrate == "5M"
+        assert c.render_concurrency == min(3, config.cpu_limit()) and c.render_gpu == "auto" and c.render_bitrate == "5M"
         assert config.Config.render_bitrate == "5M"
         os.environ.pop("RENDER_CONCURRENCY")
         c = config.load(TMP / "tidak-ada.env")

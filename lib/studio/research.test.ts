@@ -179,6 +179,37 @@ async function main() {
     // kata kunci dibatasi 6 kata
     assert.ok(researchQuery("promo Sepatu Lari Ringan Merek Baru Super Empuk Banget Murah Meriah").split(" ").length <= 6);
   });
+  await test("kata kunci: subjek dunia Konten.com tanpa nama tidak dicari, nama berhuruf besar utuh, link tanpa kata sisa (regresi pemeriksa)", () => {
+    for (const t of ["explainer cara withdraw", "bikin explainer withdraw", "Bikin video tutorial cara daftar jadi clipper", "next: promo buat UMKM"]) assert.equal(turn(t), null, t);
+    assert.equal(turn("Bikin video tutorial cara masak rendang")?.query, "tutorial cara masak rendang");
+    assert.equal(turn("bikinin video buat launching fitur Auto Clip")?.query, "fitur Auto Clip");
+    assert.equal(turn("teaser event Clipper Fest 2026")?.query, "event Clipper Fest");
+    assert.equal(researchQuery("bikin promo Kopi Kenangan kayak iklan Apple"), "Kopi Kenangan");
+    // link: halaman dibaca langsung, kata sisa ("linknya", "link") tidak dicari
+    for (const t of ["ini linknya https://tokoku.co.id/produk/kopi-susu-gula-aren", "cek link ini ya https://tokoku.co.id/p/1"]) {
+      const p = turn(t);
+      assert.equal(p?.why, "link", t);
+      assert.equal(p?.query, "", t);
+      assert.equal(p?.subject, "tokoku.co.id", t);
+    }
+    assert.equal(turn("pakai info dari https://tokoku.co.id/p/1 buat promo Sepatu Lari Ringan")?.query, "Sepatu Lari Ringan");
+    // penyaring: "fitur Auto Clip" tidak cocok dengan halaman "Fitur Auto Hold" di mobil
+    const body = (s: string) => `${s} `.repeat(6);
+    const auto: ResearchPlan = { query: "fitur Auto Clip", urls: [], subject: "fitur Auto Clip", why: "subjek" };
+    assert.equal(researchContext(auto, [{ url: "https://oto.com/berita/fitur-auto-hold", title: "Fitur Auto Hold di Mobil", content: body("Fitur auto hold menahan rem mobil saat berhenti.") }]).sources.length, 0);
+    assert.equal(researchContext(auto, [{ url: "https://berita.id/ac", title: "Fitur Auto Clip", content: body("Fitur Auto Clip memotong video otomatis jadi klip.") }]).sources.length, 1);
+    // hanya baca link: judul blok riset tanpa kata kunci kosong
+    const out = researchContext({ query: "", urls: ["https://tokoku.co.id/p/1"], subject: "tokoku.co.id", why: "link" }, [{ url: "https://tokoku.co.id/p/1", content: body("Kopi susu gula aren Tokoku, 250 ml.") }]);
+    assert.match(out.context, /dibaca otomatis barusan dari link user: tokoku\.co\.id/);
+    assert.doesNotMatch(out.context, /kata kunci ""/);
+  });
+  await test("contoh bawaan: riset hanya untuk brief yang jelas (perintah edit contohnya tidak diriset)", () => {
+    const st = { hasTimeline: false, starter: true };
+    assert.equal(turn("Promo campaign Konten.com 15 detik", st)?.query, "konten.com");
+    assert.equal(turn("Bikin iklan Kopi Kenangan 15 detik buat Reels", st)?.query, "Kopi Kenangan");
+    for (const t of ["VO adegan 1 terlalu cepat", "videonya kepanjangan", "promo nya kurang menarik", "bikin lebih dramatis", "judulnya ganti jadi Cuan dari Klip", "musik yang lebih upbeat dong", "promo nya tambahin testimoni dari Andi, clipper Bandung"])
+      assert.equal(turn(t, st), null, t);
+  });
   await test("riset otomatis dilewati untuk urusan rahasia / internal & kata umum saja", () => {
     assert.equal(turn("Bikin video tentang hasil rapat internal: revenue Q3 turun 12%, klien besar X cabut, rencana PHK 20 orang"), null);
     assert.equal(turn("Bikin video soal gaji tim bulan ini"), null);

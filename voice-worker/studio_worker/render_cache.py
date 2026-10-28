@@ -273,16 +273,21 @@ def ensure(tmp: Path, key_fn: Callable[[], str], build: Callable[[Path], None]) 
     raise RuntimeError("tidak sampai")  # pragma: no cover
 
 
-def _leftover(s: Path, d: Path) -> bool:
-    """d sudah ada (sisa folder job lama yang tidak terhapus: file dipegang program lain). True = d sudah hardlink ke file cache s
-    (dipakai apa adanya). Selain itu d dihapus dulu — JANGAN ditulisi: bisa hardlink ke cache versi lain; gagal → OSError (job gagal)."""
+def _leftover(s: Path, d: Path) -> str:
+    """d sudah ada (sisa folder job lama yang tidak terhapus: file dipegang program lain). "sama" = d sudah hardlink ke file cache s
+    (dipakai apa adanya; dulu shutil.copy2 melempar SameFileError → job gagal). "hapus" = file lain, sudah dihapus → di-link / disalin
+    seperti biasa. "timpa" = file lain yang tidak bisa dihapus → ditimpa salinan s (seperti dulu; kalau itu hardlink ke cache versi
+    lain, cache itu ketahuan rusak oleh intact() — ukuran / mtime berubah — lalu dibangun ulang)."""
     try:
         if os.path.samefile(s, d):
-            return True
+            return "sama"
     except OSError:
         pass
-    os.unlink(d)
-    return False
+    try:
+        os.unlink(d)
+        return "hapus"
+    except OSError:
+        return "timpa"
 
 
 def link_tree(src: Path, dst: Path) -> tuple[int, int]:
@@ -297,8 +302,13 @@ def link_tree(src: Path, dst: Path) -> tuple[int, int]:
         (dst / rel).mkdir(parents=True, exist_ok=True)
         for f in files:
             s, d = Path(dp) / f, dst / rel / f
-            if dirty and os.path.lexists(d) and _leftover(s, d):
+            left = _leftover(s, d) if dirty and os.path.lexists(d) else ""
+            if left == "sama":
                 linked += 1
+                continue
+            if left == "timpa":  # os.link pasti gagal (nama sudah ada) → langsung salin, cara link untuk file lain tidak berubah
+                shutil.copy2(s, d)
+                copied += 1
                 continue
             if can_link:
                 try:

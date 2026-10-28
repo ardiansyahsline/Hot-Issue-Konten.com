@@ -8,8 +8,10 @@ ketahuan → dibangun ulang), cadangan salin kalau hardlink gagal, job render le
 bundle, hit → langsung render, render gagal karena cache → dibangun ulang sekali, error komposisi biasa tidak diulang, file suara VO
 tidak diunduh untuk versi tanpa VO, pra-bangun di latar + job menunggu kuncinya (gagal → tidak diulang tiap cek berkala), tab
 paralel auto dari CPU & RAM palsu, migrasi "RENDER_CONCURRENCY=2" .env lama (2 varian, CRLF/BOM terjaga, angka pemakai dihormati,
-sekali saja, hanya oleh worker yang memegang kunci satu-instance), dan flag --concurrency CLI Remotion menang atas
-Config.setConcurrency di remotion.config.mjs.
+sekali saja, hanya oleh worker yang memegang kunci satu-instance), flag --concurrency CLI Remotion menang atas
+Config.setConcurrency di remotion.config.mjs, kunci ikut node_modules/.package-lock.json (paket lain yang di-bundle), sisa folder job
+lama yang tidak terhapus tidak menggagalkan job, sisa sekali-pakai PID lama dibersihkan, tab tidak pernah lebih dari thread CPU
+(batas Remotion), dan .env ANSI / UTF-16 tetap terbaca.
 """
 from __future__ import annotations
 
@@ -113,6 +115,7 @@ def fake_repo(d: Path) -> Path:
         "node_modules/@remotion/cli/remotion-cli.js": "// palsu\n",
         "node_modules/remotion/package.json": '{"version": "4.0.535"}',
         "node_modules/lain/index.js": "// paket lain\n",
+        "node_modules/.package-lock.json": '{"packages": {"node_modules/mediabunny": {"version": "1.61.3"}}}',
         "assets/audio/sfx/ui-pop.mp3": "pop",
         "assets/audio/sfx/whoosh.mp3": "whoosh",
         "assets/audio/music/lagu.mp3": "lagu",
@@ -159,12 +162,20 @@ def t_kunci_cache_berubah_saat_file_berubah():
     (repo / "components" / ".cache").mkdir()
     (repo / "components" / ".cache" / "x").write_text("x")
     assert key(repo) == k0, "node_modules paket lain & folder tersembunyi tidak ikut kunci (package-lock.json yang ikut)"
+    hidden = repo / "node_modules" / ".package-lock.json"
+    body = hidden.read_text()
+    hidden.write_text(body)  # npm ci / npm i dengan pohon paket sama: file ditulis ulang, isi sama → tidak bangun ulang
+    st = hidden.stat()
+    os.utime(hidden, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    assert key(repo) == k0, "node_modules/.package-lock.json ditulis ulang dengan isi sama → kunci tetap"
     changes = {
         "kode komponen": lambda: fx.write_text("export const Grain = 2;\n"),
         "file kode baru": lambda: (repo / "lib" / "studio" / "baru.ts").write_text("export {};\n"),
         "remotion.config.mjs": lambda: (repo / "remotion.config.mjs").write_text("// config 2\n"),
         "package-lock.json": lambda: (repo / "package-lock.json").write_text('{"v": 2}\n'),
         "versi @remotion/cli": lambda: (repo / "node_modules" / "@remotion" / "cli" / "package.json").write_text('{"version": "4.0.536"}'),
+        # git pull lalu install.ps1 (npm i) memperbarui paket lain yang ikut di-bundle (mediabunny, react, @fontsource…)
+        "node_modules terpasang (npm i)": lambda: hidden.write_text('{"packages": {"node_modules/mediabunny": {"version": "1.62.0"}}}'),
         "SFX baru": lambda: (repo / "assets" / "audio" / "sfx" / "boom.mp3").write_text("boom"),
         "ukuran SFX": lambda: (repo / "assets" / "audio" / "sfx" / "ui-pop.mp3").write_text("pop pop"),
         "logo preset": lambda: (repo / "public" / "konten-logo.png").write_text("png2"),
@@ -322,6 +333,74 @@ def t_kode_berubah_di_tengah_bangun():
     assert built and k == "y" * 20 and len(calls) == 2 and src.parent.name == "y" * 20
     assert not (render_cache.root(tmp) / ("x" * 20)).exists()
     return "git pull saat bundle → dibangun sekali lagi, disimpan dengan kunci baru"
+
+
+@test
+def t_sisa_folder_job_lama_tidak_menggagalkan_link():
+    """job diulang dengan id sama (recover_stale) & folder job lama tidak terhapus tuntas (file dipegang program lain tanpa
+    share-delete): file yang sudah hardlink ke cache dipakai (dulu SameFileError → "Tugas gagal"), file lain dihapus lalu di-link,
+    file lain yang tidak bisa dihapus ditimpa salinan (seperti dulu). Cache tetap utuh."""
+    tmp = TMP / "data-sisa" / "tmp"
+    k = "w" * 20
+    src, _, _ = render_cache.ensure(tmp, lambda: k, fake_build([]))
+    job = TMP / "data-sisa" / "job"
+    render_cache.link_tree(src, job)  # sisa job lama: semua hardlink ke cache ini
+    for name, body in (("bundle.js", "sisa lain"), ("6.bundle.js", "sisa terkunci")):  # file lain (mis. cache versi lama)
+        (job / name).unlink()
+        (job / name).write_text(body)
+    real_unlink = os.unlink
+
+    def locked(path, *a, **kw):
+        if Path(path) == job / "6.bundle.js":
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process (palsu)")
+        return real_unlink(path, *a, **kw)
+
+    os.unlink = locked  # type: ignore[assignment]
+    try:
+        linked, copied = render_cache.link_tree(src, job)
+    finally:
+        os.unlink = real_unlink  # type: ignore[assignment]
+    assert (linked, copied) == (5, 1), (linked, copied)
+    assert os.path.samefile(src / "index.html", job / "index.html"), "sudah hardlink ke cache → dipakai apa adanya"
+    assert os.path.samefile(src / "bundle.js", job / "bundle.js"), "file lain yang bisa dihapus → diganti hardlink"
+    assert (job / "6.bundle.js").read_text() == "chunk" and not os.path.samefile(src / "6.bundle.js", job / "6.bundle.js")
+    assert render_cache.intact(src.parent, k), "cache tidak boleh berubah"
+    # folder job baru (normal): tanpa cek tambahan, semua hardlink
+    linked, copied = render_cache.link_tree(src, TMP / "data-sisa" / "job-baru")
+    assert (linked, copied) == (6, 0), (linked, copied)
+    return "hardlink sisa dipakai, file lain diganti / ditimpa, cache utuh"
+
+
+@test
+def t_rename_selalu_gagal_sisa_lama_dibuang():
+    """rename .baru selalu ditolak di laptop itu (antivirus / OneDrive / pengindeks) + worker menyala ulang (PID baru): sisa
+    sekali-pakai milik PID lain yang sudah basi (> STALE_BUILD_SEC) ikut dibuang — dulu menumpuk ±49 MB per worker menyala"""
+    tmp = TMP / "data-sisa-pid" / "tmp"
+    r = render_cache.root(tmp)
+    stale, young = r / ".baru-qqqqqqqq-1111-aaaaaa", r / ".baru-qqqqqqqq-2222-bbbbbb"
+    for d in (stale, young):
+        (d / "bundle").mkdir(parents=True)
+        (d / "bundle" / "index.html").write_text("<html></html>")
+    old = time.time() - render_cache.STALE_BUILD_SEC - 60
+    os.utime(stale, (old, old))
+    real_replace, tries = os.replace, render_cache.RENAME_TRIES
+
+    def deny(a, b):
+        if Path(a).name.startswith(".baru-"):
+            raise PermissionError(5, "Access is denied (palsu)")
+        return real_replace(a, b)
+
+    try:
+        render_cache.RENAME_TRIES = 2
+        os.replace = deny  # type: ignore[assignment]
+        src, _, built = render_cache.ensure(tmp, lambda: "q" * 20, fake_build([]))
+    finally:
+        os.replace = real_replace  # type: ignore[assignment]
+        render_cache.RENAME_TRIES = tries
+    assert built and src.parent.name.startswith(f".baru-qqqqqqqq-{os.getpid()}-") and (src / "index.html").exists(), src
+    assert not stale.exists(), "sisa sekali-pakai PID lain yang > 6 jam harus dibuang"
+    assert young.exists(), "folder .baru yang masih baru tidak disentuh"
+    return "sisa basi PID lama dibuang, folder sekali-pakai job ini & yang masih baru aman"
 
 
 # ---------------------------------------------------------------- job render lengkap
@@ -614,22 +693,127 @@ def t_tab_paralel_auto_cpu_ram_palsu():
         os.environ["DATA_DIR"] = str(TMP / "data-tab")
         os.environ.pop("RENDER_CONCURRENCY", None)
         c = config.load(TMP / "tidak-ada.env")  # tanpa .env → bawaan auto
-        assert c.render_conc_auto and c.render_concurrency == config.render_tabs(os.cpu_count() or 4, 8.0), c.render_concurrency
-        assert c.render_conc_info.startswith(f"auto: {os.cpu_count()} thread, 8,0 GB RAM"), c.render_conc_info
+        assert c.render_conc_auto and c.render_concurrency == config.render_tabs(config.cpu_limit(), 8.0), c.render_concurrency
+        assert c.render_conc_info.startswith(f"auto: {config.cpu_limit()} thread, 8,0 GB RAM"), c.render_conc_info
         for raw, want in (("auto", None), ("AUTO", None), ("", None), ("4", 4), ("1", 1), ("12", 8), ("0", 1), ("tiga", None)):
             os.environ["RENDER_CONCURRENCY"] = raw
             c = config.load(TMP / "tidak-ada.env")
             if want is None:
-                assert c.render_conc_auto and c.render_concurrency == config.render_tabs(os.cpu_count() or 4, 8.0), (raw, c.render_concurrency)
+                assert c.render_conc_auto and c.render_concurrency == config.render_tabs(config.cpu_limit(), 8.0), (raw, c.render_concurrency)
             else:
-                assert not c.render_conc_auto and c.render_concurrency == want and c.render_conc_info == f"RENDER_CONCURRENCY={want} di .env", (raw, c)
+                n = min(want, config.cpu_limit())  # lebih dari thread CPU → dibatasi (t_tab_tidak_lebih_dari_thread_cpu)
+                assert not c.render_conc_auto and c.render_concurrency == n and c.render_conc_info.startswith(f"RENDER_CONCURRENCY={want} di .env"), (raw, c)
     finally:
         for k, v in old.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    return f"laptop 12 thread/16 GB → 6 tab, 8 GB → 2, 4 GB → 1; di sini RAM {ram and round(ram, 1)} GB → auto {config.render_tabs(os.cpu_count() or 4, ram)}"
+    return f"laptop 12 thread/16 GB → 6 tab, 8 GB → 2, 4 GB → 1; di sini RAM {ram and round(ram, 1)} GB → auto {config.render_tabs(config.cpu_limit(), ram)}"
+
+
+@test
+def t_tab_tidak_lebih_dari_thread_cpu():
+    """Remotion menolak --concurrency > thread CPU ("concurrency is set higher than the amount of CPU cores available") → semua
+    render gagal. Angka di .env & auto dibatasi cpu_limit(); 1 thread → 1 tab (dulu TABS_MIN memberi 2)."""
+    assert config.render_tabs(1, 64.0) == 1 and config.render_tabs(1, None) == 1 and config.render_tabs(2, 64.0) == 2
+    real = config.cpu_limit
+    keys = ("RENDER_CONCURRENCY", "DATA_DIR")
+    old = {k: os.environ.get(k) for k in keys}
+    try:
+        os.environ["DATA_DIR"] = str(TMP / "data-tab-cpu")
+        config.total_ram_gb = lambda: 32.0  # type: ignore[assignment]
+        config.cpu_limit = lambda: 4  # type: ignore[assignment]
+        for raw, want, info in (("6", 4, "RENDER_CONCURRENCY=6 di .env, dibatasi 4 thread CPU"), ("12", 4, "RENDER_CONCURRENCY=8 di .env, dibatasi 4 thread CPU"),
+                                ("4", 4, "RENDER_CONCURRENCY=4 di .env"), ("3", 3, "RENDER_CONCURRENCY=3 di .env")):
+            os.environ["RENDER_CONCURRENCY"] = raw
+            c = config.load(TMP / "tidak-ada.env")
+            assert (c.render_concurrency, c.render_conc_auto, c.render_conc_info) == (want, False, info), (raw, c.render_concurrency, c.render_conc_info)
+            assert jobs_render.tabs_note(c) == info
+        config.cpu_limit = lambda: 1  # type: ignore[assignment]
+        os.environ["RENDER_CONCURRENCY"] = "auto"
+        c = config.load(TMP / "tidak-ada.env")
+        assert c.render_concurrency == 1 and c.render_conc_info.startswith("auto: 1 thread"), (c.render_concurrency, c.render_conc_info)
+    finally:
+        config.cpu_limit = real  # type: ignore[assignment]
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    lim = config.cpu_limit()
+    assert 1 <= lim <= (os.cpu_count() or lim)
+    # batas Python tidak boleh melebihi batas Remotion asli di laptop ini (getCpuCount = min(nproc, os.availableParallelism()))
+    node = shutil.which("node")
+    js = REPO / "node_modules" / "@remotion" / "renderer" / "dist" / "get-cpu-count.js"
+    if not node or not js.exists():
+        return f"batas {lim} thread (Remotion tidak dicek: node / @remotion/renderer tidak ada)"
+    def remotion_cpus(env: dict) -> int:
+        r = subprocess.run([node, "-e", f"console.log(require({json.dumps(str(js))}).getCpuCount())"], capture_output=True, text=True, timeout=60, env=env)
+        assert r.returncode == 0, r.stderr
+        return int(r.stdout.strip().splitlines()[-1])
+
+    # env proses render = jobs_render.cli_env(): OMP_NUM_THREADS dari apply_thread_limits (di sini 2) TIDAK ikut — `nproc` membacanya
+    assert os.environ.get("OMP_NUM_THREADS") and "OMP_NUM_THREADS" not in jobs_render.cli_env()
+    rem = remotion_cpus(jobs_render.cli_env())
+    assert lim <= rem, (lim, rem)
+    raw = remotion_cpus(dict(os.environ))
+    return f".env 6 → 4 tab di laptop 4 thread, 1 thread → 1; di sini batas {lim} thread, Remotion {rem} (dengan OMP_NUM_THREADS ikut: {raw})"
+
+
+@test
+def t_env_ansi_utf16_tetap_dibaca():
+    """.env yang disimpan ANSI (Notepad lama / PowerShell 5.1 Set-Content) atau UTF-16 (PowerShell 5.1 `>` / Out-File) dengan satu
+    huruf non-ASCII: dulu python-dotenv (UTF-8 ketat) melempar UnicodeDecodeError saat import worker.py → worker tidak bisa menyala
+    (jalankan.bat mengulang tiap 15 dtk). Sekarang tetap dibaca + 1 catatan untuk log."""
+    try:
+        import dotenv  # noqa: F401
+    except ImportError:
+        return "dilewati (python-dotenv belum terpasang)"
+    keys = ("UPLOAD_WORKERS", "TAKES", "PRELOAD", "RENDER_CONCURRENCY", "DATA_DIR")
+    old = {k: os.environ.get(k) for k in keys}
+    body = "# catatan Alif: suara “natural” é ñ\r\nUPLOAD_WORKERS=5\r\nTAKES=2\r\n"
+    cases = {
+        "ANSI": (body.replace("“", '"').replace("”", '"').encode("cp1252"), "ANSI"),
+        "UTF-16": (("\ufeff" + body).encode("utf-16-le"), "UTF-16"),
+        "UTF-8+BOM": (b"\xef\xbb\xbf" + body.encode("utf-8"), ""),
+        "UTF-8": (body.replace("\r\n", "\n").encode("utf-8"), ""),
+    }
+    got = []
+    try:
+        for name, (raw, enc) in cases.items():
+            for k in keys:
+                os.environ.pop(k, None)
+            os.environ["DATA_DIR"] = str(TMP / "data-enc")
+            f = TMP / f"enc-{name}.env"
+            f.write_bytes(raw)
+            c = config.load(f)
+            assert (c.upload_workers, c.takes) == (5, 2), (name, c.upload_workers, c.takes)
+            if enc:
+                assert enc in c.env_note and "UTF-8" in c.env_note, (name, c.env_note)
+            else:
+                assert c.env_note == "", (name, c.env_note)
+            assert f.read_bytes() == raw, "file .env tidak diubah"
+            got.append(name)
+        # "PRELOAD=0" bawaan .env lama di file ANSI: _preload membaca file itu juga → tidak crash, tetap dikenali sebagai bawaan lama
+        for k in keys:
+            os.environ.pop(k, None)
+        os.environ["DATA_DIR"] = str(TMP / "data-enc")
+        f = TMP / "enc-preload.env"
+        f.write_bytes(("# é\r\n" + config._OLD_PRELOAD.replace("\n", "\r\n") + "\r\n").encode("cp1252"))
+        c = config.load(f)
+        assert c.preload and c.preload_old_default and "ANSI" in c.env_note
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert config.read_env_text(TMP / "tidak-ada.env") == (None, "")
+    src = (HERE / "worker.py").read_text(encoding="utf-8")
+    main = src[src.index("def main()"):]
+    assert main.index("CFG.env_note") < main.index("CFG.missing()"), "catatan encoding ditulis ke log sebelum cek kunci Supabase"
+    return ", ".join(got) + " terbaca; PRELOAD=0 lama di file ANSI dikenali"
 
 
 # ---------------------------------------------------------------- migrasi .env
@@ -663,7 +847,7 @@ def t_migrasi_env_lama_dua_varian():
     except ImportError:
         return "dilewati (python-dotenv belum terpasang)"
     config.total_ram_gb = lambda: 16.0  # type: ignore[assignment]
-    want_n = config.render_tabs(os.cpu_count() or 4, 16.0)
+    want_n = config.render_tabs(config.cpu_limit(), 16.0)
     out = []
     for name, text, eol, bom in (("A-komentar-lama-CRLF", OLD_A, "\r\n", False), ("B-tanpa-komentar-LF", OLD_B, "\n", False),
                                  ("A-BOM-CRLF", OLD_A, "\r\n", True), ("B-tanpa-enter-akhir", OLD_B.rstrip("\n").replace("\nRENDER_TIMEOUT_MIN=40", ""), "\n", False)):
@@ -702,7 +886,7 @@ def t_migrasi_env_lama_dua_varian():
         c = _load_env(p)
         assert p.read_bytes() == raw and not c.env_migrated, val
         if val in ("3", "1"):
-            assert c.render_concurrency == int(val) and not c.render_conc_auto
+            assert c.render_concurrency == min(int(val), config.cpu_limit()) and not c.render_conc_auto
     # dua baris RENDER_CONCURRENCY (diedit pemakai) → tidak disentuh
     p = TMP / "env-dobel"
     raw = (OLD_B + "RENDER_CONCURRENCY=4\n").encode()
@@ -726,7 +910,7 @@ def t_migrasi_env_lama_dua_varian():
     os.environ["RENDER_CONCURRENCY"] = "5"
     try:
         c = config.load(p, migrate=True)
-        assert c.render_concurrency == 5
+        assert c.render_concurrency == min(5, config.cpu_limit())
     finally:
         os.environ.pop("RENDER_CONCURRENCY", None)
     return f"{len(out)} varian .env lama → auto ({want_n} tab di sini dengan RAM 16 GB palsu); angka pemakai dihormati"

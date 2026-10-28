@@ -82,14 +82,19 @@ async function main() {
   // ---------- keahlian hero ----------
   await test("keahlian sutradara ada & khas untuk semua hero bawaan", () => {
     const labels = new Set<string>();
+    const shorts = new Set<string>();
     for (const h of HERO_NAMES) {
       const s = directorSkillOf(h);
       assert.ok(hasHeroSkill(h), `${h} tanpa keahlian khas`);
       assert.ok(s.skill.length >= 8 && s.skill.length <= 40, `${h}: label keahlian ${s.skill.length} huruf`);
       assert.ok(s.style.length >= 60, `${h}: gaya terlalu pendek`);
+      // label kartu "Pilih sutradara" (84 px, 2 baris): pendek supaya tidak terpotong di tengah frasa
+      assert.ok(s.short && s.short.length <= 18 && s.short.split(" ").every((w) => w.length <= 12), `${h}: label pendek "${s.short}"`);
       labels.add(s.skill);
+      shorts.add(s.short!);
     }
     assert.equal(labels.size, HERO_NAMES.length, "label keahlian kembar");
+    assert.equal(shorts.size, HERO_NAMES.length, "label pendek kembar");
     // karakter buatan / hero asing: dari tipe MBTI
     assert.equal(directorSkillOf("Karakterku", "INTP").skill, directorSkillOf("Gord").skill);
     assert.ok(directorSkillOf("Siapa", "XXXX").skill);

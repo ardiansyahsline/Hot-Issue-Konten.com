@@ -162,8 +162,9 @@ const ABOUT = /\b(tentang|soal|mengenai|bertema|seputar)\s+[\p{L}\p{N}]/iu;
 const EDIT_HINT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(di)?(ganti|ubah|hapus|buang|tukar|pindah|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki|percepat|perlambat|pendekin|panjangin)(in|kan|nya)?\b|^\s*(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|musik|volume|subtitle|ejaan|tombol|vo|suara|durasi|hook|cta|intro|outro)(nya)?\b/i;
 /**
- * proyek nyata: tanda revisi tambahan — kata kerja "masukkan ke video" (tambahin, tampilin, kasih, taruh, tulis, sebut, masukin,
- * mention, tonjolkan), kritik (kurang, terlalu, kepanjangan), posisi di video ("di akhir", "di CTA"), bagian video + -nya ("hook-nya")
+ * tanda revisi tambahan (proyek nyata; di contoh bawaan: brief yang tidak "jelas" → tidak diriset) — kata kerja "masukkan ke video"
+ * (tambahin, tampilin, kasih, taruh, tulis, sebut, masukin, mention, tonjolkan), kritik (kurang, terlalu, kepanjangan), posisi di video
+ * ("di akhir", "di CTA"), bagian video + -nya ("hook-nya")
  */
 const REVISE_HINT =
   /\b(tambah(in|kan)?|tampil(in|kan)|kasih|kasi|(di)?taruh(in)?|(di)?tulis(in|kan)?|(di)?sebut(in|kan)?|(di)?masuk(in|kan)|mention|(di)?tonjol(in|kan)|kurang|terlalu|kebanyakan|kepanjangan|kependekan|kecepetan|kelamaan|kegedean|kekecilan)\b|\b(di|ke|pada)\s+(akhir|awal|tengah|ujung|pojok|ending|penutup|pembuka|intro|outro|hook|cta|adegan|scene|vo|teks|judul|bagian)\b|\b(hook|cta|intro|outro|judul|teks|tulisan|vo|musik|logo|warna|font|transisi|subtitle|caption|durasi|ending|opening|narasi)[\s-]*nya\b/iu;

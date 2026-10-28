@@ -498,8 +498,18 @@ def _kill(p: subprocess.Popen) -> None:
         pass
 
 
-def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_stop: Callable[[], bool], timeout: float) -> tuple[int, list[str]]:
+def cli_env() -> dict[str, str]:
+    """env proses node Remotion. OMP_NUM_THREADS / OMP_THREAD_LIMIT (config.apply_thread_limits, untuk torch) dibuang: `nproc` (Linux,
+    atau Windows dengan alat Unix Git di PATH) membacanya → Remotion mengira CPU hanya sebanyak CPU_THREADS & menolak --concurrency
+    yang lebih besar (semua render gagal). Node / Chrome / ffmpeg tidak memakai OpenMP."""
     env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0"}
+    for k in ("OMP_NUM_THREADS", "OMP_THREAD_LIMIT"):
+        env.pop(k, None)
+    return env
+
+
+def run_cli(args: list[str], cwd: Path, on_line: Callable[[str], None], should_stop: Callable[[], bool], timeout: float) -> tuple[int, list[str]]:
+    env = cli_env()
     p = subprocess.Popen(
         args, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, creationflags=ff.CHILD_FLAGS
     )
