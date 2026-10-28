@@ -4,6 +4,7 @@ Dipanggil PALING AWAL (sebelum numpy/torch di-import) supaya batas thread CPU & 
 """
 from __future__ import annotations
 
+import io
 import os
 import re
 import socket
@@ -131,6 +132,16 @@ class Config:
     utmos_urls: tuple[str, ...] = ()  # mirror checkpoint UTMOS (dicoba sebelum GitHub); boleh hf://pemilik/repo/file.pt
     auto_download: bool = True  # model yang kurang diunduh di thread latar saat worker hidup (job tidak menunggu)
     # --- /UNDUH ---
+    # --- RENDER-CEPAT ---
+    # RENDER_CONCURRENCY=auto (bawaan): tab dihitung dari thread CPU & RAM (render_tabs); angka di .env = dipakai apa adanya
+    render_conc_auto: bool = True
+    render_conc_info: str = ""  # untuk log "Render: N tab paralel (<info>)"
+    # pesan sekali untuk log saat worker mulai: "RENDER_CONCURRENCY=2" bawaan lama di .env ditulis ulang jadi auto (migrate_env)
+    env_migrated: str = ""
+    env_file: Path | None = None  # .env yang dibaca load() (dipakai migrate_env)
+    # .env bukan UTF-8 (mis. ANSI dari Notepad lama / PowerShell 5.1) → tetap dibaca; worker.py menulis pesan ini sekali ke log
+    env_note: str = ""
+    conc_sysenv: bool = False  # RENDER_CONCURRENCY dari env sistem (bukan .env) → migrasi .env tidak mengubah jumlah tab
 
     @property
     def cache(self) -> Path:
@@ -175,24 +186,44 @@ def apply_thread_limits(n: int) -> None:
 _OLD_PRELOAD = "# muat model suara saat worker mulai (1) atau saat job pertama (0)\nPRELOAD=0"
 
 
+def read_env_text(env_file: Path) -> tuple[str | None, str]:
+    """isi .env sebagai teks, apa pun cara menyimpannya: UTF-8 (dengan / tanpa BOM), UTF-16 ber-BOM (PowerShell 5.1 `>` / Out-File),
+    selain itu ANSI cp1252 (Notepad lama, PowerShell 5.1 Set-Content) — dulu satu huruf seperti "é" membuat worker tidak bisa menyala.
+    Balikan (teks, nama encoding kalau bukan UTF-8); file tidak ada / tak terbaca → (None, "")."""
+    try:
+        raw = env_file.read_bytes()
+    except OSError:
+        return None, ""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16"), "UTF-16"
+        except UnicodeDecodeError:
+            pass
+    try:
+        return raw.decode("utf-8-sig"), ""
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace"), "ANSI"
+
+
 def _preload(env_file: Path) -> tuple[bool, bool]:
     """(PRELOAD, True kalau "PRELOAD=0" bawaan .env lama diabaikan)"""
     if _env("PRELOAD") == "0":
-        try:
-            txt = env_file.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
-        except OSError:
-            txt = ""
+        txt = (read_env_text(env_file)[0] or "").replace("\r\n", "\n")
         if _OLD_PRELOAD in txt:
             return True, True
     return _bool("PRELOAD", True), False
 
 
-def load(env_file: Path | None = None) -> Config:
+def load(env_file: Path | None = None, migrate: bool = False) -> Config:
+    """migrate=True = langsung migrate_env() (tes). worker.py memanggil migrate_env() sendiri SESUDAH kunci satu-instance."""
     env_file = env_file or ROOT / ".env"
+    pre_conc = os.environ.get("RENDER_CONCURRENCY")  # dari env sistem (bukan .env) → tidak disentuh migrasi
+    env_text, env_enc = read_env_text(env_file)
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(env_file, override=False)
+        if env_text is not None:  # dibaca sendiri (bukan load_dotenv(path) = UTF-8 ketat → .env ANSI membuat worker crash)
+            load_dotenv(stream=io.StringIO(env_text), override=False)
     except ImportError:  # python-dotenv belum terpasang: pakai env sistem saja
         pass
 
@@ -236,7 +267,7 @@ def load(env_file: Path | None = None) -> Config:
         poll_sec=_float("POLL_SEC", 5, 1, 120),
         heartbeat_sec=_float("HEARTBEAT_SEC", 20, 5, 300),
         render=_bool("RENDER_ENABLED", True),
-        render_concurrency=_int("RENDER_CONCURRENCY", 2, 1, 8),
+        render_concurrency=2,  # diisi di bawah (RENDER-CEPAT)
         render_timeout_min=_int("RENDER_TIMEOUT_MIN", 40, 5, 240),
         render_browser=_env("REMOTION_BROWSER"),
         df_atten_db=_float("DF_ATTEN_DB", 18, 6, 30),
@@ -265,8 +296,14 @@ def load(env_file: Path | None = None) -> Config:
     # --- RENDER-GPU ---
     cfg.render_gpu = render_gpu_mode(_env("RENDER_GPU", "auto"))
     cfg.render_bitrate = render_bitrate(_env("RENDER_BITRATE", "5M"))
-    if _env("RENDER_CONCURRENCY").lower() == "auto":  # _int() di atas memberi 2 untuk "auto" → diganti sesuai jumlah core
-        cfg.render_concurrency = auto_render_concurrency()
+    if env_enc:
+        cfg.env_note = (f"File .env tersimpan sebagai {env_enc}, bukan UTF-8 — tetap dibaca. Supaya aman: buka di Notepad → Simpan Sebagai → "
+                        "Encoding UTF-8.")
+    # --- RENDER-CEPAT ---
+    cfg.env_file, cfg.conc_sysenv = env_file, pre_conc is not None
+    set_render_tabs(cfg, _env("RENDER_CONCURRENCY", "auto"))
+    if migrate:
+        migrate_env(cfg)
     cfg.ensure_dirs()
     return cfg
 
@@ -292,7 +329,146 @@ def render_bitrate(raw: str) -> str:
     return f"{num}{unit}"
 
 
-def auto_render_concurrency(cpus: int | None = None) -> int:
-    """RENDER_CONCURRENCY=auto → tab Chrome render paralel = setengah core CPU, 2..4 (laptop juga dipakai bot WAHA)"""
-    n = cpus if cpus is not None else (os.cpu_count() or 4)
-    return min(4, max(2, n // 2))
+# --- RENDER-CEPAT ---
+# tab Chrome render paralel untuk RENDER_CONCURRENCY=auto (bawaan): separuh thread CPU (sisanya untuk bot WAHA & worker), 2..6,
+# lalu dibatasi RAM total: RAM_RESERVE_GB untuk Windows + bot WAHA + mesin suara + Remotion/ffmpeg, tiap tab ±TAB_GB
+TABS_MIN, TABS_MAX = 2, 6
+# diukur (teaser 1080×1920, Chrome tanpa GPU): tiap tab tambahan ±0,17 GB PSS (2 tab 1,03 GB → 4 tab 1,36 GB). 0,7 GB = cadangan
+# untuk timeline berisi video / gambar besar
+TAB_GB = 0.7
+RAM_RESERVE_GB = 6.0
+
+
+def total_ram_gb() -> float | None:
+    """RAM total (GB) tanpa paket tambahan: Windows GlobalMemoryStatusEx (ctypes), Linux/mac os.sysconf; gagal → None"""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _Mem(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [
+                    (n, ctypes.c_ulonglong) for n in ("total", "avail", "page_t", "page_a", "virt_t", "virt_a", "ext_a")
+                ]
+
+            m = _Mem()
+            m.dwLength = ctypes.sizeof(_Mem)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return None
+            return m.total / 1024**3 or None
+        return (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / 1024**3 or None
+    except (AttributeError, OSError, ValueError, TypeError):
+        return None
+
+
+def cpu_limit() -> int:
+    """thread CPU yang boleh dipakai proses ini = batas --concurrency Remotion (min(nproc, os.availableParallelism())): lebih dari ini
+    → Remotion menolak render ("concurrency is set higher than the amount of CPU cores available")"""
+    try:
+        f = getattr(os, "process_cpu_count", None)  # Python 3.13+: ikut affinity proses (Windows & Linux)
+        n = f() if f else len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        n = None
+    return max(1, n or os.cpu_count() or 1)
+
+
+def render_tabs(cpus: int, ram_gb: float | None) -> int:
+    """jumlah tab render untuk auto: min(separuh thread CPU dalam 2..6, tab yang muat di RAM); RAM tak terbaca → CPU saja.
+    RAM sangat kecil (< ±7,4 GB) → bisa 1 tab supaya laptop tidak kehabisan memori. Tidak pernah lebih dari jumlah thread (1 thread → 1)."""
+    n = min(TABS_MAX, max(TABS_MIN, int(cpus or 4) // 2), int(cpus or 4))
+    if ram_gb and ram_gb > 0:
+        n = min(n, int((ram_gb - RAM_RESERVE_GB) / TAB_GB))
+    return max(1, n)
+
+
+def auto_render_concurrency(cpus: int | None = None, ram_gb: float | None = None) -> int:
+    """RENDER_CONCURRENCY=auto → render_tabs() untuk laptop ini (cpus / ram_gb kosong = dibaca dari sistem)"""
+    return render_tabs(cpus if cpus is not None else cpu_limit(), ram_gb if ram_gb is not None else total_ram_gb())
+
+
+def _tabs_fixed(raw: str) -> int | None:
+    """RENDER_CONCURRENCY dari .env: angka → 1..8 (dihormati, lalu dibatasi cpu_limit() di set_render_tabs); kosong / auto / salah
+    ketik → None (= auto)"""
+    v = (raw or "").strip().lower()
+    if v in ("", "auto", "otomatis"):
+        return None
+    try:
+        return max(1, min(8, int(float(v.replace(",", ".")))))
+    except ValueError:
+        return None
+
+
+def set_render_tabs(cfg: Config, raw: str) -> None:
+    """RENDER_CONCURRENCY (raw) → cfg.render_concurrency / render_conc_auto / render_conc_info"""
+    fixed = _tabs_fixed(raw)
+    cpus = cpu_limit()  # Remotion menolak --concurrency > jumlah thread → semua render gagal
+    if fixed is None:
+        ram = total_ram_gb()
+        cfg.render_concurrency = render_tabs(cpus, ram)
+        cfg.render_conc_auto = True
+        cfg.render_conc_info = f"auto: {cpus} thread, " + (f"{ram:.1f} GB RAM".replace(".", ",") if ram else "RAM tidak terbaca")
+    else:
+        n = min(fixed, cpus)
+        cfg.render_concurrency, cfg.render_conc_auto = n, False
+        cfg.render_conc_info = f"RENDER_CONCURRENCY={fixed} di .env" + (f", dibatasi {cpus} thread CPU" if n < fixed else "")
+
+
+def migrate_env(cfg: Config) -> str:
+    """worker.py main() SESUDAH kunci satu-instance (proses kedua yang langsung berhenti tidak menulis .env): .env lama dirapikan
+    sekali (migrate_render_concurrency) lalu jumlah tab dihitung ulang (auto) kecuali RENDER_CONCURRENCY dari env sistem.
+    Balikan pesan satu baris untuk log ("" = tidak ada yang diubah); juga disimpan di cfg.env_migrated."""
+    if cfg.env_file is None:
+        return ""
+    msg = migrate_render_concurrency(cfg.env_file)
+    if not msg:
+        return ""
+    if not cfg.conc_sysenv:  # "2" tadi dari .env = bawaan lama → auto (juga kalau .env tidak bisa ditulis ulang)
+        os.environ["RENDER_CONCURRENCY"] = "auto"
+        set_render_tabs(cfg, "auto")
+    cfg.env_migrated = f"{msg} → sekarang {cfg.render_concurrency} tab render paralel ({cfg.render_conc_info})."
+    return cfg.env_migrated
+
+
+# migrasi .env lama: "RENDER_CONCURRENCY=2" disalin install.ps1 dari .env.example versi dulu = BAWAAN lama (bukan pilihan pemakai)
+_OLD_CONC_COMMENT = "# tab Chrome render paralel: angka 1-8, atau auto = setengah jumlah core CPU (2-4). Bawaan 2"
+CONC_COMMENT = "# tab Chrome render paralel: auto (bawaan) = sesuai thread CPU & RAM laptop (2-6), atau angka tetap 1-8"
+
+
+def migrate_render_concurrency(env_file: Path) -> str:
+    """sekali saja: .env yang berisi baris persis "RENDER_CONCURRENCY=2" (satu-satunya baris RENDER_CONCURRENCY) dan belum punya
+    komentar baru → baris itu jadi "RENDER_CONCURRENCY=auto" + komentar baru (komentar lama tepat di atasnya diganti; kalau tidak ada,
+    komentar baru disisipkan). Sisa file, akhir baris CRLF/LF & BOM tidak berubah. Angka lain / sudah dimigrasi → tidak diubah.
+    Balikan pesan untuk log ("" = tidak ada yang diubah)."""
+    try:
+        raw = env_file.read_bytes()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        text = raw[3:].decode("utf-8") if bom else raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if CONC_COMMENT in text:
+        return ""
+    lines = text.splitlines(keepends=True)
+    body = [ln.rstrip("\r\n") for ln in lines]
+    conc = [i for i, ln in enumerate(body) if re.match(r"\s*RENDER_CONCURRENCY\s*=", ln)]
+    if len(conc) != 1 or body[conc[0]].rstrip() != "RENDER_CONCURRENCY=2":
+        return ""
+    i = conc[0]
+    eol = "\r\n" if "\r\n" in text else "\n"
+    end = lines[i][len(body[i]):]  # akhir baris itu sendiri ("" kalau baris terakhir tanpa enter)
+    new = ["RENDER_CONCURRENCY=auto" + end]
+    if i > 0 and body[i - 1].strip() == _OLD_CONC_COMMENT:
+        lines[i - 1] = CONC_COMMENT + (lines[i - 1][len(body[i - 1]):] or eol)
+    else:
+        new.insert(0, CONC_COMMENT + eol)
+    lines[i : i + 1] = new
+    out = ("\ufeff" if bom else "") + "".join(lines)
+    tmp = env_file.with_name(env_file.name + ".baru")
+    try:
+        tmp.write_bytes(out.encode("utf-8"))
+        os.replace(tmp, env_file)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return f"RENDER_CONCURRENCY=2 di .env adalah bawaan lama → dipakai auto (file .env tidak bisa ditulis: {e})"
+    return "RENDER_CONCURRENCY=2 di .env adalah bawaan lama → diganti jadi RENDER_CONCURRENCY=auto (mau angka tetap? tulis angkanya di .env)"

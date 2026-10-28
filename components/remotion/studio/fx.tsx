@@ -5,8 +5,8 @@
  * RGB-split (glitch) dan garis zona aman. Cahaya bulat selalu pakai SVG radialGradient
  * (CSS radial-gradient tidak didukung renderer browser).
  */
-import { createContext, useContext, useId, type CSSProperties, type ReactNode } from "react";
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+import { createContext, useContext, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { AbsoluteFill, continueRender, delayRender, Img, random, useCurrentFrame, useRemotionEnvironment, useVideoConfig } from "remotion";
 import { clamp01, rgba, svgId, useStudio } from "./theme";
 
 /** id SVG unik per komponen */
@@ -15,15 +15,127 @@ export const useSvgId = (p: string) => `${p}${svgId(useId())}`;
 // ---------------------------------------------------------------------------------------------
 // Grain & vignette
 // ---------------------------------------------------------------------------------------------
-/** grain film tipis: noise SVG, pola berganti tiap 2 frame (digambar setengah resolusi supaya ringan) */
+/** petak pola grain (px). stitchTiles membuat noise-nya bersambung → petak diulang tanpa garis sambungan */
+const GRAIN_TILE = 1024;
+/** isi filter grain dalam bentuk teks untuk petak — HARUS sama dengan filter di Grain() (versi per frame) */
+const GRAIN_FILTER_SVG =
+  '<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/>' +
+  '<feComponentTransfer><feFuncR type="linear" slope="1.6" intercept="-0.3"/><feFuncG type="linear" slope="1.6" intercept="-0.3"/>' +
+  '<feFuncB type="linear" slope="1.6" intercept="-0.3"/></feComponentTransfer>';
+let grainReady: string | null = null;
+let grainJob: Promise<string> | null = null;
+
+/** petak grain dirender SEKALI per tab / halaman: SVG feTurbulence (1 satuan = 2 px, sama dengan versi per frame) → canvas → PNG blob URL */
+function grainTile(): Promise<string> {
+  if (grainReady) return Promise.resolve(grainReady);
+  if (grainJob) return grainJob;
+  const t = GRAIN_TILE;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${t}" height="${t}" viewBox="0 0 ${t / 2} ${t / 2}" preserveAspectRatio="none"><filter id="g" x="0" y="0" width="100%" height="100%" filterUnits="userSpaceOnUse">${GRAIN_FILTER_SVG}</filter><rect width="${t / 2}" height="${t / 2}" filter="url(#g)"/></svg>`;
+  const job = new Promise<string>((resolve, reject) => {
+    setTimeout(() => reject(new Error("pola grain terlalu lama dibuat")), 10_000); // jangan sampai menahan render (delayRender 30 dtk)
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = t;
+        c.height = t;
+        const g = c.getContext("2d");
+        if (!g) throw new Error("canvas 2D tidak tersedia");
+        g.drawImage(img, 0, 0, t, t);
+        c.toBlob((b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("pola grain gagal dibuat"))), "image/png");
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = () => reject(new Error("pola grain gagal dimuat"));
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+  grainJob = job;
+  job.then(
+    (u) => {
+      grainReady = u;
+    },
+    () => {
+      grainJob = null;
+    },
+  );
+  return job;
+}
+
+/** URL petak grain: string = siap, null = sedang dibuat (render ditahan delayRender), false = tidak dipakai / gagal */
+function useGrainTile(on: boolean): string | false | null {
+  const [tile, setTile] = useState<string | false | null>(() => (on ? grainReady : false));
+  const wait = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (!on || grainReady) return;
+    let live = true;
+    const h = delayRender("Menyiapkan pola grain");
+    wait.current = h;
+    grainTile().then(
+      (u) => live && setTile(u),
+      () => live && setTile(false),
+    );
+    return () => {
+      live = false;
+      if (wait.current === h) {
+        continueRender(h);
+        wait.current = null;
+      }
+    };
+  }, [on]);
+  // dilepas SESUDAH petak terpasang (Img sudah menahan render sampai gambarnya siap) → frame pertama tidak tanpa grain
+  useLayoutEffect(() => {
+    if (tile !== null && wait.current !== null) {
+      continueRender(wait.current);
+      wait.current = null;
+    }
+  }, [tile]);
+  return on ? tile : false;
+}
+
+/**
+ * grain film tipis, pola berganti tiap 2 frame. Pola noise dibuat SEKALI (feTurbulence yang sama dengan versi lama, lihat grainTile)
+ * lalu petaknya digeser acak tiap 2 frame (random() Remotion → deterministik) — dulu feTurbulence dihitung ulang di resolusi penuh
+ * tiap frame. Opacity per petak (petak tidak bertumpuk = sama dengan opacity grup; lapisan & kecerahan sama dengan versi lama, TANPA
+ * will-change: lapisan compositor terpisah membuat grain lebih redup). Petak HANYA untuk render CLI (laptop, skala 1:1 = hasil sama
+ * per piksel). Player website / Studio: feTurbulence seperti dulu — Player diperkecil di layar, petak raster ikut diperkecil &
+ * butirnya melembut (grain di HP jadi lebih samar). Render browser (@remotion/web-renderer) & petak gagal dibuat: feTurbulence juga.
+ */
 export function Grain({ opacity = 0.05 }: { opacity?: number }) {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
+  const { isRendering, isClientSideRendering } = useRemotionEnvironment();
   const id = useSvgId("grain");
+  const [broken, setBroken] = useState(false);
+  const tile = useGrainTile(isRendering && !isClientSideRendering && !broken);
   const seed = Math.floor(frame / 2);
+  const o = opacity * (0.85 + 0.3 * (((seed * 7919) % 100) / 100));
+  if (tile) {
+    const T = GRAIN_TILE;
+    const dx = Math.floor(random(`grain-x-${seed}`) * T);
+    const dy = Math.floor(random(`grain-y-${seed}`) * T);
+    const nx = Math.ceil(width / T) + 1;
+    const ny = Math.ceil(height / T) + 1;
+    const tiles = [];
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        tiles.push(
+          <Img
+            key={`${i}-${j}`}
+            src={tile}
+            alt=""
+            showInTimeline={false}
+            onImageError={() => setBroken(true)}
+            style={{ position: "absolute", left: i * T - dx, top: j * T - dy, width: T, height: T, maxWidth: "none", opacity: o }}
+          />,
+        );
+      }
+    }
+    return <AbsoluteFill style={{ pointerEvents: "none", overflow: "hidden" }}>{tiles}</AbsoluteFill>;
+  }
+  if (tile === null) return null; // petak sedang dibuat (render ditahan delayRender)
   const w = Math.round(width / 2);
   const h = Math.round(height / 2);
-  const o = opacity * (0.85 + 0.3 * (((seed * 7919) % 100) / 100));
   return (
     <AbsoluteFill style={{ pointerEvents: "none", opacity: o }}>
       <svg width={width} height={height} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">

@@ -1303,7 +1303,7 @@ def t_worker_menyenyapkan_sebelum_library_diimport():
     q = src.index("vlog.quiet(")
     for mod in ("from studio_worker import VERSION", "from studio_worker.engines import", "from studio_worker.asr import"):
         assert src.index(mod) > q, mod
-    assert src.index("CFG = config.load()") < q
+    assert src.index("CFG = config.load(") < q
     assert not re.search(r"^\s*import torch", src[:q], re.M)
     return "quiet() dipanggil tepat sesudah config.load()"
 

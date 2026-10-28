@@ -178,7 +178,27 @@ memaksa walau `nvidia-smi` tidak terbaca. `RENDER_BITRATE` (bawaan `5M`) = kuali
 CRF, jadi ukurannya ditentukan bitrate). 5M ≈ ukuran & kualitas render CPU lama (CRF 18; teaser 60 dtk dulu ±3,4 Mbps = 27 MB).
 Jangan dinaikkan ke 10M: MP4 jadi 2–3× lebih besar → video 60 dtk ±77 MB, lewat batas upload paket gratis Supabase (±50 MB per
 file), dan video di atas ±165 dtk lewat batas worker 200 MB. `.env` lama berisi `RENDER_BITRATE=10M`? Ganti jadi `5M` (atau hapus barisnya).
-`RENDER_CONCURRENCY=auto` = jumlah tab Chrome render sesuai core CPU (2–4; bawaan tetap 2).
+
+## Render MP4 cepat
+Yang membuat render video (terutama versi **tanpa VO**) jauh lebih cepat, tanpa menurunkan kualitas:
+- **Komposisi disiapkan sekali, bukan tiap video.** Dulu tiap render menjalankan `remotion bundle` dulu (beberapa detik; sesudah
+  update kode bisa puluhan detik). Sekarang hasilnya disimpan di `data\tmp\bundle-cache\` dan dipakai ulang sampai kode / SFX / musik / logo bawaan
+  berubah (dicek otomatis). Saat worker menyala, komposisi langsung disiapkan di **latar** (prioritas rendah, bot WAHA tetap lancar),
+  jadi render pertama pun tidak menunggu. Per video isinya di-*hardlink* (instan, tanpa makan ruang disk). Log:
+  `Komposisi render dari cache … — tanpa bundle ulang`. Cache rusak → dibuang & disiapkan ulang otomatis. Aman dihapus kapan saja.
+  Gagal disiapkan di latar (mis. sesudah `git pull` belum menjalankan `install.ps1`) → tidak diulang terus tiap 10 menit; render
+  berikutnya mencoba sendiri, dan versi kode baru dicoba lagi otomatis.
+- **Tab Chrome paralel otomatis** (`RENDER_CONCURRENCY=auto`, bawaan baru): separuh thread CPU (sisanya untuk bot WAHA), 2–6 tab,
+  dibatasi RAM (±0,7 GB per tab, 6 GB disisakan untuk Windows, bot WAHA & mesin suara). Contoh: 12 thread + 16 GB RAM → **6 tab**
+  (dulu selalu 2), 12 thread + 8 GB → 2 tab.
+  Log tiap render: `Render: 6 tab paralel (auto: 12 thread, 15,7 GB RAM)`. Mau angka tetap? Tulis angkanya (1–8). Angka yang lebih
+  besar dari jumlah thread CPU otomatis diturunkan (Remotion menolaknya), tertulis di log: `dibatasi 4 thread CPU`.
+  `.env` lama yang masih berisi `RENDER_CONCURRENCY=2` (bawaan lama) diganti **sekali** jadi `auto` saat worker mulai (ada 1 baris
+  di log); angka lain yang Anda tulis sendiri tidak diubah. Mau tetap 2? Tulis lagi `RENDER_CONCURRENCY=2` — tidak akan diganti lagi.
+- **Efek grain film lebih ringan saat render MP4 di laptop.** Pola noise-nya sama, tapi dibuat sekali lalu digeser tiap 2 frame
+  (dulu dihitung ulang tiap frame di resolusi penuh). Sudah dicek di MP4: kecerahan sama, pola tetap berganti tiap 2 frame.
+  Pratinjau di website tetap cara lama, jadi tampilannya di HP / laptop tidak berubah.
+- **Versi tanpa VO tidak mengunduh file suara VO** (memang tidak diputar).
 
 ## Update setelah ada perubahan di repo
 ```powershell
@@ -283,6 +303,8 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | Render gagal | Pastikan Node.js 20 terpasang lalu `install.ps1` lagi. Render pertama mengunduh Chrome khusus render (±100 MB). Kalau unduhan itu diblokir jaringan, unduh *chrome-headless-shell* (Chrome for Testing) sendiri lalu isi path-nya di `REMOTION_BROWSER` (`.env`). |
 | Render lambat / Task Manager menunjukkan GPU Intel | Lihat log: `Render memakai GPU: …`. Kalau bukan NVIDIA, ikuti langkah manual di bagian *Render MP4 pakai GPU NVIDIA*. Pastikan `RENDER_GPU` bukan `off`. |
 | Log `NVENC … tidak bisa dipakai` | Driver NVIDIA lama / ffmpeg Remotion tanpa NVENC. Render tetap jalan (encode CPU). Update driver NVIDIA lalu nyalakan ulang worker. |
+| Render gagal `Komposisi video gagal disiapkan` / tetap gagal sesudah update | Tutup worker, hapus folder `data\tmp\bundle-cache`, nyalakan lagi (komposisi disiapkan ulang). Pastikan `install.ps1` sudah dijalankan sesudah `git pull`. |
+| Laptop berat / kehabisan RAM saat render | Turunkan `RENDER_CONCURRENCY` di `.env` (mis. 3). Bawaan `auto` sudah menyesuaikan thread CPU & RAM. |
 | Upload video gagal (file besar) | Paket gratis Supabase membatasi ukuran file (±50 MB). Render video lebih pendek atau naikkan batas di Supabase. |
 | `UTMOS belum diunduh` / `Skor kealamian UTMOS tidak dipakai di sesi ini` | Tidak masalah: suara tetap dibuat & dipilih dari kejelasan + nada, job tidak menunggu. Jalankan `SIAPKAN-MODEL.bat` (392 MB, bisa dilanjutkan) — begitu selesai UTMOS otomatis dipakai. Atau matikan dengan `NATURAL_MOS=0`. |
 | `Worker sudah jalan` | Sudah ada worker lain (mis. dari nyala otomatis). Cukup satu. |
@@ -295,6 +317,7 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 .venv\Scripts\python selftest_unduh.py      # pengunduh model: paralel, lanjut setelah putus, cek sha, tanpa internet
 .venv\Scripts\python selftest_cepat.py      # jalur cepat Chatterbox (bobot acak di CPU; --ringan = tanpa torch)
 .venv\Scripts\python selftest_render_gpu.py  # render MP4 pakai GPU NVIDIA
+.venv\Scripts\python selftest_render_cache.py  # render cepat: cache komposisi, tab paralel auto, migrasi .env
 ```
 
 ---
@@ -308,9 +331,9 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 | `install.ps1`, `requirements.txt`, `requirements-gpu.txt` | Pemasang (urutan paket penting — pakai `install.ps1`) |
 | `cek_gpu.py` | Cek GPU + tes suara |
 | `SIAPKAN-MODEL.bat` / `siapkan_model.py` | Unduh / cek model suara di depan (cepat, bisa dilanjutkan) |
-| `selftest.py`, `selftest_natural.py`, `selftest_unduh.py`, `selftest_runtime.py`, `selftest_cepat.py`, `selftest_render_gpu.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_unduh.py`: pengunduh model; `selftest_runtime.py`: alur worker; `selftest_cepat.py`: jalur cepat Chatterbox; `selftest_render_gpu.py`: render pakai NVIDIA) |
+| `selftest.py`, `selftest_natural.py`, `selftest_unduh.py`, `selftest_runtime.py`, `selftest_cepat.py`, `selftest_render_gpu.py`, `selftest_render_cache.py` | Tes mandiri tanpa GPU/model (`selftest_natural.py`: suara natural — nada, jeda, sambungan, tempo; `selftest_unduh.py`: pengunduh model; `selftest_runtime.py`: alur worker; `selftest_cepat.py`: jalur cepat Chatterbox; `selftest_render_gpu.py`: render pakai NVIDIA; `selftest_render_cache.py`: render cepat — cache komposisi, tab paralel, migrasi .env) |
 | `tambah_sfx.py`, `freesound_cc0.py` | Tambah SFX |
-| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `models.py` + `unduh.py` (cek & unduh model), `beats.py`, `mix.py`, `jobs_*.py`, `seed.py`, `supa.py` (Supabase) |
+| `studio_worker/` | Isi mesin: `engines/` (Chatterbox, pocket-tts), `clean.py` (pembersih), `natural.py` (skor kealamian, room tone, jeda alami), `post.py` (EQ/kompresor/loudness), `asr.py` (cek ucapan), `models.py` + `unduh.py` (cek & unduh model), `beats.py`, `mix.py`, `jobs_*.py`, `render_cache.py` (cache komposisi render), `seed.py`, `supa.py` (Supabase) |
 | `bank-suara/` | Rekaman referensi suara Alif (jangan diubah) |
 | `data/` | Dibuat otomatis: log, cache suara, model, file sementara (tidak masuk Git) |
 
@@ -318,7 +341,7 @@ lalu di-upload ke penyimpanan Studio dan langsung muncul di katalog SFX website.
 Lihat `.env.example`. Yang paling sering diubah: `CPU_THREADS`, `TAKES` (jumlah versi per baris untuk job yang tidak membawa
 setelan, 1–4, bawaan 3 — website Studio sekarang selalu meminta 3 versi, jadi angka ini tidak mengubah job dari website; laptop lambat
 tidak perlu diatur: jumlah versi otomatis dikurangi kalau tidak sempat, lihat **Kecepatan mesin suara** di bawah), `NATURAL_MOS` (skor kealamian, 1 = nyala), `WHISPER_MODEL` (`small` bawaan; `medium` lebih akurat tapi lebih
-berat), `RENDER_ENABLED`, `IDLE_UNLOAD_MIN`, `PRELOAD` (1 = panaskan mesin di latar saat mulai), `UPLOAD_WORKERS` (unggahan
+berat), `RENDER_ENABLED`, `RENDER_CONCURRENCY` (tab render paralel, bawaan `auto`), `IDLE_UNLOAD_MIN`, `PRELOAD` (1 = panaskan mesin di latar saat mulai), `UPLOAD_WORKERS` (unggahan
 bersamaan, bawaan 3), `QUIET_LOG` (1 = log bersih, 0 = semua peringatan tampil).
 
 ## Kecepatan mesin suara
