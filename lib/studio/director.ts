@@ -37,7 +37,7 @@ import {
 import { keepTeaserVisual } from "./teaserLock";
 import { lexKey } from "./pronounce";
 import { applyStyle, isTeaserTimeline } from "./voiceStyle";
-import { looksBrief, stripResearchFooter } from "./research";
+import { NEW_VIDEO, looksBrief, stripResearchFooter } from "./research";
 
 export const DIRECTOR_HERO = "Harley";
 /** sama dengan batas normalizeTimeline (lib/studio/timeline.ts, `.slice(0, 8)`) & MAX_SFX di SceneCard */
@@ -773,12 +773,7 @@ const BIG_EDIT =
 const SMALL_EDIT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;
 
-/**
- * sudah ada timeline tapi minta video LAIN (rencana baru). Wajib ada kata benda video/versi/konten (atau "yang buat/untuk …"),
- * supaya revisi kecil seperti "satu lagi, logonya digedein" / "buat lagi transisinya" tidak ikut dianggap rencana baru.
- */
-const NEW_VIDEO =
-  /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(satu|1) (video|versi|konten) lagi\b|\b(bikin|buat)(in|kan)? (juga|lagi) (video|versi|konten|yang (buat|untuk|versi)|(buat|untuk) (fitur|produk|brand|layanan))\b/i;
+// NEW_VIDEO (minta video LAIN) ada di research.ts — dipakai juga untuk menilai subjek baru
 
 /**
  * revisi kecil pada timeline yang sudah ada → boleh pakai mesin cepat (rencana baru / revisi besar → mesin berat).
@@ -789,8 +784,9 @@ export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   const t = String(text ?? "").trim();
   if (!t || t.length > 240 || /^📌/.test(t)) return false;
   // revisi besar / minta video lain / brief video untuk suatu subjek → bukan revisi kecil, walau menyebut durasi/logo/warna
-  // ("bikinin juga video buat fitur X, 30 detik", "Promo Konten.com buat clipper 30 detik")
-  if (BIG_EDIT.test(t) || NEW_VIDEO.test(t) || looksBrief(t)) return false;
+  // ("bikinin juga video buat fitur X, 30 detik", "Promo Konten.com buat clipper 30 detik", "ganti jadi promo Shopee").
+  // Sudah ada timeline → hanya sinyal brief yang kuat (looksBrief planned): "tambahin CTA di konten.com" tetap revisi
+  if (BIG_EDIT.test(t) || NEW_VIDEO.test(t) || looksBrief(t, true)) return false;
   return SMALL_EDIT.test(t);
 }
 
@@ -825,7 +821,7 @@ export function needsHeavy(text: string, o: { hasTimeline: boolean; afterAsk?: b
   if (o.afterAsk && !(question && !brief)) return true;
   if (t.length <= 160 && !brief && (question || CHITCHAT.test(t))) return false;
   // sudah ada timeline: pesan pendek = revisi ringan / obrolan (kecuali minta video baru / brief video untuk suatu subjek); belum ada: brief video
-  return o.hasTimeline ? t.length > 60 || NEW_VIDEO.test(t) || looksBrief(t) : brief || t.length >= 25;
+  return o.hasTimeline ? t.length > 60 || NEW_VIDEO.test(t) || looksBrief(t, true) : brief || t.length >= 25;
 }
 
 /** pesan lama untuk riwayat: blok rencana diringkas (timeline terbaru sudah ada di sesi), kartu jadi daftar pertanyaannya */

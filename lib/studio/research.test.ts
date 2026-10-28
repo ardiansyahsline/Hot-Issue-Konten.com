@@ -96,9 +96,39 @@ async function main() {
     assert.equal(sameSubject("konten.com", about), true);
     assert.equal(wantsNewSubject("video promo konten.com 30 detik ya", about), false);
     assert.equal(looksBrief("video promo konten.com 30 detik ya"), true);
-    assert.equal(wantsNewSubject("Promo Konten.com buat brand", about), true);
+    // situs sama = subjek sama (penonton lain → sutradara yang menilai; tetap brief → mesin berat, tanpa riset ulang)
+    assert.equal(wantsNewSubject("Promo Konten.com buat brand", about), false);
+    assert.equal(looksBrief("Promo Konten.com buat brand", true), true);
+    assert.equal(wantsNewSubject("Promo Shopee 11.11 buat brand", about), true);
     const teaser = "Teaser CS Tracker · Masalah kerja tim CS → CS Tracker beresin semuanya · Kenalkan semua fitur terbaru CS Tracker ke tim";
     assert.equal(wantsNewSubject("Promo Konten.com buat clipper 30 detik", teaser), true);
+  });
+  await test("sameSubject: nama / kata khas sebagian besar ada di timeline (kata pengisi tidak menggagalkan)", () => {
+    const kopi = "Kopi Kenangan: Ngopi Tanpa Antre · Promo menu baru Kopi Kenangan dengan pesan lewat aplikasi";
+    assert.equal(sameSubject("tetap Kopi Kenangan", kopi), true);
+    assert.equal(sameSubject("Kopi Kenangan Gen Z", kopi), true);
+    assert.equal(sameSubject("kopi kenangan", kopi), true);
+    assert.equal(sameSubject("Kopi Janji Jiwa", kopi), false);
+    assert.equal(sameSubject("kopi janji jiwa", kopi), false);
+    assert.equal(sameSubject("konten.com", kopi), false);
+    assert.equal(sameSubject("konten.com", "10 Tips Konten TikTok"), false);
+  });
+  await test("proyek nyata: revisi yang menyebut nama subjeknya sendiri BUKAN subjek baru (regresi pemeriksa)", () => {
+    const kopi = "Promo Kopi Kenangan · Promo menu baru Kopi Kenangan";
+    for (const t of [
+      "Videonya tetap tentang Kopi Kenangan, tapi tambahin promo diskon 50% di akhir",
+      "Promo Kopi Kenangan-nya tambahin harga Rp 25 ribu",
+      "Promo Kopi Kenangan ini kurang nendang, bikin hook-nya soal antri panjang",
+      "Video Kopi Kenangan ini tolong tambahin adegan barista",
+      "Konten Kopi Kenangan nya kasih CTA order lewat GoFood",
+    ])
+      assert.equal(wantsNewSubject(t, kopi), false, t);
+    const kc = "Promo Konten.com untuk Clipper · Ajak clipper gabung Konten.com";
+    for (const t of ["Promo Konten.com ini tambahin adegan soal payout cepat", "Video Konten.com ini kasih testimoni clipper di tengah", "Videonya tetap promo Konten.com tapi fokus ke mahasiswa"])
+      assert.equal(wantsNewSubject(t, kc), false, t);
+    // subjek lain tetap terdeteksi
+    assert.equal(wantsNewSubject("bikin video promo Kopi Janji Jiwa", kopi), true);
+    assert.equal(wantsNewSubject("bikin video promo tentang Kopi Kenangan, tambahin diskon 50% di akhir", "Teaser CS Tracker"), true);
   });
 
   // ---------- kapan riset jalan ----------

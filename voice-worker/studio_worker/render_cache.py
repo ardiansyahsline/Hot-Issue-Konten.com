@@ -3,9 +3,11 @@ Cache bundle Remotion untuk render MP4 di laptop: `remotion bundle` (±6 dtk den
 per versi kode, bukan tiap job.
 
 - Kunci = sha1 isi kode yang di-bundle (remotion/, components/, lib/, remotion.config.mjs, package.json, package-lock.json,
-  tsconfig.json) + versi @remotion/cli, @remotion/bundler, @remotion/renderer & remotion di node_modules + daftar/ukuran/mtime aset
-  bawaan (assets/audio/sfx, assets/audio/music) + isi logo preset (public/konten-logo.png, public/brand/*). Kode / aset berubah →
-  kunci baru → dibangun ulang otomatis.
+  tsconfig.json) + versi @remotion/cli, @remotion/bundler, @remotion/renderer & remotion di node_modules + isi
+  node_modules/.package-lock.json (ditulis ulang npm tiap npm ci / npm i: paket lain yang ikut di-bundle — react, mediabunny,
+  @fontsource… — diperbarui install.ps1 sesudah git pull → kunci baru) + daftar/ukuran/mtime aset bawaan (assets/audio/sfx,
+  assets/audio/music) + isi logo preset (public/konten-logo.png, public/brand/*). Kode / paket / aset berubah → kunci baru →
+  dibangun ulang otomatis.
 - Cache = <tmp>/bundle-cache/<kunci>/bundle: dibangun di folder sementara lalu di-rename (atomik), 2 terbaru disimpan.
   manifest.json mencatat ukuran + mtime semua file → cache yang rusak / tersentuh dibuang & dibangun ulang.
 - Per job: isi cache di-HARDLINK ke <work>/bundle (os.link: instan, tanpa ruang disk; NTFS/ext4) — gagal (FAT32/exFAT, beda drive,
@@ -99,6 +101,8 @@ def cache_key(repo: Path, safe_file: re.Pattern, logos: tuple[str, ...]) -> str:
         add(f, repo / f)
     for pkg in PKGS:
         h.update(f"P {pkg} {_version(repo, pkg)}\n".encode("utf-8"))
+    # pohon node_modules yang terpasang (npm menulisnya ulang tiap install; isinya sama kalau paketnya sama → tidak bangun ulang)
+    add("node_modules/.package-lock.json", repo / "node_modules" / ".package-lock.json")
     for d in ASSET_DIRS:
         base = repo / "assets" / "audio" / d
         try:
@@ -258,6 +262,7 @@ def ensure(tmp: Path, key_fn: Callable[[], str], build: Callable[[Path], None]) 
                 log.warning("Cache komposisi render tidak bisa disimpan (folder dipegang program lain) — dipakai untuk video ini saja.")
                 keep = work
                 work = r / ".tidak-ada"
+                prune(tmp)  # sisa sekali-pakai worker sebelumnya (PID lain) yang > STALE_BUILD_SEC ikut dibuang; `keep` masih baru → aman
                 return keep / "bundle", key, True
             _touch(entry)
             prune(tmp)
@@ -268,16 +273,33 @@ def ensure(tmp: Path, key_fn: Callable[[], str], build: Callable[[Path], None]) 
     raise RuntimeError("tidak sampai")  # pragma: no cover
 
 
+def _leftover(s: Path, d: Path) -> bool:
+    """d sudah ada (sisa folder job lama yang tidak terhapus: file dipegang program lain). True = d sudah hardlink ke file cache s
+    (dipakai apa adanya). Selain itu d dihapus dulu — JANGAN ditulisi: bisa hardlink ke cache versi lain; gagal → OSError (job gagal)."""
+    try:
+        if os.path.samefile(s, d):
+            return True
+    except OSError:
+        pass
+    os.unlink(d)
+    return False
+
+
 def link_tree(src: Path, dst: Path) -> tuple[int, int]:
     """isi folder cache → dst: hardlink per file (instan, tanpa ruang disk); hardlink gagal (FAT32/exFAT, beda drive, batas 1023
-    link NTFS) → salin biasa. Balikan (jumlah hardlink, jumlah salinan)."""
+    link NTFS) → salin biasa. dst sisa job lama (rmtree tidak tuntas) → file yang sudah ada dicek dulu (_leftover).
+    Balikan (jumlah hardlink, jumlah salinan)."""
     linked = copied = 0
     can_link = True
+    dirty = dst.exists()  # biasanya False (get_bundle menghapus dst dulu) → tanpa cek tambahan per file
     for dp, _dirs, files in os.walk(src):
         rel = Path(dp).relative_to(src)
         (dst / rel).mkdir(parents=True, exist_ok=True)
         for f in files:
             s, d = Path(dp) / f, dst / rel / f
+            if dirty and os.path.lexists(d) and _leftover(s, d):
+                linked += 1
+                continue
             if can_link:
                 try:
                     os.link(s, d)

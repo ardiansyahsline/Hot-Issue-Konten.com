@@ -876,6 +876,8 @@ def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
 
 
 def main() -> int:
+    if getattr(CFG, "env_note", ""):  # .env ANSI / UTF-16: tetap dibaca, pemakai diberi tahu cara menyimpannya sebagai UTF-8
+        log.warning("%s", CFG.env_note)
     missing = CFG.missing()
     if missing:
         log.error("Isi dulu %s di file voice-worker\\.env (contoh: .env.example). Worker berhenti.", ", ".join(missing))

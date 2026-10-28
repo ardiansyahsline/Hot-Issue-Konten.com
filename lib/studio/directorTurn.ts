@@ -4,7 +4,7 @@
  */
 import { isSmallEdit, needsHeavy } from "./director";
 import { isStarterTimeline, timelineAbout } from "./directorStarter";
-import { planResearch, wantsNewSubject, type ResearchPlan } from "./research";
+import { linkOnly, looksBrief, planResearch, wantsNewSubject, type ResearchPlan } from "./research";
 import type { Timeline } from "./timeline";
 
 export type TurnInput = {
@@ -40,18 +40,24 @@ export type TurnKind = {
 export function turnKind(i: TurnInput): TurnKind {
   const content = String(i.content ?? "");
   const current = i.current;
-  // contoh bawaan yang belum diubah ("mulai dari contoh rencana") → isinya contoh, bukan subjek user: dinilai seperti belum ada
-  // timeline (brief apa pun = rencana baru, bukan "revisi kecil" contoh CS Tracker)
+  // contoh bawaan yang belum diubah ("mulai dari contoh rencana") → isinya contoh, bukan subjek user: brief apa pun = rencana baru
+  // (bukan "revisi kecil" contoh CS Tracker); perintah edit contohnya sendiri tetap revisi
   const starter = isStarterTimeline(current);
   const planned = !!current && !starter;
   // subjek timeline sekarang — pembanding "video untuk subjek lain"
   const about = planned ? timelineAbout(current) : "";
   const cardAnswer = /^📌\s*(Jawaban|Lewati)/i.test(content);
   const brief = cardAnswer ? String(i.brief ?? "") : "";
-  const small = !cardAnswer && isSmallEdit(content, planned);
+  // pesan berisi link saja = brief untuk isi link itu (mesin berat, tidak bergantung panjang link; bukan "revisi kecil" walau
+  // alamatnya memuat kata seperti "logo" / "ganti")
+  const link = !cardAnswer && linkOnly(content);
+  // contoh bawaan: brief / link / jawaban kartu = rencana baru (dinilai seperti belum ada timeline); perintah edit biasa
+  // ("ganti warna background jadi biru") = revisi contoh itu (revisi kecil & mesin cepat seperti proyek nyata, tanpa riset)
+  const editing = planned || (starter && !cardAnswer && !link && !looksBrief(content));
+  const small = !cardAnswer && !link && isSmallEdit(content, editing);
   const afterAsk = /```ask/i.test(String(i.lastAssistant ?? ""));
   // mesin berat hanya untuk giliran kreatif (rencana baru / revisi besar / jawaban kartu); sapaan & pertanyaan cara pakai -> mesin cepat
-  const creative = needsHeavy(content, { hasTimeline: planned, afterAsk });
+  const creative = link || needsHeavy(content, { hasTimeline: editing, afterAsk });
   // mis. proyek teaser CS Tracker → "Promo Konten.com buat clipper" (jawaban kartu → subjek dari brief aslinya)
   const newSubject = planned && wantsNewSubject(cardAnswer ? brief : content, about);
 
