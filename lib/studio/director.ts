@@ -769,20 +769,28 @@ function keepVo(prev: Timeline, next: Timeline): VoTrack | null {
 /** permintaan yang butuh kreativitas besar (rencana / konsep baru) */
 const BIG_EDIT =
   /\b(konsep|ide|cerita|alur|storyline|storyboard|nuansa|vibe|gaya video)(nya)?\b|\b(sudut pandang|dari awal|(di)?rombak|remake|versi (baru|lain|kedua|(buat|untuk) \w+)|buat ulang|bikin ulang|ulang (semua|rencana))\b|\blebih (seru|dramatis|kreatif|menarik|epik|sinematik|premium|lucu|keren|emosional|nendang|viral)\b|\btambah(kan|in)? (\w+ )?(adegan|scene|bagian|babak)\b/i;
-/** revisi kecil: durasi, teks, hapus/tukar adegan, warna, transisi, SFX, musik */
-const SMALL_EDIT =
-  /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(durasi|detik|dtk|percepat|perlambat|pendekin|panjangin|lebih (cepat|lambat|lama|pendek|singkat|panjang))\b|\b(ganti|ubah|hapus|buang|tukar|pindah(in)?|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki)\b|\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)\b/i;
+/** kata kerja edit ("ganti", "diganti", "gantiin", "kecilin") */
+const EDIT_VERB =
+  /\b(di)?(ganti|ubah|hapus|buang|tukar|pindah|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki|percepat|perlambat|pendekin|panjangin)(in|kan|nya)?\b/i;
+/** revisi kecil: durasi, teks, hapus/tukar adegan, warna, transisi, SFX, musik ("musiknya diganti" juga) */
+const SMALL_EDIT = new RegExp(
+  `\\b(adegan|scene)\\s*(ke-?)?\\d+\\b|\\b(durasi|detik|dtk|lebih (cepat|lambat|lama|pendek|singkat|panjang))\\b|${EDIT_VERB.source}|\\b(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|efek suara|musik|volume|subtitle|ejaan|rasio|tombol)(nya)?\\b`,
+  "i"
+);
 
 // NEW_VIDEO (minta video LAIN) ada di research.ts — dipakai juga untuk menilai subjek baru
 
 /**
  * revisi kecil pada timeline yang sudah ada → boleh pakai mesin cepat (rencana baru / revisi besar → mesin berat).
- * Timeline contoh bawaan dihitung "belum ada timeline" oleh pemanggil (route).
+ * Pemanggil (directorTurn.ts) mengirim hasTimeline=false untuk contoh bawaan yang menerima brief baru; perintah edit contoh tetap
+ * dihitung revisi. Pertanyaan ("kenapa adegan 3 gitu?", "bisa jelasin kenapa milih musik ini?") bukan revisi.
  */
 export function isSmallEdit(text: string, hasTimeline: boolean): boolean {
   if (!hasTimeline) return false;
   const t = String(text ?? "").trim();
   if (!t || t.length > 240 || /^📌/.test(t)) return false;
+  // bertanya (kenapa / kok / jelasin …?) tanpa kata kerja edit → dijawab, bukan diubah
+  if (!EDIT_VERB.test(t) && (HOWTO.test(t) || (/\?\s*$/.test(t) && /\b(jelasin|jelaskan|kenapa|mengapa|kok|maksud(nya)?|apa (itu|maksud))\b/i.test(t)))) return false;
   // revisi besar / minta video lain / brief video untuk suatu subjek → bukan revisi kecil, walau menyebut durasi/logo/warna
   // ("bikinin juga video buat fitur X, 30 detik", "Promo Konten.com buat clipper 30 detik", "ganti jadi promo Shopee").
   // Sudah ada timeline → hanya sinyal brief yang kuat (looksBrief planned): "tambahin CTA di konten.com" tetap revisi

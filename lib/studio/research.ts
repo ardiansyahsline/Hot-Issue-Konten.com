@@ -26,9 +26,20 @@ export function researchDomains(text: string): string[] {
   return out.slice(0, 2);
 }
 
-/** user jelas minta dicarikan / dirisetkan dulu */
-const ASK_RESEARCH =
-  /\b(riset(in|kan)?|research|risetnya|cari(in|kan)? (dulu |info|informasi|data|tahu)|carikan|browsing|browse|googling|search|telusuri|pelajari (dulu )?(soal|tentang)|cek (di |ke )?(internet|google|web|situs|website))\b/i;
+/**
+ * user jelas minta dicarikan / dirisetkan dulu: kata riset, penanda internet ("cek di google"), atau "cari info / data / tentang …".
+ * "carikan musik / SFX / font / ide hook", "cari tahu kenapa VO kepotong", "adegan … browsing di HP" = urusan studio, bukan riset web.
+ */
+const STUDIO_ASSET = "(musik|lagu|sfx|font|huruf|ide|hook|warna|gambar|foto|transisi|efek|suara|backsound|vo|template|stiker|emoji)";
+const ASK_RESEARCH = new RegExp(
+  "\\b(riset(in|kan|nya)?|research|googling|telusuri" +
+    "|pelajari\\s+(dulu\\s+)?(soal|tentang|mengenai)" +
+    "|cari(in|kan)?\\s+(dulu\\s+)?(info|informasi|data|referensi|fakta)(nya)?" +
+    `|cari(in|kan)?\\s+(tahu\\s+)?(dulu\\s+)?(tentang|soal|mengenai)\\s+(?!${STUDIO_ASSET}\\b)` +
+    "|(cari(in|kan)?|cek|lihat|liat|baca|browsing|browse|search(ing)?)\\s+(dulu\\s+)?(di|ke|dari)\\s+(internet|google|web|situs|website)" +
+    "|(browsing|browse|search(ing)?)\\s+(dulu\\s+)?(soal|tentang|mengenai)\\s+(?!" + STUDIO_ASSET + "\\b))",
+  "i"
+);
 export const asksResearch = (text: string) => ASK_RESEARCH.test(String(text ?? ""));
 
 /**
@@ -57,6 +68,16 @@ const NOT_SUBJECT = new RegExp(
       // kata kerja revisi, link, pengisi ("ganti jadi tentang withdraw", "ini linknya …", "next: promo buat UMKM") — bukan subjek
       "(di)?(ganti|ubah)(in|kan|nya)?", "tukar", "tambah(in|kan)?", "tampil(in|kan)", "taruh(in)?", "(di)?tulis(in|kan)?", "(di)?sebut(in|kan)?",
       "masuk(in|kan)", "mention", "tonjol(in|kan)", "topik(nya)?", "subjek(nya)?", "link(nya)?", "url(nya)?", "tautan(nya)?", "sekarang", "next",
+      // singkatan chat, pembuka / penutup, koreksi & ganti topik ("lupain yg tadi", "bukan cs tracker, harusnya …", "mending …")
+      "yg", "utk", "dgn", "ttg", "jd", "sm", "krn", "karena", "eh", "btw", "lupain", "lupakan", "skip", "stop", "cukup", "tadi", "nanti", "kabarin",
+      "bukan", "bukannya", "salah", "harusnya", "seharusnya", "mestinya", "maunya", "pengennya", "mending", "mendingan", "tema(nya)?", "project", "proyek",
+      // pertanyaan / pengisi ("bisa bikin video apa aja?", "lagi bingung", "terserah, yang penting jelas")
+      "apa", "apaan", "gimana", "bagaimana", "gmn", "kenapa", "mengapa", "kok", "bingung", "punya", "butuh", "perlu", "terserah", "penting",
+      "jelasin", "jelaskan", "ga", "gak", "nggak", "enggak", "ngga", "tidak", "sosmed", "medsos",
+      // gaya bahasa & meniru rujukan ("gaya santai", "terus terapin")
+      "santai", "gaul", "formal", "kasual", "casual", "serius", "terap(in|kan)", "tiru(in|kan)?", "contoh(in)?",
+      // bahasa Inggris ("please make a promo video for …", "Ads 15 detik …")
+      "make", "create", "produce", "need", "want", "for", "about", "the", "an?", "ads?",
     ].join("|") +
     ")\\b",
   "gi"
@@ -68,17 +89,29 @@ const NOT_SUBJECT = new RegExp(
 const HERO_ALT = HERO_NAMES.map((h) => h.replace(/[^A-Za-z ]/g, "")).filter(Boolean).join("|");
 const CALL_START = new RegExp(`^\\s*((halo|hai|hi|hey|oke|ok)\\s+)?(${HERO_ALT})(?=\\s*[,!:]|\\s+(tolong|bikin|bikinin|buat|buatin|buatkan|coba|bantu|yuk|please|aku|gue|gw|saya|mau|minta)\\b)`, "i");
 const CALL_END = new RegExp(`[,\\s]+(ya\\s+|dong\\s+)?(${HERO_ALT})\\s*[.!?]*\\s*$`, "i");
+/** pesan tanpa sapaan ke hero di awal / akhir (tanda baca sesudah sapaan ikut dibuang: "Harley, video promo …" → "video promo …") */
+const stripCall = (t: string) => t.replace(CALL_START, " ").replace(/^\s*[,!:.;-]+/, " ").replace(CALL_END, " ");
+const HERO_SET = new Set(HERO_NAMES.map((h) => h.toLowerCase()));
 
 /** kata yang menunjuk tool INTERNAL tim (CS Tracker & fiturnya) — web tidak tahu isinya, jadi tidak perlu riset */
 const INTERNAL_SUBJECT =
   /\b(cs tracker|tracker|hot ?issue|issue|video review|review|catatan|saran|train (your )?ai|studio( pro)?|chat( tim)?|fitur|ai|dashboard|laporan|report|ppt|desain( berita)?|tim|internal|aplikasi|app|musik|cs|vo|sfx)\b/gi;
 
-/** rujukan gaya ("kayak iklan Apple", "ala Netflix") — bukan subjek videonya */
-const STYLE_REF = /(^|[^\p{L}])(kayak|seperti|ala|mirip|style|vibes?)\s+((iklan|video|promo|konten|film|trailer)(nya)?\s+)?[^\s,.!?;:()]+(\s+\p{Lu}[^\s,.!?;:()]*)*/giu;
+/** huruf kecil/besar bebas tanpa flag "i" (flag "i" membuat \p{Lu} ikut cocok dengan huruf kecil) */
+const anyCase = (re: string) => re.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`);
+const STYLE_FORM = anyCase("(iklan|video|promo|konten|film|trailer)(nya)?");
+/**
+ * rujukan gaya ("kayak iklan Apple", "ala Netflix", "gaya iklan Apple", "gaya Netflix"; bukan "Gaya Hidup …") — bukan subjek videonya.
+ * Nama berhuruf besar sesudahnya ikut ("kayak iklan Apple Vision Pro"), kata biasa tidak ("kayak iklan Apple tapi …")
+ */
+const STYLE_REF = new RegExp(
+  `(^|[^\\p{L}])(${anyCase("(kayak|seperti|ala|mirip|style|vibes?)")}\\s+(${STYLE_FORM}\\s+)?[^\\s,.!?;:()]+|${anyCase("gaya")}\\s+(${STYLE_FORM}\\s+[^\\s,.!?;:()]+|(?![Hh]idup\\b)\\p{Lu}[^\\s,.!?;:()]*))(\\s+\\p{Lu}[^\\s,.!?;:()]*)*`,
+  "gu"
+);
 
 /** subjek video dari kalimat user (tanpa kata perintah, durasi, platform, rujukan gaya). Situs (konten.com) & link dijaga utuh */
 export function researchSubject(text: string): string {
-  const src = String(text ?? "").replace(URL_RE, " ").replace(CALL_START, " ").replace(CALL_END, " ").replace(STYLE_REF, "$1 ");
+  const src = stripCall(String(text ?? "").replace(URL_RE, " ")).replace(STYLE_REF, "$1 ");
   const keep: string[] = [];
   // situs dijaga dulu: "konten" di "konten.com" bukan kata "konten" (bentuk video)
   const guarded = src.replace(DOMAIN_RE, (_all, pre: string, d: string) => {
@@ -131,33 +164,50 @@ const EDIT_TOKEN = new RegExp(
 );
 
 /**
- * sisa pesan yang mungkin SUBJEK video: researchSubject tanpa kosakata revisi.
+ * bagian yang DIBANTAH / dibatalkan — bukan subjek: "bukan (tentang) CS Tracker", "ga jadi cs tracker deh, mending …". Berhenti di
+ * koma / akhir kalimat / "tapi, harusnya, mending, deh …" (titik di "konten.com" bukan akhir kalimat)
+ */
+const NEGATED =
+  /(^|[^\p{L}])(bukan|(ga|gak|nggak|enggak|ngga|tidak)\s+jadi)\s+(?:[^,;!?.]|\.(?!\s|$))*?(?=\s*(,|;|[.!?](?=\s|$)|$)|\s+(tapi|tetapi|melainkan|harusnya|seharusnya|mestinya|maunya|mending|mendingan|deh|dong|ya|aja|sekarang)\b)/giu;
+/** penonton / sasaran ("buat Gen Z", "target cewek 20an", "untuk mahasiswa") — atribut video, bukan subjeknya */
+const AUDIENCE =
+  /(^|[^\p{L}])(gen(erasi)?[\s-]*(z|y|x|alpha|alfa|milenial)|genz|milenial|millennials?|boomers?|remaja|anak[\s-]+(muda|sekolah|kuliah|kos|kost|sma|smp|sd)|abg|mahasiswa|mahasiswi|pelajar|pemula|cewek|cowok|wanita|pria|perempuan|laki[\s-]*laki|ibu[\s-]+rumah[\s-]+tangga|ibu[\s-]+ibu|emak[\s-]*emak|bapak[\s-]*bapak|ortu|orang[\s-]+tua|karyawan|pekerja|freelancer)(\s+\d+\s*-?an)?(?![\p{L}\p{N}])/giu;
+
+/**
+ * sisa pesan yang mungkin SUBJEK video: researchSubject tanpa kosakata revisi & bagian yang dibantah ("bukan cs tracker").
  * "bikin video lebih gelap" → "" · "buat promo pake logo TWS" → "" · "Promo Konten.com buat clipper 30 detik" → "konten.com clipper"
  */
 export function subjectCore(text: string): string {
-  const t = String(text ?? "").replace(ATTR_PHRASE, "$1 ").replace(EDIT_PHRASE, "$1 ");
+  const t = String(text ?? "").replace(NEGATED, "$1 ").replace(ATTR_PHRASE, "$1 ").replace(EDIT_PHRASE, "$1 ");
   return researchSubject(t)
     .split(/\s+/)
     .filter((w) => w && (w.includes(".") || !EDIT_TOKEN.test(w)) && letters(w) > 0)
     .join(" ");
 }
 
-/** kata kerja + bentuk video (bukan "video ini/nya"): "buat video promo …", "bikinin teaser …" */
-const MAKE_VIDEO = /\b(bikin|buat|rancang|garap|susun)(in|kan|kin)?\s+(video|teaser|trailer|promo(si)?|iklan|explainer|konten|reels?)\b(?!\.\p{L})(?!\s+(ini|itu|nya|tadi)\b)(?!nya)/iu;
+/** bentuk video ("ads" = iklan dalam bahasa Inggris) */
+const VFORM = "video|teaser|trailer|promo(?:si)?|iklan|explainer|konten|reels?|ads?";
+/** kata kerja + bentuk video (bukan "video ini/nya", bukan pertanyaan "bikin video apa aja?"): "buat video promo …", "bikinin teaser …",
+ * "dibuatin video …" */
+const MAKE_VIDEO = new RegExp(`\\b(di)?(bikin|buat|rancang|garap|susun)(in|kan|kin)?\\s+(${VFORM})\\b(?!\\.\\p{L})(?!\\s+(ini|itu|nya|tadi|apa|apaan|apapun)\\b)(?!nya)`, "iu");
+/** kata kerja bikin di mana saja ("bikinin teasernya"); "buat" polos = "untuk", tidak dihitung */
+const MAKE_VERB = /\b((di)?(bikin|buat|rancang|garap|susun)(in|kan|kin)|bikin|rancang|garap|susun)\b/iu;
 /** ajakan / tujuan video: "ajak brand pasang campaign …", "rekrut clipper …" */
 const GOAL = /\b(ajak(in)?|ajakan|rekrut|kenal(in|kan)|perkenalkan|promosi(in|kan)|undang|tawar(in|kan))\b/i;
-/** kata pembuka sebelum brief: "tolong …", "sekarang …", "next: …" */
+/** kata pembuka sebelum brief: "tolong …", "butuh …", "sekarang …", "harusnya …", "next: …", "please make a …" */
 const LEAD =
-  "(?:(?:tolong|coba|mau|minta|pengen|pingin|ingin|aku|gue|gw|saya|kita|kami|dong|yuk|ayo|halo|hai|hi|oke|ok|sip|sekarang|terus|trus|lalu|next|selanjutnya|kak|bang|min)[\\s:,.!]+)*";
+  "(?:(?:tolong|coba|mau|minta|pengen|pingin|ingin|butuh|perlu|aku|gue|gw|saya|kita|kami|yang|yg|tuh|nih|sih|dong|yuk|ayo|halo|hai|hi|oke|ok|sip|eh|btw|sekarang|terus|trus|lalu|next|selanjutnya|kak|bang|min|harusnya|seharusnya|mestinya|maunya|pengennya|mending|mendingan|please|pls|plis|make|create|produce|need|want|a|an|new)[\\s:,.!]+)*";
 /** bentuk video di mana saja di pesan ("konten" di "konten.com" bukan bentuk video) */
-const BRIEF_WORD = /\b(video|teaser|trailer|promo(si)?|iklan|explainer|konten|reels?)(nya)?\b(?!\.\p{L})/iu;
-/** pesan diawali bentuk video: "promo kopi kenangan 30 detik", "Video promo konten.com ya", "next: promo buat UMKM" — bukan
+const BRIEF_WORD = new RegExp(`\\b(${VFORM})(nya)?\\b(?!\\.\\p{L})`, "iu");
+/** bentuk video yang tidak menunjuk video sekarang (bukan "videonya" / "promo ini") */
+const BRIEF_BARE = new RegExp(`\\b(${VFORM})\\b(?!\\.\\p{L})(?![\\s-]*(nya|ini|itu|tadi|tsb|tersebut)\\b)`, "iu");
+/** pesan / klausa diawali bentuk video: "promo kopi kenangan 30 detik", "Video promo konten.com ya", "next: promo buat UMKM" — bukan
  * "Video nya bagus" / "promo ini …" (menunjuk video sekarang) */
-const BRIEF_START = new RegExp(`^\\s*${LEAD}(video|teaser|trailer|promo(si)?|iklan|explainer|konten|reels?)\\b(?!\\.\\p{L})(?![\\s-]*(nya|ini|itu|tadi|tsb|tersebut)\\b)`, "iu");
+const BRIEF_START = new RegExp(`^\\s*${LEAD}(${VFORM})\\b(?!\\.\\p{L})(?![\\s-]*(nya|ini|itu|tadi|tsb|tersebut)\\b)`, "iu");
 /** ajakan di AWAL pesan ("Ajak brand pasang campaign di Konten.com"); "akhirnya ajak daftar …" / "kasih ajakan …" = revisi CTA */
 const GOAL_START = new RegExp(`^\\s*${LEAD}(ajak(in)?|ajakan|rekrut|kenal(in|kan)|perkenalkan|promosi(in|kan)|undang|tawar(in|kan))\\b`, "iu");
 /** penanda subjek eksplisit: "tentang / soal / mengenai <subjek>" */
-const ABOUT = /\b(tentang|soal|mengenai|bertema|seputar)\s+[\p{L}\p{N}]/iu;
+const ABOUT = /\b(tentang|ttg|soal|mengenai|bertema|seputar)\s+[\p{L}\p{N}]/iu;
 /** tanda revisi: kata kerja edit, "adegan 3", atau pesan diawali bagian video ("teks …", "logonya …") */
 const EDIT_HINT =
   /\b(adegan|scene)\s*(ke-?)?\d+\b|\b(di)?(ganti|ubah|hapus|buang|tukar|pindah|geser|naikin|turunin|kecilin|besarin|gedein|matiin|nyalain|benerin|perbaiki|percepat|perlambat|pendekin|panjangin)(in|kan|nya)?\b|^\s*(warna|teks|tulisan|judul|font|huruf|logo|transisi|sfx|musik|volume|subtitle|ejaan|tombol|vo|suara|durasi|hook|cta|intro|outro)(nya)?\b/i;
@@ -169,22 +219,31 @@ const EDIT_HINT =
 const REVISE_HINT =
   /\b(tambah(in|kan)?|tampil(in|kan)|kasih|kasi|(di)?taruh(in)?|(di)?tulis(in|kan)?|(di)?sebut(in|kan)?|(di)?masuk(in|kan)|mention|(di)?tonjol(in|kan)|kurang|terlalu|kebanyakan|kepanjangan|kependekan|kecepetan|kelamaan|kegedean|kekecilan)\b|\b(di|ke|pada)\s+(akhir|awal|tengah|ujung|pojok|ending|penutup|pembuka|intro|outro|hook|cta|adegan|scene|vo|teks|judul|bagian)\b|\b(hook|cta|intro|outro|judul|teks|tulisan|vo|musik|logo|warna|font|transisi|subtitle|caption|durasi|ending|opening|narasi)[\s-]*nya\b/iu;
 /** menunjuk video yang SUDAH ADA ("promo ini", "video tadi", "tetap", "adegan 3", "tambah adegan …") */
-const REF_THIS =
-  /\b(video|teaser|trailer|promo(si)?|iklan|konten|explainer|reels?)[\s-]*(ini|itu|tadi|tsb|tersebut)\b|\b(tetap|tetep)\b|\b(adegan|scene)\s*(ke-?)?\s*\d+\b|\btambah(in|kan)?\s+(\S+\s+)?(adegan|scene|bagian|babak)\b/iu;
+const REF_THIS = new RegExp(
+  `\\b(${VFORM})[\\s-]*(ini|itu|tadi|tsb|tersebut)\\b|\\b(tetap|tetep)\\b|\\b(adegan|scene)\\s*(ke-?)?\\s*\\d+\\b|\\btambah(in|kan)?\\s+(\\S+\\s+)?(adegan|scene|bagian|babak)\\b`,
+  "iu"
+);
 /** proyek nyata: menunjuk video SEKARANG (REF_THIS + "videonya" / "promo nya") → revisi, walau ada "bikin video …" */
-const REF_CURRENT = new RegExp(`${REF_THIS.source}|\\b(video|teaser|trailer|promo(si)?|iklan|konten|explainer|reels?)[\\s-]*nya\\b`, "iu");
-/** ganti subjek terang-terangan: "ganti topik: …", "ganti jadi promo Shopee", "videonya diganti aja jadi promo Konten.com", "jadiin explainer …" */
+const REF_CURRENT = new RegExp(`${REF_THIS.source}|\\b(${VFORM})[\\s-]*nya\\b`, "iu");
+/**
+ * ganti subjek terang-terangan: "ganti topik: …", "topiknya ganti ke …", "ga jadi X, mending Y", "next project: …", "ganti jadi promo
+ * Shopee", "videonya diganti aja jadi promo Konten.com", "jadiin explainer …"
+ */
 const TOPIC_SWITCH = new RegExp(
   "\\b(ganti|ubah|tukar)\\s+(topik|subjek|tema)(nya)?\\b" +
-    `|^\\s*${LEAD}((video|teaser|trailer|promo(si)?|iklan|konten|explainer|reels?)[\\s-]*(nya|ini)?\\s+)?((di)?(ganti|ubah)(in|kan)?|jadi(in|kan))\\s+((aja|saja)\\s+)?(jadi(in|kan)?\\s+)?(video|teaser|trailer|promo(si)?|iklan|explainer|konten|reels?|tentang|soal|mengenai)\\b`,
+    "|\\b(topik|subjek|tema)(nya)?\\s+(di)?(ganti|ubah|tukar)(in|kan)?\\b" +
+    "|\\bsalah\\s+(topik|subjek|tema)(nya)?\\b" +
+    "|\\b(ga|gak|nggak|enggak|ngga|tidak)\\s+jadi\\b[^.!?]*\\b(mending|mendingan)\\b" +
+    "|\\bnext\\s+(project|proyek|video)\\b" +
+    `|^\\s*${LEAD}((${VFORM})[\\s-]*(nya|ini)?\\s+)?((di)?(ganti|ubah)(in|kan)?|jadi(in|kan))\\s+((aja|saja)\\s+)?(jadi(in|kan)?\\s+)?(${VFORM}|tentang|soal|mengenai)\\b`,
   "iu"
 );
 /**
- * sudah ada timeline tapi minta video LAIN (rencana baru). Wajib ada kata benda video/versi/konten (atau "yang buat/untuk …"),
- * supaya revisi kecil seperti "satu lagi, logonya digedein" / "buat lagi transisinya" tidak ikut dianggap rencana baru.
+ * sudah ada timeline tapi minta video LAIN (rencana baru). Wajib ada kata benda video/versi/konten (atau "yang buat/untuk …",
+ * "bikin yang baru"), supaya revisi kecil seperti "satu lagi, logonya digedein" / "buat lagi transisinya" tidak ikut dianggap rencana baru.
  */
 export const NEW_VIDEO =
-  /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(satu|1) (video|versi|konten) lagi\b|\b(bikin|buat)(in|kan)? (juga|lagi) (video|versi|konten|yang (buat|untuk|versi)|(buat|untuk) (fitur|produk|brand|layanan))\b/i;
+  /\b(video|rencana|proyek|konten) (baru|lain|kedua|berikutnya)\b|\b(satu|1) (video|versi|konten) lagi\b|\b(bikin|buat)(in|kan)? (juga|lagi) (video|versi|konten|yang (buat|untuk|versi)|(buat|untuk) (fitur|produk|brand|layanan))\b|\b(bikin|buat)(in|kan)?\s+(yg|yang)\s+baru\b/i;
 
 /** kata yang muncul di judul / konsep video apa pun — bukan penanda subjek */
 const WEAK_WORD = /^(video|promo|promosi|teaser|trailer|iklan|konten|explainer|fitur|produk|layanan|aplikasi|app|platform|versi|baru|cara|tips|tutorial|panduan|event|acara)$/i;
@@ -192,6 +251,7 @@ const trimDots = (w: string) => w.replace(/^\.+|\.+$/g, "");
 
 /**
  * subjek pesan (subjectCore) sama dengan judul / konsep / tujuan timeline sekarang (revisi):
+ *  - isinya hanya penonton ("Gen Z", "mahasiswa") → atribut video sekarang (revisi), bukan subjek lain
  *  - ada nama situs → situsnya disebut di timeline sekarang
  *  - kalau tidak: nama berhuruf besar & kata khas (≥4 huruf) — sebagian besar ada di timeline sekarang (kata pengisi tidak menggagalkan)
  * "Kopi Kenangan" vs "Promo Kopi Kenangan" ✓ · "Kopi Janji Jiwa" vs "Kopi Kenangan" ✗ · "konten.com" vs "Teaser CS Tracker" ✗
@@ -203,7 +263,10 @@ export function sameSubject(core: string, about: string): boolean {
     .map(trimDots)
     .filter(Boolean);
   if (!aw.length) return false;
-  const words = String(core ?? "")
+  const src = String(core ?? "");
+  const rest0 = src.replace(AUDIENCE, "$1 ");
+  if (rest0 !== src && !/\p{L}{2,}/u.test(rest0)) return true;
+  const words = rest0
     .split(/[^\p{L}\p{N}.]+/u)
     .map(trimDots)
     .filter((w) => /\p{L}/u.test(w));
@@ -219,49 +282,89 @@ export function sameSubject(core: string, about: string): boolean {
   return !!rest.length && rest.every(hit);
 }
 
+/** koreksi user ("harusnya …", "aku minta …") — tanpa bentuk video, hanya nama SITUS yang dihitung subjek ("kok jadi cs tracker? aku minta konten.com") */
+const CORRECTION = /\b(harusnya|seharusnya|mestinya|bukannya|maunya|(aku|gue|gw|saya)\s+(minta|mau)(nya)?)\b/i;
+/** setuju / lanjut ("videonya mantap, render") — bukan brief */
+const APPROVE = /\b(mantap|mantul|bagus|keren|oke|okay|ok|sip|render|lanjut(in|kan)?|setuju|approve|fix|final|generate)\b/i;
+/** klausa pesan (dipisah koma / titik / titik koma / titik dua / tanda tanya; titik di "konten.com" & "11.11" tidak memisah), tanpa sapaan */
+const clausesOf = (t: string) =>
+  t
+    .split(/[,;:\n]+|[.!?]+(?=\s|$)|\s[-–—]\s/)
+    .map(stripCall)
+    .filter((c) => letters(c) > 0);
+/** klausa pertama yang diawali bentuk video ("udah cukup cs trackernya. sekarang promo X") → klausa itu & sesudahnya; null kalau tidak ada */
+function briefTail(t: string): string | null {
+  const cs = clausesOf(t);
+  const i = cs.findIndex((c) => BRIEF_START.test(c));
+  return i < 0 ? null : cs.slice(i).join(", ");
+}
+/** subjek bernama: ada situs, atau nama berhuruf besar yang bukan kata pertama pesan */
+function named(core: string, t: string): boolean {
+  if (researchDomains(core).length) return true;
+  const first = stripCall(t).trim().split(/[^\p{L}\p{N}.]+/u)[0] ?? "";
+  return core.split(/\s+/).some((w) => /^\p{Lu}/u.test(w) && w !== first);
+}
+
 /**
  * Pesan berbentuk BRIEF video untuk suatu subjek (bukan revisi): wajib ada bentuk video / ajakan + subjek tersisa (tanpa kosakata
- * revisi), dan penanda subjek.
- *  - belum ada timeline / contoh bawaan (`planned` false): kata kerja ("buat video …"), "tentang …", ajakan, atau — kalau tidak ada
- *    tanda revisi — nama situs, pesan diawali bentuk video, nama berhuruf besar.
+ * revisi), dan penanda subjek. Sapaan ke hero ("Harley, …") tidak ikut dinilai; brief boleh ada di klausa mana saja.
+ *  - belum ada timeline / contoh bawaan (`planned` false): ganti topik, kata kerja ("buat video …", "dibuatin video …"), "tentang …",
+ *    ajakan, atau — kalau tidak ada tanda revisi — nama situs, klausa diawali bentuk video, nama berhuruf besar.
  *  - proyek nyata (`planned` true): hanya sinyal KUAT — "ganti topik / ganti jadi promo …", "video baru", "bikin video …" (yang tidak
- *    menunjuk video sekarang), atau "tentang …" / ajakan di awal / pesan diawali bentuk video tanpa tanda revisi apa pun.
+ *    menunjuk video sekarang), atau "tentang …" / ajakan di awal / klausa diawali bentuk video tanpa tanda revisi apa pun.
  *    Nama situs / huruf besar saja tidak cukup ("tambahin CTA di konten.com", "bikin videonya kayak iklan Apple" = revisi).
- * ✓ "buat video promo tentang konten.com", "Promo Konten.com buat clipper 30 detik", "Ajak brand pasang campaign di Konten.com"
+ * ✓ "buat video promo tentang konten.com", "Promo Konten.com buat clipper 30 detik", "Harley, video promo konten.com ya"
  * ✗ "buat videonya lebih cepat", "bikin video lebih gelap", "buat promo pake logo TWS", "bikin video tanpa musik", "adegan 3 lebih cepat"
  */
 export function looksBrief(text: string, planned = false): boolean {
-  return briefOf(text, planned) !== null;
+  const b = briefOf(text, planned);
+  return b !== null && !b.soft;
 }
 /**
  * contoh bawaan: brief yang JELAS — kata kerja / "tentang" / ajakan, atau nama / situs tanpa tanda revisi. "promo nya tambahin
  * testimoni dari Andi", "videonya mention konten.com" tetap looksBrief (mesin berat, rencana dinilai sutradara) tapi tidak diriset.
  */
 export const clearBrief = (text: string): boolean => !!briefOf(text)?.clear;
-function briefOf(text: string, planned = false): { core: string; clear: boolean } | null {
+/** `soft`: proyek nyata, pesan menyebut "videonya / promonya" — subjek baru hanya kalau situs / namanya tidak ada di timeline sekarang */
+function briefOf(text: string, planned = false): { core: string; clear: boolean; soft?: boolean } | null {
   const t = String(text ?? "").trim();
   if (!t || /^📌/.test(t)) return null;
-  const lead = t.replace(CALL_START, " ");
-  // proyek nyata: ganti subjek terang-terangan / minta video lain = brief walau memakai kata kerja edit ("ganti jadi promo Shopee")
-  const sw = planned && (TOPIC_SWITCH.test(lead) || NEW_VIDEO.test(t));
+  const lead = stripCall(t);
+  // ganti subjek terang-terangan / minta video lain = brief walau memakai kata kerja edit ("ganti jadi promo Shopee")
+  const sw = TOPIC_SWITCH.test(lead) || NEW_VIDEO.test(t);
   const goal = GOAL.test(t);
-  if (!sw && !goal && !BRIEF_WORD.test(t)) return null;
+  const corr = planned && CORRECTION.test(t);
+  if (!sw && !goal && !corr && !BRIEF_WORD.test(t)) return null;
   const core = subjectCore(t);
   if (letters(core) < 3) return null;
+  if (sw) return { core, clear: true };
+  const tail = briefTail(t);
   if (!planned) {
     const site = researchUrls(t).length > 0 || researchDomains(t).length > 0;
     // "tambah adegan soal X di video ini" bukan brief tentang X
     if (MAKE_VIDEO.test(t) || ((ABOUT.test(t) || goal) && !REF_THIS.test(t))) return { core, clear: true };
-    const medium = site || BRIEF_START.test(lead) || /\p{Lu}/u.test(core);
+    const medium = site || tail !== null || /\p{Lu}/u.test(core);
     if (!medium || EDIT_HINT.test(t)) return null;
     return { core, clear: !REVISE_HINT.test(t) && !REF_THIS.test(t) };
   }
-  const ok = { core, clear: true };
-  if (sw) return ok;
-  if (REF_CURRENT.test(t)) return null;
-  if (MAKE_VIDEO.test(t)) return ok;
-  const weak = ABOUT.test(t) || GOAL_START.test(lead) || BRIEF_START.test(lead);
-  return weak && !EDIT_HINT.test(t) && !REVISE_HINT.test(t) ? ok : null;
+  const edit = EDIT_HINT.test(t) || REVISE_HINT.test(t);
+  // calon subjek baru "lunak" (dinilai wantsNewSubject dengan judul / konsep timeline): tanpa tanda revisi / setuju, situs / nama disebut
+  const soft = () => !REF_THIS.test(t) && !edit && !APPROVE.test(t) && named(core, t);
+  if (REF_CURRENT.test(t)) {
+    // "videonya / promonya" saja (bukan "ini / tadi / tetap / adegan N") + kata kerja bikin / bentuk video lain / "tentang …":
+    // mungkin brief subjek baru ("Konten.com itu platform …, bikin video promonya"); "videonya mention konten.com" / "di video ini
+    // Konten.com ditulis …" tetap revisi
+    return (MAKE_VERB.test(t) || BRIEF_BARE.test(t) || ABOUT.test(t)) && soft() ? { core, clear: true, soft: true } : null;
+  }
+  if (MAKE_VIDEO.test(t)) return { core, clear: true };
+  const weak = ABOUT.test(t) || GOAL_START.test(lead) || tail !== null;
+  if (weak && !edit) {
+    // brief di belakang pembuka ("udah cukup cs trackernya. sekarang promo X") → subjek dari bagian brief-nya
+    const sub = tail ? subjectCore(tail) : "";
+    return { core: letters(sub) >= 3 ? sub : core, clear: true };
+  }
+  // koreksi tanpa bentuk video ("kok jadi cs tracker? aku minta konten.com", "harusnya konten.com") → hanya kalau menyebut situs
+  return corr && researchDomains(core).length > 0 && soft() ? { core, clear: true, soft: true } : null;
 }
 
 /** kata pengantar di pesan yang isinya hanya link ("ini linknya …", "cek ini ya …") */
@@ -289,7 +392,9 @@ function aboutHasSite(about: string, url: string): boolean {
 /**
  * Sudah ada timeline (proyek nyata) tapi user minta video untuk SUBJEK lain: brief dengan sinyal kuat (looksBrief planned) yang
  * subjeknya tidak ada di `about` (judul + konsep + tujuan timeline sekarang), atau link saja ke situs yang tidak disebut di timeline.
- * Dipakai untuk riset, catatan "rencana baru", & judul proyek. Brief untuk subjek yang sama = bukan revisi kecil, tapi tidak riset ulang.
+ * Termasuk calon "lunak" (menyebut "videonya / promonya" atau koreksi "harusnya / aku minta …" + situs / nama yang tidak ada di
+ * timeline) — catatan sutradaranya kondisional, jadi sutradara yang memutuskan dengan melihat judul / konsep timeline.
+ * Dipakai untuk riset, catatan "rencana baru", & judul proyek (judul hanya ikut kalau judul rencana barunya memang beda topik). Brief untuk subjek yang sama = bukan revisi kecil, tapi tidak riset ulang.
  */
 export function wantsNewSubject(text: string, about = ""): boolean {
   if (linkOnly(text)) return !researchUrls(text).some((u) => aboutHasSite(about, u));
@@ -310,9 +415,18 @@ const HONORIFIC_NAME = new RegExp(
     .join("|")})\\.?\\s+\\p{Lu}[\\p{L}'-]*(\\s+\\p{Lu}[\\p{L}'-]*)?`,
   "gu"
 );
-/** kata yang menunjuk data pribadi / urusan kerja, bukan subjek */
+/** kata yang menunjuk data pribadi / urusan kerja / jadwal, bukan subjek ("hari" dinilai terpisah: lihat holiday) */
 const PRIVATE_WORD =
-  /^(klien|client|customer|pic|kontak|contact|cp|hp|wa|whatsapp|email|e-mail|telp|telepon|nomor|no|rekening|budget|anggaran|biaya|deadline|tayang|rilis|launching|minggu|bulan|tahun|hari|besok|lusa|tanggal|tgl|jam|depan|nanti|sekarang)$/i;
+  /^(klien|client|customer|pic|kontak|contact|cp|hp|wa|whatsapp|email|e-mail|telp|telepon|nomor|no|rekening|budget|anggaran|biaya|deadline|tayang|rilis|launching|minggu|bulan|tahun|besok|lusa|tanggal|tgl|jam|depan|nanti|sekarang|kantor|senin|selasa|rabu|kamis|jumat|sabtu|ahad|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)$/i;
+/** sesudah "hari" = jadwal ("tayang hari Senin", "hari ini", "hari H"), bukan nama hari besar ("Hari Pahlawan", "hari guru nasional") */
+const DAY_AFTER = /^(senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu|ahad|ini|itu|h|ke|kerja|biasa|depan|terakhir|pertama|esok|besok|lusa|yang|yg)$/i;
+const holiday = (raw: readonly string[], i: number) => {
+  const next = raw[i + 1];
+  return !!next && /^\p{L}/u.test(next) && !DAY_AFTER.test(next) && !PRIVATE_WORD.test(next);
+};
+/** nama hero ("harley bisa bikin …") bukan subjek — kecuali bagian nama berhuruf besar ("Harley Davidson", "Johnson & Johnson") */
+const heroWord = (raw: readonly string[], i: number) =>
+  HERO_SET.has(raw[i].toLowerCase()) && !(/^\p{Lu}/u.test(raw[i]) && [raw[i - 1], raw[i + 1]].some((x) => !!x && /^\p{Lu}/u.test(x)));
 /** pesan menyebut urusan rahasia / internal → tidak dicari otomatis (kecuali user sendiri minta riset) */
 const CONFIDENTIAL = /\b(internal|rapat|meeting|notulen|revenue|omzet|omset|gaji|salary|phk|pecat|rahasia|confidential|nda|password|sandi)\b/i;
 /**
@@ -320,32 +434,56 @@ const CONFIDENTIAL = /\b(internal|rapat|meeting|notulen|revenue|omzet|omset|gaji
  * membantu (aturan sutradara sudah menjelaskan Konten.com) dan hasilnya bisa soal platform lain ("cara withdraw" → Binance / Shopee)
  */
 const GENERIC_WORD =
-  /^(brand|brands|campaign|kampanye|clipper|clippers|kreator|creator|klip|clip|views?|cuan|penghasilan|platform|marketplace|produk|product|layanan|jasa|withdraw|wd|payout|tarik|penarikan|saldo|bayaran|komisi|daftar|pendaftaran|registrasi|gabung|join|banding|brief|umkm|mahasiswa|pelajar|pemula|seller|penjual|influencer|audiens|penonton)$/i;
+  /^(brand|brands|campaign|kampanye|clipper|clippers|kreator|creator|klip|clip|views?|cuan|penghasilan|platform|marketplace|produk|product|layanan|jasa|withdraw|wd|payout|tarik|penarikan|saldo|bayaran|komisi|daftar|pendaftaran|registrasi|gabung|join|banding|brief|umkm|mahasiswa|pelajar|pemula|seller|penjual|influencer|audiens|penonton|valid|ditonton|tayangan)$/i;
 /** kata cara / panduan — ikut kata kunci, tapi tanpa subjek lain tidak dicari ("cara daftar" ✗, "cara masak rendang" ✓) */
-const HOWTO_WORD = /^(cara|tutorial|panduan|tips|trik|langkah|step|steps)$/i;
+const HOWTO_WORD = /^(cara|kerja|tutorial|panduan|tips|trik|langkah|step|steps)$/i;
 /** kata umum yang tetap dipakai kalau bagian nama berhuruf besar ("Clipper Fest", "fitur Auto Clip") */
 const inName = (words: readonly string[], i: number) =>
   /^\p{Lu}/u.test(words[i]) && [words[i - 1], words[i + 1]].some((x) => !!x && /^\p{Lu}/u.test(x) && !GENERIC_WORD.test(x));
 const MAX_QUERY_WORDS = 6;
 
 /**
- * kata kunci pencarian dari pesan user — HANYA subjeknya: ada nama situs → situsnya saja; kalau tidak, potongan kalimat pertama yang
- * berisi subjek, tanpa email, nomor HP, angka / uang, nama orang (Pak Budi), dan kata urusan kerja (klien, PIC, budget). Maks 6 kata.
+ * kata kunci pencarian dari pesan user — HANYA subjeknya: ada nama situs → situsnya saja; kalau tidak, potongan kalimat yang berisi
+ * subjek (klausa dengan bentuk video / "tentang …" / nama berhuruf besar diutamakan; pembuka seperti "lupain yg tadi" dilewati), tanpa
+ * sapaan ke hero, bagian yang dibantah ("bukan cs tracker"), penonton (Gen Z), email, nomor HP, angka / uang, nama orang (Pak Budi),
+ * dan kata urusan kerja (klien, PIC, budget). Maks 6 kata.
  */
 export function researchQuery(text: string): string {
   const src = String(text ?? "");
   const sites = researchDomains(src);
   if (sites.length) return sites.join(" ");
-  const clean = src.replace(URL_RE, " ").replace(EMAIL_RE, " ").replace(MONEY_RE, " ").replace(PHONE_RE, " ").replace(HONORIFIC_NAME, "$1 ");
+  const clean = stripCall(src.replace(URL_RE, " ").replace(EMAIL_RE, " ").replace(MONEY_RE, " ").replace(PHONE_RE, " ").replace(HONORIFIC_NAME, "$1 "))
+    .replace(NEGATED, "$1 ")
+    .replace(AUDIENCE, "$1 ")
+    .replace(ATTR_PHRASE, "$1 ");
+  let first = "";
   for (const part of clean.split(/[,;:()[\]\n]+|[.!?](?=\s|$)|\s[-–—]\s/)) {
-    const words = researchSubject(part)
-      .split(/\s+/)
-      .filter((w) => letters(w) > 0 && /\p{L}/u.test(w) && !PRIVATE_WORD.test(w));
+    const raw = researchSubject(part).split(/\s+/).filter(Boolean);
+    const words = raw.filter(
+      (w, i) => letters(w) > 0 && /\p{L}/u.test(w) && !heroWord(raw, i) && (/^hari$/i.test(w) ? holiday(raw, i) : !PRIVATE_WORD.test(w))
+    );
     const key = words.filter((w, i) => !GENERIC_WORD.test(w) || inName(words, i));
     const pick = (key.some((w) => !HOWTO_WORD.test(w)) ? key : words).slice(0, MAX_QUERY_WORDS).join(" ").slice(0, 60).trim();
-    if (letters(pick) >= 3) return pick;
+    if (letters(pick) < 3) continue;
+    if (BRIEF_WORD.test(part) || ABOUT.test(part) || /\p{Lu}/u.test(pick)) return pick;
+    first ||= pick;
   }
-  return "";
+  return first;
+}
+/** kata kunci punya token subjek: situs, nama berhuruf besar, atau kata isi ≥4 huruf (bukan kata umum / cara) — "apa" / "bingung" ✗ */
+const hasSubjectToken = (q: string) =>
+  researchDomains(q).length > 0 || q.split(/\s+/).some((w) => /^\p{Lu}/u.test(w) || (letters(w) >= 4 && !GENERIC_WORD.test(w) && !HOWTO_WORD.test(w)));
+/** rujukan gaya sebagai kata kunci kalau user sendiri minta riset gayanya ("pelajari dulu soal gaya iklan Apple" → "gaya iklan Apple") */
+function styleQuery(text: string): string {
+  const m = String(text ?? "").match(STYLE_REF)?.[0] ?? "";
+  return m
+    .replace(/^[^\p{L}]+/u, "")
+    .replace(/^(kayak|seperti|ala|mirip|style|vibes?)\s+/iu, "")
+    .split(/\s+/)
+    .slice(0, MAX_QUERY_WORDS)
+    .join(" ")
+    .slice(0, 60)
+    .trim();
 }
 /** kata kunci hanya kata umum (brand, campaign, clipper, cara daftar …) */
 const isGenericQuery = (q: string) => !!q && q.split(/\s+/).every((w) => GENERIC_WORD.test(w) || HOWTO_WORD.test(w));
@@ -363,7 +501,7 @@ export type ResearchPlan = {
 export type ResearchTurn = {
   /** pesan user giliran ini */
   text: string;
-  /** brief asli (pesan user sebelum kartu pertanyaan) kalau pesan ini jawaban kartu 📌 */
+  /** brief asli (pesan user sebelum kartu pertanyaan) kalau pesan ini jawaban kartu (📌 atau jawaban bebas sesudah kartu) */
   brief?: string;
   hasTimeline: boolean;
   /** timeline sekarang masih contoh bawaan (belum pernah direncanakan) */
@@ -383,20 +521,23 @@ export type ResearchTurn = {
 export function planResearch(t: ResearchTurn): ResearchPlan | null {
   const text = String(t.text ?? "").trim();
   const card = /^📌/.test(text);
-  const base = card ? String(t.brief ?? "") : text;
   const urls = researchUrls(text);
-  const asked = asksResearch(text) || (card && asksResearch(base));
+  // rencana baru: belum ada timeline / contoh bawaan → brief yang JELAS (obrolan, pertanyaan, & perintah edit contohnya tidak diriset);
+  // proyek nyata → minta video untuk subjek lain
+  const fresh = (s: string) => (t.hasTimeline && !t.starter ? wantsNewSubject(s, t.about) : clearBrief(s));
+  // jawaban kartu (📌 / jawaban bebas sesudah kartu) → subjek dari brief aslinya, kecuali jawabannya sendiri brief baru
+  const brief = String(t.brief ?? "");
+  const base = card || (brief && !fresh(text)) ? brief : text;
+  const asked = asksResearch(text) || (base !== text && asksResearch(base));
   if (t.small && !urls.length && !asked) return null;
-  // rencana baru: belum ada timeline, contoh bawaan + brief yang jelas (perintah edit contohnya tidak diriset), atau minta video
-  // untuk subjek lain di proyek nyata (jawaban kartu → brief aslinya)
-  const fresh = t.hasTimeline && !t.starter ? wantsNewSubject(base, t.about) : !t.starter || clearBrief(base);
-  if (!urls.length && !asked && !(t.creative && fresh)) return null;
+  if (!urls.length && !asked && !(t.creative && fresh(base))) return null;
   const domains = researchDomains(base);
   // urusan rahasia / internal (rapat, gaji, revenue …) tidak dicari otomatis; nama situs saja tetap aman dicari
   if (!urls.length && !asked && !domains.length && CONFIDENTIAL.test(base)) return null;
-  const query = researchQuery(base) || (card ? "" : researchQuery(text));
+  const query = researchQuery(base) || (asked ? styleQuery(base) : "");
   if (!urls.length) {
-    if (letters(query) < 3) return null;
+    // kata kunci tanpa subjek ("apa", "bingung apa") tidak dicari
+    if (letters(query) < 3 || !hasSubjectToken(query)) return null;
     // subjek tool internal (CS Tracker dkk.) / kata umum saja: web tidak tahu isinya (kecuali user sendiri yang minta riset)
     if (!asked && (isInternalSubject(query) || isGenericQuery(query))) return null;
   }
@@ -485,9 +626,12 @@ function subjectMatcher(p: Pick<ResearchPlan, "query" | "urls">): ((hay: string,
     .split(/[^\p{L}\p{N}.]+/u)
     .map(trimDots)
     .filter((w) => w.length >= 3 && !siteTokens.has(w.toLowerCase()) && !researchDomains(w).length);
-  // kata umum diabaikan kalau ada kata lain — kecuali bagian nama ("fitur Auto Clip": halaman "Fitur Auto Hold" tidak cocok)
+  // kata umum diabaikan kalau ada kata lain — kecuali bagian nama ("fitur Auto Clip": halaman "Fitur Auto Hold" tidak cocok); kata
+  // pendek (<4 huruf) yang bukan nama berhuruf besar terlalu umum untuk penanda, diabaikan kalau ada kata lain
   const key = words.filter((w, i) => !GENERIC_WORD.test(w) || inName(words, i));
-  const need = (key.length ? key : words).map((w) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w.toLowerCase())}`, "iu"));
+  const pool = key.length ? key : words;
+  const strong = pool.filter((w) => w.length >= 4 || /^\p{Lu}/u.test(w));
+  const need = (strong.length ? strong : pool).map((w) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w.toLowerCase())}`, "iu"));
   if (!siteRes.length && !need.length) return null;
   return (hay, url) => {
     const host = hostOf(url);

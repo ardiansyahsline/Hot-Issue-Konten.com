@@ -23,7 +23,7 @@ import {
 import { resolveDirector, type CharLoader } from "@/lib/studio/directorResolve";
 import { EXAMPLE_PROJECT_TITLE } from "@/lib/studio/directorStarter";
 import { turnKind } from "@/lib/studio/directorTurn";
-import { researchFooter, researchMissNote } from "@/lib/studio/research";
+import { researchFooter, researchMissNote, sameSubject } from "@/lib/studio/research";
 import { runResearch, type ResearchResult } from "@/lib/studio/research.server";
 import { normDirector, normalizeTimeline, type Timeline } from "@/lib/studio/timeline";
 import { SFX_BUILTIN, type SfxMeta } from "@/lib/studio/sfxMeta";
@@ -427,9 +427,10 @@ export async function POST(req: NextRequest) {
       const patch: Record<string, unknown> = { timeline: tl };
       const title = tl.title && tl.title !== NEW_TITLE ? tl.title.slice(0, 120) : "";
       // proyek berjudul bawaan / proyek contoh yang baru direncanakan untuk subjek user / proyek yang judulnya masih judul rencana
-      // lama dan kini berisi video untuk subjek lain (mis. "Teaser CS Tracker" → promo Konten.com) → ikut judul rencana.
+      // lama dan kini berisi video untuk subjek lain (mis. "Teaser CS Tracker" → promo Konten.com) → ikut judul rencana — hanya kalau
+      // judul rencana barunya memang beda topik (sutradara yang ternyata merevisi timeline lama tidak mengganti judul proyek).
       // Judul yang diganti user sendiri tidak disentuh.
-      const renamed = newSubject && !!current && project.title === current.title && title !== current.title;
+      const renamed = newSubject && !!current && project.title === current.title && !!title && title !== current.title && !sameSubject(title, turn.about);
       if ((project.title === NEW_TITLE || (starter && project.title === EXAMPLE_PROJECT_TITLE) || renamed) && title && title !== project.title) patch.title = title;
       const { error } = await supabase.from("studio_projects").update(patch).eq("id", project.id);
       if (error) console.log("[studio] gagal simpan timeline:", error.message);

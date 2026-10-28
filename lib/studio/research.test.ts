@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import {
   RESEARCH_END,
+  asksResearch,
   looksBrief,
   planResearch,
   researchContext,
@@ -229,6 +230,56 @@ async function main() {
     assert.equal(turn("📌 Jawaban\n- Durasi? 30 dtk", { hasTimeline: true, brief: "ubah warnanya" }), null);
   });
 
+  await test("kata kunci: sapaan ke hero, klausa pembuka, singkatan chat, & bagian yang dibantah tidak jadi kata kunci (putaran 3)", () => {
+    assert.equal(researchQuery("Harley, bikinin promo Kopi Kenangan"), "Kopi Kenangan");
+    assert.equal(researchQuery("Nana, aku mau iklan buat Wardah lip cream baru, target cewek 20an"), "Wardah lip cream");
+    assert.equal(researchQuery("Layla, iklan Scarlett Whitening 20 detik dong"), "Scarlett Whitening");
+    assert.equal(researchQuery("Johnson, tolong teaser Java Jazz 2027"), "Java Jazz");
+    assert.equal(researchQuery("harley bisa bikin video apa aja sih?"), "");
+    // nama hero yang jadi bagian nama berhuruf besar tetap subjek
+    assert.equal(researchQuery("bikin promo Harley Davidson 30 detik"), "Harley Davidson");
+    assert.equal(researchQuery("lupain yg tadi, gue mau video buat Tokopedia Ramadan Ekstra"), "Tokopedia Ramadan Ekstra");
+    assert.equal(researchQuery("stop dulu yg ini. ganti tema: hari guru nasional"), "hari guru nasional");
+    assert.equal(researchQuery("Bang, video kampanye Hari Pahlawan 10 November buat sosmed kantor dong"), "Hari Pahlawan");
+    assert.equal(researchQuery("promo kosmetik lokal yg lagi naik daun"), "kosmetik lokal naik daun");
+    assert.equal(researchQuery("videonya bukan tentang CS Tracker, harusnya promo Kopi Kenangan"), "Kopi Kenangan");
+    // "hari" untuk jadwal tetap dibuang
+    assert.equal(researchQuery("promo Kopi Kenangan tayang hari Senin"), "Kopi Kenangan");
+    // penonton & atribut revisi bukan subjek
+    assert.equal(researchQuery("iklan untuk Gen Z, pakai bahasa gaul"), "");
+    assert.equal(researchQuery("Bikin video promo Kopi Kenangan buat Gen Z dengan musik upbeat"), "Kopi Kenangan");
+    // rujukan gaya hanya sampai nama berhuruf besar (dulu "\p{Lu}" + flag i ikut menelan kata sesudahnya)
+    assert.equal(researchSubject("bikin promo Kopi Kenangan kayak iklan Apple tapi buat brand lokal"), "Kopi Kenangan brand lokal");
+  });
+  await test("minta riset: hanya kata riset / penanda internet / 'cari info …' — bukan 'carikan musik', 'cari tahu kenapa', 'browsing di HP'", () => {
+    for (const t of ["riset dulu soal Kopi Kenangan ya", "risetin konten.com", "cari info dulu soal Kopi Kenangan", "carikan informasi tentang Java Jazz", "cek di google soal Hari Pahlawan", "pelajari dulu soal gaya iklan Apple", "googling dulu ya", "cari tahu tentang Wardah dulu"])
+      assert.equal(asksResearch(t), true, t);
+    for (const t of ["carikan musik yang cocok", "carikan SFX yang pas buat adegan 3", "carikan font yang lebih tegas", "adegan 2 ganti jadi browsing di HP", "cari tahu kenapa VO nya kepotong", "tolong carikan ide hook yang lebih nendang", "carikan soal musik yang lebih ceria"])
+      assert.equal(asksResearch(t), false, t);
+  });
+  await test("belum ada timeline: hanya brief yang jelas diriset; kata kunci tanpa token subjek ditolak", () => {
+    for (const t of ["oke makasih penjelasannya, nanti aku kabarin lagi", "kamu bisa bikin video apa aja sih? jelasin dong fitur studio ini", "halo harley, aku lagi bingung mau bikin apa nih buat minggu depan", "aku punya acara ulang tahun kantor minggu depan, butuh opening", "bikin video explainer tentang cara kerja views valid", "buat brand F&B aja, durasi 30 detik, gaya santai", "vertikal, 45 detik, pake VO cewek"])
+      assert.equal(turn(t), null, t);
+    // jawaban bebas sesudah kartu → brief aslinya
+    assert.equal(turn("buat brand F&B aja, durasi 30 detik, gaya santai", { brief: "Promo Konten.com buat clipper" })?.query, "konten.com");
+    // tetap jalan untuk brief jelas
+    assert.equal(turn("Harley, bikinin promo Kopi Kenangan")?.query, "Kopi Kenangan");
+    // proyek nyata: minta riset sambil merevisi gaya → kata kunci rujukan gayanya
+    assert.equal(turn("pelajari dulu soal gaya iklan Apple terus terapin", { hasTimeline: true, about: "Promo Konten.com" })?.query, "gaya iklan Apple");
+  });
+  await test("subjek baru vs atribut: penonton saja = subjek sama; nama yang dibantah tidak dihitung", () => {
+    const kc = "Promo Konten.com untuk Clipper · Ajak clipper gabung Konten.com";
+    assert.equal(sameSubject("Gen Z", kc), true);
+    assert.equal(sameSubject("mahasiswa", kc), true);
+    assert.equal(sameSubject("Kopi Kenangan Gen Z", kc), false);
+    assert.equal(wantsNewSubject("iklan untuk Gen Z, pakai bahasa gaul", kc), false);
+    assert.equal(wantsNewSubject("pelajari dulu soal gaya iklan Apple terus terapin", kc), false);
+    const teaser = "Teaser CS Tracker · Masalah kerja tim CS → CS Tracker beresin semuanya";
+    assert.equal(wantsNewSubject("videonya bukan tentang CS Tracker, harusnya promo Kopi Kenangan", teaser), true);
+    assert.equal(wantsNewSubject("Harley, video promo konten.com ya", teaser), true);
+    assert.equal(looksBrief("Harley, video promo konten.com ya", true), true);
+  });
+
   // ---------- hasil riset → prompt ----------
   const plan: ResearchPlan = { query: "konten.com", urls: ["https://konten.com"], subject: "konten.com", why: "subjek" };
   await test("konteks: halaman resmi selalu dipakai, hasil lain wajib menyebut subjek, maks 4 sumber, tanda ` dibuang", () => {
@@ -285,6 +336,13 @@ async function main() {
     assert.equal(sys.match(/^## CATATAN GILIRAN INI$/gm)?.length, 1);
     assert.ok(sys.indexOf(RESEARCH_END) < sys.search(/^## CATATAN GILIRAN INI$/m));
     assert.doesNotMatch(sys, /## CATATAN GILIRAN INI[^\n]*evil/);
+  });
+  await test("penyaring: kata pendek (<4 huruf, bukan nama) tidak cukup sebagai penanda kalau ada kata lain", () => {
+    const body = (s: string) => `${s} `.repeat(6);
+    const p: ResearchPlan = { query: "kue apa Lapis Legit", urls: [], subject: "kue Lapis Legit", why: "subjek" };
+    // halaman soal Lapis Legit tanpa kata "apa" tetap dipakai; halaman yang cuma menyebut "kue apa" tidak
+    assert.equal(researchContext(p, [{ url: "https://resep.id/ll", title: "Lapis Legit", content: body("Lapis legit kue lapis khas Indonesia.") }]).sources.length, 1);
+    assert.equal(researchContext(p, [{ url: "https://resep.id/x", title: "Kue apa saja", content: body("Kue apa yang enak untuk lebaran?") }]).sources.length, 0);
   });
   await test("konteks kosong kalau tidak ada yang cocok", () => {
     const out = researchContext(plan, [{ url: "https://lain.id", title: "Resep", content: "y".repeat(300) }]);
