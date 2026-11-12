@@ -534,9 +534,14 @@ class Replika:
                     vcol, scol = self._id_col("appeals", "video_id"), self._id_col("appeals", "status")
                     cre = self.kolom.col("appeals", "created_at", wajib=False)
                     order = sql.SQL(", {} DESC NULLS LAST").format(sql.Identifier(cre)) if cre else sql.SQL("")
-                    q = sql.SQL("SELECT DISTINCT ON ({v}) {v}::text AS vid, {s}::text AS st FROM {t} WHERE {v} = ANY({p}) "
-                                "ORDER BY {v}{o}").format(v=vcol, s=scol, t=self.kolom.tbl("appeals"), p=fa, o=order)
-                    banding = {str(r["vid"]): self._arti_banding(r.get("st")) for r in self._q_raw(q, (ba,))}
+                    # appeals dihubungkan lewat target_type + target_id: saring jenis target kalau [nilai] banding_target diisi
+                    tt, target = self.kolom.col("appeals", "target_type", wajib=False), self.kolom.val("banding_target")
+                    saring, p_saring = sql.SQL(""), ()
+                    if tt and target:
+                        saring, p_saring = sql.SQL(" AND lower({}::text) = ANY(%s)").format(sql.Identifier(tt)), (target,)
+                    q = sql.SQL("SELECT DISTINCT ON ({v}) {v}::text AS vid, {s}::text AS st FROM {t} WHERE {v} = ANY({p}){f} "
+                                "ORDER BY {v}{o}").format(v=vcol, s=scol, t=self.kolom.tbl("appeals"), p=fa, f=saring, o=order)
+                    banding = {str(r["vid"]): self._arti_banding(r.get("st")) for r in self._q_raw(q, (ba, *p_saring))}
             for vid in bagian:
                 a, v = audit.get(vid), vids.get(vid)
                 if a is None and v is None:
@@ -609,7 +614,7 @@ class Replika:
     def _nilai_unik(self, skema: dict[str, list[str]]) -> dict[str, list[dict]]:
         sql = self._sql()
         out: dict[str, list[dict]] = {}
-        target = [("videos", "status"), ("audit", "action"), ("appeals", "status")]
+        target = [("videos", "status"), ("audit", "action"), ("appeals", "status"), ("appeals", "target_type"), ("appeals", "appeal_type")]
         for t, c in target:
             nama_t = self.kolom.tabel.get(t)
             nama_c = (self.kolom.kolom.get(t) or {}).get(c)

@@ -359,7 +359,30 @@ def t_kolom_toml_validasi_dan_sesuaikan():
     toml = (ROOT / "kolom.toml").read_text(encoding="utf-8").lower()
     for pribadi in ("username", "email", "phone", "full_name", "notes"):
         assert not re.search(rf'^\s*\w+\s*=\s*"[^"]*{pribadi}', toml, re.M), f"kolom pribadi dipetakan: {pribadi}"
-    return f"{len(masalah)} masalah terdeteksi + saran nama mirip"
+    # skema ASLI Konten.com (nama kolom dari `kenali-skema --nilai` di laptop user): pemetaan cocok semua, tanpa catatan
+    asli = json.loads((HERE / "data" / "skema-asli-kolom.json").read_text(encoding="utf-8"))
+    k3 = kolom.muat(ROOT / "kolom.toml")
+    assert k3.validasi(asli["tabel"]) == [], k3.validasi(asli["tabel"])
+    k3.sesuaikan(asli["tabel"])
+    assert not k3.catatan and not k3.mati, (k3.catatan, k3.mati)
+    assert (k3.col("videos", "caption"), k3.col("videos", "created_at"), k3.col("videos", "platform_video_id")) == \
+        ("description", "submitted_at", "platform_video_id")
+    assert k3.col("videos", "hashtags", wajib=False) is None and k3.col("videos", "duration", wajib=False) is None
+    assert (k3.col("appeals", "video_id"), k3.col("appeals", "target_type")) == ("target_id", "target_type")
+    assert (k3.col("history", "video_id"), k3.col("history", "status"), k3.col("history", "created_at")) == \
+        ("tracked_video_id", "to_status", "changed_at")
+    # semua nilai status asli punya arti (kecuali status yang memang bukan keputusan)
+    nu = asli["nilai_unik"]
+    bukan_keputusan = {"pending_review", "deleted", "expired", "budget_finished", "max_claimed", "flagged"}
+    for st in nu["tracked_videos.status"]:
+        arti = st in k3.val("status_approve") or st in k3.val("status_reject")
+        assert arti != (st in bukan_keputusan), st
+    assert "approved_flag" in k3.val("status_approve")
+    banding = {st: [x for x in ("banding_dibatalkan", "banding_dikuatkan", "banding_menunggu") if st in k3.val(x)] for st in nu["appeals.status"]}
+    assert banding == {"denied": ["banding_dikuatkan"], "granted": ["banding_dibatalkan"], "under_review": ["banding_menunggu"],
+                       "resubmit_allowed": ["banding_dikuatkan"]}, banding
+    assert set(k3.val("audit_approve") + k3.val("audit_reject")) <= set(nu["audit_log.action"]) and k3.val("banding_target") == []
+    return f"{len(masalah)} masalah terdeteksi + saran nama mirip; skema asli cocok"
 
 
 @test
@@ -429,8 +452,9 @@ def t_replika_asli_psycopg_read_only_dan_query_minimal():
             except psycopg.errors.ReadOnlySqlTransaction:
                 pass
         v = r.ambil_video("5001")
-        assert v and v.platform == "tiktok" and v.platform_video_id == "7300000000000000001" and v.hashtags == ["#filmsatu", "#seru"]
-        assert "tiktok.com/@" not in repr(v) and v.durasi_detik == 13.0, "url (berisi username) tidak boleh tercetak"
+        assert v and v.platform == "tiktok" and v.platform_video_id == "7300000000000000001" and v.hashtags == []
+        assert v.caption and "#FilmSatu" in v.caption and v.dibuat, "caption = kolom description, dibuat = submitted_at"
+        assert "tiktok.com/@" not in repr(v) and v.durasi_detik is None, "url (berisi username) tidak boleh tercetak; durasi dari ffprobe"
         assert r.ambil_video("bukan-angka") is None and r.ambil_video("999999") is None
         assert r.cari_video(VideoRef(jenis="platform", platform="tiktok", nilai="7300000000000000003")).id == "5003"
         assert r.cari_video(VideoRef(jenis="platform", platform="instagram", nilai="CxFiktif5")).id == "5005"
@@ -438,23 +462,37 @@ def t_replika_asli_psycopg_read_only_dan_query_minimal():
         assert r.cari_video(VideoRef(jenis="platform", platform="tiktok", nilai="x_%")) is None
         c = r.ambil_campaign(v.campaign_id)
         assert c and isinstance(c.brief_detail, dict) and c.brief_detail["durasiMax"] == "60" and c.min_video_duration == 15
+        assert c.rules == '["Wajib sebut judul"]' and c.brief_detail["tagSocialMedia"] == "@filmsatu.official"
         alasan = r.daftar_alasan()
         assert {a[0] for a in alasan} == {"Konten tidak sesuai brief campaign", "CTA wajib tidak ada", "Followers belum memenuhi syarat"}
         ks = r.daftar_kandidat_sampel()
         assert len(ks) == 26 and all(k.reviewer and k.reviewer.startswith("R-") for k in ks)
         assert {k.keputusan for k in ks} == {"approve", "reject"} and all(k.alasan_label is None for k in ks if k.keputusan == "approve")
         assert len(r.daftar_kandidat_sampel(batas=5)) == 5
-        km = r.keputusan_manusia(["5004", "5008", "5012", "5016", "5007", "999"])
+        km = r.keputusan_manusia(["5004", "5008", "5012", "5016", "5020", "5024", "5007", "5014", "999"])
         assert km["5004"].keputusan == "approve", "keputusan TERAKHIR yang dipakai"
-        assert (km["5008"].banding, km["5012"].banding, km["5016"].banding) == ("dibatalkan", "dikuatkan", "menunggu")
-        assert km["5007"].keputusan is None and km["5007"].status_sekarang == "pending" and "999" not in km
+        # appeals lewat target_id: granted (terbaru) / denied / under_review / resubmit_allowed
+        assert (km["5008"].banding, km["5012"].banding, km["5016"].banding, km["5020"].banding) == \
+            ("dibatalkan", "dikuatkan", "menunggu", "dikuatkan"), [km[x].banding for x in ("5008", "5012", "5016", "5020")]
+        assert km["5024"].banding == "dibatalkan", "banding_target kosong → semua baris appeals dipakai"
+        assert km["5007"].keputusan is None and km["5007"].status_sekarang == "pending_review" and "999" not in km
+        assert km["5014"].keputusan == "approve" and km["5014"].status_sekarang == "approved_flag", "approved_flag = approve"
+        # banding_target diisi → hanya appeals.target_type itu (banding payout 5024 tidak lagi dihitung)
+        r.kolom.nilai["nilai"]["banding_target"] = ["tracked_video"]
+        km2 = r.keputusan_manusia(["5008", "5024"])
+        assert km2["5008"].banding == "dibatalkan" and km2["5024"].banding is None, (km2["5008"].banding, km2["5024"].banding)
+        r.kolom.nilai["nilai"]["banding_target"] = []
         r.kenali_skema(nilai=True)
         sk = json.loads((CFG.data / "skema.json").read_text(encoding="utf-8"))
-        assert "tracked_videos" in sk["tabel"] and "nilai_unik" in sk
+        assert "tracked_videos" in sk["tabel"] and "nilai_unik" in sk and sk["masalah_pemetaan"] == [], sk["masalah_pemetaan"]
+        nu = {k: [x["nilai"] for x in v] for k, v in sk["nilai_unik"].items()}
+        assert set(nu["appeals.target_type"]) == {"tracked_video", "payout"} and "video_reject" in nu["appeals.appeal_type"], nu
+        assert "approved_flag" in nu["tracked_videos.status"] and "tagSocialMedia" in nu["campaigns.brief_detail (key)"]
         teks_sk = json.dumps(sk)
         assert "clipper.fiktif" not in teks_sk and "Nama Reviewer" not in teks_sk, "kenali-skema membaca isi baris pribadi"
         semua = "\n".join(sql_dikirim).lower()
-        for pribadi in ('"username"', '"clipper_email"', '"clipper_phone"', '"full_name"', "notes", '"email"', '"owner_email"', '"note"'):
+        for pribadi in ('"username"', '"clipper_email"', '"clipper_phone"', '"full_name"', "notes", '"email"', '"owner_email"', '"note"',
+                        '"name"', '"internal_notes"', '"is_ads"'):
             assert pribadi not in semua, f"query membaca kolom pribadi {pribadi}"
         assert all(re.match(r"^\s*(select|with)\b", q, re.I) for q in sql_dikirim)
         r.tutup()
@@ -1016,6 +1054,8 @@ def t_cli_kode_keluar():
         assert k.returncode == 0 and "tracked_videos: ADA" in k.stdout, k.stdout + k.stderr
         c = run("cek")
         assert "read-only terverifikasi" in c.stdout, c.stdout
+        baris = next(b for b in c.stdout.splitlines() if "Pemetaan kolom.toml" in b)
+        assert "GAGAL" not in baris and "cocok" in baris, baris
         subprocess.run(base + ["-c", "drop database if exists replika_palsu_cli"], capture_output=True)
     return "help 0, pengaturan kurang 2, gagal 1" + (" + DB palsu" if pg else "")
 

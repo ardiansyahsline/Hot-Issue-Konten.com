@@ -14,7 +14,7 @@ from .privasi import bersihkan_teks
 from .skema import (BriefCampaign, CekPoin, CekPoinAI, KeputusanAI, KodeSerah, MateriVideo, PenilaianFinal, PoinBrief,
                     ReferensiCampaign)
 
-ATURAN_VERSI = "a1"  # naikkan kalau aturan berubah (ikut hash rubrik)
+ATURAN_VERSI = "a2"  # naikkan kalau aturan berubah (ikut hash rubrik). a2: cek tag akun tagSocialMedia (tidak terlihat = cek manusia)
 
 BUKTI_IDENTITAS = "Butuh cek manusia: menyangkut mengenali orang tertentu (AI tidak boleh menebak identitas orang)."
 BUKTI_MATERI = "Materi referensi campaign belum ada, jadi tidak bisa dibandingkan. Upload di halaman Materi."
@@ -96,6 +96,44 @@ def _cek_hashtag(p: PoinBrief, brief: BriefCampaign, materi: MateriVideo) -> tup
     return "lolos", "Caption memuat semua hashtag / tag wajib: " + " ".join(wajib) + "."
 
 
+def _cek_tag_akun(p: PoinBrief, materi: MateriVideo) -> tuple[str, str]:
+    """poin tagSocialMedia: akun / tag brand di caption → lolos; tidak terlihat / caption kosong / akun tidak tertulis di brief →
+    tidak_bisa_dinilai (BUTUH CEK MANUSIA: bisa di-tag lewat fitur tag platform). TIDAK PERNAH "tidak" (bukan alasan reject)."""
+    isi = p.teks.split(":", 1)[1] if ":" in p.teks else p.teks
+    plat_video = (materi.meta.platform or "").strip().lower()
+    semua: list[str] = []
+    khusus: list[str] = []
+    umum: list[str] = []
+    for bag in isi.split(";"):
+        tags = re.findall(r"[#@][\w.]+", bag)
+        tags = [t.rstrip(".") for t in tags]
+        semua += tags
+        m = re.match(r"\s*(tiktok|instagram|youtube|semua platform)\b", bag, re.I)
+        if m and m.group(1).lower() == plat_video:
+            khusus += tags
+        elif m and m.group(1).lower() == "semua platform":
+            umum += tags
+    wajib = (khusus + umum) if khusus else semua  # akun per platform: yang dicek hanya akun untuk platform video ini (+ akun umum)
+    if not wajib:
+        return "tidak_bisa_dinilai", "Akun yang wajib di-tag tidak tertulis jelas di brief — cek manusia."
+    cap = _norm(materi.meta.caption or "")
+    if not cap.strip():
+        return "tidak_bisa_dinilai", "Caption video tidak tersedia di data — tag akun " + " ".join(wajib) + " dicek manusia."
+    tags_video, _ = _tag_video(materi)
+    kurang = []
+    for t in wajib:
+        n = _norm(t)
+        if n.startswith("#"):
+            if n.lstrip("#") not in tags_video:
+                kurang.append(t)
+        elif not re.search(r"(?<![\w.])" + re.escape(n) + r"(?![\w])", cap):
+            kurang.append(t)
+    if kurang:
+        return "tidak_bisa_dinilai", ("Tag akun " + " ".join(kurang) + " tidak terlihat di caption (bisa jadi di-tag lewat fitur "
+                                      "tag platform) — cek manusia.")
+    return "lolos", "Caption memuat tag akun wajib: " + " ".join(wajib) + "."
+
+
 def _token(s: str) -> list[str]:
     return [t for t in re.findall(r"[#@]?\w+", _norm(s)) if len(t) >= 2]
 
@@ -120,7 +158,8 @@ def _cek_caption(p: PoinBrief, brief: BriefCampaign, materi: MateriVideo) -> tup
 
 
 def cek_kode(brief: BriefCampaign, materi: MateriVideo) -> list[CekPoin]:
-    """poin cara_nilai "kode" (durasi vs durasiMin/Max ±1 dtk, hashtag wajib di caption/hashtags, caption wajib) — juga
+    """poin cara_nilai "kode" (durasi vs durasiMin/Max ±1 dtk, hashtag wajib di caption/hashtags, caption wajib, tag akun
+    tagSocialMedia — tidak terlihat = cek manusia) — juga
     dikirim ke AI sebagai fakta"""
     out: list[CekPoin] = []
     for p in brief.poin:
@@ -128,6 +167,8 @@ def cek_kode(brief: BriefCampaign, materi: MateriVideo) -> list[CekPoin]:
             continue
         if p.kategori == "durasi":
             hasil, bukti = _cek_durasi(brief, materi)
+        elif p.kategori == "hashtag" and p.sumber.startswith("tagSocialMedia"):
+            hasil, bukti = _cek_tag_akun(p, materi)
         elif p.kategori == "hashtag":
             hasil, bukti = _cek_hashtag(p, brief, materi)
         elif p.kategori == "caption_wajib":

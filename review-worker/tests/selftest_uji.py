@@ -317,6 +317,15 @@ def t_di_luar_video_dan_rasio_asli():
     m = metrik.hitung_metrik(B, SimpleNamespace(kurs_idr=18000, video_per_hari=2000))
     assert m["n_di_luar_video"] == 8 and m["matriks"]["reject"]["approve"] == 0 and m["setuju_akhir"]["persen"] == 100.0, m["matriks"]
     assert [(x["code"], x["di_luar_video"]) for x in m["per_alasan"]] == [("engagement_bot", True)]
+    # "Video pakai Ads" (kode lainnya, data platform) = di luar jangkauan AI; "Lainnya" biasa tetap dihitung — baris per_alasan terpisah
+    B2 = [_b(200 + i, "approve", "reject", code="lainnya") for i in range(3)] + [_b(300, "reject", "reject", code="lainnya")]
+    for r in B2[:3]:
+        r["human_reason"] = "Video pakai Ads (promosi berbayar)"
+    B2[3]["human_reason"] = "Lainnya"
+    m2 = metrik.hitung_metrik(B2 + [_b(400, "approve", "approve")], SimpleNamespace(kurs_idr=18000, video_per_hari=2000))
+    assert m2["n_di_luar_video"] == 3 and m2["matriks"]["reject"] == {"approve": 0, "reject": 1, "cek_manusia": 0}, m2["matriks"]
+    assert sorted((x["label"], x["di_luar_video"], x["n"]) for x in m2["per_alasan"]) == [
+        ("Lainnya", False, 1), ("Video pakai Ads (promosi berbayar)", True, 3)], m2["per_alasan"]
     # perkiraan pada perbandingan asli 80:20 — dihitung tangan dari baris matriks
     mt = {"approve": {"approve": 8, "reject": 2, "cek_manusia": 0}, "reject": {"approve": 1, "reject": 7, "cek_manusia": 2}}
     ra = laporan.rasio_asli(mt, {"n_kandidat_approve": 800, "n_kandidat_reject": 200})

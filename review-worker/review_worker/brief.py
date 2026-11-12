@@ -28,7 +28,8 @@ _POIN_KEYS: list[tuple[str, str, str, bool, bool, str]] = [
     ("cta", "cta", "ai", True, False, "cta_tidak_ada"),
     ("captionWajib", "caption_wajib", "kode", True, False, "tidak_sesuai_brief"),
     ("hashtags", "hashtag", "kode", True, False, "tidak_sesuai_brief"),
-    ("durasi", "durasi", "kode", True, False, "tidak_sesuai_brief"),  # durasiMin + durasiMax jadi satu poin
+    ("tagSocialMedia", "hashtag", "kode", True, False, "tidak_sesuai_brief"),  # akun brand wajib di-tag (sumber tagSocialMedia)
+    ("durasi", "durasi", "kode", True, False, "tidak_sesuai_brief"),  # durasiMin + durasiMax (cadangan durasiVideo) jadi satu poin
     ("bolehDilakukan", "boleh", "info", False, False, "tidak_sesuai_brief"),
     ("dilarangDilakukan", "dilarang", "ai", True, False, "tidak_sesuai_brief"),
     ("ugcWajahClipper", "ugc_wajah", "ai", True, False, "tidak_sesuai_brief"),
@@ -42,8 +43,11 @@ _POIN_KEYS: list[tuple[str, str, str, bool, bool, str]] = [
     ("nicheAkunDisetujui", "niche_akun", "data_akun", True, False, "lainnya"),
     ("customSections", "lainnya", "ai", True, False, "tidak_sesuai_brief"),
 ]
-_KONTEKS_KEYS = ("penjelasanBrand", "caption", "contohVideo", "materi")
-_LAIN_KEYS = ("materialWajibChoice", "footageWajibChoice", "durasiMin", "durasiMax")
+_KONTEKS_KEYS = ("penjelasanBrand", "caption", "contohVideo", "materi", "judulFile", "jenisKampanye", "namaBrandArtist")
+_LAIN_KEYS = ("materialWajibChoice", "footageWajibChoice", "durasiMin", "durasiMax", "durasiVideo")
+# konteks teks pendek (bacaan AI, bukan poin). namaBrandArtist bisa nama artis: SENGAJA tidak masuk daftar pengecualian
+# identitas (abaikan) — poin yang menyebut artis tetap butuh cek manusia.
+_KONTEKS_LABEL = {"jenisKampanye": "Jenis kampanye", "namaBrandArtist": "Nama brand / artis", "judulFile": "Judul file dari brand"}
 # key brief_detail dikenal (dinormalkan: huruf kecil, tanpa _ - spasi)
 _SEMUA = [k for k, *_ in _POIN_KEYS if k != "durasi"] + list(_KONTEKS_KEYS) + list(_LAIN_KEYS)
 _NORM = {re.sub(r"[^a-z0-9]", "", k.lower()): k for k in _SEMUA}
@@ -52,7 +56,8 @@ _NORM.update({"hashtag": "hashtags", "hastag": "hashtags", "hastags": "hashtags"
               "durasimaksimal": "durasiMax", "durasimin": "durasiMin", "durasimax": "durasiMax", "minfollowers": "minimumFollowers",
               "customsection": "customSections", "materials": "materi", "material": "materi", "contohvideos": "contohVideo",
               "tujuan": "tujuanCampaign", "instruksi": "instruksiBrief", "dilarang": "dilarangDilakukan",
-              "boleh": "bolehDilakukan", "elemen": "elemenWajib", "dos": "bolehDilakukan", "donts": "dilarangDilakukan"})
+              "boleh": "bolehDilakukan", "elemen": "elemenWajib", "dos": "bolehDilakukan", "donts": "dilarangDilakukan",
+              "tagsocialmedia": "tagSocialMedia", "tagsosmed": "tagSocialMedia", "tagakun": "tagSocialMedia", "durasi": "durasiVideo"})
 
 # kata perintah → poin narasi/tujuan/kesan/target/custom jadi wajib
 _PERINTAH = re.compile(r"\b(wajib|harus|jangan|dilarang|pastikan|tidak boleh|gak boleh|nggak boleh|ga boleh|must|required|"
@@ -359,6 +364,133 @@ def _handles_brief(raw: Any) -> list[str]:
     return sorted({m.group(0) for m in _HANDLE_BRIEF.finditer(s or "")})
 
 
+# ------------------------------------------------------------------ durasiVideo (teks bebas) & tagSocialMedia
+_NUM = r"(\d+(?:[.,]\d+)?)\s*(detik|dtk|seconds?|secs?|s|menit|mnt|minutes?|min|m)?\b"
+_RENTANG = re.compile(_NUM + r"\s*(?:-|–|—|~|s/?d|sampai|hingga|to)\s*" + _NUM, re.I)
+_MAKS = re.compile(r"(?:\bmaks(?:imal|imum)?\b|\bmax(?:imal|imum)?\b|paling lama|di\s*bawah|kurang dari|tidak lebih dari|"
+                   r"\bhingga\b|\bsampai\b|<=?|≤)\s*:?\s*" + _NUM, re.I)
+_MIN = re.compile(r"(?:\bmin(?:imal|imum)?\b|paling (?:sedikit|singkat|pendek)|di\s*atas|lebih dari|setidaknya|at least|>=?|≥)"
+                  r"\s*:?\s*" + _NUM, re.I)
+_KE_ATAS = re.compile(_NUM + r"\s*(?:ke\s*atas|atau lebih|lebih)\b", re.I)
+_KE_BAWAH = re.compile(_NUM + r"\s*(?:ke\s*bawah|atau kurang)\b", re.I)
+
+
+def _detik(angka: str, satuan: Optional[str]) -> Optional[float]:
+    return _angka_detik(f"{angka} {satuan or 'detik'}")
+
+
+def _durasi_video(v: Any) -> tuple[Optional[float], Optional[float]]:
+    """durasiVideo → (min, maks) detik. '30-60 detik' → (30, 60); 'min 30 detik' → (30, None); 'maks 1 menit' → (None, 60);
+    angka / '30 detik' saja → (30, None) (dianggap MINIMAL); objek {min, max}; tidak terbaca → (None, None)"""
+    if v is None or isinstance(v, bool):
+        return None, None
+    if isinstance(v, dict):
+        lo = _angka_detik(_cari(v, ("min", "minimal", "minimum", "durasimin", "dari")))
+        hi = _angka_detik(_cari(v, ("max", "maks", "maksimal", "maximum", "durasimax", "sampai")))
+        if lo is None and hi is None:
+            return _durasi_video(_cari(v, ("value", "nilai", "durasi", "text", "teks")))
+        return lo, hi
+    if isinstance(v, list):
+        for x in v:
+            lo, hi = _durasi_video(x)
+            if lo is not None or hi is not None:
+                return lo, hi
+        return None, None
+    if isinstance(v, (int, float)):
+        return _angka_detik(v), None
+    t = " ".join(_teks_mentah(v)).lower().replace(",", ".")
+    for m in _RENTANG.finditer(t):
+        if not (m.group(2) or m.group(4)) and m.group(0).strip() != t.strip(" .detik"):
+            continue  # "rasio 9-16" bukan durasi: rentang tanpa satuan hanya kalau isinya memang rentang saja
+        s1, s2 = m.group(2) or m.group(4), m.group(4) or m.group(2)  # "1-2 menit": satuan kedua berlaku untuk keduanya
+        return _detik(m.group(1), s1), _detik(m.group(3), s2)
+    lo = hi = None
+    for pola, sisi in ((_MAKS, "hi"), (_KE_BAWAH, "hi"), (_MIN, "lo"), (_KE_ATAS, "lo")):
+        m = pola.search(t)
+        if m:
+            x = _detik(m.group(1), m.group(2))
+            if sisi == "hi" and hi is None:
+                hi = x
+            elif sisi == "lo" and lo is None:
+                lo = x
+    if lo is None and hi is None:  # "30 detik" / "1:30" / "30" saja → dianggap minimal
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(detik|dtk|seconds?|secs?|s|menit|mnt|minutes?|m)\b", t)
+        if m:
+            lo = _detik(m.group(1), m.group(2))
+        elif re.fullmatch(r"\s*(?:\d+(?:\.\d+)?|\d{1,2}:\d{2})\s*", t):
+            lo = _angka_detik(t.strip())
+    return lo, hi
+
+
+_PLATFORM_TAG = {"tiktok": "TikTok", "tt": "TikTok", "instagram": "Instagram", "ig": "Instagram", "insta": "Instagram",
+                 "youtube": "YouTube", "yt": "YouTube"}
+_AKUN_URL = re.compile(r"(?:tiktok\.com|instagram\.com|youtube\.com)/@?([A-Za-z0-9_.]{2,30})", re.I)
+_BUKAN_HANDLE = frozenset("tag mention akun account wajib harus dan atau di ke resmi official brand sosmed social media "
+                          "username user caption video yang untuk".split())
+
+
+def _akun_teks(t: str) -> list[str]:
+    """'@a, @b' / 'brandx' / 'https://www.tiktok.com/@brandx' → ['@a', '@b']; kalimat biasa tanpa handle → []"""
+    out: list[str] = []
+    for m in _AKUN_URL.finditer(t):
+        if m.group(1).lower() not in ("reel", "reels", "stories", "explore", "channel", "user", "watch", "shorts", "video", "tv"):
+            out.append("@" + m.group(1).rstrip("."))
+    t2 = _URL.sub(" ", t)
+    out += [m.group(0).rstrip(".") for m in _HANDLE_BRIEF.finditer(t2)]
+    out += [m.group(0) for m in re.finditer(r"(?<![\w&])#[\wÀ-￿]+", t2)]
+    if not out:  # tanpa '@': hanya kalau isinya memang seperti daftar nama akun (1-3 kata berbentuk handle), bukan kalimat
+        kata = [w.strip(".:") for w in re.split(r"[\s,;/|]+", t2) if w.strip(".:")]
+        kata = [w for w in kata if w.lower() not in _PLATFORM_TAG and w.lower() not in _BUKAN_HANDLE]
+        if 1 <= len(kata) <= 3 and all(re.fullmatch(r"[A-Za-z0-9_.]{2,30}", w) for w in kata) and \
+                (len(kata) == 1 or all(re.search(r"[._\d]", w) for w in kata)):
+            out = ["@" + w for w in kata]
+    hasil: list[str] = []
+    for h in out:
+        if h.lower() not in [x.lower() for x in hasil]:
+            hasil.append(h)
+    return hasil
+
+
+def _tag_akun(v: Any, kedalaman: int = 0) -> tuple[list[tuple[Optional[str], str]], bool]:
+    """tagSocialMedia → ([(platform | None, '@akun' / '#tag')], diwajibkan_tanpa_akun). Objek per platform ({"tiktok": "@a"}
+    atau [{"platform": "tiktok", "username": "a"}]) → akun per platform. true / 'wajib' tanpa akun → (_, True)."""
+    if v is None or kedalaman > 4:
+        return [], False
+    if isinstance(v, bool):
+        return [], v
+    if isinstance(v, str) and v.strip()[:1] in "[{":
+        try:
+            return _tag_akun(json.loads(v), kedalaman + 1)
+        except ValueError:
+            pass
+    if isinstance(v, (str, int, float)):
+        t = str(v).strip()
+        if _jadi_bool(t) is not None and len(t) <= 8:
+            return [], bool(_jadi_bool(t))
+        akun = _akun_teks(t)
+        return [(None, a) for a in akun], (not akun and bool(t))
+    out: list[tuple[Optional[str], str]] = []
+    wajib = False
+    if isinstance(v, list):
+        for x in v:
+            o, w = _tag_akun(x, kedalaman + 1)
+            out += o
+            wajib = wajib or w
+        return out, wajib
+    if isinstance(v, dict):
+        low = {str(k).lower().strip(): x for k, x in v.items()}
+        plat = _PLATFORM_TAG.get(str(low.get("platform") or low.get("sosmed") or low.get("media") or "").lower().strip())
+        for k, x in low.items():
+            if k in ("platform", "sosmed", "media"):
+                continue
+            o, w = _tag_akun(x, kedalaman + 1)
+            kk = re.sub(r"[^a-z]", "", k)
+            p_k = _PLATFORM_TAG.get(kk) or next((n for a, n in _PLATFORM_TAG.items() if len(a) > 2 and a in kk), None) or plat
+            out += [(p_k or pf, a) for pf, a in o]
+            wajib = wajib or w
+    return out, wajib
+
+
 def _muat_json(raw: Any, catatan: list[str]) -> Optional[dict]:
     v = raw
     for _ in range(3):  # string JSON (kadang di-encode dua kali)
@@ -446,7 +578,9 @@ def parse_brief(campaign: CampaignDB) -> BriefCampaign:
 def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
     d = _muat_json(campaign.brief_detail, catatan) or {}
     d = _normalkan_key(d, catatan) if d else {}
-    izinkan = _handles_brief(campaign.brief_detail)
+    akun_tag, tag_tanpa_akun = _tag_akun(d.get("tagSocialMedia"))
+    # akun brand yang wajib di-tag (juga yang ditulis tanpa '@') boleh tetap terlihat — data brand, bukan data clipper
+    izinkan = sorted(set(_handles_brief(campaign.brief_detail)) | {a for _, a in akun_tag if a.startswith("@")})
     abaikan = tuple(x for x in (campaign.title, campaign.brand) if x)  # judul film / brand bukan nama orang
     poin: list[PoinBrief] = []
     konteks: dict[str, str] = {}
@@ -475,8 +609,19 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         catatan.append("durasiMin tidak terbaca sebagai angka")
     if d.get("durasiMax") not in (None, "") and dmax is None:
         catatan.append("durasiMax tidak terbaca sebagai angka")
+    sumber_durasi = [k for k in ("durasiMin", "durasiMax") if d.get(k) not in (None, "")]
+    if (dmin is None or dmax is None) and d.get("durasiVideo") not in (None, "", [], {}):  # cadangan: teks bebas durasiVideo
+        vlo, vhi = _durasi_video(d.get("durasiVideo"))
+        if vlo is None and vhi is None:
+            catatan.append("durasiVideo tidak terbaca sebagai durasi")
+        elif (dmin is None and vlo is not None) or (dmax is None and vhi is not None):
+            dmin = dmin if dmin is not None else vlo
+            dmax = dmax if dmax is not None else vhi
+            sumber_durasi.append("durasiVideo")
     if dmin is None and campaign.min_video_duration:
         dmin = _angka_detik(campaign.min_video_duration)
+        if dmin is not None:
+            sumber_durasi.append("min_video_duration")
     if dmin is not None and dmax is not None and dmin > dmax:
         catatan.append("durasiMin > durasiMax — ditukar")
         dmin, dmax = dmax, dmin
@@ -518,12 +663,14 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
                     t = f"Durasi video minimal {dmin:g} detik"
                 else:
                     t = f"Durasi video maksimal {dmax:g} detik"
-                tambah("durasi", t, "durasiMin/durasiMax" if (d.get("durasiMin") or d.get("durasiMax")) else "min_video_duration",
-                       "kode", True, False, kode)
+                tambah("durasi", t, "/".join(sumber_durasi) or "min_video_duration", "kode", True, False, kode)
             continue
         if key == "hashtags":
             if tags:
                 tambah("hashtag", "Caption memuat hashtag / tag wajib: " + " ".join(tags), "hashtags", "kode", True, False, kode)
+            continue
+        if key == "tagSocialMedia":
+            _poin_tag_akun(tambah, akun_tag, tag_tanpa_akun, kode)
             continue
         if key == "captionWajib":
             for i, (t, c) in enumerate(cap_poin):
@@ -581,6 +728,10 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         n = len(contoh) if isinstance(contoh, list) else 1
         teks_contoh = " ".join(it["teks"] for it in _items(contoh) if "[tautan]" not in it["teks"]).strip()
         konteks["Contoh video"] = (f"{n} contoh video dari brand (link tidak dikirim)" + (f": {teks_contoh}" if teks_contoh else ""))[:600]
+    for k, nama in _KONTEKS_LABEL.items():
+        isi = " ".join(it["teks"] for it in _items(d.get(k), izinkan) if it.get("bool") is None).strip()
+        if isi:
+            konteks[nama] = isi[:300]
     links = _links(d.get("materi"))
 
     # --- cadangan: brief_detail kosong → kolom rules
@@ -603,6 +754,26 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         _KONTEKS.pop(next(iter(_KONTEKS)))
     return BriefCampaign(campaign_id=str(campaign.id), judul=judul, brand=brand, poin=poin, durasi_min=dmin, durasi_max=dmax,
                          hashtag_wajib=tags, caption_wajib=caption_wajib, materi_links=links, hash=h, catatan_parser=catatan[:30])
+
+
+TEKS_TAG_AKUN = "Tag / mention akun wajib"
+
+
+def _poin_tag_akun(tambah, akun: list[tuple[Optional[str], str]], tanpa_akun: bool, kode: str) -> None:
+    """tagSocialMedia → satu poin wajib cara "kode" (aturan._cek_tag_akun): akun ada di caption → lolos; tidak terlihat /
+    caption kosong → BUTUH CEK MANUSIA (bisa di-tag lewat fitur tag platform), TIDAK PERNAH reject."""
+    if akun:
+        per_plat: dict[str, list[str]] = {}
+        for plat, a in akun[:20]:
+            per_plat.setdefault(plat or "", []).append(a)
+        if list(per_plat) == [""]:
+            t = f"{TEKS_TAG_AKUN}: " + " ".join(per_plat[""])
+        else:
+            t = f"{TEKS_TAG_AKUN}: " + "; ".join(f"{p or 'semua platform'} " + " ".join(xs) for p, xs in per_plat.items())
+        tambah("hashtag", t, "tagSocialMedia", "kode", True, False, kode)
+    elif tanpa_akun:
+        tambah("hashtag", f"{TEKS_TAG_AKUN}: akun brand (nama akun tidak tertulis di brief)", "tagSocialMedia", "kode", True,
+               False, kode)
 
 
 def _poin_material(tambah, key: str, kategori: str, kode: str, v: Any, choice: Any, izinkan, catatan: list[str]) -> None:

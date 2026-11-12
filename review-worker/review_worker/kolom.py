@@ -28,14 +28,16 @@ WAJIB: dict[str, list[str]] = {
 TABEL_WAJIB = ("videos", "campaigns", "audit")
 TABEL_BAWAAN = {"videos": "tracked_videos", "campaigns": "campaigns", "audit": "audit_log", "staff": "staff", "appeals": "appeals",
                 "history": "video_status_history"}
+# cadangan kalau kunci [nilai] tidak ada di kolom.toml — nilai ASLI Konten.com (kenali-skema --nilai, 12-11-2026)
 NILAI_BAWAAN: dict[str, list[str]] = {
-    "status_approve": ["approved", "approve", "accepted"],
-    "status_reject": ["rejected", "reject", "declined"],
+    "status_approve": ["approved", "approved_flag"],
+    "status_reject": ["rejected"],
     "audit_approve": ["video_approve"],
     "audit_reject": ["video_reject"],
-    "banding_dibatalkan": ["accepted", "approved", "overturned", "granted"],
-    "banding_dikuatkan": ["rejected", "denied", "upheld", "declined"],
-    "banding_menunggu": ["pending", "open", "review", "in_review"],
+    "banding_dibatalkan": ["granted"],
+    "banding_dikuatkan": ["denied", "resubmit_allowed"],  # resubmit_allowed = penolakan tetap (clipper boleh kirim ulang)
+    "banding_menunggu": ["under_review"],
+    "banding_target": [],  # appeals.target_type untuk banding video; kosong = tidak disaring
 }
 SARAN_EDIT = "Jalankan: review kenali-skema, lalu sesuaikan kolom.toml"
 

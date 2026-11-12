@@ -367,7 +367,7 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
              _n(x.get("n")), _n(x.get("ai_reject")), _n(x.get("ai_reject_alasan_sama")), _n(x.get("ai_approve")), _n(x.get("ai_cek")),
              _pct(x.get("akurasi"))] for x in pa]))
         bagian.append("<p class=\"sub\">Tepat = AI reject ÷ (AI reject + AI approve). Alasan sama = AI reject dengan alasan resmi yang sama dengan reviewer. Alasan bertanda <i>di luar jangkauan AI</i> "
-                      "(followers, link di bio, video duplikat, engagement/bot, video tidak bisa diakses saat dicek reviewer) tidak terlihat dari isi "
+                      "(followers, link di bio, video duplikat, engagement/bot, video pakai Ads, video tidak bisa diakses saat dicek reviewer) tidak terlihat dari isi "
                       "video, jadi tidak dihitung sebagai kesalahan AI.</p>")
 
     # ---------------- per campaign
@@ -464,7 +464,7 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
     bagian.append("<h2>Video yang tidak dihitung dalam akurasi</h2><ul class=\"daftar\">"
                   f"<li>Video tidak bisa diakses (dihapus, private, atau butuh login): <b>{_n(m.get('n_tidak_bisa_diakses'))}</b></li>"
                   f"<li>Gagal diproses di laptop: <b>{_n(m.get('n_gagal'))}</b></li>"
-                  f"<li>Di-reject karena alasan di luar isi video (followers, link di bio, duplikat, engagement/bot, tidak bisa diakses saat dicek reviewer): <b>{_n(m.get('n_di_luar_video'))}</b></li>"
+                  f"<li>Di-reject karena alasan di luar isi video (followers, link di bio, duplikat, engagement/bot, video pakai Ads, tidak bisa diakses saat dicek reviewer): <b>{_n(m.get('n_di_luar_video'))}</b></li>"
                   f"<li>Tanpa keputusan reviewer yang jelas: <b>{_n(m.get('n_tanpa_keputusan'))}</b></li></ul>")
     tl = m.get("termasuk_di_luar_video") or {}
     if m.get("n_di_luar_video"):

@@ -106,6 +106,11 @@ Nilai status juga perlu dicek (mis. apa arti "approved" dan apa tanda banding di
 `review.py kenali-skema --nilai`. Perintah ini hanya menampilkan nilai unik dan jumlahnya, tanpa data pribadi. Sesudah itu
 sesuaikan bagian `[nilai]`. Kalau bingung, kirim isi `data\skema.json` ke tim web. File itu tidak berisi data pribadi.
 
+`kolom.toml` sudah dicocokkan dengan skema asli (12-11-2026): caption = `description`, waktu submit = `submitted_at`, banding
+dihubungkan lewat `appeals.target_id`, status `approved_flag` = approve, banding `granted` = dibatalkan, `denied` dan
+`resubmit_allowed` = dikuatkan (penolakan tetap), `under_review` = menunggu. Kalau tabel `appeals` juga berisi banding selain
+video, lihat nilai `appeals.target_type` di `kenali-skema --nilai`, lalu isi `banding_target` di `[nilai]` (mis. `["video"]`).
+
 ---
 
 ## 5. Uji 50 video dulu, lalu 500
