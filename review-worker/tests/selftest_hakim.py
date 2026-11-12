@@ -311,7 +311,7 @@ def aturan_identitas_dipaksa_manusia():
     assert len(ids) == 4 and f2.saran == "cek_manusia" and all(c.oleh == "manusia" for c in f2.checklist if c.poin_id in ids)
     # reject karena poin lain yang jelas dilanggar tetap sah
     f3 = nilai(b, ai_semua(b, saran="reject", alasan_kode="cta_tidak_ada", kecuali={poin(b, "cta")[0].id: ("tidak", "transkrip 00:00-00:20 tanpa ajakan")}))
-    assert f3.saran == "reject" and f3.alasan_kode == "cta_tidak_ada" and f3.serah == []
+    assert f3.saran == "reject" and f3.alasan_kode == "cta_tidak_ada" and f3.serah == ["identitas_orang"], f3.serah  # reject sah, tapi poin identitas yang tertunda tetap terlihat reviewer
 
 
 @test
