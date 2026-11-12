@@ -477,8 +477,12 @@ def t_replika_asli_psycopg_read_only_dan_query_minimal():
         assert km["5024"].banding == "dibatalkan", "banding_target kosong → semua baris appeals dipakai"
         # 5012: banding payout (ap-7) LEBIH BARU tapi banding video (denied) tetap didahulukan saat banding_target kosong
         # waktu banding selesai: resolved_at, cadangan admin_decided_at (5008); tanpa banding → None
-        assert km["5012"].banding_selesai.startswith("2026-10-01T03:00:00") and km["5008"].banding_selesai.startswith("2026-10-20T03:00:00"), \
+        from datetime import datetime, timezone
+        hari = lambda iso: (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() / 86400  # noqa: E731
+        assert round(hari(km["5012"].banding_selesai)) == 29 and round(hari(km["5008"].banding_selesai)) == 18, \
             (km["5012"].banding_selesai, km["5008"].banding_selesai)
+        assert datetime.fromisoformat(km["5008"].banding_selesai) > datetime.fromisoformat(km["5008"].diputuskan), \
+            "banding selesai sesudah keputusan reviewer → kebenaran tetap dibalik"
         assert km["5016"].banding_selesai is None and km["5004"].banding_selesai is None
         assert km["5007"].keputusan is None and km["5007"].status_sekarang == "pending_review" and "999" not in km
         assert km["5014"].keputusan == "approve" and km["5014"].status_sekarang == "approved_flag", "approved_flag = approve"

@@ -88,8 +88,8 @@ insert into alif.staff values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Nama Rev
 -- resolved_at / admin_decided_at = waktu banding diputuskan (ap-2 hanya admin_decided_at → cadangan COALESCE)
 insert into alif.appeals (id, user_id, appeal_type, target_type, target_id, reason, status, admin1_notes, created_at, resolved_at, admin_decided_at) values
  ('ap-1', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'banding lama @clipper.fiktif8', 'under_review', null, now() - interval '20 days', null, null),
- ('ap-2', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'hubungi 0812-8888-0008', 'granted', 'ok', now() - interval '19 days', null, '2026-10-20T03:00:00+00'),
- ('ap-3', 'cccccccc-cccc-4ccc-8ccc-000000000012', 'video_reject', 'tracked_video', '5012', null, 'denied', 'catatan admin', now() - interval '30 days', '2026-10-01T03:00:00+00', '2026-09-30T03:00:00+00'),
+ ('ap-2', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'hubungi 0812-8888-0008', 'granted', 'ok', now() - interval '19 days', null, now() - interval '18 days'),
+ ('ap-3', 'cccccccc-cccc-4ccc-8ccc-000000000012', 'video_reject', 'tracked_video', '5012', null, 'denied', 'catatan admin', now() - interval '30 days', now() - interval '29 days', now() - interval '28 days'),
  ('ap-4', 'cccccccc-cccc-4ccc-8ccc-000000000016', 'video_reject', 'tracked_video', '5016', null, 'under_review', null, now() - interval '40 days', null, null),
  ('ap-5', 'cccccccc-cccc-4ccc-8ccc-000000000020', 'video_reject', 'tracked_video', '5020', null, 'resubmit_allowed', null, now() - interval '50 days', null, null),
  ('ap-6', 'cccccccc-cccc-4ccc-8ccc-000000000024', 'payout', 'payout', '5024', null, 'granted', null, now() - interval '5 days', null, null),
