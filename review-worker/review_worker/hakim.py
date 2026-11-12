@@ -46,6 +46,11 @@ _DESKRIPSI = {
     "alasan_kode": "Kode alasan reject resmi. WAJIB diisi bila saran reject; null bila approve.",
     "alasan_spesifik": "SATU kalimat bahasa Indonesia yang spesifik untuk video ini (sebut poin & bukti). Tanpa nama orang.",
     "keyakinan": "Seberapa yakin saranmu benar, bilangan bulat 0-100.",
+    "condong": "Pendapatmu SENDIRI: kalau kamu yang harus memutuskan sekarang, video ini approve atau reject? SELALU diisi, juga "
+               "saat saran cek_manusia. Abaikan poin BUTUH CEK MANUSIA (identitas orang) dan DATA AKUN: condong dihitung dari "
+               "poin lain. fakta_kode wajib bernilai tidak = condong reject.",
+    "keyakinan_condong": "Seberapa yakin condongmu benar (sama dengan keputusan reviewer berpengalaman), bilangan bulat 50-100: "
+                         "50 = setengah-setengah / menebak, 70 = cukup yakin, 90 = sangat yakin. Jujur, jangan dinaikkan.",
     "ringkasan": "Maksimal 2 kalimat untuk reviewer: isi video & hal penting yang perlu dicek.",
     "CekPoinAI": "Hasil satu poin brief.",
     "poin_id": "id poin persis dari brief, mis. p03.",
@@ -89,12 +94,29 @@ def _ketat(s: Any, nama: Optional[str] = None) -> Any:
     return out
 
 
+# field yang Optional di Pydantic (jawaban lama tetap terbaca) tapi WAJIB diisi AI → cabang null dibuang dari skema API
+_WAJIB_ISI = ("condong", "keyakinan_condong")
+
+
+def _tanpa_null(s: dict) -> dict:
+    """{"anyOf": [X, {"type": "null"}], ...} → X (+ deskripsi)"""
+    cabang = [c for c in s.get("anyOf") or [] if c.get("type") != "null"]
+    if len(cabang) != 1:
+        return s
+    out = dict(cabang[0])
+    if "description" in s:
+        out["description"] = s["description"]
+    return out
+
+
 def skema_keputusan() -> dict:
     """JSON schema keluaran (stabil → cache grammar structured outputs tetap terpakai)"""
     global _SKEMA
     if _SKEMA is None:
         s = _ketat(KeputusanAI.model_json_schema())
         s["description"] = _DESKRIPSI["KeputusanAI"]
+        for k in _WAJIB_ISI:
+            s["properties"][k] = _tanpa_null(s["properties"][k])
         _SKEMA = s
     return copy.deepcopy(_SKEMA)
 
@@ -272,7 +294,8 @@ class Hakim:
         teks = ("MATERI VIDEO (JSON, sudah dibersihkan dari data pribadi):\n"
                 + json.dumps(mj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 + "\n\nNilai video ini sesuai rubrik dan brief di atas. Isi checklist untuk SEMUA id di poin_dinilai_ai, "
-                  "sebut bukti untuk tiap poin, lalu beri saran, alasan, dan keyakinan. Kalau ragu, pilih cek_manusia.")
+                  "sebut bukti untuk tiap poin, beri condong approve/reject + keyakinan_condong (selalu), lalu saran, alasan, "
+                  "dan keyakinan. Kalau ragu, saran cek_manusia — condong tetap diisi.")
         konten.append({"type": "text", "text": teks})
         return {
             "model": self.model,
@@ -375,6 +398,13 @@ class Hakim:
                 d["keyakinan"] = int(round(float(d["keyakinan"])))
             except ValueError:
                 return None
+        if isinstance(d.get("keyakinan_condong"), (float, str)):
+            try:
+                d["keyakinan_condong"] = int(round(float(d["keyakinan_condong"])))
+            except ValueError:
+                d["keyakinan_condong"] = None  # condong tetap terbaca; keyakinan diturunkan di aturan
+        if d.get("condong") not in (None, "approve", "reject"):
+            d["condong"] = None
         if isinstance(d.get("checklist"), list):
             boleh_c = {"poin_id", "hasil", "bukti", "bukti_frame", "bukti_detik"}
             d["checklist"] = [{k: v for k, v in c.items() if k in boleh_c} for c in d["checklist"] if isinstance(c, dict)]

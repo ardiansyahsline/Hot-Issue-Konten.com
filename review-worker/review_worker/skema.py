@@ -254,8 +254,12 @@ class CekPoinAI(_M):
 
 
 class KeputusanAI(_M):
-    """persis yang diminta ke Claude (output_config.format json_schema). Tanpa minimum/maximum (tidak didukung) — dicek di kode."""
+    """persis yang diminta ke Claude (output_config.format json_schema). Tanpa minimum/maximum (tidak didukung) — dicek di kode.
+    condong + keyakinan_condong: pendapat AI SENDIRI approve/reject (selalu diisi; skema API mewajibkannya, hakim.skema_keputusan).
+    Optional di sini hanya supaya jawaban format lama tetap terbaca (aturan.py menurunkan condong dari saran / checklist)."""
     checklist: list[CekPoinAI]
+    condong: Optional[Keputusan] = None  # approve / reject menurut AI, walau saran cek_manusia
+    keyakinan_condong: Optional[int] = None  # 50..100 = seberapa yakin condong itu benar (dijepit di kode)
     saran: Saran
     alasan_kode: Optional[KodeAlasan] = None  # wajib kalau saran reject
     alasan_spesifik: str  # 1 kalimat spesifik
@@ -300,6 +304,9 @@ class PenilaianFinal(_M):
     ringkasan: str = ""
     checklist: list[CekPoin] = Field(default_factory=list)
     serah: list[KodeSerah] = Field(default_factory=list)  # kenapa butuh cek manusia
+    # condong AI sendiri (terpisah dari saran & tanda cek manusia). None = AI gagal / menolak / video tidak bisa diakses
+    condong: Optional[Keputusan] = None
+    keyakinan_condong: Optional[int] = None  # 50..100
     pemakaian: PemakaianAI = Field(default_factory=PemakaianAI)
     rubrik_versi: str = ""
     rubrik_hash: str = ""
@@ -333,6 +340,9 @@ class HasilVideo(_M):
     official_code: Optional[KodeAlasan] = None
     specific_reason: Optional[str] = None
     handoff_reasons: list[KodeSerah] = Field(default_factory=list)
+    # migration-24: condong AI approve/reject + keyakinan 0..100 (null = tidak ada condong). Kolom belum ada → supa membuangnya
+    ai_lean: Optional[Keputusan] = None
+    ai_lean_confidence: Optional[int] = None
     checklist: list[dict] = Field(default_factory=list)  # CekPoin.model_dump()
     music: dict = Field(default_factory=dict)  # HasilMusik.model_dump()
     visual: dict = Field(default_factory=dict)  # HasilVisual.model_dump()

@@ -200,6 +200,8 @@ def cmd_video(cfg, args) -> int:
         print(f"{label} Video #{h.video_id} · {h.campaign_title or h.campaign_id or '-'}")
         print(f"    status: {h.pipeline_status}" + (f" ({h.error})" if h.error else ""))
         print(f"    saran AI: {h.suggestion} (yakin {h.confidence})" + (f" — {h.official_reason}" if h.official_reason else ""))
+        condong = f"{h.ai_lean.upper()} · yakin {h.ai_lean_confidence}%" if h.ai_lean else "tidak ada"
+        print(f"    condong AI: {condong}" + (" · perlu cek manusia" if h.suggestion == "cek_manusia" else ""))
         if h.specific_reason:
             print(f"    alasan: {h.specific_reason}")
         print(f"    checklist: {cek.count('lolos')} lolos · {cek.count('tidak')} tidak · {cek.count('tidak_bisa_dinilai')} tidak bisa dinilai")
@@ -239,7 +241,16 @@ def cmd_jalan(cfg, args) -> int:
 
     if not cfg.ada_supabase():
         return _kurang(cfg)
-    return antrian.jalan(_rt(cfg))
+    rt = _rt(cfg)
+    try:  # condong AI yang dulu hanya tersimpan lokal (migration-24 belum jalan) → tulis balik ke Supabase kalau kolomnya sudah ada
+        from review_worker import pipeline
+
+        pipeline.pulihkan_condong_lokal(rt, paksa=True)
+    except Exception as e:  # pragma: no cover — tidak boleh menghentikan worker
+        from review_worker import log as rlog
+
+        rlog.get("cli").warning("Tulis-balik condong AI lama dilewati (%s).", type(e).__name__)
+    return antrian.jalan(rt)
 
 
 def parser() -> argparse.ArgumentParser:

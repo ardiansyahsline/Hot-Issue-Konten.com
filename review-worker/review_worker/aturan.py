@@ -1,7 +1,9 @@
 """Aturan KODE sesudah jawaban AI (pemilik: hakim-ai). KONTRAK.md §5.2. Tidak bergantung pada kepatuhan prompt:
 identitas orang → selalu butuh cek manusia; materi referensi belum ada → poin "wajib pakai materi" tidak bisa dinilai;
 durasi / hashtag / caption wajib dicek kode; keyakinan < REVIEW_MIN_CONFIDENCE → cek_manusia; reject tanpa bukti / alasan →
-cek_manusia; AI menolak / gagal → cek_manusia."""
+cek_manusia; AI menolak / gagal → cek_manusia.
+Condong AI (a4): pendapat AI sendiri approve/reject + keyakinan 50..100 untuk SETIAP video yang dinilai AI — tidak menghapus tanda
+cek manusia (saran tetap seperti dulu). AI gagal / menolak / video tidak bisa diakses → tanpa condong (None), bukan tebakan."""
 from __future__ import annotations
 
 import re
@@ -9,13 +11,15 @@ import unicodedata
 from typing import Optional
 
 from .alasan import DI_LUAR_VIDEO, label_untuk_kode
-from .brief import TOLERANSI_DURASI, deteksi_identitas_orang, jenis_materi_poin
+from .brief import TOLERANSI_DURASI, deteksi_identitas_orang, jenis_materi_poin, pengecualian_brief
 from .privasi import bersihkan_teks
 from .skema import (BriefCampaign, CekPoin, CekPoinAI, KeputusanAI, KodeSerah, MateriVideo, PenilaianFinal, PoinBrief,
                     ReferensiCampaign)
 
-ATURAN_VERSI = "a3"  # naikkan kalau aturan berubah (ikut hash rubrik). a2: cek tag akun tagSocialMedia (tidak terlihat = cek manusia)
+ATURAN_VERSI = "a4"  # naikkan kalau aturan berubah (ikut hash rubrik). a2: cek tag akun tagSocialMedia (tidak terlihat = cek manusia)
 # a3: durasi dari teks bebas durasiVideo yang tidak pasti → cek manusia (bukan reject); tag akun per platform hanya platform video
+# a4: condong AI approve/reject + keyakinan_condong (terpisah dari saran / tanda cek manusia) — lihat hitung_condong()
+KEYAKINAN_CONDONG_MIN = 50  # condong biner: di bawah 50 berarti condong sebaliknya → dijepit 50 ("setengah-setengah")
 
 BUKTI_IDENTITAS = "Butuh cek manusia: menyangkut mengenali orang tertentu (AI tidak boleh menebak identitas orang)."
 BUKTI_MATERI = "Materi referensi campaign belum ada, jadi tidak bisa dibandingkan. Upload di halaman Materi."
@@ -217,10 +221,12 @@ def _bersih_bukti(c: CekPoinAI, materi: MateriVideo) -> tuple[str, list[int], li
 
 
 def _nilai_poin(p: PoinBrief, ai_c: Optional[CekPoinAI], kode_c: Optional[CekPoin], materi: MateriVideo,
-                ref: Optional[ReferensiCampaign], akses_gagal: bool, flags: set[str], abaikan: tuple = ()) -> CekPoin:
+                ref: Optional[ReferensiCampaign], akses_gagal: bool, flags: set[str], abaikan: tuple = (),
+                nama_brand: tuple = ()) -> CekPoin:
     dasar = dict(poin_id=p.id, kategori=p.kategori, teks=p.teks, wajib=p.wajib)
     # 1. menyangkut mengenali orang tertentu → selalu manusia (dicek ulang di sini, tidak percaya cara_nilai saja)
-    if p.cara_nilai == "manusia" or deteksi_identitas_orang(p.teks, abaikan) or any(deteksi_identitas_orang(x, abaikan) for x in p.pilihan):
+    if (p.cara_nilai == "manusia" or deteksi_identitas_orang(p.teks, abaikan, nama_brand)
+            or any(deteksi_identitas_orang(x, abaikan, nama_brand) for x in p.pilihan)):
         if p.wajib:
             flags.add("identitas_orang" if (p.alasan_manusia in (None, "identitas_orang")) else "poin_tidak_bisa_dinilai")
         bukti = BUKTI_IDENTITAS if p.alasan_manusia in (None, "identitas_orang") else "Butuh cek manusia."
@@ -266,6 +272,49 @@ def _kalimat(s: str, maks: int = 300) -> str:
     return bersihkan_teks(re.sub(r"\s+", " ", s or "").strip(), maks)
 
 
+# ------------------------------------------------------------------ condong AI (approve / reject + keyakinan)
+def _jepit_condong(x) -> Optional[int]:
+    try:
+        v = int(round(float(x)))
+    except (TypeError, ValueError):
+        return None
+    return max(KEYAKINAN_CONDONG_MIN, min(100, v))
+
+
+def hitung_condong(ai: KeputusanAI, checklist: list[CekPoin], poin_by_id: dict[str, PoinBrief], saran: str, keyakinan: int,
+                   yakin_kode) -> tuple[Optional[str], Optional[int]]:
+    """condong AI dijujurkan dengan aturan kode (dipanggil hanya kalau AI benar-benar menjawab):
+    1. condong + keyakinan_condong dari AI (dijepit 50..100). Jawaban format lama tanpa condong → turunkan dari saran
+       approve/reject (+ keyakinan), atau dari checklist (ada poin "tidak" → reject, selain itu approve) dengan keyakinan 50.
+    2. Fakta kode (durasi / hashtag / caption wajib, oleh="kode", hasil "tidak") → condong reject; keyakinan minimal sama dengan
+       keyakinan fakta kode (80 / 90).
+    3. Condong reject tanpa SATU pun poin "tidak" yang boleh dinilai (bukan identitas orang / data akun) → keyakinan dijepit 50:
+       condong itu hanya bisa berasal dari menebak identitas orang atau hal yang tidak dibuktikan.
+    4. Saran final approve / reject (sudah lolos aturan) → condong = saran (keduanya selalu sejalan)."""
+    dinilai = [c for c in checklist if c.oleh != "manusia" and poin_by_id[c.poin_id].cara_nilai != "data_akun"]
+    tidak = [c for c in dinilai if c.hasil == "tidak" and c.bukti.strip()]
+    kode_wajib = [c for c in tidak if c.oleh == "kode" and c.wajib]
+    condong = ai.condong if ai.condong in ("approve", "reject") else None
+    yakin = _jepit_condong(ai.keyakinan_condong) if condong else None
+    if condong is None:
+        if ai.saran in ("approve", "reject"):
+            condong, yakin = ai.saran, _jepit_condong(ai.keyakinan)
+        else:
+            condong = "reject" if any(c.wajib for c in tidak) else "approve"
+            yakin = KEYAKINAN_CONDONG_MIN
+    if yakin is None:  # condong ada, angka keyakinan rusak / kosong
+        yakin = _jepit_condong(ai.keyakinan) if ai.saran == condong else KEYAKINAN_CONDONG_MIN
+    if kode_wajib:
+        yk = max(yakin_kode(c) for c in kode_wajib)
+        yakin = max(yakin, yk) if condong == "reject" else yk
+        condong = "reject"
+    elif condong == "reject" and not tidak:
+        yakin = KEYAKINAN_CONDONG_MIN
+    if saran in ("approve", "reject") and condong != saran:
+        condong, yakin = saran, _jepit_condong(keyakinan)
+    return condong, (yakin if yakin is not None else KEYAKINAN_CONDONG_MIN)
+
+
 # ------------------------------------------------------------------ gabungan akhir
 def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: MateriVideo, ref: ReferensiCampaign, cfg,
                     gagal: Optional[KodeSerah] = None, label_alasan: Optional[dict[str, str]] = None) -> PenilaianFinal:
@@ -280,8 +329,8 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
     kode_map = {c.poin_id: c for c in cek_kode(brief, materi)}
     flags: set[str] = set()
     poin_by_id = {p.id: p for p in brief.poin}
-    abaikan = tuple(x for x in (brief.judul, brief.brand) if x)  # judul film / brand bukan nama orang (sama dengan parser)
-    checklist = [_nilai_poin(p, ai_map.get(p.id), kode_map.get(p.id), materi, ref, akses_gagal, flags, abaikan)
+    abaikan, nama_brand = pengecualian_brief(brief)  # judul film / brand / namaBrandArtist non-artis bukan orang (sama dengan parser)
+    checklist = [_nilai_poin(p, ai_map.get(p.id), kode_map.get(p.id), materi, ref, akses_gagal, flags, abaikan, nama_brand)
                  for p in brief.poin if p.cara_nilai != "info"]
 
     wajib = [c for c in checklist if c.wajib and poin_by_id[c.poin_id].cara_nilai != "data_akun"]
@@ -386,5 +435,10 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
                 if k in flags:
                     tambah(k)
     alasan_label = label_untuk_kode(alasan_kode, label_alasan) if alasan_kode else None
+    # condong AI: hanya kalau AI benar-benar menilai (gagal / menolak / video tidak bisa diakses → None, bukan tebakan)
+    condong, yakin_condong = (None, None)
+    if ai is not None and not akses_gagal:
+        condong, yakin_condong = hitung_condong(ai, checklist, poin_by_id, saran, keyakinan, yakin_kode)
     return PenilaianFinal(saran=saran, keyakinan=keyakinan, alasan_kode=alasan_kode, alasan_label=alasan_label,
-                          alasan_spesifik=spesifik, ringkasan=ringkasan, checklist=checklist, serah=serah)  # type: ignore[arg-type]
+                          alasan_spesifik=spesifik, ringkasan=ringkasan, checklist=checklist, serah=serah,  # type: ignore[arg-type]
+                          condong=condong, keyakinan_condong=yakin_condong)  # type: ignore[arg-type]

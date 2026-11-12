@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,11 +141,95 @@ def _referensi(rt, campaign: CampaignDB, brief: BriefCampaign):
         return ReferensiCampaign(campaign_id=cid, status="gagal", pesan="Materi referensi gagal disiapkan di laptop.")
 
 
+CONDONG_LOKAL = "condong-lokal.jsonl"
+CONDONG_TERKIRIM = "condong-lokal-terkirim.jsonl"  # arsip baris yang sudah ditulis balik ke Supabase
+PULIH_CONDONG_JEDA = 600.0  # tulis-balik yang gagal dicoba lagi paling cepat 10 menit kemudian
+_KUNCI_CONDONG = threading.Lock()
+
+
+def _simpan_condong_lokal(rt, hasil: HasilVideo) -> None:
+    """migration-24 belum dijalankan (Supabase menolak kolom ai_lean) → condong disimpan di data/condong-lokal.jsonl supaya
+    metrik & laporan uji tetap bisa menghitung akurasi condong (uji.Simpanan.hasil_run menggabungkannya). Sesudah migration-24
+    dijalankan, pulihkan_condong_lokal menulisnya balik ke review_results (website ikut menampilkan condong)."""
+    if not hasil.ai_lean:
+        return
+    try:
+        with _KUNCI_CONDONG, open(Path(rt.cfg.data) / CONDONG_LOKAL, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"scope": hasil.scope, "video_id": hasil.video_id, "ai_lean": hasil.ai_lean,
+                                 "ai_lean_confidence": hasil.ai_lean_confidence, "suggestion": hasil.suggestion,
+                                 "rubric_hash": hasil.rubric_hash}, ensure_ascii=False) + "\n")
+    except OSError as e:
+        log.warning("Condong AI video %s tidak bisa disimpan lokal: %s", hasil.video_id, e)
+
+
+def pulihkan_condong_lokal(rt, paksa: bool = False) -> Optional[int]:
+    """migration-24 sudah dijalankan → condong yang dulu hanya tersimpan di data/condong-lokal.jsonl ditulis balik ke
+    review_results (per scope + video_id), supaya kartu / filter website & angka Ringkasan sama. Hanya baris yang ai_lean-nya
+    masih kosong DAN (kalau tercatat) saran & rubriknya masih sama — hasil yang sudah dinilai ulang tidak ditimpa. Semua
+    terkirim → baris dipindah ke condong-lokal-terkirim.jsonl. Balikan jumlah baris yang diperbarui, None = belum dicoba / gagal
+    (dicoba lagi nanti). Dipanggil otomatis sesudah hasil tersimpan dengan kolom condong (jeda 10 menit antar percobaan)."""
+    supa = rt.supa
+    f = Path(rt.cfg.data) / CONDONG_LOKAL
+    if supa is None or getattr(supa, "tanpa_condong", False) is True or not f.is_file():
+        return None
+    now = time.monotonic()
+    if not paksa and now - (getattr(rt, "_pulih_condong_coba", None) or -1e9) < PULIH_CONDONG_JEDA:
+        return None
+    rt._pulih_condong_coba = now
+    with _KUNCI_CONDONG:
+        try:
+            baris = f.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            log.warning("%s tidak terbaca: %s", CONDONG_LOKAL, e)
+            return None
+        terakhir: dict[tuple[str, str], dict] = {}  # baris terakhir per video (dinilai ulang → yang terbaru)
+        for b in baris:
+            try:
+                r = json.loads(b)
+            except ValueError:
+                continue
+            if (isinstance(r, dict) and r.get("scope") and r.get("video_id") is not None
+                    and r.get("ai_lean") in ("approve", "reject") and isinstance(r.get("ai_lean_confidence"), int)):
+                terakhir[(str(r["scope"]), str(r["video_id"]))] = r
+        n = 0
+        try:
+            for (scope, vid), r in terakhir.items():
+                filt = {"scope": f"eq.{scope}", "video_id": f"eq.{vid}", "ai_lean": "is.null"}
+                if r.get("suggestion"):
+                    filt["suggestion"] = f"eq.{r['suggestion']}"
+                if r.get("rubric_hash"):
+                    filt["rubric_hash"] = f"eq.{r['rubric_hash']}"
+                got = supa.update("review_results", filt, {"ai_lean": r["ai_lean"],
+                                                           "ai_lean_confidence": max(0, min(100, r["ai_lean_confidence"]))})
+                n += len(got or [])
+        except SupaError as e:
+            from .supa import _kolom_hilang
+
+            if _kolom_hilang(str(e)):  # migration-24 belum dijalankan: tetap di cadangan lokal (bukan masalah)
+                log.info("Kolom condong AI belum ada di Supabase — condong lama tetap di %s.", CONDONG_LOKAL)
+            else:
+                log.warning("Condong AI lama belum bisa ditulis ke Supabase (%s) — dicoba lagi nanti.", str(e)[:120])
+            return None
+        try:
+            with open(Path(rt.cfg.data) / CONDONG_TERKIRIM, "a", encoding="utf-8") as fh:
+                fh.writelines(b + "\n" for b in baris)
+            f.unlink()
+        except OSError as e:
+            log.warning("%s tidak bisa diarsipkan: %s", CONDONG_LOKAL, e)
+    log.info("Condong AI lama (sebelum migration-24) ditulis ke Supabase: %d hasil diperbarui.", n)
+    return n
+
+
 def _simpan(rt, hasil: HasilVideo) -> Optional[dict]:
     row = hasil.baris_supabase()
     if rt.supa is not None:
         try:
-            return rt.supa.simpan_hasil(row)
+            got = rt.supa.simpan_hasil(row)
+            if getattr(rt.supa, "tanpa_condong", False) is True:
+                _simpan_condong_lokal(rt, hasil)
+            else:  # kolom condong ada (migration-24 sudah jalan) → condong lama dari cadangan lokal ditulis balik sekali
+                pulihkan_condong_lokal(rt)
+            return got
         except SupaError as e:
             log.warning("Hasil video %s belum tersimpan di Supabase (%s) — disimpan lokal dulu.", hasil.video_id, str(e)[:120])
     f = Path(rt.cfg.data) / "hasil-lokal.jsonl"
@@ -234,6 +319,8 @@ def proses_video(rt, video_id: str, *, scope: str, run_id: Optional[str] = None,
         hasil.official_code, hasil.official_reason = nilai.alasan_kode, nilai.alasan_label
         hasil.specific_reason = bersihkan_teks(nilai.alasan_spesifik, 500) or None
         hasil.handoff_reasons = list(dict.fromkeys(nilai.serah))
+        if nilai.condong in ("approve", "reject") and nilai.keyakinan_condong is not None:  # condong AI (migration-24)
+            hasil.ai_lean, hasil.ai_lean_confidence = nilai.condong, max(0, min(100, int(nilai.keyakinan_condong)))
         hasil.checklist = [{**c.model_dump(mode="json"), "bukti": bersihkan_teks(c.bukti, 600)} for c in nilai.checklist]
         hasil.music = materi.musik.model_dump(mode="json")
         hasil.visual = materi.visual.model_dump(mode="json")
@@ -271,8 +358,10 @@ def proses_video(rt, video_id: str, *, scope: str, run_id: Optional[str] = None,
         except Exception:
             pass
     hasil.process_sec = round(time.monotonic() - t0, 2)
-    log.info("Video %s: %s%s · %s · %.0f dtk · $%.4f", vid, hasil.suggestion or "-",
-             f" ({hasil.confidence})" if hasil.confidence is not None else "", hasil.pipeline_status, hasil.process_sec, hasil.cost_usd)
+    log.info("Video %s: %s%s · condong %s · %s · %.0f dtk · $%.4f", vid, hasil.suggestion or "-",
+             f" ({hasil.confidence})" if hasil.confidence is not None else "",
+             f"{hasil.ai_lean} {hasil.ai_lean_confidence}%" if hasil.ai_lean else "-", hasil.pipeline_status, hasil.process_sec,
+             hasil.cost_usd)
     if simpan:
         lapor(0.97, "Menyimpan hasil…")
         _simpan(rt, hasil)

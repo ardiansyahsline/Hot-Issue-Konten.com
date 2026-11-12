@@ -3,6 +3,7 @@ import { linkVideo, rupiah, type ReviewResult } from "@/lib/asistenReview";
 import {
   ChecklistView,
   CocokBadge,
+  CondongAI,
   KeputusanBadge,
   MusikView,
   PipelineNote,
@@ -12,6 +13,7 @@ import {
   VisualView,
   cekList,
   detik,
+  perluCekManusia,
 } from "./Bits";
 import UmpanBalik, { type FeedbackMine } from "./UmpanBalik";
 
@@ -72,9 +74,21 @@ export default function HasilDetail({ r, mine, counts, lain }: { r: ReviewResult
           )}
         </div>
         <PipelineNote status={r.pipeline_status} error={r.error} />
+        {r.ai_lean !== undefined && (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+            <p className="label mb-1.5">Pendapat AI sendiri</p>
+            <CondongAI lean={r.ai_lean} yakin={r.ai_lean_confidence} perluCek={perluCekManusia(r.suggestion)} akhir={r.final_truth} besar />
+            <p className="mt-1.5 text-xs text-zinc-500">
+              {r.ai_lean === "approve" || r.ai_lean === "reject"
+                ? "Kalau AI harus memilih sendiri. Angka yakin = seberapa yakin AI pilihannya benar."
+                : "AI tidak berpendapat karena gagal menilai, video tidak bisa dibuka, atau hasil ini dibuat sebelum fitur pendapat AI — AI tidak menebak."}
+              {perluCekManusia(r.suggestion) && (r.ai_lean === "approve" || r.ai_lean === "reject") && " Tetap perlu dicek reviewer (alasannya di bawah)."}
+            </p>
+          </div>
+        )}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-3 text-xs sm:grid-cols-4">
           <div>
-            <dt className="label mb-1">Saran AI</dt>
+            <dt className="label mb-1">Saran akhir AI</dt>
             <dd>
               <SaranBadge saran={r.suggestion} yakin={r.confidence} />
             </dd>

@@ -1,9 +1,9 @@
-import { arErrorText } from "@/lib/asistenReview";
+import { arErrorText, condongBelumAda } from "@/lib/asistenReview";
 import { requireAsisten } from "@/lib/asistenReview.server";
 import BelumSiap from "@/components/asisten/BelumSiap";
 import type { Opsi } from "@/components/asisten/hasil/HasilFilter";
 import HasilHalaman, { type FilterHasil } from "@/components/asisten/hasil/HasilHalaman";
-import { KARTU_COLS, type KartuRow } from "@/components/asisten/hasil/HasilKartu";
+import { KARTU_COLS, KARTU_COLS_CONDONG, type KartuRow } from "@/components/asisten/hasil/HasilKartu";
 import { loadArStatus } from "@/components/asisten/status.server";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,9 @@ const tgl = (iso: string) => new Intl.DateTimeFormat("id-ID", { day: "2-digit", 
 /**
  * Halaman utama tab Asisten Review: daftar hasil AI per video (terbaru dulu) + filter + paginasi.
  * Filter dari alamat: ?run=<uuid>|manual &campaign= &reviewer= &saran=approve|reject|cek_manusia &yakin=90|70|rendah
- * &cocok=ya|tidak|kosong &hal=N. Nilai tidak dikenal diabaikan (bukan error).
+ * &cocok=ya|tidak|kosong &condong=approve|reject|kosong|benar|salah_approve|salah_reject &yc=90|80|70|60|50|bawah50 &hal=N.
+ * Nilai tidak dikenal diabaikan (bukan error). condong/yc = pendapat AI sendiri (kolom migration-24): kalau kolomnya belum ada,
+ * daftar dibaca ulang tanpa kolom & filter itu (halaman tetap jalan, ada catatan kecil).
  */
 export default async function HasilPage({ searchParams }: { searchParams: SP }) {
   const ctx = await requireAsisten();
@@ -36,35 +38,52 @@ export default async function HasilPage({ searchParams }: { searchParams: SP }) 
     saran: ["approve", "reject", "cek_manusia"].includes(satu(sp.saran)) ? satu(sp.saran) : "",
     yakin: ["90", "70", "rendah"].includes(satu(sp.yakin)) ? satu(sp.yakin) : "",
     cocok: ["ya", "tidak", "kosong"].includes(satu(sp.cocok)) ? satu(sp.cocok) : "",
+    condong: ["approve", "reject", "kosong", "benar", "salah_approve", "salah_reject"].includes(satu(sp.condong)) ? satu(sp.condong) : "",
+    yc: ["90", "80", "70", "60", "50", "bawah50"].includes(satu(sp.yc)) ? satu(sp.yc) : "",
   };
   const hal = Math.min(10_000, Math.max(1, Math.floor(Number(satu(sp.hal)) || 1)));
 
-  let q = sb.from("review_results").select(KARTU_COLS, { count: "exact" });
-  if (f.run === "manual") q = q.is("run_id", null);
-  else if (f.run) q = q.eq("run_id", f.run);
-  if (f.campaign) q = q.eq("campaign_id", f.campaign);
-  if (f.reviewer) q = q.eq("reviewer", f.reviewer);
-  if (f.saran) q = q.eq("suggestion", f.saran);
-  if (f.yakin === "90") q = q.gte("confidence", 90);
-  else if (f.yakin === "70") q = q.gte("confidence", 70);
-  else if (f.yakin === "rendah") q = q.lt("confidence", 70);
-  if (f.cocok === "ya") q = q.eq("match", true);
-  else if (f.cocok === "tidak") q = q.eq("match", false);
-  else if (f.cocok === "kosong") q = q.is("match", null);
-  q = q.order("created_at", { ascending: false }).order("id", { ascending: false }).range((hal - 1) * PER, hal * PER - 1);
+  const daftar = (cols: string, condong: boolean) => {
+    let q = sb.from("review_results").select(cols, { count: "exact" });
+    if (f.run === "manual") q = q.is("run_id", null);
+    else if (f.run) q = q.eq("run_id", f.run);
+    if (f.campaign) q = q.eq("campaign_id", f.campaign);
+    if (f.reviewer) q = q.eq("reviewer", f.reviewer);
+    if (f.saran) q = q.eq("suggestion", f.saran);
+    if (f.yakin === "90") q = q.gte("confidence", 90);
+    else if (f.yakin === "70") q = q.gte("confidence", 70);
+    else if (f.yakin === "rendah") q = q.lt("confidence", 70);
+    if (f.cocok === "ya") q = q.eq("match", true);
+    else if (f.cocok === "tidak") q = q.eq("match", false);
+    else if (f.cocok === "kosong") q = q.is("match", null);
+    if (condong) {
+      if (f.condong === "approve" || f.condong === "reject") q = q.eq("ai_lean", f.condong);
+      else if (f.condong === "kosong") q = q.is("ai_lean", null);
+      else if (f.condong === "benar") q = q.or("and(ai_lean.eq.approve,final_truth.eq.approve),and(ai_lean.eq.reject,final_truth.eq.reject)");
+      else if (f.condong === "salah_approve") q = q.eq("ai_lean", "approve").eq("final_truth", "reject");
+      else if (f.condong === "salah_reject") q = q.eq("ai_lean", "reject").eq("final_truth", "approve");
+      if (f.yc === "bawah50") q = q.lt("ai_lean_confidence", 50);
+      else if (f.yc === "90") q = q.gte("ai_lean_confidence", 90);
+      else if (f.yc) q = q.gte("ai_lean_confidence", Number(f.yc)).lt("ai_lean_confidence", Number(f.yc) + 10);
+    }
+    return q.order("created_at", { ascending: false }).order("id", { ascending: false }).range((hal - 1) * PER, hal * PER - 1);
+  };
 
   // reviewer untuk pilihan filter: pseudonim unik (dalam run yang dipilih kalau ada)
   let rq = sb.from("review_results").select("reviewer").not("reviewer", "is", null).order("reviewer").limit(3000);
   if (f.run === "manual") rq = rq.is("run_id", null);
   else if (f.run) rq = rq.eq("run_id", f.run);
 
-  const [res, runsRes, campRes, revRes, status] = await Promise.all([
-    q,
+  const [res0, runsRes, campRes, revRes, status] = await Promise.all([
+    daftar(KARTU_COLS_CONDONG, true),
     sb.from("review_runs").select("id, label, sample_size, rubric_version, created_at").order("created_at", { ascending: false }).limit(30),
     sb.from("review_campaigns").select("campaign_id, title, brand").order("last_seen_at", { ascending: false }).limit(300),
     rq,
     loadArStatus(ctx),
   ]);
+  // migration-24 belum dijalankan → baca ulang tanpa kolom & filter condong
+  const condongAda = !condongBelumAda(res0.error);
+  const res = condongAda ? res0 : await daftar(KARTU_COLS, false);
   if (missing(res.error)) return <BelumSiap />;
   const rows = (res.data ?? []) as unknown as KartuRow[];
   const total = res.count ?? rows.length;
@@ -112,6 +131,7 @@ export default async function HasilPage({ searchParams }: { searchParams: SP }) 
       hal={hal}
       pages={pages}
       f={f}
+      condongAda={condongAda}
       galat={res.error ? arErrorText(res.error, "Daftar hasil gagal dibaca. Muat ulang halaman.") : null}
     />
   );
