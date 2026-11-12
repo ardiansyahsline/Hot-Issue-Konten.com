@@ -110,6 +110,10 @@ sesuaikan bagian `[nilai]`. Kalau bingung, kirim isi `data\skema.json` ke tim we
 dihubungkan lewat `appeals.target_id`, status `approved_flag` = approve, banding `granted` = dibatalkan, `denied` dan
 `resubmit_allowed` = dikuatkan (penolakan tetap), `under_review` = menunggu. Kalau tabel `appeals` juga berisi banding selain
 video, lihat nilai `appeals.target_type` di `kenali-skema --nilai`, lalu isi `banding_target` di `[nilai]` (mis. `["video"]`).
+Selama `banding_target` masih kosong, worker mengingatkan di log. Banding yang `target_type`-nya mengandung kata "video"
+didahulukan. Banding `granted` hanya membalik keputusan **reject**. Banding yang diterima atas video yang sudah di-approve
+(mis. banding payout ditahan) tidak mengubah approve. Waktu banding selesai (`resolved_at`, cadangan `admin_decided_at`) juga
+dibaca. Kalau reviewer mencatat ulang keputusan sesudah banding selesai, keputusan itu yang dipakai dan tidak dibalik lagi.
 
 ---
 
