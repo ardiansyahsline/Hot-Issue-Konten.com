@@ -1,0 +1,17 @@
+{
+  "Elemen_Wajib": "<ul><li>Logo <b>BrandY</b> di awal</li><li>Sebut promo 50%</li></ul>",
+  "materialWajib": [{"text": "Jingle BrandY", "wajib": true}, {"nama": "Key visual promo"}],
+  "materialWajibChoice": "salah satu",
+  "cta": {"teks": "Download aplikasi BrandY sekarang"},
+  "captionWajib": "Caption harus menyebut kode promo HEMAT50",
+  "hashtags": ["brandy", "#Promo50", "@brandy.id"],
+  "durasiMin": 20,
+  "durasiMax": "1:30",
+  "dilarangDilakukan": "Menyebut merek pesaing. Menampilkan harga lama",
+  "minimumFollowers": {"value": 5000},
+  "ugcWajahClipper": "opsional",
+  "tipeKonten": ["Tutorial"],
+  "keyAneh": {"apa": "ini"},
+  "customSections": "Pastikan audio jernih",
+  "materi": [{"url": "https://drive.google.com/file/d/1ZZZ/view"}, "https://drive.google.com/file/d/1YYY/view"]
+}

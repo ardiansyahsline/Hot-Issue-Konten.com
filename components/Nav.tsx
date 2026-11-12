@@ -85,10 +85,13 @@ export default function Nav({
     { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: open("catatan") },
     { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: open("chat") },
     { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: open("ai") },
+    // tab khusus: hanya admin & user yang dibuka admin (bawaan tertutup — lib/tabs.ts optIn)
+    { href: "/asisten-review", label: "🤖 Asisten Review", icon: "🤖", short: "Uji", show: open("asisten_review") },
     // Studio: admin, atau user yang diberi akses admin (dihitung di server oleh layout)
     { href: "/remotion", label: "🎬 Studio", icon: "🎬", short: "Studio", show: role === "admin" || studio },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
   ].filter((l) => l.show);
+  const padat = links.length + (music ? 1 : 0) >= 10;
   // pemutar musik cukup SATU di halaman (kalau dua, perintah "putar" diterima dua pemutar -> suara dobel):
   // dipasang di menu HP atau menu layar lebar sesuai ukuran layar
   const [narrow, setNarrow] = useState<boolean | null>(null);
@@ -116,18 +119,19 @@ export default function Nav({
 
   return (
     <>
-    {/* HP: semua menu tampil sejajar sebagai ikon + label kecil (proporsional, tidak perlu digeser) */}
-    <nav className="grid w-full auto-cols-fr grid-flow-col gap-0.5 rounded-2xl border border-zinc-800/80 bg-zinc-900 p-1 sm:hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+    {/* HP: semua menu tampil sejajar sebagai ikon + label kecil (proporsional, tidak perlu digeser).
+        Menu ≥ 10 (admin: + Uji + Studio + musik) → jarak & huruf dirapatkan supaya "Studio" / "Admin" tidak terpotong di 390 px */}
+    <nav className={`grid w-full auto-cols-fr grid-flow-col ${padat ? "gap-0" : "gap-0.5"} rounded-2xl border border-zinc-800/80 bg-zinc-900 p-1 sm:hidden`} style={{ boxShadow: "var(--shadow-sm)" }}>
       {links.map((l) => (
         <Link
           key={l.href}
           href={l.href}
           title={l.label}
-          className={`relative flex min-w-0 flex-col items-center gap-0.5 rounded-xl px-0.5 py-1 transition ${isActive(l.href) ? "bg-zinc-800 text-zinc-50" : "text-zinc-400"}`}
+          className={`relative flex min-w-0 flex-col items-center gap-0.5 rounded-xl ${padat ? "px-0" : "px-0.5"} py-1 transition ${isActive(l.href) ? "bg-zinc-800 text-zinc-50" : "text-zinc-400"}`}
           style={isActive(l.href) ? { boxShadow: "var(--shadow-pop)" } : undefined}
         >
           <span className="text-[16px] leading-none">{l.icon}</span>
-          <span className="w-full truncate text-center text-[10px] font-semibold leading-tight">{l.short}</span>
+          <span className={`w-full truncate text-center font-semibold leading-tight ${padat ? "text-[9.5px] tracking-tighter" : "text-[10px]"}`}>{l.short}</span>
           {l.href === "/video-review" && badge("right-0.5 top-0")}
         </Link>
       ))}

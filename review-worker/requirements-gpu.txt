@@ -1,0 +1,12 @@
+# Paket GPU review-worker (pemilik: worker-media). Dipasang install.ps1 SESUDAH PyTorch CUDA 12.8 (wajib untuk RTX 50xx / sm_120):
+#   uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+# (laptop tanpa GPU NVIDIA: index-url .../whl/cpu — EasyOCR tetap jalan di CPU, lebih lambat)
+#
+# OCR teks layar. EasyOCR 1.7.2 (Apache-2.0) dipilih, bukan PaddleOCR: PaddlePaddle GPU untuk RTX 50 di Windows butuh wheel
+# khusus & ada masalah yang diketahui; EasyOCR memakai torch cu128 yang sudah terbukti jalan. Model (+-100 MB) diunduh sekali
+# ke data\models\easyocr saat pertama dipakai. Ikut terpasang: scikit-image, python-bidi, shapely, pyclipper, PyYAML, ninja.
+easyocr==1.7.2
+#
+# Opsional (REVIEW_DEMUCS=1 di .env): pisahkan vokal kalau kecocokan musik rendah. Demucs 4.1.0 (MIT), model htdemucs
+# (+-80 MB) diunduh sekali. Pasang manual bila perlu:  .venv\Scripts\python -m pip install demucs==4.1.0
+# demucs==4.1.0

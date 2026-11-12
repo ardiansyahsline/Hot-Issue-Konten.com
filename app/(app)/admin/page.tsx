@@ -6,7 +6,7 @@ import { STUDIO_MAX, studioErrorText } from "@/lib/studio/access.server";
 import { CreateUserForm, DeleteUserButton, ResetPasswordForm, RoleSelect } from "./AdminForms";
 import StudioAccess, { type StudioCandidate, type StudioLogItem, type StudioMember } from "./StudioAccess";
 import TabAccess, { type TabUser } from "./TabAccess";
-import { normalizeTabs, tabErrorText } from "@/lib/tabs";
+import { normalizeBlocked, normalizeGranted, tabErrorText } from "@/lib/tabs";
 
 type AccessRow = { user_id: string; granted_by: string | null; granted_at: string };
 type LogRow = { id: number; user_id: string | null; user_name: string | null; action: "grant" | "revoke"; by_id: string | null; by_name: string | null; at: string };
@@ -17,7 +17,15 @@ export default async function AdminPage() {
     supabase.from("profiles").select("*").order("created_at"),
     supabase.from("studio_access").select("user_id, granted_by, granted_at").order("granted_at"),
     supabase.from("studio_access_log").select("id, user_id, user_name, action, by_id, by_name, at").order("at", { ascending: false }).limit(20),
-    supabase.from("user_tab_blocks").select("user_id, blocked"),
+    // kolom granted (tab khusus, migration-23) belum ada -> ambil blocked saja
+    supabase
+      .from("user_tab_blocks")
+      .select("user_id, blocked, granted")
+      .then(async (r) =>
+        r.error && (r.error.code === "42703" || r.error.code === "PGRST204") && /granted/i.test(r.error.message ?? "")
+          ? { ...(await supabase.from("user_tab_blocks").select("user_id, blocked")), noGranted: true }
+          : { ...r, noGranted: false }
+      ),
   ]);
   const profiles = (data ?? []) as Profile[];
   const hasServiceKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -50,7 +58,9 @@ export default async function AdminPage() {
   const studioSetup = acc.error ? studioErrorText(acc.error, "Data akses Studio gagal dimuat. Coba muat ulang halaman.") : null;
 
   // Akses tab per user: tidak ada baris = semua tab boleh; admin selalu semua tab
-  const tabBlocks = new Map(((tabRes.data ?? []) as { user_id: string; blocked: unknown }[]).map((r) => [r.user_id, normalizeTabs(r.blocked)]));
+  const tabRows = (tabRes.data ?? []) as { user_id: string; blocked: unknown; granted?: unknown }[];
+  const tabBlocks = new Map(tabRows.map((r) => [r.user_id, normalizeBlocked(r.blocked)]));
+  const tabGranted = new Map(tabRows.map((r) => [r.user_id, normalizeGranted(r.granted)]));
   const tabUsers: TabUser[] = profiles.map((p) => ({
     id: p.id,
     name: p.full_name?.trim() || p.email || "Tanpa nama",
@@ -59,7 +69,10 @@ export default async function AdminPage() {
     admin: p.role === "admin",
     self: p.id === user.id,
     blocked: p.role === "admin" ? [] : (tabBlocks.get(p.id) ?? []),
+    granted: p.role === "admin" ? [] : (tabGranted.get(p.id) ?? []),
   }));
+  // tab khusus (Asisten Review) butuh kolom granted dari migration-23
+  const optInSetup = !tabRes.error && tabRes.noGranted ? "Jalankan supabase/migration-23-asisten-review.sql dulu untuk membuka tab khusus." : null;
   const tabSetup = tabRes.error ? tabErrorText(tabRes.error, "Data akses tab gagal dimuat. Coba muat ulang halaman.") : null;
 
   return (
@@ -125,7 +138,7 @@ export default async function AdminPage() {
         </table>
       </div>
 
-      <TabAccess users={tabUsers} setup={tabSetup} />
+      <TabAccess users={tabUsers} setup={tabSetup} optInSetup={optInSetup} />
 
       <StudioAccess members={members} candidates={candidates} log={studioLog} max={STUDIO_MAX} setup={studioSetup} />
     </div>

@@ -1,0 +1,13 @@
+{
+  "elemenWajib": [
+    "Artis yang tampil harus pemain film FILM Z, bukan artis lain",
+    "Sebut judul FILM Z"
+  ],
+  "dilarangDilakukan": [
+    "Menampilkan Dewi Lestari sebelum berjilbab",
+    "Pakai footage aktor dengan prostetik di luar trailer resmi"
+  ],
+  "cta": "Ajak nonton di bioskop",
+  "durasiMin": 10,
+  "footageWajib": "Footage wajib: adegan Dian Sastro menangis"
+}
