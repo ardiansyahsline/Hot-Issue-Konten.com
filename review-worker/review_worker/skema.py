@@ -76,6 +76,7 @@ class KeputusanManusia(_M):
     reviewer: Optional[str] = None  # pseudonim R-xxxxxx
     diputuskan: Optional[str] = None  # ISO
     banding: Optional[Banding] = None
+    banding_selesai: Optional[str] = None  # ISO — waktu banding terbaru diputuskan (appeals.resolved_at / admin_decided_at)
     status_sekarang: Optional[str] = None  # tracked_videos.status terkini (mentah)
 
 
@@ -117,6 +118,8 @@ class BriefCampaign(_M):
     poin: list[PoinBrief] = Field(default_factory=list)
     durasi_min: Optional[float] = None  # detik
     durasi_max: Optional[float] = None
+    durasi_teks: list[str] = Field(default_factory=list)  # sisi batas ("min" / "max") yang dibaca dari teks bebas durasiVideo
+    durasi_ragu: list[str] = Field(default_factory=list)  # sisi dari teks bebas yang bacaannya tidak pasti → pelanggaran = cek manusia
     hashtag_wajib: list[str] = Field(default_factory=list)
     caption_wajib: Optional[str] = None
     materi_links: list[str] = Field(default_factory=list)  # link Google Drive (brief_detail.materi)

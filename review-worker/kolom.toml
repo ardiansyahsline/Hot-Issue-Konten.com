@@ -1,5 +1,5 @@
-# Pemetaan kolom DB replika Konten.com (schema "alif") — TEBAKAN AWAL. Nama kolom sebenarnya belum diketahui:
-# jalankan `review kenali-skema` (atau menu CEK di NYALAKAN-ASISTEN-REVIEW.bat), baca hasilnya, lalu sesuaikan nilai di kanan "=".
+# Pemetaan kolom DB replika Konten.com (schema "alif") — sudah dicocokkan dengan hasil `review kenali-skema --nilai` (12-11-2026).
+# Kalau DB berubah: jalankan `review kenali-skema` (atau menu CEK di NYALAKAN-ASISTEN-REVIEW.bat), baca hasilnya, lalu sesuaikan nilai di kanan "=".
 # Kunci di kiri "=" JANGAN diubah (dipakai kode). Kolom opsional yang tidak ada di DB dilewati otomatis (dicatat di log);
 # kolom WAJIB yang tidak ada membuat worker berhenti dengan pesan jelas. Hanya kolom yang dibutuhkan yang dibaca —
 # nama / email / no HP / username clipper TIDAK PERNAH dipetakan. File ini TIDAK berisi password / data pribadi.
@@ -19,15 +19,15 @@ id = "id"
 campaign_id = "campaign_id"
 url = "video_url"                 # link hanya dipakai di laptop untuk mengunduh — tidak pernah dikirim ke AI / Supabase / log
 platform = "platform"
-# platform_video_id = "platform_video_id"   # buka komentar kalau ada kolom id video platform tersendiri (cari link lebih cepat)
+platform_video_id = "platform_video_id"   # id video di platform (cari link lebih cepat)
 status = "status"
-caption = "caption"
-hashtags = "hashtags"
+caption = "description"           # caption / deskripsi postingan (hashtag dibaca dari sini)
 hashtag_present = "hashtag_present"
 bot_score = "bot_score"
 current_views = "current_views"
-duration = "duration"
-created_at = "created_at"
+created_at = "submitted_at"       # waktu clipper submit video
+# hashtags / duration: tidak ada kolomnya di tracked_videos — hashtag diambil dari caption, durasi diukur ffprobe dari file video.
+# is_ads (boolean "Video pakai Ads") ada di DB tapi sengaja TIDAK dibaca: data platform di luar isi video (lihat alasan.DI_LUAR_VIDEO).
 
 [campaigns]           # wajib: id, brief_detail (brief_instructions / brief_dos / brief_donts / brief_goal / brief_narrative KOSONG — tidak dipakai)
 id = "id"
@@ -45,27 +45,35 @@ action = "action"
 details = "details"
 user_id = "user_id"               # id reviewer → disamarkan jadi R-xxxxxx (nama staff tidak dibaca)
 created_at = "created_at"
-target_id = "target_id"           # id video yang diputuskan (bisa juga entity_id / video_id — cek kenali-skema)
+target_id = "target_id"           # id video yang diputuskan (aksi video_approve / video_reject)
 
 [staff]               # hanya id. Nama / email staff TIDAK dibaca.
 id = "id"
 
-[appeals]             # wajib (kalau tabel ada): video_id, status
-video_id = "video_id"
+[appeals]             # wajib (kalau tabel ada): video_id, status. Tabel appeals TIDAK punya kolom video_id: penghubungnya target_type + target_id
+video_id = "target_id"
+target_type = "target_type"       # opsional: banding untuk video saja → isi [nilai] banding_target (kosong = tidak difilter)
+appeal_type = "appeal_type"       # hanya ditampilkan di `kenali-skema --nilai` (tidak dipakai untuk menyaring)
 status = "status"
 created_at = "created_at"         # banding terbaru per video yang dipakai
+resolved_at = "resolved_at"       # opsional: waktu banding selesai → keputusan reviewer yang dicatat SESUDAHNYA tidak dibalik lagi
+decided_at = "admin_decided_at"   # opsional: cadangan kalau resolved_at kosong
 
 [history]
-video_id = "video_id"
-status = "status"
-created_at = "created_at"
+video_id = "tracked_video_id"
+status = "to_status"
+created_at = "changed_at"
 
 [nilai]               # isi kolom yang berarti approve / reject / hasil banding (huruf besar-kecil diabaikan).
 # Cek nilai sebenarnya: `review kenali-skema --nilai` (hanya nilai unik + jumlah, tanpa data pribadi)
-status_approve = ["approved", "approve", "accepted"]
-status_reject = ["rejected", "reject", "declined"]
+status_approve = ["approved", "approved_flag"]
+status_reject = ["rejected"]
 audit_approve = ["video_approve"]
 audit_reject = ["video_reject"]
-banding_dibatalkan = ["accepted", "approved", "overturned", "granted"]   # banding diterima → keputusan reviewer dibatalkan
-banding_dikuatkan = ["rejected", "denied", "upheld", "declined"]
-banding_menunggu = ["pending", "open", "review", "in_review"]
+banding_dibatalkan = ["granted"]                       # banding diterima → keputusan reviewer dibatalkan
+banding_dikuatkan = ["denied", "resubmit_allowed"]     # resubmit_allowed: penolakan tetap, clipper hanya boleh kirim ulang
+banding_menunggu = ["under_review"]
+# appeals.target_type yang berarti "banding atas video" (mis. ["video"]). Kosong = semua baris appeals dipakai (target_id = id video;
+# baris yang target_type-nya mengandung "video" didahulukan, dan banding "granted" atas video yang di-APPROVE tidak membalik approve).
+# Isi sesudah melihat nilai appeals.target_type di `kenali-skema --nilai` (worker mengingatkan di log selama masih kosong).
+banding_target = []

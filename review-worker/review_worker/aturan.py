@@ -14,7 +14,8 @@ from .privasi import bersihkan_teks
 from .skema import (BriefCampaign, CekPoin, CekPoinAI, KeputusanAI, KodeSerah, MateriVideo, PenilaianFinal, PoinBrief,
                     ReferensiCampaign)
 
-ATURAN_VERSI = "a1"  # naikkan kalau aturan berubah (ikut hash rubrik)
+ATURAN_VERSI = "a3"  # naikkan kalau aturan berubah (ikut hash rubrik). a2: cek tag akun tagSocialMedia (tidak terlihat = cek manusia)
+# a3: durasi dari teks bebas durasiVideo yang tidak pasti → cek manusia (bukan reject); tag akun per platform hanya platform video
 
 BUKTI_IDENTITAS = "Butuh cek manusia: menyangkut mengenali orang tertentu (AI tidak boleh menebak identitas orang)."
 BUKTI_MATERI = "Materi referensi campaign belum ada, jadi tidak bisa dibandingkan. Upload di halaman Materi."
@@ -54,9 +55,14 @@ def _cek_durasi(brief: BriefCampaign, materi: MateriVideo) -> tuple[str, str]:
     lo, hi = brief.durasi_min, brief.durasi_max
     if d is None or d <= 0:
         return "tidak_bisa_dinilai", "Durasi video tidak diketahui."
+    ragu = " Batas ini dibaca dari teks bebas durasi di brief dan bacaannya tidak pasti — cek manusia."
     if lo is not None and d < lo - TOLERANSI_DURASI:
+        if "min" in brief.durasi_ragu:  # tebakan parser teks bebas bukan fakta → tidak boleh jadi alasan reject
+            return "tidak_bisa_dinilai", f"Durasi video {d:.1f} detik, kurang dari perkiraan minimal {lo:g} detik.{ragu}"
         return "tidak", f"Durasi video {d:.1f} detik, kurang dari minimal {lo:g} detik."
     if hi is not None and d > hi + TOLERANSI_DURASI:
+        if "max" in brief.durasi_ragu:
+            return "tidak_bisa_dinilai", f"Durasi video {d:.1f} detik, lebih dari perkiraan maksimal {hi:g} detik.{ragu}"
         return "tidak", f"Durasi video {d:.1f} detik, lebih dari maksimal {hi:g} detik."
     batas = " – ".join(x for x in (f"min {lo:g}" if lo is not None else "", f"maks {hi:g}" if hi is not None else "") if x)
     return "lolos", f"Durasi video {d:.1f} detik (diminta {batas} detik)."
@@ -96,6 +102,56 @@ def _cek_hashtag(p: PoinBrief, brief: BriefCampaign, materi: MateriVideo) -> tup
     return "lolos", "Caption memuat semua hashtag / tag wajib: " + " ".join(wajib) + "."
 
 
+def _cek_tag_akun(p: PoinBrief, materi: MateriVideo) -> tuple[str, str]:
+    """poin tagSocialMedia: akun / tag brand di caption → lolos; tidak terlihat / caption kosong / akun tidak tertulis di brief →
+    tidak_bisa_dinilai (BUTUH CEK MANUSIA: bisa di-tag lewat fitur tag platform). TIDAK PERNAH "tidak" (bukan alasan reject)."""
+    isi = p.teks.split(":", 1)[1] if ":" in p.teks else p.teks
+    plat_video = (materi.meta.platform or "").strip().lower()
+    semua: list[str] = []
+    khusus: list[str] = []
+    umum: list[str] = []
+    platform_lain: set[str] = set()
+    for bag in isi.split(";"):
+        tags = re.findall(r"[#@][\w.]+", bag)
+        tags = [t.rstrip(".") for t in tags]
+        semua += tags
+        m = re.match(r"\s*(tiktok|instagram|youtube|semua platform)\b", bag, re.I)
+        nama = m.group(1).lower() if m else None
+        if nama and nama == plat_video:
+            khusus += tags
+        elif nama == "semua platform":
+            umum += tags
+        elif nama and tags:
+            platform_lain.add(nama)
+    # akun per platform: yang dicek hanya akun untuk platform video ini + akun umum. Brief hanya menyebut akun untuk platform LAIN
+    # (platform video diketahui) → poin ini tidak berlaku untuk video ini. Platform video tidak diketahui → semua akun dicek.
+    if khusus or umum:
+        wajib = khusus + umum
+    elif platform_lain and plat_video in ("tiktok", "instagram", "youtube"):
+        return "lolos", ("Brief hanya mewajibkan tag akun untuk platform lain (" +
+                         ", ".join(sorted(x.title() for x in platform_lain)) + ") — tidak berlaku untuk video ini.")
+    else:
+        wajib = semua
+    if not wajib:
+        return "tidak_bisa_dinilai", "Akun yang wajib di-tag tidak tertulis jelas di brief — cek manusia."
+    cap = _norm(materi.meta.caption or "")
+    if not cap.strip():
+        return "tidak_bisa_dinilai", "Caption video tidak tersedia di data — tag akun " + " ".join(wajib) + " dicek manusia."
+    tags_video, _ = _tag_video(materi)
+    kurang = []
+    for t in wajib:
+        n = _norm(t)
+        if n.startswith("#"):
+            if n.lstrip("#") not in tags_video:
+                kurang.append(t)
+        elif not re.search(r"(?<![\w.])" + re.escape(n) + r"(?![\w])", cap):
+            kurang.append(t)
+    if kurang:
+        return "tidak_bisa_dinilai", ("Tag akun " + " ".join(kurang) + " tidak terlihat di caption (bisa jadi di-tag lewat fitur "
+                                      "tag platform) — cek manusia.")
+    return "lolos", "Caption memuat tag akun wajib: " + " ".join(wajib) + "."
+
+
 def _token(s: str) -> list[str]:
     return [t for t in re.findall(r"[#@]?\w+", _norm(s)) if len(t) >= 2]
 
@@ -120,7 +176,8 @@ def _cek_caption(p: PoinBrief, brief: BriefCampaign, materi: MateriVideo) -> tup
 
 
 def cek_kode(brief: BriefCampaign, materi: MateriVideo) -> list[CekPoin]:
-    """poin cara_nilai "kode" (durasi vs durasiMin/Max ±1 dtk, hashtag wajib di caption/hashtags, caption wajib) — juga
+    """poin cara_nilai "kode" (durasi vs durasiMin/Max ±1 dtk, hashtag wajib di caption/hashtags, caption wajib, tag akun
+    tagSocialMedia — tidak terlihat = cek manusia) — juga
     dikirim ke AI sebagai fakta"""
     out: list[CekPoin] = []
     for p in brief.poin:
@@ -128,6 +185,8 @@ def cek_kode(brief: BriefCampaign, materi: MateriVideo) -> list[CekPoin]:
             continue
         if p.kategori == "durasi":
             hasil, bukti = _cek_durasi(brief, materi)
+        elif p.kategori == "hashtag" and p.sumber.startswith("tagSocialMedia"):
+            hasil, bukti = _cek_tag_akun(p, materi)
         elif p.kategori == "hashtag":
             hasil, bukti = _cek_hashtag(p, brief, materi)
         elif p.kategori == "caption_wajib":
@@ -236,6 +295,11 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
         if k not in serah:
             serah.append(k)
 
+    def yakin_kode(c: CekPoin) -> int:
+        """keyakinan pelanggaran fakta kode: durasi dari angka durasiMin/Max = 90; durasi dari teks bebas durasiVideo / hashtag /
+        caption = 80"""
+        return 90 if c.kategori == "durasi" and not brief.durasi_teks else 80
+
     def kode_pelanggaran(cs: list[CekPoin]) -> Optional[str]:
         """kode alasan dari poin yang dilanggar (CTA didahulukan)"""
         if not cs:
@@ -272,12 +336,12 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
                 if alasan_kode in DI_LUAR_VIDEO or alasan_kode not in boleh:
                     alasan_kode = kode_pelanggaran(langgar)  # alasan harus sesuai poin yang benar-benar dilanggar
                 if langgar_kode:  # pelanggaran fakta kode (durasi / hashtag / caption) = keyakinan sama dengan jalur approve
-                    keyakinan = max(keyakinan, 90 if any(c.kategori == "durasi" for c in langgar_kode) else 80)
+                    keyakinan = max(keyakinan, max(yakin_kode(c) for c in langgar_kode))
         elif saran == "approve":
             if langgar_kode:  # pelanggaran yang dicek kode (durasi / hashtag / caption) sah sebagai alasan reject
                 c = sorted(langgar_kode, key=lambda c: c.kategori != "durasi")[0]
                 saran, alasan_kode = "reject", poin_by_id[c.poin_id].kode_alasan
-                keyakinan = max(keyakinan, 90 if c.kategori == "durasi" else 80)
+                keyakinan = max(keyakinan, yakin_kode(c))
                 spesifik = _kalimat(c.bukti)
             elif langgar:
                 saran = "cek_manusia"

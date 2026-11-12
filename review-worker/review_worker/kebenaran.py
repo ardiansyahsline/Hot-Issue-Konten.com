@@ -1,6 +1,8 @@
 """Kebenaran akhir untuk uji akurasi (pemilik: hakim-uji). KONTRAK.md §6.1.
-Banding dibatalkan → kebalikan keputusan reviewer (hasil banding yang benar); dikuatkan / tanpa banding → keputusan reviewer;
-banding menunggu → keputusan reviewer (ditandai).
+Banding dibatalkan → REJECT reviewer dibalik jadi approve (hasil banding yang benar); dikuatkan / tanpa banding → keputusan reviewer;
+banding menunggu → keputusan reviewer (ditandai). Banding clipper hanya bisa membatalkan PENOLAKAN: banding "diterima" atas video
+yang di-APPROVE (mis. banding penahanan payout / flag, appeals.target_id = id video) TIDAK membalik approve → tetap approve, status
+banding dikosongkan (bukan banding atas keputusan review; dicatat log).
 Keputusan reviewer = aksi audit TERAKHIR. Kalau aksi itu dicatat SESUDAH banding selesai (waktu banding tersedia), aksi itu sudah
 hasil banding → TIDAK dibalik lagi (cegah balik dua kali). Waktu banding belum dikirim replika → dibalik seperti bawaan, kasus yang
 mencurigakan (status video sekarang sama dengan keputusan terakhir) dicatat di log."""
@@ -17,8 +19,9 @@ _KEBALIKAN: dict[str, Keputusan] = {"approve": "reject", "reject": "approve"}
 _BANDING = ("dibatalkan", "dikuatkan", "menunggu")
 # hanya untuk peringatan log (pemetaan sebenarnya di kolom.toml [nilai], dipakai replika)
 _STATUS = {"approve": {"approved", "approve", "accepted"}, "reject": {"rejected", "reject", "declined"}}
-_WAKTU_BANDING = ("banding_selesai", "banding_waktu")  # field opsional (belum ada di skema) — dipakai otomatis kalau ditambah
+_WAKTU_BANDING = ("banding_selesai", "banding_waktu")  # waktu banding selesai (replika: appeals.resolved_at / admin_decided_at)
 ambigu = 0  # jumlah kasus mencurigakan sejak worker menyala
+banding_approve = 0  # banding diterima atas video yang di-approve (bukan banding penolakan) — tidak membalik
 
 
 def _waktu(x: Any) -> Optional[datetime]:
@@ -41,14 +44,21 @@ def _sesudah_banding(km: KeputusanManusia) -> bool:
 def tentukan(km: Optional[KeputusanManusia]) -> tuple[Optional[Keputusan], Optional[Banding]]:
     """(kebenaran akhir, status banding). Tanpa keputusan reviewer → kebenaran None (video tidak masuk penyebut akurasi),
     status banding tetap dikembalikan supaya tercatat."""
-    global ambigu
+    global ambigu, banding_approve
     if km is None:
         return None, None
     banding = km.banding if km.banding in _BANDING else None
     kep = km.keputusan if km.keputusan in _KEBALIKAN else None
     if kep is None:
         return None, banding
-    if banding == "dibatalkan":  # keputusan reviewer dibatalkan saat banding → hasil banding yang benar
+    if banding == "dibatalkan" and kep == "approve":
+        # banding clipper hanya membatalkan penolakan; "diterima" atas video approve = banding lain (payout ditahan / flag) → tetap approve
+        banding_approve += 1
+        if banding_approve <= 20:
+            log.info("Video %s: banding diterima tapi keputusan reviewer approve — bukan banding penolakan, kebenaran tetap approve.",
+                     km.video_id)
+        return kep, None  # bukan banding atas keputusan review → tidak dihitung sebagai "keputusan dibatalkan" di laporan
+    if banding == "dibatalkan":  # penolakan reviewer dibatalkan saat banding → hasil banding (approve) yang benar
         if _sesudah_banding(km):
             return kep, banding  # keputusan terakhir = keputusan sesudah banding (sudah hasil banding)
         if str(km.status_sekarang or "").strip().lower() in _STATUS[kep]:

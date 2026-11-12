@@ -3,7 +3,7 @@
 Definisi (dipakai juga oleh laporan HTML — bahasa awam di laporan.py):
 - Kebenaran akhir = keputusan reviewer, kecuali dibatalkan saat banding → kebalikannya (kebenaran.tentukan).
 - "Bisa dinilai" (n_dinilai) = pipeline_status ok + ada keputusan reviewer + alasan reject BUKAN di luar video. Video yang
-  di-reject karena followers / link bio / duplikat / bot / tidak bisa diakses (alasan.DI_LUAR_VIDEO) tidak bisa dilihat AI → dihitung terpisah
+  di-reject karena followers / link bio / duplikat / bot / tidak bisa diakses (alasan.DI_LUAR_VIDEO) / label Ads (alasan.label_di_luar_video) tidak bisa dilihat AI → dihitung terpisah
   (n_di_luar_video, per_alasan[].di_luar_video) dan tidak menghukum akurasi. Video tidak bisa diakses / gagal juga terpisah.
 - setuju_reviewer / setuju_akhir = hanya video yang DIPUTUSKAN AI (approve/reject): berapa yang sama dengan reviewer /
   kebenaran akhir. akurasi_tanpa_cek_manusia = SEMUA video yang bisa dinilai sebagai penyebut: berapa yang AI putuskan
@@ -19,7 +19,8 @@ import math
 from collections import Counter, defaultdict
 from typing import Any, Iterable, Optional
 
-from .alasan import DI_LUAR_VIDEO, KODE_LABEL_BAWAAN
+from .alasan import KODE_LABEL_BAWAAN
+from .alasan import di_luar_video as _alasan_di_luar
 from .privasi import bersihkan_teks
 
 AR = ("approve", "reject")
@@ -87,8 +88,9 @@ def kebenaran_baris(r: dict) -> Optional[str]:
 
 def di_luar_video(r: dict) -> bool:
     """reject (akhir) karena alasan yang tidak terlihat di video (alasan.DI_LUAR_VIDEO: followers / link bio / duplikat / bot /
-    tidak bisa diakses saat dicek reviewer)"""
-    return r.get("human_decision") == "reject" and kebenaran_baris(r) == "reject" and r.get("human_code") in DI_LUAR_VIDEO
+    tidak bisa diakses saat dicek reviewer; juga label "lainnya" yang berupa data platform, mis. "Video pakai Ads")"""
+    return (r.get("human_decision") == "reject" and kebenaran_baris(r) == "reject"
+            and _alasan_di_luar(r.get("human_code"), r.get("human_reason")))
 
 
 def bisa_dinilai(r: dict) -> bool:
@@ -175,19 +177,20 @@ def hitung_metrik(baris: list[dict], cfg, n_sampel: Optional[int] = None) -> dic
     n_cek = matriks["approve"]["cek_manusia"] + matriks["reject"]["cek_manusia"]
 
     # per alasan reject (reject akhir yang memang di-reject reviewer; dikelompokkan kode alasan reviewer)
-    grup: dict[str, list[dict]] = defaultdict(list)
+    grup: dict[tuple[str, bool], list[dict]] = defaultdict(list)  # (kode, di luar video) — label Ads terpisah dari "lainnya" biasa
     for r in ok:
         if r.get("human_decision") == "reject" and kebenaran_baris(r) == "reject":
-            grup[r.get("human_code") or "lainnya"].append(r)
+            kode = r.get("human_code") or "lainnya"
+            grup[(kode, _alasan_di_luar(kode, r.get("human_reason")))].append(r)
     per_alasan = []
-    for kode, rs in grup.items():
+    for (kode, kode_luar), rs in grup.items():
         label = Counter(r.get("human_reason") for r in rs if r.get("human_reason")).most_common(1)
         rj = [r for r in rs if saran(r) == "reject"]
         ap = sum(saran(r) == "approve" for r in rs)
         per_alasan.append({
             "code": kode, "label": bersihkan_teks(label[0][0], 160) if label else KODE_LABEL_BAWAAN.get(kode, kode), "n": len(rs), "ai_reject": len(rj),
             "ai_reject_alasan_sama": sum(r.get("official_code") == kode for r in rj), "ai_approve": ap,
-            "ai_cek": sum(saran(r) == "cek_manusia" for r in rs), "di_luar_video": kode in DI_LUAR_VIDEO,
+            "ai_cek": sum(saran(r) == "cek_manusia" for r in rs), "di_luar_video": kode_luar,
             "akurasi": _r1(len(rj) / (len(rj) + ap) * 100) if (len(rj) + ap) else None,
         })
     per_alasan.sort(key=lambda x: (x["di_luar_video"], -x["n"], x["code"]))

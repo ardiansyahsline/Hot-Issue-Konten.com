@@ -531,6 +531,246 @@ def alasan_label_dan_sinkron():
     assert alasan.DI_LUAR_VIDEO == {"followers_kurang", "link_bio_tidak_ada", "duplikat", "engagement_bot", "tidak_bisa_diakses"}
 
 
+# label alasan reject ASLI Konten.com (output `sinkron-alasan` di laptop user, 12-11-2026): (label, jumlah pakai, kode harapan,
+# di luar jangkauan AI). 15 label resmi + label bebas yang dikutip user (sisa ±11 label bebas jarang belum diterima).
+LABEL_ASLI = [
+    ("Konten tidak sesuai brief campaign", 12744, "tidak_sesuai_brief", False),
+    ("CTA wajib tidak ada", 1835, "cta_tidak_ada", False),
+    ("Caption tidak sesuai brief", 1653, "tidak_sesuai_brief", False),
+    ("Engagement mencurigakan / bot", 1166, "engagement_bot", True),
+    ("Lainnya", 1117, "lainnya", False),
+    ("Video duplikat / sudah disubmit", 595, "duplikat", True),
+    ("Link di bio belum ada", 552, "link_bio_tidak_ada", True),
+    ("Video tidak bisa diakses", 489, "tidak_bisa_diakses", True),
+    ("Salah campaign", 349, "tidak_sesuai_brief", False),
+    ("Brand tidak di-mention (wajib)", 280, "tidak_sesuai_brief", False),
+    ("Followers belum memenuhi syarat", 181, "followers_kurang", True),
+    ("Brand safety / pelanggaran", 72, "lainnya", False),
+    ("Durasi video tidak sesuai", 59, "tidak_sesuai_brief", False),
+    ("Konten tidak sesuai brief", 32, "tidak_sesuai_brief", False),
+    ("Video pakai Ads (promosi berbayar)", 22, "lainnya", True),
+    ("Konten tidak sesuai brief - Minimal 1000 follower untuk klaim", 3, "followers_kurang", True),
+    ("harus ada hook di 3 detik pertama", 2, "tidak_sesuai_brief", False),
+    ("tidak ada menampilkan kemasan produk", 2, "tidak_sesuai_brief", False),
+    ("Duplikat konten - Tidak boleh mengambil video dari orang lain", 2, "duplikat", True),
+    ("Lainnya - Konten tidak bisa diakses", 1, "tidak_bisa_diakses", True),
+    ("tidak memasang bio [akun] + wajib ada hook", 1, "link_bio_tidak_ada", True),
+]
+# variasi label bebas yang wajar (BUKAN dari output asli) — memastikan kata kunci baru tidak salah arah
+LABEL_VARIASI = {"Brand tidak di tag": "tidak_sesuai_brief", "Tidak mention akun brand": "tidak_sesuai_brief",
+                 "Logo produk tidak ditampilkan": "tidak_sesuai_brief", "Salah kampanye": "tidak_sesuai_brief",
+                 "Video promosi berbayar / ads": "lainnya", "Mengambil konten orang lain": "duplikat",
+                 "Pelanggaran brief": "tidak_sesuai_brief", "Konten SARA / pelanggaran": "lainnya"}
+
+
+@test
+def alasan_label_asli_konten():
+    salah = [(lab, alasan.kode_untuk_label(lab), kode) for lab, _n, kode, _l in LABEL_ASLI if alasan.kode_untuk_label(lab) != kode]
+    salah += [(lab, alasan.kode_untuk_label(lab), kode) for lab, kode in LABEL_VARIASI.items() if alasan.kode_untuk_label(lab) != kode]
+    assert not salah, salah
+    luar = [(lab, l) for lab, _n, kode, l in LABEL_ASLI if alasan.di_luar_video(alasan.kode_untuk_label(lab), lab) != l]
+    assert not luar, luar
+    assert alasan.label_di_luar_video("Video pakai Ads (promosi berbayar)") and not alasan.label_di_luar_video("Brand safety / pelanggaran")
+    assert not alasan.label_di_luar_video("Download aplikasi") and not alasan.label_di_luar_video(None)
+    # sinkron: semua label tersimpan dengan kode yang benar
+    s = SupaAlasan()
+    n = alasan.sinkron(s, [(lab, jml, None, None) for lab, jml, _k, _l in LABEL_ASLI])
+    assert n == len(LABEL_ASLI) and {r["label"]: r["code"] for r in s.insert_rows} == {lab: k for lab, _n, k, _l in LABEL_ASLI}
+    # muat_daftar: label paling sering per kode = label resmi; kode lama yang tersimpan (aturan lama: "Salah campaign" → lainnya)
+    # tidak menang atas aturan baru
+    rows = [{"label": lab, "code": "lainnya" if lab in ("Salah campaign", "Brand tidak di-mention (wajib)") else k, "uses": jml}
+            for lab, jml, k, _l in LABEL_ASLI]
+    d = alasan.muat_daftar(SupaAlasan(rows))
+    assert d["tidak_sesuai_brief"] == "Konten tidak sesuai brief campaign" and d["lainnya"] == "Lainnya", d
+    assert d["followers_kurang"] == "Followers belum memenuhi syarat" and d["duplikat"] == "Video duplikat / sudah disubmit"
+    assert alasan.kode_untuk_label("Salah campaign") == "tidak_sesuai_brief"
+    # label asing yang tidak dikenali aturan → kode tersimpan di review_reasons dipakai
+    alasan.muat_daftar(SupaAlasan([{"label": "qwerty zzz", "code": "engagement_bot", "uses": 1}]))
+    assert alasan.kode_untuk_label("qwerty zzz") == "engagement_bot"
+    # label yang tersedia untuk saran AI (label_untuk_kode) = label resmi yang paling sering dipakai
+    assert alasan.label_untuk_kode("tidak_sesuai_brief", d) == "Konten tidak sesuai brief campaign"
+    return f"{len(LABEL_ASLI)} label asli + {len(LABEL_VARIASI)} variasi"
+
+
+@test
+def brief_key_asli_tag_durasi_konteks():
+    d = json.loads((DATA / "brief-konten-asli.json").read_text(encoding="utf-8"))
+    b = brief.parse_brief(CampaignDB(id="c-31", title="Kopi Senja Ramadan", brand="PT Kopi Senja", brief_detail=d))
+    assert not b.catatan_parser, b.catatan_parser  # semua key asli dikenal
+    tag = [p for p in b.poin if p.sumber == "tagSocialMedia"]
+    assert len(tag) == 1 and tag[0].wajib and tag[0].cara_nilai == "kode" and tag[0].kode_alasan == "tidak_sesuai_brief"
+    assert "@kopisenja.id" in tag[0].teks and "@kopisenja.id" not in b.hashtag_wajib
+    assert (b.durasi_min, b.durasi_max) == (30, 60) and poin(b, "durasi")[0].sumber == "durasiVideo"
+    kt = brief.konteks_brief(b)
+    assert kt["Jenis kampanye"] == "UGC Review Produk" and kt["Judul file dari brand"].startswith("Kopi Senja")
+    assert kt["Nama brand / artis"] == "Kopi Senja"
+    t = brief.teks_brief_untuk_prompt(b)
+    assert "@kopisenja.id" in t and "[akun]" not in t  # handle brand tidak disamarkan pembersih privasi
+    from review_worker.media import susun
+    assert "@kopisenja.id" in susun.tag_boleh(b) and "@kopisenja.id" in hakim._tag_boleh(b)
+    assert privasi.bersihkan_teks("Mampir ke @kopisenja.id ya, aku @clipper_x", izinkan=susun.tag_boleh(b)) == \
+        "Mampir ke @kopisenja.id ya, aku [akun]"
+    # durasiMin/durasiMax terisi → durasiVideo hanya mengisi sisi yang kosong
+    b2 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, durasiMin="20", durasiVideo="maks 45 detik")))
+    assert (b2.durasi_min, b2.durasi_max) == (20, 45) and poin(b2, "durasi")[0].sumber == "durasiMin/durasiVideo"
+    kasus = {"30-60 detik": (30, 60), "min 30 detik": (30, None), "Minimal 15 detik, maksimal 1 menit": (15, 60),
+             "maks 60 detik": (None, 60), "30": (30, None), 45: (45, None), "15s - 1 menit": (15, 60), "1-2 menit": (60, 120),
+             "30 detik ke atas": (30, None), "di bawah 90 detik": (None, 90), "Rasio 9-16, durasi 30 detik": (30, None),
+             "Bebas": (None, None), "": (None, None), '{"min": 15, "max": "45 detik"}': (15, 45)}
+    for raw, harap in kasus.items():
+        raw = json.loads(raw) if isinstance(raw, str) and raw[:1] == "{" else raw
+        assert brief._durasi_video(raw) == harap, (raw, brief._durasi_video(raw))
+    b3 = brief.parse_brief(CampaignDB(id="c", min_video_duration=10, brief_detail=dict(d, durasiVideo="Bebas")))
+    assert (b3.durasi_min, b3.durasi_max) == (10, None) and any("durasiVideo" in c for c in b3.catatan_parser)
+    # bentuk tagSocialMedia lain: per platform, tanpa '@', link profil, flag wajib tanpa akun, kosong
+    bentuk = {
+        json.dumps({"tiktok": "@kopisenja.tt", "instagram": "kopisenja.ig"}): "TikTok @kopisenja.tt; Instagram @kopisenja.ig",
+        "kopisenja": "@kopisenja", "https://www.instagram.com/kopisenja.id/": "@kopisenja.id",
+        json.dumps([{"platform": "TikTok", "username": "kopisenja"}]): "TikTok @kopisenja",
+        "Wajib tag akun resmi brand": "akun brand (nama akun tidak tertulis di brief)", "ya": "akun brand (nama akun tidak tertulis di brief)",
+        "": None, "tidak": None,
+    }
+    for raw, harap in bentuk.items():
+        nilai_raw = json.loads(raw) if raw[:1] in ("[", "{") else raw
+        bb = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia=nilai_raw)))
+        tp = [p for p in bb.poin if p.sumber == "tagSocialMedia"]
+        if harap is None:
+            assert not tp, (raw, [p.teks for p in tp])
+        else:
+            assert len(tp) == 1 and tp[0].teks.endswith(harap), (raw, [p.teks for p in tp])
+    return f"{len(b.poin)} poin, {len(kasus)} bentuk durasiVideo, {len(bentuk)} bentuk tagSocialMedia"
+
+
+@test
+def aturan_tag_akun_tidak_terlihat_cek_manusia_bukan_reject():
+    d = json.loads((DATA / "brief-konten-asli.json").read_text(encoding="utf-8"))
+    b = brief.parse_brief(CampaignDB(id="c-31", title="Kopi Senja Ramadan", brand="PT Kopi Senja", brief_detail=d))
+    pid = next(p.id for p in b.poin if p.sumber == "tagSocialMedia")
+
+    def tag(m):
+        return next((c.hasil, c.bukti) for c in aturan.cek_kode(b, m) if c.poin_id == pid)
+
+    ada = materi_ok(durasi=40, caption="Ngopi sore! @kopisenja.id #kopisenja #ngopisore", hashtags=["#kopisenja", "#ngopisore"])
+    assert tag(ada)[0] == "lolos"
+    tanpa = materi_ok(durasi=40, caption="Ngopi sore! #kopisenja #ngopisore", hashtags=["#kopisenja", "#ngopisore"])
+    assert tag(tanpa)[0] == "tidak_bisa_dinilai" and "cek manusia" in tag(tanpa)[1]
+    kosong = materi_ok(durasi=40, caption="", hashtags=[])
+    assert tag(kosong)[0] == "tidak_bisa_dinilai"
+    # AI approve + tag tidak terlihat → cek manusia (bukan reject); AI reject karena poin lain tetap reject
+    f = nilai(b, ai_semua(b), materi=tanpa)
+    assert f.saran == "cek_manusia" and "poin_tidak_bisa_dinilai" in f.serah, (f.saran, f.serah)
+    assert nilai(b, ai_semua(b), materi=ada).saran == "approve"
+    f = nilai(b, ai_semua(b, saran="reject", alasan_kode="tidak_sesuai_brief"), materi=tanpa)
+    assert f.saran != "reject", "tag akun tidak terlihat bukan alasan reject"
+    # per platform: hanya akun platform video yang dicek
+    b2 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia={"tiktok": "@kopisenja.tt", "instagram": "@kopisenja.ig"})))
+    p2 = next(p.id for p in b2.poin if p.sumber == "tagSocialMedia")
+    m_tt = materi_ok(durasi=40, caption="Enak @kopisenja.tt #kopisenja #ngopisore", hashtags=["#kopisenja"])
+    m_tt = m_tt.model_copy(update={"meta": m_tt.meta.model_copy(update={"platform": "tiktok"})})
+    assert next(c.hasil for c in aturan.cek_kode(b2, m_tt) if c.poin_id == p2) == "lolos"
+    m_ig = m_tt.model_copy(update={"meta": m_tt.meta.model_copy(update={"platform": "instagram"})})
+    assert next(c.hasil for c in aturan.cek_kode(b2, m_ig) if c.poin_id == p2) == "tidak_bisa_dinilai"
+    # campuran akun per platform + akun umum: video TikTok wajib akun TikTok + akun umum
+    b3 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia=[{"platform": "tiktok", "username": "kopi.tt"}, "@kopisenja.id"])))
+    p3 = next(p for p in b3.poin if p.sumber == "tagSocialMedia")
+    assert p3.teks.endswith("TikTok @kopi.tt; semua platform @kopisenja.id"), p3.teks
+    m3 = m_tt.model_copy(update={"meta": m_tt.meta.model_copy(update={"caption": "Enak @kopi.tt #kopisenja"})})
+    assert next(c.hasil for c in aturan.cek_kode(b3, m3) if c.poin_id == p3.id) == "tidak_bisa_dinilai"
+    m3 = m_tt.model_copy(update={"meta": m_tt.meta.model_copy(update={"caption": "Enak @kopi.tt @kopisenja.id #kopisenja"})})
+    assert next(c.hasil for c in aturan.cek_kode(b3, m3) if c.poin_id == p3.id) == "lolos"
+    # brief hanya punya akun untuk platform LAIN (+ tanpa akun umum) → tidak berlaku untuk video ini (bukan cek manusia)
+    b4 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia="TikTok: @kopi.tt")))
+    p4 = next(p for p in b4.poin if p.sumber == "tagSocialMedia")
+    assert p4.teks.endswith("TikTok @kopi.tt"), p4.teks
+    m_ig4 = m_tt.model_copy(update={"meta": m_tt.meta.model_copy(update={"platform": "instagram", "caption": "Enak #kopisenja"})})
+    assert next(c.hasil for c in aturan.cek_kode(b4, m_ig4) if c.poin_id == p4.id) == "lolos"
+    m_tt4 = m_ig4.model_copy(update={"meta": m_ig4.meta.model_copy(update={"platform": "tiktok"})})
+    assert next(c.hasil for c in aturan.cek_kode(b4, m_tt4) if c.poin_id == p4.id) == "tidak_bisa_dinilai"
+    m_x4 = m_ig4.model_copy(update={"meta": m_ig4.meta.model_copy(update={"platform": None})})  # platform tak diketahui → semua dicek
+    assert next(c.hasil for c in aturan.cek_kode(b4, m_x4) if c.poin_id == p4.id) == "tidak_bisa_dinilai"
+    # per platform + akun umum: video Instagram hanya wajib akun umum (akun khusus TikTok tidak dicek di caption Instagram)
+    b5 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia=[{"platform": "tiktok", "username": "kopi.tt"}, "@kopisenja.id"])))
+    p5 = next(p for p in b5.poin if p.sumber == "tagSocialMedia")
+    m5 = m_ig4.model_copy(update={"meta": m_ig4.meta.model_copy(update={"caption": "Enak @kopisenja.id #kopisenja"})})
+    assert next(c.hasil for c in aturan.cek_kode(b5, m5) if c.poin_id == p5.id) == "lolos"
+    # string per platform "TikTok: @a, Instagram: @b" → akun per platform (tidak dua-duanya diwajibkan)
+    b6 = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia="TikTok: @kopi.tt, Instagram: @kopi.ig")))
+    p6 = next(p for p in b6.poin if p.sumber == "tagSocialMedia")
+    assert p6.teks.endswith("TikTok @kopi.tt; Instagram @kopi.ig"), p6.teks
+    m6 = m_ig4.model_copy(update={"meta": m_ig4.meta.model_copy(update={"caption": "Enak @kopi.ig #kopisenja"})})
+    assert next(c.hasil for c in aturan.cek_kode(b6, m6) if c.poin_id == p6.id) == "lolos"
+
+
+@test
+def brief_tag_akun_isian_kosong_bukan_wajib():
+    """tagSocialMedia berisi isian negatif / kosong ("Tidak ada", "N/A", "none", "kosong", "tidak wajib") → TIDAK ada poin tag wajib
+    (dulu: poin wajib tanpa akun / akun palsu @none @kosong @tidak → video campaign itu tidak pernah bisa auto-approve)"""
+    d = json.loads((DATA / "brief-konten-asli.json").read_text(encoding="utf-8"))
+    kosong = ["Tidak ada", "tidak perlu", "N/A", "n/a", "none", "None", "kosong", "tidak wajib", "Tidak perlu tag", "-", "null",
+              "Tidak ada tag wajib", "tidak.", "Opsional", "nggak perlu"]
+    for raw in kosong:
+        assert brief._tag_akun(raw) == ([], False), (raw, brief._tag_akun(raw))
+        b = brief.parse_brief(CampaignDB(id="c", brief_detail=dict(d, tagSocialMedia=raw)))
+        assert not [p for p in b.poin if p.sumber == "tagSocialMedia"], raw
+    # akun asli tetap terbaca; isian negatif dengan akun eksplisit tetap memakai akunnya
+    assert brief._tag_akun("brandx") == ([(None, "@brandx")], False)
+    assert brief._tag_akun("Tidak perlu tag, tapi mention @brand_x di caption") == ([(None, "@brand_x")], False)
+    assert brief._tag_akun("Wajib tag akun brand") == ([], True)
+    assert brief._tag_akun("IG & TikTok: @a.b") == ([("Instagram", "@a.b"), ("TikTok", "@a.b")], False)
+    return f"{len(kosong)} isian kosong/negatif"
+
+
+@test
+def brief_durasi_video_teks_bebas():
+    """durasiVideo teks bebas: negasi, mm:ss, "X menit Y detik"; bacaan tidak pasti → pelanggaran = cek manusia (bukan reject 90)"""
+    kasus = {"tidak lebih dari 60 detik": (None, 60, True), "Tidak boleh lebih dari 1 menit": (None, 60, True),
+             "bukan lebih dari 60 detik": (None, 60, True), "tidak kurang dari 30 detik": (30, None, True),
+             "1:30 menit": (90, None, False), "1 min 30 detik": (90, None, False), "1 menit 30 detik": (90, None, False),
+             "maks 2:30": (None, 150, True), "min 1:00": (60, None, True), "maksimal 1 menit 30 detik": (None, 90, True),
+             "min 30 detik, jangan lebih dari 1 menit": (30, 60, True), "30-60 detik": (30, 60, True),
+             "Durasi video 30-60 detik": (30, 60, True), "30-60 detik, wajib hook 3 detik pertama": (30, 60, False),
+             "15 detik": (15, None, False), "Rasio 9:16, durasi 30 detik": (30, None, False), "no more than 60 seconds": (None, 60, True)}
+    for raw, harap in kasus.items():
+        assert brief._durasi_video_rinci(raw) == harap, (raw, brief._durasi_video_rinci(raw))
+    d = json.loads((DATA / "brief-konten-asli.json").read_text(encoding="utf-8"))
+    d = dict(d, durasiMin="", durasiMax="")
+
+    def br(teks, **kw):
+        return brief.parse_brief(CampaignDB(id="c-31", title="Kopi Senja Ramadan", brand="PT Kopi Senja",
+                                            brief_detail=dict(d, durasiVideo=teks, **kw)))
+
+    def m(dur):  # caption memenuhi hashtag / tag akun brief asli → satu-satunya pembeda = durasi
+        return materi_ok(durasi=dur, caption="Ngopi sore! @kopisenja.id #kopisenja #ngopisore", hashtags=["#kopisenja", "#ngopisore"])
+
+    def cek(b, dur):
+        pid = poin(b, "durasi")[0].id
+        return next((c.hasil, c.bukti) for c in aturan.cek_kode(b, m(dur)) if c.poin_id == pid)
+
+    b = br("tidak lebih dari 60 detik")
+    assert (b.durasi_min, b.durasi_max) == (None, 60) and poin(b, "durasi")[0].teks == "Durasi video maksimal 60 detik"
+    assert cek(b, 25)[0] == "lolos" and cek(b, 75)[0] == "tidak"
+    b = br("1:30 menit")  # dulu: minimal 1800 detik → semua video ditolak
+    assert b.durasi_min == 90 and b.durasi_ragu == ["min"] and b.durasi_teks == ["min"]
+    assert cek(b, 95)[0] == "lolos"
+    h, bukti = cek(b, 40)
+    assert h == "tidak_bisa_dinilai" and "cek manusia" in bukti, (h, bukti)  # tebakan "minimal" → bukan fakta reject
+    # AI approve + durasi teks bebas tidak pasti di luar batas → cek manusia (bukan reject keyakinan 90)
+    assert nilai(b, ai_semua(b), materi=m(95)).saran == "approve"
+    f = nilai(b, ai_semua(b), materi=m(40))
+    assert f.saran == "cek_manusia" and "poin_tidak_bisa_dinilai" in f.serah, (f.saran, f.serah)
+    # teks bebas yang pasti ("30-60 detik") tetap fakta kode → reject, keyakinan 80 (bukan 90 seperti angka durasiMin/Max)
+    b = br("30-60 detik")
+    assert b.durasi_teks == ["min", "max"] and b.durasi_ragu == []
+    f = nilai(b, ai_semua(b, keyakinan=72), materi=m(75))
+    assert f.saran == "reject" and f.keyakinan == 80, (f.saran, f.keyakinan)
+    b = br("bebas", durasiMin=30, durasiMax=60)  # angka durasiMin/Max → keyakinan 90 seperti sebelumnya
+    f = nilai(b, ai_semua(b, keyakinan=72), materi=m(75))
+    assert f.saran == "reject" and f.keyakinan == 90 and b.durasi_teks == [], (f.saran, f.keyakinan)
+    # prompt menandai durasi perkiraan
+    assert "perkiraan" in brief.teks_brief_untuk_prompt(br("1:30 menit")) and "perkiraan" not in brief.teks_brief_untuk_prompt(br("30-60 detik"))
+    return f"{len(kasus)} bentuk durasiVideo"
+
+
 # ================================================================== rubrik
 @test
 def rubrik_versi_hash_dan_panjang():
