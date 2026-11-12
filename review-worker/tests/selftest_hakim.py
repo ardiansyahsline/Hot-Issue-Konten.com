@@ -206,16 +206,28 @@ def brief_rusak_tidak_pernah_melempar():
 def brief_identitas_orang():
     b = brief_dari("artis")
     m = [p for p in b.poin if p.cara_nilai == "manusia"]
-    assert len(m) == 3 and all(p.alasan_manusia == "identitas_orang" for p in m), [p.teks for p in m]
+    assert len(m) == 4 and all(p.alasan_manusia == "identitas_orang" for p in m), [p.teks for p in m]
     assert poin(b, "cta")[0].cara_nilai == "ai"
     ya = ["Artis bukan pemain film", "Tampilkan artis X sebelum berjilbab", "Aktor memakai prostetik", "Reza Rahadian harus tampil",
           "Video wajib menampilkan pemeran utama", "Jangan tampilkan selebriti selain pemain resmi", "Pemain asli film harus muncul",
-          "Dilarang memakai cuplikan artis lain", "Bukan cosplayer atau lookalike"]
+          "Dilarang memakai cuplikan artis lain", "Bukan cosplayer atau lookalike",
+          # nama SESUDAH kata kerja, tanpa kata "artis/aktor"
+          "Wajib menampilkan Reza Rahadian", "Footage wajib: adegan Dian Sastro menangis", "Harus ada Raffi Ahmad di video",
+          "Video harus menampilkan Joko Anwar sebagai sutradara"]
     tidak = ["Wajah clipper wajib tampil", "Pakai lagu OST resmi", "Tampilkan poster film", "Buat video mirip contoh",
              "Logo Brand Resmi harus terlihat", "CTA nonton di bioskop", "Video podcast tampil di awal", "Gunakan model video 9:16",
-             "Tampilkan wajah kamu sendiri", "Sebut tanggal tayang 12 Desember"]
+             "Tampilkan wajah kamu sendiri", "Sebut tanggal tayang 12 Desember", "Wajib menampilkan Logo Netflix",
+             "Harus ada Call To Action", "Tampilkan Poster Resmi Film", "Wajib ada Promo Spesial"]
     salah = [t for t in ya if not brief.deteksi_identitas_orang(t)] + [t for t in tidak if brief.deteksi_identitas_orang(t)]
     assert not salah, salah
+    # judul film / brand (dari campaign) bukan nama orang — parser & aturan sama-sama memakai pengecualian ini
+    assert brief.deteksi_identitas_orang("Wajib menampilkan Agak Laen Menyala") is True
+    assert brief.deteksi_identitas_orang("Wajib menampilkan Agak Laen Menyala", ["Agak Laen: Menyala Pantiku"]) is False
+    assert brief.deteksi_identitas_orang("Wajib menampilkan Samsung Galaxy", ["Samsung"]) is False
+    b2 = brief.parse_brief(CampaignDB(id="c9", title="Agak Laen: Menyala Pantiku", brief_detail={
+        "elemenWajib": ["Wajib menampilkan Agak Laen Menyala", "Wajib menampilkan Reza Rahadian"]}))
+    cara = {p.teks: p.cara_nilai for p in b2.poin}
+    assert cara["Wajib menampilkan Agak Laen Menyala"] == "ai" and cara["Wajib menampilkan Reza Rahadian"] == "manusia", cara
 
 
 @test
@@ -295,9 +307,10 @@ def aturan_identitas_dipaksa_manusia():
     # poin yang lolos parser sebagai "ai" tapi teksnya menyangkut identitas → tetap dipaksa di aturan
     b2 = b.model_copy(update={"poin": [p.model_copy(update={"cara_nilai": "ai", "alasan_manusia": None}) for p in b.poin]})
     f2 = nilai(b2, ai_semua(b2))
-    assert f2.saran == "cek_manusia" and all(c.oleh == "manusia" for c in f2.checklist if c.poin_id in ("p01", "p05", "p06"))
+    ids = {p.id for p in b.poin if p.alasan_manusia == "identitas_orang"}
+    assert len(ids) == 4 and f2.saran == "cek_manusia" and all(c.oleh == "manusia" for c in f2.checklist if c.poin_id in ids)
     # reject karena poin lain yang jelas dilanggar tetap sah
-    f3 = nilai(b, ai_semua(b, saran="reject", alasan_kode="cta_tidak_ada", kecuali={"p03": ("tidak", "transkrip 00:00-00:20 tanpa ajakan")}))
+    f3 = nilai(b, ai_semua(b, saran="reject", alasan_kode="cta_tidak_ada", kecuali={poin(b, "cta")[0].id: ("tidak", "transkrip 00:00-00:20 tanpa ajakan")}))
     assert f3.saran == "reject" and f3.alasan_kode == "cta_tidak_ada" and f3.serah == []
 
 
@@ -515,7 +528,7 @@ def alasan_label_dan_sinkron():
     assert alasan.kode_untuk_label("CTA tidak ada (wajib)") == "cta_tidak_ada"
     assert alasan.muat_daftar(SupaAlasan(gagal=True)) == alasan.KODE_LABEL_BAWAAN
     assert alasan.label_untuk_kode("cta_tidak_ada", d) == "CTA tidak ada (wajib)" and alasan.label_untuk_kode(None) is None
-    assert alasan.DI_LUAR_VIDEO == {"followers_kurang", "link_bio_tidak_ada", "duplikat"}
+    assert alasan.DI_LUAR_VIDEO == {"followers_kurang", "link_bio_tidak_ada", "duplikat", "engagement_bot", "tidak_bisa_diakses"}
 
 
 # ================================================================== rubrik
@@ -657,9 +670,17 @@ def hakim_error_sdk_tidak_crash():
         f = h.nilai(b, materi_ok(), ref_ada())
         assert f.saran == "cek_manusia" and f.serah[0] == "ai_gagal", (jenis, f.serah)
         assert len(k.panggilan) == n_coba and h.status == status, (jenis, len(k.panggilan), h.status)
+        # error yang PASTI berulang untuk semua video (kunci / izin) → h.mati (uji berhenti); sementara / 400 biasa → tidak
+        assert bool(h.mati) == (jenis in ("auth", "izin")) and h.galat_terakhir, (jenis, h.mati)
     # gangguan sekali lalu pulih
     h, k = hakim_palsu([pa.galat("server"), ai_semua(b)])
     assert h.nilai(b, materi_ok(), ref_ada(trailer=True)).saran == "approve" and len(k.panggilan) == 2
+    # kunci ditolak lalu berhasil (kunci diganti di klien) → mati kembali None
+    h, k = hakim_palsu([pa.galat("auth"), ai_semua(b)])
+    h.nilai(b, materi_ok(), ref_ada(trailer=True))
+    assert h.mati and "401" in h.mati
+    h.nilai(b, materi_ok(), ref_ada(trailer=True))
+    assert h.mati is None
     # error tak dikenal
     h, k = hakim_palsu(ValueError("aneh"))
     assert h.nilai(b, materi_ok(), ref_ada()).serah == ["ai_gagal"]
@@ -671,6 +692,7 @@ def hakim_kunci_kosong_anggaran_akses():
     h = hakim.Hakim(Cfg(anthropic_key_ada=False), None, rubrik_aktif())
     f = h.nilai(b, materi_ok(), ref_ada())
     assert f.saran == "cek_manusia" and f.serah == ["ai_gagal"] and h.status == "kunci_kosong" and "ANTHROPIC_API_KEY" in f.ringkasan
+    assert h.mati and "ANTHROPIC_API_KEY" in h.mati
     # anggaran habis → diteruskan, API tidak dipanggil
     bud = biaya.Budget(Cfg(daily_budget_usd=0.001), None, TMP / "biaya-habis")
     h, k = hakim_palsu(ai_semua(b), budget=bud)

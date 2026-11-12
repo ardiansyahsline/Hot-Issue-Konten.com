@@ -1,5 +1,6 @@
 """faster-whisper bahasa Indonesia + timestamp (pemilik: worker-media). Dimuat malas di rt.cache["asr"]; dijalankan di dalam
-rt.gpu.pegang("asr"). Model bisa memakai cache unduhan voice-worker (REVIEW_WHISPER_CACHE).
+rt.gpu.pegang("asr"). Cache voice-worker hanya terpakai kalau model SAMA (voice-worker bawaannya "small", review-worker
+"large-v3-turbo" → biasanya tetap diunduh sekali, ±1,6 GB).
 
 GPU dicoba dulu (int8_float16 → float16), gagal (DLL CUDA / kernel sm_120) → CPU int8. Model dicari dulu di cache lokal
 (REVIEW_WHISPER_CACHE → voice-worker/data/models/whisper → data/models/whisper); belum ada → diunduh SEKALI ke
@@ -76,8 +77,9 @@ def bersihkan_segmen(segmen: Iterable, boleh: Iterable[str] = ()) -> list[Segmen
 
 
 def bersihkan(teks: str, boleh: Iterable[str] = (), maks: Optional[int] = None) -> str:
-    """privasi.bersihkan_teks (@handle → [akun], email, no HP, link), tapi tag wajib campaign (mis. @akunbrand di brief) tetap utuh"""
-    return privasi.bersihkan_teks(teks, maks, izinkan=list(boleh))
+    """privasi.bersihkan_teks (@handle → [akun], email, no HP, link, username tanpa '@'), tapi tag wajib campaign (mis. @akunbrand
+    di brief) tetap utuh. Dipakai untuk SEMUA teks dari video: caption, transkrip, OCR."""
+    return privasi.bersihkan_teks(teks, maks, izinkan=list(boleh), nama_akun=True)
 
 
 class ASR:

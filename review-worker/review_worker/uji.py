@@ -29,6 +29,9 @@ BATAS = {"campaign": 0.15, "reviewer": 0.25, "tanggal": 0.10}  # porsi maksimal 
 LONGGAR = (1, 2, 4, None)  # batas dilonggarkan bertahap kalau kandidat kurang beragam (None = tanpa batas)
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 SIMPAN_TIAP = 5  # review_runs.done/cost diperbarui tiap N video (website: progres run)
+AI_GAGAL_BERUNTUN = 3  # AI tidak terjangkau N video berturut-turut → uji dihentikan (bukan ratusan video "cek manusia")
+KOLAM = ("Kolam kandidat diambil acak oleh database (maks 20.000 keputusan) — seed hanya mengatur pilihan DI DALAM kolam itu. "
+         "Daftar video run ini tersimpan di run (sample) dan dipakai ulang oleh Lanjutkan / Ulangi.")
 
 
 # ================================================================== sampel berlapis
@@ -177,7 +180,9 @@ def pilih_sampel(kandidat: list[KandidatSampel], jumlah: int, seed: int) -> list
 
 
 def seed_bawaan() -> int:
-    """angka dari tanggal WIB hari ini (mis. 20261112) — uji di hari yang sama memilih sampel yang sama"""
+    """angka dari tanggal WIB hari ini (mis. 20261112). Deterministik hanya untuk kolam kandidat yang sama: kolam dari DB diambil
+    acak (replika: ORDER BY random() LIMIT), jadi klik kedua di hari yang sama bisa memberi sampel lain. Sampel yang bisa
+    diulang persis = review_runs.sample (Ulangi / Lanjutkan)."""
     return int(datetime.now(WIB).strftime("%Y%m%d"))
 
 
@@ -328,6 +333,15 @@ def _pesan(i: int, total: int, st: Counter) -> str:
         f" · tidak bisa diakses {st['akses']}" if st["akses"] else "")
 
 
+def belum_dinilai_ai(r: dict) -> bool:
+    """video sudah diolah tapi AI TIDAK menjawab sama sekali (kunci ditolak, model salah, internet putus): pipeline ok + serah
+    ai_gagal + tanpa token. Tidak dihitung selesai → Lanjutkan memprosesnya lagi. (Refusal / jawaban terpotong punya token.)"""
+    if r.get("pipeline_status") != "ok" or "ai_gagal" not in (r.get("handoff_reasons") or []):
+        return False
+    tok = r.get("tokens") if isinstance(r.get("tokens"), dict) else {}
+    return not any(int(tok.get(k) or 0) for k in ("input", "output", "cache_read")) and not float(r.get("cost_usd") or 0)
+
+
 def _hitung(st: Counter, r: dict) -> None:
     if r.get("pipeline_status") == "tidak_bisa_diakses":
         st["akses"] += 1
@@ -347,6 +361,8 @@ def tutup_run(rt, simp: Simpanan, run: dict, status: str, laporan: bool = True) 
 
     run_id = str(run["id"])
     baris = simp.hasil_run(run_id)
+    if status != "selesai":  # run berhenti di tengah: video yang belum dinilai AI diulang saat Lanjutkan, belum masuk angka
+        baris = [r for r in baris if not belum_dinilai_ai(r)]
     m = metrik.hitung_metrik(baris, rt.cfg, n_sampel=len(run.get("sample") or []))
     patch: dict = {"status": status, "done": len(baris), "metrics": m, "cost_usd": m["biaya"]["total_usd"]}
     if status != "proses":
@@ -383,6 +399,9 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
         raise JobError("Kunci ANTHROPIC_API_KEY belum diisi di review-worker\\.env — uji akurasi butuh AI. Isi dulu lalu coba lagi.")
 
     rubrik = _rubrik_aktif(rt)
+    mati = getattr(getattr(rt, "hakim", None), "mati", None)
+    if mati:  # AI sudah pasti gagal (kunci ditolak dsb.) → jangan unduh / olah video sia-sia
+        raise JobError(_pesan_ai_mati(mati))
     budget = getattr(rt, "budget", None)
     if budget is not None:  # batas harian sudah habis → jangan mulai (antrian menandai job gagal dengan pesan ini)
         try:
@@ -408,6 +427,11 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
         if rubrik is not None and run.get("rubric_hash") and run["rubric_hash"] != rubrik.hash:
             raise JobError(f"Rubrik sudah berubah sejak run ini dimulai ({run.get('rubric_version')} → {rubrik.versi}). "
                            "Pakai \"Ulangi dengan rubrik terbaru\" supaya hasil tidak tercampur.")
+        for kunci, env, nama in (("model", "REVIEW_MODEL", "Model AI"), ("effort", "REVIEW_EFFORT", "Effort AI")):
+            lama, kini = str(run.get(kunci) or "").strip().lower(), str(getattr(cfg, kunci, "") or "").strip().lower()
+            if lama and kini and lama != kini:
+                raise JobError(f"{nama} sudah berubah sejak run ini dimulai ({lama} → {kini}, {env} di .env). "
+                               "Pakai \"Ulangi\" supaya hasil tidak tercampur, atau kembalikan pengaturan lama.")
         if run.get("status") == "selesai":
             log.info("Run %s sudah selesai — metrik & laporan dihitung ulang saja.", str(run["id"])[:8])
         simp.ubah_run(str(run["id"]), {"status": "proses", "worker": worker, "finished_at": None,
@@ -431,7 +455,7 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
                                                getattr(ctx, "cek_batal", None))
             sample, params = pilih_sampel_rinci(kandidat, int(jumlah), seed)
             dari, sampai = _rentang(rt)
-            params.update({"dari": dari, "sampai": sampai})
+            params.update({"dari": dari, "sampai": sampai, "kolam_kandidat": KOLAM})
             if not sample:
                 raise JobError(f"Tidak ada keputusan reviewer (approve/reject) di rentang {dari} s/d {sampai}. "
                                "Cek kolom.toml (jalankan: review kenali-skema).")
@@ -455,12 +479,15 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
 
     # ---------------------------------------------------------------- video yang belum punya hasil
     sudah = simp.hasil_run(run_id)
-    selesai = {str(r["video_id"]) for r in sudah if r.get("pipeline_status") != "dilewati_biaya"}
+    selesai = {str(r["video_id"]) for r in sudah if r.get("pipeline_status") != "dilewati_biaya" and not belum_dinilai_ai(r)}
     todo = [v for v in sample if v not in selesai]
     st: Counter = Counter()
     for r in sudah:
         if str(r["video_id"]) in selesai:
             _hitung(st, r)
+    if len(selesai) < len(sudah) and any(belum_dinilai_ai(r) for r in sudah):
+        log.info("Run %s: %d video belum dinilai AI (AI sempat mati) — diproses lagi.", run_id[:8],
+                 sum(belum_dinilai_ai(r) for r in sudah))
     n_done = total - len(todo)
     _lapor(ctx, 0.03 + 0.95 * n_done / max(total, 1), (_pesan(n_done, total, st) if n_done else f"Mulai uji {total} video…"),
            done=n_done, total=total, run_id=run_id)
@@ -470,6 +497,7 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
     durasi: list[float] = []
     biaya_run = sum(float(r.get("cost_usd") or 0) for r in sudah)
     stop = getattr(rt, "stop", None)
+    ai_gagal = 0  # berturut-turut
     try:
         for vid in todo:
             if ctx is not None:
@@ -481,6 +509,14 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
                                           cek_batal=getattr(ctx, "cek_batal", None))
             durasi.append(time.monotonic() - t0)
             row = hasil.baris_supabase()
+            if belum_dinilai_ai(row):
+                ai_gagal += 1
+                mati = getattr(getattr(rt, "hakim", None), "mati", None)
+                if mati or ai_gagal >= AI_GAGAL_BERUNTUN:
+                    galat = getattr(getattr(rt, "hakim", None), "galat_terakhir", None) or "internet / server AI bermasalah"
+                    raise JobError(_pesan_ai_mati(mati or f"AI gagal {ai_gagal} video berturut-turut ({galat.rstrip('.')})"))
+            else:
+                ai_gagal = 0
             _hitung(st, row)
             biaya_run += float(row.get("cost_usd") or 0)
             n_done += 1
@@ -527,6 +563,11 @@ def jalankan_uji(rt, ctx=None, *, jumlah: Optional[int] = None, lanjut_run: Opti
     else:
         log.info(pesan)
     return run_id
+
+
+def _pesan_ai_mati(sebab: str) -> str:
+    return (f"Uji dihentikan: AI tidak bisa dipakai — {sebab.rstrip('.')}. Perbaiki dulu (lalu nyalakan ulang mesin), "
+            "kemudian klik Lanjutkan; video yang belum dinilai AI akan diproses lagi.")
 
 
 def _fmt(p: Optional[float]) -> str:

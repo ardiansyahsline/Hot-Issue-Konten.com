@@ -94,6 +94,29 @@ def _rasio(a: int, b: int) -> str:
     return "-" if not b else f"{_d(a / b * 100)}%"
 
 
+def rasio_asli(mt: dict, sp: dict) -> Optional[dict]:
+    """angka sampel 50/50 → perkiraan pada perbandingan approve:reject ASLI (kolam kandidat sample_params). Tingkat per kelas
+    (baris matriks) tidak bergantung perbandingan; setuju / presisi reject / bahaya / cek manusia dibobot ulang. None = data kurang."""
+    na, nr = float(sp.get("n_kandidat_approve") or 0), float(sp.get("n_kandidat_reject") or 0)
+    a, r = mt.get("approve") or {}, mt.get("reject") or {}
+    ta, tr = sum(a.values()), sum(r.values())
+    if na <= 0 or nr <= 0 or not ta or not tr:
+        return None
+    wa, wr = na / (na + nr), nr / (na + nr)
+    pa = {k: a.get(k, 0) / ta for k in ("approve", "reject", "cek_manusia")}
+    pr = {k: r.get(k, 0) / tr for k in ("approve", "reject", "cek_manusia")}
+    putus = wa * (pa["approve"] + pa["reject"]) + wr * (pr["approve"] + pr["reject"])
+    ai_rej = wa * pa["reject"] + wr * pr["reject"]
+    return {
+        "persen_approve": wa * 100, "persen_reject": wr * 100, "kelas_approve": {k: v * 100 for k, v in pa.items()},
+        "kelas_reject": {k: v * 100 for k, v in pr.items()},
+        "setuju_akhir": (wa * pa["approve"] + wr * pr["reject"]) / putus * 100 if putus else None,
+        "presisi_reject": wr * pr["reject"] / ai_rej * 100 if ai_rej else None,
+        "bahaya": wr * pr["approve"] / putus * 100 if putus else None,
+        "cek_manusia": (wa * pa["cek_manusia"] + wr * pr["cek_manusia"]) * 100,
+    }
+
+
 # ------------------------------------------------------------------ grafik batang (HTML+CSS murni: tanpa JS, teks tetap terbaca di HP;
 # angka juga ada di tabel / kalimat — warna tidak pernah jadi satu-satunya penanda)
 def _bar_tumpuk(baris: list[tuple[str, list[tuple[int, str, str]]]]) -> str:
@@ -311,6 +334,27 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
                   f"<li>Kalau AI bilang <b>reject</b>, <b>{_pct(pr)}</b> memang seharusnya reject ({_n(pr.get('benar'))} dari {_n(pr.get('n'))}; {_ci(pr)}).</li>"
                   f"<li>Dari semua video yang seharusnya reject, AI menangkap <b>{_pct(rc)}</b> sebagai reject ({_n(rc.get('benar'))} dari "
                   f"{_n(rc.get('n'))}); sisanya lolos atau diserahkan ke manusia.</li></ul>")
+    ra = rasio_asli(mt, sp)
+    if ra:
+        ka, kr = ra["kelas_approve"], ra["kelas_reject"]
+        bagian.append(
+            "<h3>Kalau dipakai sehari-hari (perbandingan approve/reject asli)</h3>"
+            "<p>Sampel uji sengaja dibuat seimbang (separuh approve, separuh reject). Di pekerjaan sehari-hari perbandingannya "
+            f"sekitar <b>{_d(ra['persen_approve'], 0)}% approve : {_d(ra['persen_reject'], 0)}% reject</b> (dari keputusan reviewer "
+            "di rentang tanggal yang sama). Angka per jenis video di bawah ini tidak terpengaruh perbandingan itu:</p>"
+            '<ul class="daftar">'
+            f"<li>Video yang seharusnya <b>approve</b>: AI approve {_d(ka['approve'])}%, reject {_d(ka['reject'])}%, "
+            f"serahkan ke manusia {_d(ka['cek_manusia'])}%.</li>"
+            f"<li>Video yang seharusnya <b>reject</b>: AI reject {_d(kr['reject'])}%, approve {_d(kr['approve'])}%, "
+            f"serahkan ke manusia {_d(kr['cek_manusia'])}%.</li></ul>"
+            "<p>Angka gabungan berikut <b>bisa berbeda cukup jauh</b> dari angka sampel karena bergantung perbandingan approve/reject "
+            "(perkiraan kasar, dihitung ulang dengan perbandingan asli):</p>")
+        bagian.append(_tabel([("Ukuran", False), ("Pada sampel uji", True), ("Perkiraan sehari-hari", True)], [
+            ["Setuju dengan hasil akhir", _pct(sa), _pct(ra["setuju_akhir"])],
+            ["Kalau AI bilang reject, memang reject", _pct(pr), _pct(ra["presisi_reject"])],
+            ["AI approve padahal seharusnya reject (dari keputusan AI)", _rasio(bahaya, diputus), _pct(ra["bahaya"])],
+            ["Diserahkan ke manusia", _pct(m.get("persen_cek_manusia")), _pct(ra["cek_manusia"])],
+        ]))
 
     # ---------------- per alasan
     pa = m.get("per_alasan") or []
@@ -323,7 +367,8 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
              _n(x.get("n")), _n(x.get("ai_reject")), _n(x.get("ai_reject_alasan_sama")), _n(x.get("ai_approve")), _n(x.get("ai_cek")),
              _pct(x.get("akurasi"))] for x in pa]))
         bagian.append("<p class=\"sub\">Tepat = AI reject ÷ (AI reject + AI approve). Alasan sama = AI reject dengan alasan resmi yang sama dengan reviewer. Alasan bertanda <i>di luar jangkauan AI</i> "
-                      "(followers, link di bio, video duplikat) tidak terlihat dari isi video, jadi tidak dihitung sebagai kesalahan AI.</p>")
+                      "(followers, link di bio, video duplikat, engagement/bot, video tidak bisa diakses saat dicek reviewer) tidak terlihat dari isi "
+                      "video, jadi tidak dihitung sebagai kesalahan AI.</p>")
 
     # ---------------- per campaign
     pc = m.get("per_campaign") or []
@@ -419,7 +464,7 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
     bagian.append("<h2>Video yang tidak dihitung dalam akurasi</h2><ul class=\"daftar\">"
                   f"<li>Video tidak bisa diakses (dihapus, private, atau butuh login): <b>{_n(m.get('n_tidak_bisa_diakses'))}</b></li>"
                   f"<li>Gagal diproses di laptop: <b>{_n(m.get('n_gagal'))}</b></li>"
-                  f"<li>Di-reject karena alasan di luar isi video (followers, link di bio, duplikat): <b>{_n(m.get('n_di_luar_video'))}</b></li>"
+                  f"<li>Di-reject karena alasan di luar isi video (followers, link di bio, duplikat, engagement/bot, tidak bisa diakses saat dicek reviewer): <b>{_n(m.get('n_di_luar_video'))}</b></li>"
                   f"<li>Tanpa keputusan reviewer yang jelas: <b>{_n(m.get('n_tanpa_keputusan'))}</b></li></ul>")
     tl = m.get("termasuk_di_luar_video") or {}
     if m.get("n_di_luar_video"):
@@ -440,7 +485,9 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
         "<li>Rentang wajar 95% (metode Wilson) menunjukkan seberapa jauh angka bisa bergeser karena ukuran sampel; makin banyak video, "
         "makin sempit rentangnya.</li>"
         "<li>Sampel dipilih seimbang approve/reject dan disebar ke banyak campaign, reviewer, dan hari. Di pekerjaan sehari-hari "
-        "perbandingan approve/reject bisa berbeda, sehingga angka harian bisa sedikit berbeda.</li>"
+        "perbandingan approve/reject berbeda, sehingga angka gabungan (setuju, ketepatan saran reject, approve padahal reject, "
+        "% cek manusia) <b>bisa berbeda cukup jauh</b> — lihat tabel \"Kalau dipakai sehari-hari\". Angka per jenis video "
+        "(seharusnya approve / seharusnya reject) tidak terpengaruh.</li>"
         "<li>Poin brief yang butuh mengenali orang tertentu (artis/aktor) <b>selalu</b> diserahkan ke manusia — AI tidak menebak identitas orang.</li>"
         "<li>Poin \"wajib pakai materi\" (lagu, poster, trailer) hanya bisa dinilai kalau materi referensi campaign tersedia; kalau belum, "
         "diserahkan ke manusia.</li>"

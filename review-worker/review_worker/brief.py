@@ -93,19 +93,45 @@ _IDENTITAS_POLA = [
     re.compile(r"\b" + _BUKAN_NAMA + r"[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){1,2}\s+(?:harus\s+|wajib\s+|tidak\s+boleh\s+|jangan\s+)?"
                r"(?:tampil|muncul|terlihat)\b"),
 ]
+# kata kerja / benda tampil + (≤ 3 kata kecil) + Nama 2-3 kata Huruf Besar: "Wajib menampilkan Reza Rahadian", "adegan Dian Sastro
+# menangis", "Harus ada Raffi Ahmad di video", "menampilkan Joko Anwar sebagai sutradara" (nama SESUDAH kata kerja, tanpa "artis")
+_NAMA_SESUDAH = re.compile(r"(?i:\b(?:menampilkan|tampilkan|ditampilkan|tampil|munculkan|memunculkan|muncul|ada|hadir(?:kan)?|"
+                           r"menghadirkan|adegan|wajah|muka|foto|footage|cuplikan|potongan|bersama|featuring|feat|ft|ajak|bareng)\b)"
+                           r"\.?\s+(?:[a-z]+\s+){0,3}?((?:[A-Z][a-z]{2,})(?:\s+[A-Z][a-z]{2,}){1,2})\b")
+# kata Huruf Besar umum di brief (bukan nama orang) — satu kata ini di "nama" → bukan orang
+_UMUM = frozenset(("logo", "poster", "caption", "hashtag", "lagu", "musik", "video", "teks", "judul", "link", "tanggal", "brand",
+                   "produk", "film", "trailer", "footage", "materi", "konten", "tag", "akun", "sound", "audio", "watermark",
+                   "subtitle", "durasi", "harga", "promo", "kode", "aplikasi", "app", "tiket", "official", "resmi", "instagram",
+                   "youtube", "tiktok", "netflix", "disney", "bioskop", "cinema", "indonesia", "jakarta", "call", "action",
+                   "diskon", "spesial", "special", "edisi", "season", "episode", "series", "seri", "hari", "raya", "ramadan",
+                   "lebaran", "natal", "tahun", "baru", "gratis", "free", "store", "play", "google", "apple", "spotify", "shopee",
+                   "tokopedia", "scene", "adegan", "opening", "ending", "closing", "intro", "outro", "teaser", "highlight",
+                   "behind", "the", "scenes", "making", "soundtrack", "theme", "song", "key", "visual", "banner", "thumbnail"))
 # kata yang berarti "orang mana pun" (bukan identitas tertentu) → tidak dianggap identitas
 _BUKAN_IDENTITAS = re.compile(r"^\s*(?:wajah\s+(?:kamu|clipper|kreator|sendiri)|tampilkan\s+wajah\s+(?:kamu|sendiri))\b", re.I)
 
 
-def deteksi_identitas_orang(teks: str) -> bool:
+def _kata(s: Optional[str]) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(w) >= 3}
+
+
+def deteksi_identitas_orang(teks: str, abaikan: Iterable[str] = ()) -> bool:
     """poin menyangkut mengenali orang tertentu (artis / aktor / pemain / selebriti / tokoh X, "sebelum berjilbab", prostetik,
-    "bukan pemain film", nama orang + kata kerja tampil/muncul) → True"""
+    "bukan pemain film", nama orang + kata kerja tampil/muncul, kata kerja tampil + nama orang) → True.
+    abaikan = judul campaign / brand: nama Huruf Besar yang memuat kata dari situ (judul film, nama produk) bukan orang."""
     if not teks:
         return False
     t = re.sub(r"\s+", " ", str(teks))
     if _BUKAN_IDENTITAS.search(t):
         return False
-    return any(p.search(t) for p in _IDENTITAS_POLA)
+    if any(p.search(t) for p in _IDENTITAS_POLA):
+        return True
+    kecuali = set().union(*(_kata(a) for a in abaikan)) if abaikan else set()
+    for m in _NAMA_SESUDAH.finditer(t):
+        kata = [w.lower() for w in m.group(1).split()]
+        if not any(w in _UMUM or w in kecuali for w in kata):
+            return True
+    return False
 
 
 # ------------------------------------------------------------------ jenis materi referensi yang dibutuhkan sebuah poin
@@ -421,6 +447,7 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
     d = _muat_json(campaign.brief_detail, catatan) or {}
     d = _normalkan_key(d, catatan) if d else {}
     izinkan = _handles_brief(campaign.brief_detail)
+    abaikan = tuple(x for x in (campaign.title, campaign.brand) if x)  # judul film / brand bukan nama orang
     poin: list[PoinBrief] = []
     konteks: dict[str, str] = {}
 
@@ -434,7 +461,7 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         pil = [p[:200] for p in (pilihan or []) if p][:12]
         alasan_m = None
         # menyangkut mengenali orang tertentu → selalu butuh cek manusia (poin info tidak dinilai, dibiarkan)
-        if cara in ("ai", "kode") and (deteksi_identitas_orang(teks) or any(deteksi_identitas_orang(p) for p in pil)):
+        if cara in ("ai", "kode") and (deteksi_identitas_orang(teks, abaikan) or any(deteksi_identitas_orang(p, abaikan) for p in pil)):
             cara, alasan_m = "manusia", "identitas_orang"
         if cara == "ai" and not butuh and _PAKAI_MATERI.search(teks) and kategori not in ("dilarang", "boleh", "footage_opsional"):
             butuh = True

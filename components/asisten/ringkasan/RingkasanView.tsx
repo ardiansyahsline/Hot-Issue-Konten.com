@@ -160,7 +160,7 @@ function RunHeader({ run, admin }: { run: RunRingkas; admin: boolean }) {
 function Isi({ m, run, contoh }: { m: MetrikLengkap; run: RunRingkas; contoh: ContohKasus[] }) {
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         <AngkaBesar
           judul="Setuju dengan reviewer"
           p={m.setuju_reviewer}
@@ -212,9 +212,9 @@ function AngkaBesar({ judul, p, nilai, ket, netral }: { judul: string; p?: Perse
   const ci = p ? ciTeks(p) : null;
   const warna = netral || v == null ? "text-zinc-100" : v >= 85 ? "text-emerald-400" : v >= 70 ? "text-amber-400" : "text-red-400";
   return (
-    <div className="card card-flat p-4">
+    <div className="card card-flat min-w-0 p-3.5 sm:p-4">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{judul}</p>
-      <p className={`font-display mt-1 text-[32px] font-bold leading-none ${warna}`}>{persenTeks(v)}</p>
+      <p className={`font-display mt-1 text-[28px] font-bold leading-none sm:text-[32px] ${warna}`}>{persenTeks(v)}</p>
       {p && p.n > 0 && (
         <p className="mt-1 text-xs text-zinc-400">
           {angka(p.benar)} dari {angka(p.n)}
@@ -260,11 +260,16 @@ function Kotak({ judul, sub, children }: { judul: string; sub?: string; children
 }
 
 /** tabel geser sendiri di HP (halaman tidak ikut melebar) */
-function Tabel({ children, label }: { children: React.ReactNode; label: string }) {
+function Tabel({ children, label, lebar = 320 }: { children: React.ReactNode; label: string; lebar?: number }) {
   return (
-    <div className="-mx-1 overflow-x-auto px-1" role="region" aria-label={label} tabIndex={0}>
-      <table className="w-full min-w-[320px] text-left text-[13px]">{children}</table>
-    </div>
+    <>
+      <div className="-mx-1 overflow-x-auto px-1" role="region" aria-label={label} tabIndex={0}>
+        <table className="w-full text-left text-[13px]" style={{ minWidth: lebar }}>
+          {children}
+        </table>
+      </div>
+      {lebar > 360 && <p className="mt-1 text-[11px] text-zinc-500 sm:hidden">Geser tabel ke samping untuk kolom lain →</p>}
+    </>
   );
 }
 const th = "border-b border-zinc-800 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500";
@@ -373,7 +378,7 @@ function PerAlasan({ m }: { m: MetrikLengkap }) {
   if (!rows.length) return null;
   return (
     <Kotak judul="Per alasan reject" sub="Video yang di-reject reviewer, dikelompokkan menurut alasan resminya.">
-      <Tabel label="Per alasan reject">
+      <Tabel label="Per alasan reject" lebar={480}>
         <thead>
           <tr>
             <th className={th}>Alasan reviewer</th>
@@ -433,14 +438,14 @@ function PerCampaign({ m }: { m: MetrikLengkap }) {
   );
   return (
     <Kotak judul="Per campaign" sub="Akurasi = benar ÷ (benar + salah), tanpa yang diserahkan ke manusia.">
-      <Tabel label="Per campaign">
+      <Tabel label="Per campaign" lebar={420}>
         {kepala}
         <tbody>{rows.slice(0, 10).map(baris)}</tbody>
       </Tabel>
       {rows.length > 10 && (
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-semibold text-orange-400">Lihat {rows.length - 10} campaign lain</summary>
-          <Tabel label="Campaign lain">
+          <Tabel label="Campaign lain" lebar={420}>
             {kepala}
             <tbody>{rows.slice(10).map(baris)}</tbody>
           </Tabel>
@@ -567,7 +572,9 @@ function Contoh({ contoh, m }: { contoh: ContohKasus[]; m: MetrikLengkap }) {
                 <Link href={`${BASE}/hasil/${c.id}`} className="block rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2 transition hover:border-zinc-600">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
                     <b>Video #{c.video_id}</b>
-                    <span className="min-w-0 truncate text-zinc-500">{c.campaign_title ?? "Campaign ?"}</span>
+                    <span className="min-w-0 truncate text-zinc-500" title={c.campaign_title ?? undefined}>
+                      {c.campaign_title ?? "Campaign ?"}
+                    </span>
                   </div>
                   <p className="mt-0.5 text-xs text-zinc-400">
                     AI: <b className="text-zinc-200">{c.suggestion ? SARAN_LABEL[c.suggestion] : "–"}</b>
@@ -614,7 +621,8 @@ function BandingVersi({ lama, baru, pasangan }: { lama: RunRingkas; baru: RunRin
               <td className={`${td} text-right tabular-nums`}>{persenTeks(r.lama)}</td>
               <td className={`${td} text-right tabular-nums`}>{persenTeks(r.baru)}</td>
               <td className={`${td} whitespace-nowrap text-right font-semibold tabular-nums ${r.membaik == null ? "text-zinc-500" : r.membaik ? "text-emerald-400" : "text-red-400"}`}>
-                {r.selisih == null ? "–" : `${r.membaik == null ? "" : r.membaik ? "▲ " : "▼ "}${r.selisih > 0 ? "+" : ""}${persenTeks(r.selisih)}`}
+                {/* panah = arah angka, warna = lebih baik (hijau) / lebih buruk (merah) */}
+                {r.selisih == null ? "–" : `${r.selisih > 0 ? "▲ +" : r.selisih < 0 ? "▼ " : ""}${persenTeks(r.selisih).replace("%", "")} poin`}
               </td>
             </tr>
           ))}
@@ -635,7 +643,7 @@ function BandingVersi({ lama, baru, pasangan }: { lama: RunRingkas; baru: RunRin
 function TabelVersi({ runs, aktif }: { runs: RunRingkas[]; aktif: string | null }) {
   return (
     <Kotak judul="Semua run per versi rubrik" sub="Ulangi uji setelah rubrik diperbaiki, lalu bandingkan di sini.">
-      <Tabel label="Semua run">
+      <Tabel label="Semua run" lebar={480}>
         <thead>
           <tr>
             <th className={th}>Rubrik</th>

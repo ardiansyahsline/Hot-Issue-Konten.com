@@ -836,13 +836,28 @@ def keep_absent(rt: Runtime) -> None:
             rt.engines.mark_down(n, ABSENT[n] + " — masih diunduh di latar")
 
 
-def _gpu(kind: str):
+def _gpu(kind: str, ctx: JobCtx | None = None):
     """kunci GPU bersama dengan review-worker (studio_worker/gpu_bersama.py, salinan identik): voice-worker diprioritaskan,
-    menunggu maks 300 dtk lalu jalan saja. Modul tidak ada / error → contextlib.nullcontext (job TIDAK PERNAH gagal karena kunci)."""
+    menunggu maks 300 dtk lalu jalan saja. Selama menunggu: tombol batal tetap dicek + pesan progres sekali.
+    Modul tidak ada / error → contextlib.nullcontext (job TIDAK PERNAH gagal karena kunci)."""
+    putaran = [0]
+
+    def cek_batal() -> None:  # dipanggil tiap 0,5 dtk saat menunggu; hanya Cancelled yang diteruskan
+        putaran[0] += 1
+        try:
+            if putaran[0] == 2:  # putaran pertama gagal dapat kunci → memang menunggu
+                ctx.progress(0, "Menunggu GPU dipakai Asisten Review…")
+            ctx.check_cancel()
+        except Cancelled:
+            raise
+        except Exception:
+            pass
+
     try:
         from studio_worker import gpu_bersama
 
-        return gpu_bersama.pegang("voice-worker", kind, prioritas=True, tunggu_maks=300)
+        return gpu_bersama.pegang("voice-worker", kind, prioritas=True, tunggu_maks=300,
+                                  cek_batal=cek_batal if ctx is not None else None)
     except Exception:
         return contextlib.nullcontext(False)
 
@@ -858,7 +873,7 @@ def handle(rt: Runtime, hb: Heartbeat, table: str, job: dict) -> None:
     try:
         if not owner_can_use_studio(rt.supa, job.get("created_by")):  # akses dicabut admin setelah job masuk antrian
             raise JobError(REVOKED)
-        with _gpu(kind):  # kunci GPU bersama Asisten Review (review-worker mengalah); error apa pun → jalan tanpa kunci
+        with _gpu(kind, ctx):  # kunci GPU bersama Asisten Review (review-worker mengalah); error apa pun → jalan tanpa kunci
             if kind == "tts":
                 jobs_tts.run(ctx)
             elif kind == "clean":

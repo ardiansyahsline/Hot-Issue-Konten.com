@@ -12,7 +12,8 @@ Cara kerjanya singkat:
 3. **Claude Haiku 5.5** (lewat Anthropic API) menilai setiap poin brief, lalu menyarankan **Approve / Reject / Butuh cek
    manusia**, lengkap dengan bukti.
 4. Hasilnya dikirim ke website CS Tracker, tab **"Asisten Review (Uji)"**. Yang dikirim hanya id video, id campaign, hasil AI,
-   dan keputusan reviewer (sudah disamarkan). Tidak ada nama, email, nomor HP, atau username clipper.
+   dan keputusan reviewer (sudah disamarkan). Data akun clipper (nama, email, nomor HP, username) tidak diambil dari database.
+   Batasnya: nama yang ditulis atau diucapkan sendiri oleh clipper di video/caption bisa ikut terbaca (lihat bagian 9).
 
 > Website tetap jalan normal walau laptop mati atau kunci belum diisi. Tab Asisten Review hanya menampilkan "laptop mati".
 
@@ -27,7 +28,7 @@ Cara kerjanya singkat:
 | Akun DB replika | Env Windows `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSSLMODE`, ditambah file `%APPDATA%\postgresql\pgpass.conf`. Password **hanya** disimpan di file pgpass.conf itu. |
 | Kunci Anthropic API | `ANTHROPIC_API_KEY` untuk Claude Haiku 5.5. Biayanya kira-kira Rp 23 per video (lihat bagian 7). |
 | Supabase CS Tracker | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (sama dengan mesin suara). |
-| Ruang disk ±6–8 GB | Paket Python sendiri (torch + EasyOCR), Java portable, dan model OCR. |
+| Ruang disk ±8–10 GB | Paket Python sendiri (torch + EasyOCR), Java portable, model OCR, dan model suara-ke-teks `large-v3-turbo` (±1,6 GB, diunduh sekali saat video pertama). |
 
 Admin website cukup sekali: jalankan `supabase/migration-23-asisten-review.sql` di Supabase → SQL Editor. Lalu buka akses tab
 untuk reviewer di **Admin → Akses tab per user** (admin selalu bisa membuka tab ini).
@@ -172,7 +173,13 @@ Kunci bermasalah tidak pernah membuat job gagal. Kedua mesin tetap jalan.
 - Database Konten.com **hanya dibaca**. Sesi database dikunci read-only, perintah selain SELECT ditolak, dan batas waktunya
   30 detik. Tidak ada yang ditulis ke sistem Konten.com.
 - Yang dikirim ke AI: brief (data brand), frame (username di layar diburamkan), serta transkrip, teks layar, dan caption yang
-  sudah dibersihkan dari @username, email, nomor HP, dan link. **Tanpa** link video, nama, atau id staff.
+  sudah dibersihkan dari @username, username tanpa @ (mis. "ig budi99"), email, nomor HP, dan link (termasuk linktr.ee dll.).
+  **Tanpa** link video, data akun clipper dari database, atau id/nama staff.
+- Kalau OCR mati (`REVIEW_OCR=mati`) atau gagal, pita atas-kiri dan pita bawah frame (tempat watermark TikTok/IG)
+  diburamkan rata. Username yang ditulis clipper di tengah layar tidak tertangkap cara ini — biarkan OCR menyala.
+- **Batas yang perlu diketahui:** nama orang biasa yang ditulis atau diucapkan sendiri oleh clipper di caption/video
+  (mis. "Aku Budi Santoso dari Bekasi") **tidak bisa** dihapus otomatis dan bisa ikut terbaca AI. Yang pasti dibuang hanya
+  @username, username berpola akun, email, nomor HP, dan link.
 - Reviewer ditulis sebagai kode samaran `R-xxxxxx`, bukan nama.
 - Log di `data\logs` otomatis menyamarkan kunci, email, nomor HP, @username, dan link.
 - Video sementara dihapus sesudah setiap video. Sisa lebih dari 6 jam dihapus saat mesin menyala.

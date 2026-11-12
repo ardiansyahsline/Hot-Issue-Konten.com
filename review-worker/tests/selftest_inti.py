@@ -254,6 +254,8 @@ def t_privasi_bersihkan_teks():
         "Hubungi 0812-3456-7890 ya": "[telepon]", "WA +62 812 3456 7890": "[telepon]", "nomor 6281234567890": "[telepon]",
         "email budi.s@gmail.com": "[email]", "cek https://bit.ly/abc?x=1": "[tautan]", "link bit.ly/xyz": "[tautan]",
         "www.tiktok.com/@budi": "[tautan]", "follow @budi_clip.id!": "[akun]",
+        "link di bio linktr.ee/budi": "[tautan]", "youtu.be/abc123": "[tautan]", "beacons.ai/budi": "[tautan]",
+        "linkin.bio/budi": "[tautan]", "taplink.cc/budi": "[tautan]",
     }
     for masuk, harus in kasus.items():
         keluar = privasi.bersihkan_teks(masuk)
@@ -263,6 +265,13 @@ def t_privasi_bersihkan_teks():
     assert privasi.bersihkan_teks("tag @BrandResmi dan @orang", izinkan=["@brandresmi"]) == "tag @BrandResmi dan [akun]"
     assert privasi.bersihkan_teks("a  \n\n\n\n b @x @y", maks=8).endswith("…") and len(privasi.bersihkan_teks("x" * 50, maks=10)) == 10
     assert privasi.bersihkan_teks("@a @b @c lalu") == "[akun] lalu"
+    # teks dari video (nama_akun=True): username tanpa '@' juga dibuang, akun brand (izinkan) & kata biasa tetap
+    v = lambda t, **k: privasi.bersihkan_teks(t, nama_akun=True, **k)  # noqa: E731
+    assert v("follow ig budisantoso99 ya") == "follow ig [akun] ya" and v("cek tiktok: rina.ayu sekarang") == "cek tiktok: [akun] sekarang"
+    assert v("rina_1998 keren") == "[akun] keren" and v("ig filmxofficial", izinkan=["@filmxofficial"]) == "ig filmxofficial"
+    assert v(tetap) == tetap and v("video tiktok ini viral, IG Story TAYANG 12 DESEMBER") == "video tiktok ini viral, IG Story TAYANG 12 DESEMBER"
+    assert privasi.bersihkan_teks("follow ig budisantoso99") == "follow ig budisantoso99"  # teks brief/log: tidak diubah
+    assert privasi.kandidat_akun("follow ig filmxofficial & @filmx_official") == ["filmxofficial"]
     assert privasi.bersihkan_teks(None) == "" and privasi.ada_data_pribadi("[akun] [telepon]") is False
     assert privasi.bersihkan_hashtag(["#FilmX", "konten", "@user", "bit.ly/a", "#Seru #seru", None]) == ["#filmx", "#konten", "#seru"]
     a, b = privasi.pseudonim("staff-1", "garam"), privasi.pseudonim("staff-1", "garam")
@@ -667,10 +676,73 @@ def t_gpu_bersama_salinan_identik_dan_antar_proses():
 @test
 def t_voice_worker_handle_memakai_kunci_tanpa_bisa_gagal():
     src = (REPO / "voice-worker" / "worker.py").read_text(encoding="utf-8")
-    assert "with _gpu(kind):" in src and "contextlib.nullcontext(False)" in src and 'prioritas=True, tunggu_maks=300' in src
-    blok = src.split("def _gpu(kind: str):")[1].split("def handle(")[0]
-    assert "except Exception" in blok
-    return "handle() dibungkus, impor gagal → nullcontext"
+    assert "with _gpu(kind, ctx):" in src and "contextlib.nullcontext(False)" in src and 'prioritas=True, tunggu_maks=300' in src
+    kepala = "def _gpu(kind: str, ctx: JobCtx | None = None):"
+    blok = kepala + src.split(kepala)[1].split("def handle(")[0]
+    assert "except Exception" in blok and "cek_batal=" in blok
+    # jalankan _gpu() ASLI: kunci dipegang thread lain → batal dari website tetap terbaca + pesan progres "Menunggu GPU" sekali
+    import types
+
+    class Batal(Exception):
+        pass
+
+    class Ctx:
+        def __init__(self):
+            self.pesan, self.cek = [], 0
+
+        def progress(self, p, msg=None):
+            self.pesan.append(msg)
+
+        def check_cancel(self):
+            self.cek += 1
+            if self.cek == 3:
+                raise ConnectionError("jaringan putus")  # error lain → diabaikan, tetap menunggu
+            if self.cek >= 5:
+                raise Batal("batal")
+
+    ns: dict = {"contextlib": contextlib, "Cancelled": Batal, "JobCtx": object}
+    exec(compile("from __future__ import annotations\n" + blok, "worker._gpu", "exec"), ns)  # noqa: S102
+    folder = TMP / "gpu-voice"
+    lama_env, lama_mod = os.environ.get("HOTISSUE_GPU_DIR"), sys.modules.get("studio_worker")
+    os.environ["HOTISSUE_GPU_DIR"] = str(folder)
+    sys.modules["studio_worker"] = types.SimpleNamespace(gpu_bersama=gpu_bersama)
+    pegang, lepas = threading.Event(), threading.Event()
+
+    def review():
+        with gpu_bersama.KunciGPU("review-worker", folder).pegang("asr"):
+            pegang.set()
+            lepas.wait(10)
+
+    th = threading.Thread(target=review, daemon=True)
+    th.start()
+    try:
+        assert pegang.wait(5)
+        ctx = Ctx()
+        t0 = time.monotonic()
+        try:
+            with ns["_gpu"]("tts", ctx):
+                raise AssertionError("tidak boleh dapat kunci yang dipegang thread lain")
+        except Batal:
+            pass
+        dt = time.monotonic() - t0
+        assert dt < 10 and ctx.cek >= 5, (dt, ctx.cek)
+        assert ctx.pesan == ["Menunggu GPU dipakai Asisten Review…"], ctx.pesan
+        lepas.set()
+        th.join(5)
+        with ns["_gpu"]("tts", None) as ok:  # tanpa ctx (pemanggil lama) → tetap jalan
+            assert ok is True
+    finally:
+        lepas.set()
+        th.join(5)
+        if lama_env is None:
+            os.environ.pop("HOTISSUE_GPU_DIR", None)
+        else:
+            os.environ["HOTISSUE_GPU_DIR"] = lama_env
+        if lama_mod is None:
+            sys.modules.pop("studio_worker", None)
+        else:
+            sys.modules["studio_worker"] = lama_mod
+    return f"handle() dibungkus, impor gagal → nullcontext; batal terbaca saat menunggu GPU ({dt:.1f} dtk), pesan progres sekali"
 
 
 # ================================================================== pipeline & antrian

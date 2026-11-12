@@ -46,6 +46,7 @@ revoke execute on function public.user_tab_blocks_stamp() from public, anon;
 
 -- boleh pakai Asisten Review? admin, atau dibuka admin (granted). Fungsi TERSENDIRI (bukan tab_allowed) supaya
 -- menjalankan ulang migration-22 tidak membuka tab ini untuk semua orang.
+-- uid orang LAIN hanya boleh dicek admin / laptop (service role: auth.uid() kosong) → user biasa tidak bisa mengintip akses orang lain.
 create or replace function public.can_use_asisten_review(uid uuid default auth.uid())
 returns boolean
 language sql
@@ -53,13 +54,15 @@ stable
 security definer
 set search_path = public
 as $$
-  select uid is not null and (
+  select uid is not null
+  and (uid = auth.uid() or auth.uid() is null or public.is_admin())
+  and (
     exists (select 1 from public.profiles where id = uid and role = 'admin')
     or exists (select 1 from public.user_tab_blocks where user_id = uid and 'asisten_review' = any (granted))
   );
 $$;
 revoke execute on function public.can_use_asisten_review(uuid) from public, anon;
-grant execute on function public.can_use_asisten_review(uuid) to authenticated;
+grant execute on function public.can_use_asisten_review(uuid) to authenticated, service_role;  -- laptop: cek ulang pemilik job
 
 -- ---------- 2. Campaign yang pernah diproses laptop (data BRAND, bukan data clipper) ----------
 create table if not exists public.review_campaigns (
@@ -373,8 +376,12 @@ begin
 end;
 $$;
 
--- antrian: boleh membuat pekerjaan sendiri (uji 50 / 500, video tertentu, coba unduh materi lagi) & membatalkan
-grant insert, update on public.review_jobs to authenticated;
+-- antrian: boleh membuat pekerjaan sendiri (uji 50 / 500, video tertentu, coba unduh materi lagi) & membatalkan.
+-- UPDATE hanya kolom pembatalan (status / message / finished_at): params, kind, created_by dst. tidak bisa ditulis ulang
+-- (kalau bisa, '@username' / link bisa diselipkan lewat "batal" melewati cek insert di bawah).
+revoke update on public.review_jobs from authenticated;
+grant insert on public.review_jobs to authenticated;
+grant update (status, message, finished_at) on public.review_jobs to authenticated;
 drop policy if exists "review_jobs_insert" on public.review_jobs;
 create policy "review_jobs_insert" on public.review_jobs for insert to authenticated
   with check (
@@ -420,7 +427,8 @@ create policy "review_materials_insert" on public.review_materials for insert to
   with check (
     (select public.can_use_asisten_review()) and created_by = auth.uid()
     and source = 'manual' and status = 'antri_sidik' and sha256 is null and fingerprint = '{}'::jsonb
-    and storage_path like 'materi/' || campaign_id || '/manual/%'
+    -- regex (bukan LIKE: '_' di id campaign = wildcard LIKE): tepat folder campaign ini, satu nama file tanpa '/'
+    and storage_path ~ ('^materi/' || campaign_id || '/manual/[A-Za-z0-9][A-Za-z0-9._-]{0,159}$')
   );
 drop policy if exists "review_materials_delete" on public.review_materials;
 create policy "review_materials_delete" on public.review_materials for delete to authenticated
@@ -456,6 +464,8 @@ create policy "asisten_review_upload" on storage.objects for insert to authentic
     and (storage.foldername(name))[2] ~ '^[A-Za-z0-9_-]{1,64}$'
     and (storage.foldername(name))[3] = 'manual'
     and array_length(storage.foldername(name), 1) = 3
+    -- nama file aman + hanya ekstensi media (bucket juga menerima text/html untuk laporan laptop)
+    and name ~* '^materi/[A-Za-z0-9_-]{1,64}/manual/[A-Za-z0-9][A-Za-z0-9._-]{0,159}\.(mp3|wav|m4a|aac|ogg|oga|flac|weba|jpg|jpeg|png|webp|mp4|m4v|mov|webm)$'
   );
 drop policy if exists "asisten_review_delete" on storage.objects;
 create policy "asisten_review_delete" on storage.objects for delete to authenticated

@@ -221,6 +221,14 @@ def t_kebenaran():
     assert kebenaran.tentukan(km("reject", "dikuatkan")) == ("reject", "dikuatkan")
     assert kebenaran.tentukan(km("reject", "menunggu")) == ("reject", "menunggu")
     assert kebenaran.tentukan(km(None, "menunggu")) == (None, "menunggu")
+    # keputusan terakhir dicatat SESUDAH banding selesai = sudah hasil banding → tidak dibalik dua kali (butuh waktu banding)
+    ns = lambda k, tk, tb: SimpleNamespace(video_id="1", keputusan=k, banding="dibatalkan", diputuskan=tk,  # noqa: E731
+                                           banding_selesai=tb, status_sekarang=None)
+    assert kebenaran.tentukan(ns("approve", "2026-10-03T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("approve", "dibatalkan")
+    assert kebenaran.tentukan(ns("reject", "2026-10-01T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("approve", "dibatalkan")
+    n0 = kebenaran.ambigu
+    assert kebenaran.tentukan(KeputusanManusia(video_id="1", keputusan="reject", banding="dibatalkan", status_sekarang="Rejected")) \
+        == ("approve", "dibatalkan") and kebenaran.ambigu == n0 + 1  # dicatat sebagai kasus mencurigakan
     assert kebenaran.cocok("approve", "approve") is True and kebenaran.cocok("reject", "approve") is False
     assert kebenaran.cocok("cek_manusia", "approve") is None and kebenaran.cocok("approve", None) is None
     return "banding dibatalkan → kebalikan; cek manusia → None"
@@ -300,6 +308,28 @@ def t_metrik_dihitung_tangan():
     t = m["termasuk_di_luar_video"]["setuju_akhir"]
     assert (t["n"], t["benar"]) == (8, 5)
     return "57,1% vs reviewer · 71,4% vs akhir · 55,6% tanpa cek · matriks 3×2 tepat"
+
+
+@test
+def t_di_luar_video_dan_rasio_asli():
+    # reject karena engagement/bot: AI dilarang reject dengan kode itu (rubrik §6 + aturan) → di luar jangkauan AI, tidak menghukum
+    B = [_b(i, "approve", "reject", code="engagement_bot") for i in range(8)] + [_b(100 + i, "approve", "approve") for i in range(8)]
+    m = metrik.hitung_metrik(B, SimpleNamespace(kurs_idr=18000, video_per_hari=2000))
+    assert m["n_di_luar_video"] == 8 and m["matriks"]["reject"]["approve"] == 0 and m["setuju_akhir"]["persen"] == 100.0, m["matriks"]
+    assert [(x["code"], x["di_luar_video"]) for x in m["per_alasan"]] == [("engagement_bot", True)]
+    # perkiraan pada perbandingan asli 80:20 — dihitung tangan dari baris matriks
+    mt = {"approve": {"approve": 8, "reject": 2, "cek_manusia": 0}, "reject": {"approve": 1, "reject": 7, "cek_manusia": 2}}
+    ra = laporan.rasio_asli(mt, {"n_kandidat_approve": 800, "n_kandidat_reject": 200})
+    putus = 0.8 * 1.0 + 0.2 * 0.8
+    assert abs(ra["setuju_akhir"] - (0.8 * 0.8 + 0.2 * 0.7) / putus * 100) < 1e-9
+    assert abs(ra["presisi_reject"] - 0.2 * 0.7 / (0.8 * 0.2 + 0.2 * 0.7) * 100) < 1e-9  # 46,7% (sampel 50/50: 77,8%)
+    assert abs(ra["bahaya"] - 0.2 * 0.1 / putus * 100) < 1e-9 and abs(ra["cek_manusia"] - 0.2 * 0.2 * 100) < 1e-9
+    assert laporan.rasio_asli(mt, {}) is None
+    isi = laporan.buat_laporan({"id": "x", "status": "selesai", "sample_params": {"n_kandidat_approve": 800, "n_kandidat_reject": 200}},
+                               metrik.hitung_metrik([_b(i, "approve", "approve") for i in range(3)] + [_b(9, "reject", "reject")],
+                                                    SimpleNamespace(kurs_idr=18000, video_per_hari=2000)), [])
+    assert "Kalau dipakai sehari-hari" in isi and "80% approve : 20% reject" in isi
+    return f"bot = di luar jangkauan AI; presisi reject 77,8% di sampel → {ra['presisi_reject']:.1f}% di rasio asli"
 
 
 @test
@@ -404,6 +434,89 @@ def t_batas_biaya_lalu_lanjutkan():
     vids = [v for _, v in KENDALI["panggil"]]
     assert run["status"] == "selesai" and run["done"] == 50 and len(vids) == 50 == len(set(vids)), (run["status"], len(vids))
     return "berhenti_biaya di video 10 → Lanjutkan meneruskan 40 sisanya tanpa mengulang"
+
+
+@test
+def t_lanjut_tolak_model_effort_beda():
+    rt = buat_rt()
+    KENDALI["habis_setelah"] = 5
+    job = jalankan_job(rt, {"jumlah": 50})
+    run = rt.supa.select("review_runs", id=f"eq.{job['run_id']}")[0]
+    assert run["status"] == "berhenti_biaya" and run["effort"] == rt.cfg.effort, run
+    KENDALI["habis_setelah"] = None
+    cfg_asli = rt.cfg
+    for ubah, kata in (({"effort": "high"}, "Effort AI"), ({"model": "claude-lain-1"}, "Model AI")):
+        rt.cfg = dataclasses.replace(cfg_asli, **ubah)
+        j = jalankan_job(rt, {"lanjut_run": run["id"]})
+        assert j["status"] == "gagal" and kata in j["message"] and "Ulangi" in j["message"], j
+    assert len(KENDALI["panggil"]) == 5, "video tidak boleh diproses dengan pengaturan AI berbeda"
+    rt.cfg = cfg_asli
+    j = jalankan_job(rt, {"lanjut_run": run["id"]})
+    assert j["status"] == "selesai" and len(KENDALI["panggil"]) == 50, j
+    return "effort / model berubah → Lanjutkan ditolak (pakai Ulangi); pengaturan sama → lanjut"
+
+
+def _rt_hakim_asli(n_camp: int, per: int, klien):
+    """pipeline.proses_video ASLI + hakim ASLI dengan KlienPalsu (media ditiru) — balikan (rt, pulihkan)"""
+    from palsu_media import materi_contoh, referensi_contoh
+    from review_worker import biaya, hakim as hakim_mod, rubrik as rubrik_mod
+    from review_worker.media import materi as materi_mod, susun
+
+    vids, camps, kep = contoh(n_camp, per)
+    rt = buat_rt(data=(vids, camps, kep))
+    pipeline.proses_video = PROSES_ASLI
+    rt.rubrik = rubrik_mod.muat_rubrik(None)
+    rt.budget = biaya.Budget(rt.cfg, rt.supa, rt.cfg.data)
+    rt.hakim = hakim_mod.Hakim(rt.cfg, rt.budget, rt.rubrik, client=klien)
+    rt.hakim.sleep = lambda s: None
+    asli = (susun.buat_materi_video, materi_mod.referensi_campaign)
+    susun.buat_materi_video = lambda rt_, video, brief, ref, kerja, cek_batal=None: materi_contoh(
+        video.id, folder=kerja, campaign_id=video.campaign_id)
+    materi_mod.referensi_campaign = lambda rt_, cid: referensi_contoh(cid, folder=TMP)
+
+    def pulihkan():
+        susun.buat_materi_video, materi_mod.referensi_campaign = asli
+    return rt, pulihkan
+
+
+@test
+def t_ai_mati_uji_berhenti_lalu_lanjut():
+    """kunci ditolak (401) → uji berhenti di video pertama (bukan 12 video "cek manusia"); 400 terus-menerus → berhenti sesudah 3;
+    Lanjutkan sesudah diperbaiki memproses ulang video yang belum dinilai AI"""
+    from palsu_anthropic import KlienPalsu, galat
+    from review_worker import hakim as hakim_mod
+
+    rt, pulihkan = _rt_hakim_asli(2, 6, KlienPalsu([galat("auth")]))
+    try:
+        klien = rt.hakim.client
+        job = jalankan_job(rt, {"jumlah": 12})
+        assert job["status"] == "gagal" and "ditolak (401)" in job["message"] and "Lanjutkan" in job["message"], job
+        run = rt.supa.select("review_runs", id=f"eq.{job['run_id']}")[0]
+        assert run["status"] == "gagal" and len(klien.panggilan) == 1 and run["done"] == 0, (run["status"], run["done"])
+        hasil = rt.supa.select("review_results", run_id=f"eq.{run['id']}")
+        assert len(hasil) == 1 and uji.belum_dinilai_ai(hasil[0]), hasil
+        # hakim lama masih "mati" → uji baru langsung ditolak tanpa mengolah video
+        j2 = jalankan_job(rt, {"lanjut_run": run["id"]})
+        assert j2["status"] == "gagal" and "401" in j2["message"] and len(klien.panggilan) == 1, j2
+        # diperbaiki (mesin dinyalakan ulang = hakim baru) → Lanjutkan memproses ke-12 video, termasuk yang tadi gagal
+        jawaban = {"checklist": [], "saran": "cek_manusia", "alasan_kode": None, "alasan_spesifik": "Ragu.", "keyakinan": 40,
+                   "ringkasan": "Contoh."}
+        baik = KlienPalsu([jawaban] * 20)
+        rt.hakim = hakim_mod.Hakim(rt.cfg, rt.budget, rt.rubrik, client=baik)
+        j3 = jalankan_job(rt, {"lanjut_run": run["id"]})
+        assert j3["status"] == "selesai", j3
+        hasil = rt.supa.select("review_results", run_id=f"eq.{run['id']}")
+        assert len(hasil) == 12 and len(baik.panggilan) == 12 and not any(uji.belum_dinilai_ai(r) for r in hasil), len(baik.panggilan)
+    finally:
+        pulihkan()
+    rt, pulihkan = _rt_hakim_asli(2, 6, KlienPalsu([galat("buruk")]))
+    try:
+        job = jalankan_job(rt, {"jumlah": 12})
+        assert job["status"] == "gagal" and "3 video berturut-turut" in job["message"] and "400" in job["message"], job
+        assert len(rt.hakim.client.panggilan) == 3
+    finally:
+        pulihkan()
+    return "401 → berhenti di video 1; 400 → berhenti sesudah 3; Lanjutkan mengulang yang belum dinilai"
 
 
 @test

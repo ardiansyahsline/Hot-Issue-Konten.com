@@ -18,7 +18,11 @@ from ..skema import Frame, OCRFrame, TeksOCR
 from .asr import bersihkan
 
 log = get("ocr")
-YAKIN_MIN = 0.30
+YAKIN_MIN = 0.30  # teks OCR yang DIKIRIM ke AI
+YAKIN_SAMAR = 0.10  # kotak yang DICEK untuk diburamkan (watermark bergerak sering terbaca samar)
+# OCR mati / gagal untuk sebuah frame → area watermark platform (TikTok/IG: pita atas-kiri & pita bawah) diburamkan rata
+# (x1, y1, x2, y2 dalam pecahan lebar/tinggi). Username yang ditulis clipper di tengah layar TIDAK tertangkap cara ini.
+ZONA_WATERMARK = ((0.0, 0.0, 0.70, 0.16), (0.0, 0.85, 1.0, 1.0))
 _WATERMARK = re.compile(r"^(tik ?tok|tiktok|instagram|reels?|youtube|shorts|capcut)$", re.I)
 _MIRIP_HANDLE = re.compile(r"^@?[A-Za-z0-9._]{3,30}$")
 _PENANDA = re.compile(r"\[(email|telepon|akun|tautan)\]")
@@ -68,7 +72,8 @@ class OCR:
         self.mode = "mati"
 
     def baca(self, frames: list[Frame]) -> list[OCRFrame]:
-        """teks MENTAH per frame (bisa memuat @username) — WAJIB lewat samarkan_handle() sebelum dipakai"""
+        """teks MENTAH per frame (bisa memuat @username, termasuk kotak yakin rendah ≥ YAKIN_SAMAR) — WAJIB lewat
+        samarkan_handle() sebelum dipakai. Frame yang gagal dibaca TIDAK ada di hasil (→ samarkan_tanpa_ocr)."""
         with self.lock:
             self._muat()
             if self.reader is None:
@@ -79,11 +84,11 @@ class OCR:
                 try:
                     baris = self.reader.readtext(f.path, detail=1, paragraph=False)
                 except Exception as e:  # noqa: BLE001 — satu frame rusak tidak menggagalkan semua
-                    log.warning("OCR frame %d gagal (%s)", f.idx, type(e).__name__)
-                    baris = []
+                    log.warning("OCR frame %d gagal (%s) — area watermark diburamkan rata", f.idx, type(e).__name__)
+                    continue  # frame tanpa hasil OCR → susun memanggil samarkan_tanpa_ocr()
                 for kotak, isi, yakin in baris:
                     isi = str(isi or "").strip()
-                    if float(yakin) < YAKIN_MIN or len(isi) < 2:
+                    if float(yakin) < YAKIN_SAMAR or len(isi) < 2:
                         continue
                     xs = [int(round(p[0])) for p in kotak]
                     ys = [int(round(p[1])) for p in kotak]
@@ -177,6 +182,8 @@ def samarkan_handle(frames: list[Frame], ocr: list[OCRFrame], boleh: Iterable[st
                 if not _PENANDA.sub("", sisa).strip(" ,.;:-|") or sisa.lower() == mentah:
                     continue  # isinya cuma nama akun (atau tidak bisa dibersihkan) → buang seluruhnya
                 t = TeksOCR(teks=sisa, yakin=t.yakin, kotak=t.kotak)
+            elif t.yakin < YAKIN_MIN:
+                continue  # terlalu samar untuk dikirim ke AI (tetap dicek di atas supaya handle samar ikut diburamkan)
             else:
                 isi = bersihkan(t.teks, boleh_l)
                 if not isi:
@@ -190,8 +197,37 @@ def samarkan_handle(frames: list[Frame], ocr: list[OCRFrame], boleh: Iterable[st
             except Exception as e:  # noqa: BLE001
                 log.warning("blur frame %d gagal (%s) — frame tidak dikirim", f.idx, type(e).__name__)
                 Path(f.path).unlink(missing_ok=True)  # lebih aman tidak dikirim daripada bocor
-        keluar.append(OCRFrame(frame_idx=of.frame_idx, detik=of.detik, teks=bersih))
+        keluar.append(OCRFrame(frame_idx=of.frame_idx, detik=of.detik, teks=[t for t in bersih if t.yakin >= YAKIN_MIN]))
     return keluar
+
+
+def samarkan_tanpa_ocr(frames: list[Frame]) -> int:
+    """OCR mati / error / frame gagal dibaca: buramkan ZONA_WATERMARK di file frame supaya watermark @username TikTok/IG tidak
+    sampai ke AI. Gagal memburamkan → file frame dihapus (tidak dikirim). Balikan: jumlah frame yang diburamkan."""
+    n = 0
+    for f in frames:
+        p = Path(f.path)
+        if not p.exists():
+            continue
+        try:
+            import cv2
+
+            img = cv2.imread(str(p))
+            if img is None:
+                raise ValueError("frame tidak terbaca")
+            h, w = img.shape[:2]
+            sigma = max(6.0, 0.03 * max(h, w))  # kuat: teks setinggi ±3% frame (watermark) tidak terbaca lagi
+            for x1, y1, x2, y2 in ZONA_WATERMARK:
+                a, b, c, d = int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
+                if c - a >= 2 and d - b >= 2:
+                    img[b:d, a:c] = cv2.GaussianBlur(cv2.GaussianBlur(img[b:d, a:c], (0, 0), sigma), (0, 0), sigma)
+            if not cv2.imwrite(str(p), img, [int(cv2.IMWRITE_JPEG_QUALITY), 85]):
+                raise OSError("frame tidak bisa ditulis")
+            n += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("blur zona watermark frame %d gagal (%s) — frame tidak dikirim", f.idx, type(e).__name__)
+            p.unlink(missing_ok=True)
+    return n
 
 
 def dapatkan(rt) -> OCR:

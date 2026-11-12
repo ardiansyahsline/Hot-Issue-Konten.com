@@ -28,14 +28,14 @@ _TAG = re.compile(r"@[A-Za-z0-9._]{2,30}")
 
 
 def tag_boleh(brief: Optional[BriefCampaign]) -> list[str]:
-    """@akun yang DIWAJIBKAN brief (akun brand) — boleh tetap terlihat di caption / OCR / transkrip"""
+    """@akun yang DIWAJIBKAN brief (akun brand) — boleh tetap terlihat di caption / OCR / transkrip. Akun brand yang ditulis
+    tanpa '@' di brief ("follow ig filmxofficial") ikut, supaya tidak ikut disamarkan sebagai username clipper."""
     if brief is None:
         return []
     out = {t.strip() for t in brief.hashtag_wajib if t.strip().startswith("@")}
-    for p in brief.poin:
-        out.update(m.group(0).rstrip(".") for m in _TAG.finditer(p.teks or ""))
-    if brief.caption_wajib:
-        out.update(m.group(0).rstrip(".") for m in _TAG.finditer(brief.caption_wajib))
+    for teks in [p.teks or "" for p in brief.poin] + [brief.caption_wajib or ""]:
+        out.update(m.group(0).rstrip(".") for m in _TAG.finditer(teks))
+        out.update("@" + k for k in privasi.kandidat_akun(teks))
     return sorted(out)
 
 
@@ -108,7 +108,8 @@ def buat_materi_video(rt, video: VideoDB, brief: BriefCampaign, ref: ReferensiCa
     except OSError:
         pass
     batal()
-    # 4. OCR + samarkan @handle di frame
+    # 4. OCR + samarkan @handle di frame. Frame TANPA hasil OCR (REVIEW_OCR=mati, EasyOCR tidak ada / error, frame gagal
+    #    dibaca) → area watermark TikTok/IG diburamkan rata (ocr.samarkan_tanpa_ocr) — frame mentah TIDAK pernah ke AI.
     ocr_list = []
     with tahap("ocr"):
         try:
@@ -124,6 +125,11 @@ def buat_materi_video(rt, video: VideoDB, brief: BriefCampaign, ref: ReferensiCa
         except Exception as e:  # noqa: BLE001
             log.warning("OCR gagal (%s)", type(e).__name__)
             ocr_list = []
+        sudah = {of.frame_idx for of in ocr_list}
+        tanpa = [f for f in frames if f.idx not in sudah]
+        if tanpa:
+            n = ocr_mod.samarkan_tanpa_ocr(tanpa)
+            log.info("OCR tidak tersedia untuk %d frame → area watermark diburamkan rata (%d frame)", len(tanpa), n)
     frames = [f for f in frames if Path(f.path).exists()]  # frame yang gagal disamarkan sudah dibuang (privasi)
     batal()
     # 5. ASR

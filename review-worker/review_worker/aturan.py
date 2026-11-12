@@ -158,10 +158,10 @@ def _bersih_bukti(c: CekPoinAI, materi: MateriVideo) -> tuple[str, list[int], li
 
 
 def _nilai_poin(p: PoinBrief, ai_c: Optional[CekPoinAI], kode_c: Optional[CekPoin], materi: MateriVideo,
-                ref: Optional[ReferensiCampaign], akses_gagal: bool, flags: set[str]) -> CekPoin:
+                ref: Optional[ReferensiCampaign], akses_gagal: bool, flags: set[str], abaikan: tuple = ()) -> CekPoin:
     dasar = dict(poin_id=p.id, kategori=p.kategori, teks=p.teks, wajib=p.wajib)
     # 1. menyangkut mengenali orang tertentu → selalu manusia (dicek ulang di sini, tidak percaya cara_nilai saja)
-    if p.cara_nilai == "manusia" or deteksi_identitas_orang(p.teks) or any(deteksi_identitas_orang(x) for x in p.pilihan):
+    if p.cara_nilai == "manusia" or deteksi_identitas_orang(p.teks, abaikan) or any(deteksi_identitas_orang(x, abaikan) for x in p.pilihan):
         if p.wajib:
             flags.add("identitas_orang" if (p.alasan_manusia in (None, "identitas_orang")) else "poin_tidak_bisa_dinilai")
         bukti = BUKTI_IDENTITAS if p.alasan_manusia in (None, "identitas_orang") else "Butuh cek manusia."
@@ -221,7 +221,8 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
     kode_map = {c.poin_id: c for c in cek_kode(brief, materi)}
     flags: set[str] = set()
     poin_by_id = {p.id: p for p in brief.poin}
-    checklist = [_nilai_poin(p, ai_map.get(p.id), kode_map.get(p.id), materi, ref, akses_gagal, flags)
+    abaikan = tuple(x for x in (brief.judul, brief.brand) if x)  # judul film / brand bukan nama orang (sama dengan parser)
+    checklist = [_nilai_poin(p, ai_map.get(p.id), kode_map.get(p.id), materi, ref, akses_gagal, flags, abaikan)
                  for p in brief.poin if p.cara_nilai != "info"]
 
     wajib = [c for c in checklist if c.wajib and poin_by_id[c.poin_id].cara_nilai != "data_akun"]

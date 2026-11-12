@@ -366,9 +366,51 @@ def t_ocr_mati_dan_palsu():
 
     o2 = ocr.OCR(cfg_uji())
     o2.reader, o2.mode = ReaderPalsu(), "easyocr-cpu"
-    h = o2.baca([_frame_teks(TMP / "ocr3.jpg")])
-    assert [t.teks for t in h[0].teks] == ["PROMO"] and h[0].teks[0].kotak == [10, 10, 200, 40]
-    return "REVIEW_OCR=mati → kosong; yakin rendah / teks 1 huruf dibuang; kotak [x1,y1,x2,y2]"
+    f3 = _frame_teks(TMP / "ocr3.jpg")
+    h = o2.baca([f3])
+    assert [t.teks for t in h[0].teks] == ["PROMO", "samar"] and h[0].teks[0].kotak == [10, 10, 200, 40]  # samar: dicek blur
+    assert [t.teks for t in ocr.samarkan_handle([f3], h)[0].teks] == ["PROMO"]  # yakin < 0,30 tidak dikirim ke AI
+
+    class ReaderRusak:
+        def readtext(self, path, detail=1, paragraph=False):
+            raise RuntimeError("CUDA error")
+
+    o2.reader = ReaderRusak()
+    assert o2.baca([f3]) == []  # frame gagal dibaca tidak dianggap "sudah di-OCR"
+    return "REVIEW_OCR=mati → kosong; yakin rendah hanya untuk blur; teks 1 huruf dibuang; frame error tidak ikut; kotak [x1,y1,x2,y2]"
+
+
+def t_ocr_handle_samar_diburamkan():
+    f = _frame_teks(TMP / "ocr-samar.jpg")
+    import cv2
+
+    asli = cv2.imread(f.path)
+    mentah = [OCRFrame(frame_idx=1, detik=1.0, teks=[TeksOCR(teks="@clipper_rahasia", yakin=0.15, kotak=[20, 60, 260, 100]),
+                                                     TeksOCR(teks="budisantoso99", yakin=0.12, kotak=[20, 200, 260, 240])])]
+    h = ocr.samarkan_handle([f], mentah)
+    baru = cv2.imread(f.path)
+    std = lambda im, k: float(im[k[1]:k[3], k[0]:k[2]].std())  # noqa: E731
+    assert h[0].teks == []
+    for k in ([20, 60, 260, 100], [20, 200, 260, 240]):
+        assert std(baru, k) < std(asli, k) * 0.5, k
+    return "handle yang terbaca samar (yakin 0,12–0,15) tetap diburamkan, teksnya tidak dikirim"
+
+
+def t_ocr_tanpa_ocr_zona_watermark():
+    f = _frame_teks(TMP / "ocr-zona.jpg")
+    import cv2
+
+    asli = cv2.imread(f.path)
+    assert ocr.samarkan_tanpa_ocr([f]) == 1
+    baru = cv2.imread(f.path)
+    std = lambda im, k: float(im[k[1]:k[3], k[0]:k[2]].std())  # noqa: E731
+    for k in ([20, 30, 260, 100], [20, 680, 410, 760]):  # pita atas-kiri (watermark TikTok) & pita bawah (IG / TikTok)
+        assert std(baru, k) < std(asli, k) * 0.5, k
+    assert abs(std(baru, [20, 300, 410, 500]) - std(asli, [20, 300, 410, 500])) < 6, "tengah frame tidak diburamkan"
+    rusak = Frame(idx=2, detik=2.0, path=str(TMP / "ocr-rusak.jpg"), lebar=10, tinggi=10)
+    Path(rusak.path).write_bytes(b"bukan jpeg")
+    assert ocr.samarkan_tanpa_ocr([rusak]) == 0 and not Path(rusak.path).exists(), "frame yang gagal diburamkan dibuang"
+    return "OCR mati / error → pita watermark atas-kiri & bawah diburamkan; frame yang gagal diburamkan tidak dikirim"
 
 
 def t_ocr_easyocr_asli():
@@ -787,6 +829,42 @@ def t_susun_tidak_bisa_diakses_dan_batal():
     return f"404 → '{m.error}'; tanpa link → tidak_bisa_diakses; batal diteruskan; file audio → {m4.status}"
 
 
+def t_susun_ocr_mati_tetap_samar():
+    """REVIEW_OCR=mati / EasyOCR gagal: frame ke AI tetap tanpa watermark @username (pita atas-kiri diburamkan)"""
+    import cv2
+
+    url = server()
+    hasil = []
+    for varian in ("mati", "error"):
+        rt = _rt_susun("chroma")
+        o = ocr.dapatkan(rt)
+        if varian == "mati":
+            o.reader, o.mode = None, "mati"
+        else:
+            class ReaderRusak:
+                def readtext(self, path, detail=1, paragraph=False):
+                    raise RuntimeError("CUDA error")
+
+            o.reader = ReaderRusak()
+        v = VideoDB(id=f"90001{len(hasil)}", campaign_id="c-x", url=f"{url}/clipper.mp4")
+        m = susun.buat_materi_video(rt, v, _brief("c-x", []), ReferensiCampaign(campaign_id="c-x", status="belum_ada"),
+                                    Path(rt.cfg.tmp) / v.id)
+        assert m.status == "ok" and m.frames and m.ocr == [], (m.status, m.ocr)
+        biru = 0
+        for f in m.frames:
+            im = cv2.imread(f.path)
+            h, w = im.shape[:2]
+            if abs(int(im[h // 2, 5][0]) - 0xa0) > 30:
+                continue  # hanya adegan biru yang memuat "@clipper_rahasia" di kiri atas
+            biru += 1
+            s = w / 1080
+            k = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)[int(110 * s):int(200 * s), int(40 * s):int(600 * s)]
+            assert float(k.std()) < 12, f"teks @clipper_rahasia masih tajam (std {k.std():.1f}) di frame {f.idx}"
+        assert biru, "adegan biru harus terpilih"
+        hasil.append(f"{varian}: {biru} frame berwatermark diburamkan")
+    return "; ".join(hasil)
+
+
 def t_palsu_media():
     for v in ("lengkap", "tanpa_cta", "tanpa_musik", "tidak_bisa_diakses", "gagal"):
         m = materi_contoh("1", v, folder=TMP / f"pm-{v}")
@@ -816,9 +894,9 @@ def t_driver_dan_lisensi():
 
 
 TES = [t_ffmpeg_dasar, t_frame_pilih, t_frame_pendek, t_unduh_ytdlp_lokal, t_unduh_pesan, t_asr_palsu, t_ocr_samarkan,
-       t_ocr_mati_dan_palsu, t_ocr_easyocr_asli, t_visual, t_musik_chroma, t_musik_panako_asli, t_musik_tanpa_java, t_tautan_drive,
+       t_ocr_mati_dan_palsu, t_ocr_handle_samar_diburamkan, t_ocr_tanpa_ocr_zona_watermark, t_ocr_easyocr_asli, t_visual, t_musik_chroma, t_musik_panako_asli, t_musik_tanpa_java, t_tautan_drive,
        t_materi_gdrive_palsu, t_materi_private_dan_kosong, t_materi_manual_dan_pulih, t_susun_ujung_ke_ujung,
-       t_susun_tidak_bisa_diakses_dan_batal, t_palsu_media, t_driver_dan_lisensi]
+       t_susun_tidak_bisa_diakses_dan_batal, t_susun_ocr_mati_tetap_samar, t_palsu_media, t_driver_dan_lisensi]
 
 
 def main(argv: list[str]) -> int:

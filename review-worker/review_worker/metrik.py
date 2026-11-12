@@ -3,7 +3,7 @@
 Definisi (dipakai juga oleh laporan HTML — bahasa awam di laporan.py):
 - Kebenaran akhir = keputusan reviewer, kecuali dibatalkan saat banding → kebalikannya (kebenaran.tentukan).
 - "Bisa dinilai" (n_dinilai) = pipeline_status ok + ada keputusan reviewer + alasan reject BUKAN di luar video. Video yang
-  di-reject karena followers / link bio / duplikat (alasan.DI_LUAR_VIDEO) tidak bisa dilihat AI → dihitung terpisah
+  di-reject karena followers / link bio / duplikat / bot / tidak bisa diakses (alasan.DI_LUAR_VIDEO) tidak bisa dilihat AI → dihitung terpisah
   (n_di_luar_video, per_alasan[].di_luar_video) dan tidak menghukum akurasi. Video tidak bisa diakses / gagal juga terpisah.
 - setuju_reviewer / setuju_akhir = hanya video yang DIPUTUSKAN AI (approve/reject): berapa yang sama dengan reviewer /
   kebenaran akhir. akurasi_tanpa_cek_manusia = SEMUA video yang bisa dinilai sebagai penyebut: berapa yang AI putuskan
@@ -86,7 +86,8 @@ def kebenaran_baris(r: dict) -> Optional[str]:
 
 
 def di_luar_video(r: dict) -> bool:
-    """reject (akhir) karena alasan yang tidak terlihat di video (followers / link bio / duplikat)"""
+    """reject (akhir) karena alasan yang tidak terlihat di video (alasan.DI_LUAR_VIDEO: followers / link bio / duplikat / bot /
+    tidak bisa diakses saat dicek reviewer)"""
     return r.get("human_decision") == "reject" and kebenaran_baris(r) == "reject" and r.get("human_code") in DI_LUAR_VIDEO
 
 

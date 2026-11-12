@@ -59,6 +59,7 @@ _DESKRIPSI = {
 _BUANG = ("title", "default", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "pattern",
           "maxItems", "multipleOf")
 _SKEMA: Optional[dict] = None
+_KREDIT = re.compile(r"credit balance|billing|kredit|saldo", re.I)
 
 
 def _ketat(s: Any, nama: Optional[str] = None) -> Any:
@@ -148,6 +149,11 @@ class Hakim:
         self.sleep = time.sleep
         self.n_panggil = 0
         self._cache_diperingatkan = False
+        # pesan awam bila AI PASTI tidak bisa dipakai untuk video mana pun (kunci ditolak / tanpa izin / model salah / kredit
+        # habis / kunci kosong). Dibaca uji.jalankan_uji → uji dihentikan, bukan 500 video "cek manusia". Kembali None sesudah
+        # panggilan berhasil. Video tunggal tetap cek_manusia.
+        self.mati: Optional[str] = None
+        self.galat_terakhir: Optional[str] = None  # pesan awam error panggilan terakhir (untuk pesan uji berhenti)
 
     # ------------------------------------------------------------------ pengaturan
     @property
@@ -167,12 +173,14 @@ class Hakim:
             return self.client
         if not self._kunci_ada():
             self.status = "kunci_kosong"
+            self.mati = "Kunci ANTHROPIC_API_KEY belum diisi di review-worker\\.env."
             return None
         try:
             import anthropic
         except ImportError:
             log.error("Paket anthropic belum terpasang — jalankan install.ps1 lagi.")
             self.status = "gagal"
+            self.mati = "Paket anthropic belum terpasang — jalankan install.ps1 lagi."
             return None
         # kunci dibaca SDK sendiri dari env ANTHROPIC_API_KEY (tidak pernah disalin / dicatat)
         self.client = anthropic.Anthropic(max_retries=3, timeout=TIMEOUT_DETIK)
@@ -289,14 +297,21 @@ class Hakim:
         if anthropic is not None:
             if isinstance(e, anthropic.AuthenticationError):
                 self.status = "gagal"
-                return "Kunci ANTHROPIC_API_KEY ditolak (401). Cek isi .env.", False
+                self.mati = "Kunci ANTHROPIC_API_KEY ditolak (401). Cek isi .env."
+                return self.mati, False
             if isinstance(e, anthropic.PermissionDeniedError):
                 self.status = "gagal"
-                return "Kunci AI tidak punya izin untuk model ini (403).", False
+                self.mati = "Kunci AI tidak punya izin untuk model ini (403)."
+                return self.mati, False
             if isinstance(e, anthropic.NotFoundError):
-                return f"Model {self.model} tidak dikenal (404). Cek REVIEW_MODEL.", False
+                self.mati = f"Model {self.model} tidak dikenal (404). Cek REVIEW_MODEL."
+                return self.mati, False
             if isinstance(e, anthropic.BadRequestError):
-                return f"Permintaan ke AI ditolak (400): {str(getattr(e, 'message', e))[:200]}", False
+                pesan = str(getattr(e, "message", e))[:200]
+                if _KREDIT.search(pesan):  # kredit / tagihan habis = pasti gagal untuk semua video
+                    self.mati = "Saldo / kredit Anthropic habis (400). Isi saldo di console Anthropic."
+                    return self.mati, False
+                return f"Permintaan ke AI ditolak (400): {pesan}", False
             if isinstance(e, anthropic.RateLimitError):
                 return "Batas kecepatan AI tercapai (429).", True
             if isinstance(e, anthropic.APITimeoutError):
@@ -322,6 +337,7 @@ class Hakim:
                     self.sleep(JEDA_ULANG)
                     continue
                 log.error("%s Video diserahkan ke manusia.", pesan)
+                self.galat_terakhir = pesan
                 return None, pesan
         return None, "AI gagal"
 
@@ -409,6 +425,7 @@ class Hakim:
             if self.status not in ("gagal", "kunci_kosong"):
                 self.status = "gagal"
             return selesai(None, "ai_gagal", catatan=err or "")
+        self.mati = None  # AI terjangkau lagi
         stop = _ambil(resp, "stop_reason")
         p = hitung_biaya(_ambil(resp, "usage"), str(_ambil(resp, "model", "") or self.model), self.effort,
                          detik=time.monotonic() - t1, stop_reason=stop, request_id=_ambil(resp, "_request_id"))

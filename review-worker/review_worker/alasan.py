@@ -21,8 +21,11 @@ KODE_LABEL_BAWAAN: dict[str, str] = {
     "tidak_bisa_diakses": "Video tidak bisa diakses",
     "lainnya": "Lainnya",
 }
-# alasan yang TIDAK bisa dilihat dari isi video (dilaporkan terpisah di laporan: "di luar jangkauan AI")
-DI_LUAR_VIDEO: frozenset[str] = frozenset({"followers_kurang", "link_bio_tidak_ada", "duplikat"})
+# alasan yang TIDAK bisa dilihat dari isi video (dilaporkan terpisah di laporan: "di luar jangkauan AI"; AI tidak boleh reject
+# dengan kode ini — rubrik §6 + aturan.py). engagement_bot butuh data sistem; tidak_bisa_diakses = kondisi saat reviewer membuka
+# (video yang kini bisa diunduh tetap dinilai, tapi tidak menghukum akurasi)
+DI_LUAR_VIDEO: frozenset[str] = frozenset({"followers_kurang", "link_bio_tidak_ada", "duplikat", "engagement_bot",
+                                           "tidak_bisa_diakses"})
 KODE_SAH: frozenset[str] = frozenset(KODE_LABEL_BAWAAN)
 
 # urutan PENTING: yang lebih khusus dulu ("Link video rusak" → tidak bisa diakses, bukan link bio)

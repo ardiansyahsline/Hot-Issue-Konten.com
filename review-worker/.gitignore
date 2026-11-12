@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 .venv/
-data/
+/data/
 tools/jdk/
 tools/panako/
 __pycache__/

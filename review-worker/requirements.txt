@@ -8,7 +8,7 @@ psycopg[binary]==3.3.8         # LGPL-3.0 (pustaka tak dimodifikasi) - DB replik
 yt-dlp==2026.10.26             # Unlicense - unduh video (tanpa cookies / login)
 scenedetect==0.7.3             # BSD-3   - PySceneDetect (pilih frame)
 opencv-python-headless>=4.9,<6 # Apache-2.0 - dibutuhkan PySceneDetect
-faster-whisper==1.2.1          # MIT     - suara -> teks bahasa Indonesia + timestamp (pakai ulang cache model voice-worker)
+faster-whisper==1.2.1          # MIT     - suara -> teks bahasa Indonesia + timestamp (model large-v3-turbo diunduh sekali)
 gdown==6.5.1                   # MIT     - unduh materi referensi dari link Google Drive publik
 numpy>=1.26,<3
 scipy>=1.11
