@@ -144,6 +144,7 @@ class Replika:
         self.status_db = "belum_dicek"  # detak jantung: ok / tidak_terhubung / belum_dicek
         self.sleep: Callable[[float], None] = time.sleep
         self._banding_asing: set[str] = set()
+        self._banding_target_diingatkan = False
         self._memuat = False
         self._tanpa_validasi = False  # kenali-skema: jalan walau pemetaan salah
         self.rentang: tuple[Optional[str], Optional[str]] = (None, None)  # CLI --dari/--sampai (bawaan sampel uji)
@@ -528,6 +529,7 @@ class Replika:
                 audit = {str(r["vid"]): r for r in self._keputusan_audit(w, (bersih,))}
             vids = self._campaign_video(bagian)
             banding: dict[str, Optional[str]] = {}
+            banding_selesai: dict[str, Optional[str]] = {}
             if self.kolom.ada("appeals"):
                 fa, ba = self._param_id("appeals", "video_id", bagian)
                 if ba:
@@ -539,9 +541,26 @@ class Replika:
                     saring, p_saring = sql.SQL(""), ()
                     if tt and target:
                         saring, p_saring = sql.SQL(" AND lower({}::text) = ANY(%s)").format(sql.Identifier(tt)), (target,)
-                    q = sql.SQL("SELECT DISTINCT ON ({v}) {v}::text AS vid, {s}::text AS st FROM {t} WHERE {v} = ANY({p}){f} "
-                                "ORDER BY {v}{o}").format(v=vcol, s=scol, t=self.kolom.tbl("appeals"), p=fa, f=saring, o=order)
-                    banding = {str(r["vid"]): self._arti_banding(r.get("st")) for r in self._q_raw(q, (ba, *p_saring))}
+                    elif tt:
+                        # banding_target belum diisi: baris yang target_type-nya berbau "video" didahulukan (supaya banding payout /
+                        # flag yang lebih baru tidak menutupi banding penolakan video); kebenaran.tentukan juga tidak membalik approve
+                        order = sql.SQL(", (lower({}::text) LIKE '%%video%%') DESC NULLS LAST").format(sql.Identifier(tt)) + order
+                        if not self._banding_target_diingatkan:
+                            self._banding_target_diingatkan = True
+                            log.warning("kolom.toml [nilai] banding_target masih kosong — semua jenis banding (appeals.target_type) "
+                                        "ikut dibaca. Jalankan `review kenali-skema --nilai`, lalu isi banding_target dengan nilai "
+                                        "target_type untuk banding video (mis. [\"tracked_video\"]).")
+                    # waktu banding diputuskan → kebenaran tidak membalik keputusan yang dicatat SESUDAH banding (cegah balik dua kali)
+                    waktu = [sql.SQL("{}").format(sql.Identifier(c)) for c in
+                             (self.kolom.col("appeals", "resolved_at", wajib=False), self.kolom.col("appeals", "decided_at", wajib=False)) if c]
+                    selesai = (sql.SQL("COALESCE({})").format(sql.SQL(", ").join(waktu)) if len(waktu) > 1 else waktu[0]) if waktu \
+                        else sql.SQL("NULL::timestamptz")
+                    q = sql.SQL("SELECT DISTINCT ON ({v}) {v}::text AS vid, {s}::text AS st, {w} AS selesai FROM {t} WHERE {v} = ANY({p}){f} "
+                                "ORDER BY {v}{o}").format(v=vcol, s=scol, w=selesai, t=self.kolom.tbl("appeals"), p=fa, f=saring, o=order)
+                    for r in self._q_raw(q, (ba, *p_saring)):
+                        banding[str(r["vid"])] = self._arti_banding(r.get("st"))
+                        if r.get("selesai") is not None:
+                            banding_selesai[str(r["vid"])] = _iso(r.get("selesai"))
             for vid in bagian:
                 a, v = audit.get(vid), vids.get(vid)
                 if a is None and v is None:
@@ -553,7 +572,8 @@ class Replika:
                 out[vid] = KeputusanManusia(
                     video_id=vid, keputusan=kep, alasan_label=(bersihkan_teks(a.get("alasan"), 160) or None) if a and kep == "reject" else None,
                     reviewer=pseudonim(a.get("uid"), salt) if a else None, diputuskan=_iso(a.get("ts")) if a else None,
-                    banding=banding.get(vid), status_sekarang=st_now)
+                    banding=banding.get(vid), banding_selesai=banding_selesai.get(vid) if banding.get(vid) else None,
+                    status_sekarang=st_now)
         return out
 
     # ------------------------------------------------------------------ kenali skema

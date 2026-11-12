@@ -56,6 +56,8 @@ target_type = "target_type"       # opsional: banding untuk video saja → isi [
 appeal_type = "appeal_type"       # hanya ditampilkan di `kenali-skema --nilai` (tidak dipakai untuk menyaring)
 status = "status"
 created_at = "created_at"         # banding terbaru per video yang dipakai
+resolved_at = "resolved_at"       # opsional: waktu banding selesai → keputusan reviewer yang dicatat SESUDAHNYA tidak dibalik lagi
+decided_at = "admin_decided_at"   # opsional: cadangan kalau resolved_at kosong
 
 [history]
 video_id = "tracked_video_id"
@@ -71,6 +73,7 @@ audit_reject = ["video_reject"]
 banding_dibatalkan = ["granted"]                       # banding diterima → keputusan reviewer dibatalkan
 banding_dikuatkan = ["denied", "resubmit_allowed"]     # resubmit_allowed: penolakan tetap, clipper hanya boleh kirim ulang
 banding_menunggu = ["under_review"]
-# appeals.target_type yang berarti "banding atas video" (mis. ["video"]). Kosong = semua baris appeals dipakai (target_id = id video).
-# Isi sesudah melihat nilai appeals.target_type di `kenali-skema --nilai`.
+# appeals.target_type yang berarti "banding atas video" (mis. ["video"]). Kosong = semua baris appeals dipakai (target_id = id video;
+# baris yang target_type-nya mengandung "video" didahulukan, dan banding "granted" atas video yang di-APPROVE tidak membalik approve).
+# Isi sesudah melihat nilai appeals.target_type di `kenali-skema --nilai` (worker mengingatkan di log selama masih kosong).
 banding_target = []

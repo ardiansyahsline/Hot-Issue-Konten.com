@@ -217,14 +217,21 @@ def t_kebenaran():
     assert kebenaran.tentukan(None) == (None, None)
     assert kebenaran.tentukan(km("approve")) == ("approve", None)
     assert kebenaran.tentukan(km("reject", "dibatalkan")) == ("approve", "dibatalkan")
-    assert kebenaran.tentukan(km("approve", "dibatalkan")) == ("reject", "dibatalkan")
+    # banding "diterima" atas video yang di-APPROVE (banding payout ditahan / flag, target_id = id video) BUKAN banding penolakan:
+    # approve tidak dibalik jadi reject, dan tidak dihitung sebagai keputusan dibatalkan
+    assert kebenaran.tentukan(km("approve", "dibatalkan")) == ("approve", None)
     assert kebenaran.tentukan(km("reject", "dikuatkan")) == ("reject", "dikuatkan")
     assert kebenaran.tentukan(km("reject", "menunggu")) == ("reject", "menunggu")
     assert kebenaran.tentukan(km(None, "menunggu")) == (None, "menunggu")
     # keputusan terakhir dicatat SESUDAH banding selesai = sudah hasil banding → tidak dibalik dua kali (butuh waktu banding)
     ns = lambda k, tk, tb: SimpleNamespace(video_id="1", keputusan=k, banding="dibatalkan", diputuskan=tk,  # noqa: E731
                                            banding_selesai=tb, status_sekarang=None)
-    assert kebenaran.tentukan(ns("approve", "2026-10-03T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("approve", "dibatalkan")
+    assert kebenaran.tentukan(ns("approve", "2026-10-03T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("approve", None)
+    assert kebenaran.tentukan(ns("reject", "2026-10-03T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("reject", "dibatalkan")
+    # lewat KeputusanManusia (field banding_selesai diisi replika dari appeals.resolved_at)
+    assert kebenaran.tentukan(KeputusanManusia(video_id="1", keputusan="reject", banding="dibatalkan",
+                                               diputuskan="2026-10-03T03:00:00+00:00", banding_selesai="2026-10-02T03:00:00+00:00")) \
+        == ("reject", "dibatalkan"), "reject dicatat ulang SESUDAH banding selesai = sudah hasil banding → tidak dibalik"
     assert kebenaran.tentukan(ns("reject", "2026-10-01T03:00:00+00:00", "2026-10-02T03:00:00+00:00")) == ("approve", "dibatalkan")
     n0 = kebenaran.ambigu
     assert kebenaran.tentukan(KeputusanManusia(video_id="1", keputusan="reject", banding="dibatalkan", status_sekarang="Rejected")) \

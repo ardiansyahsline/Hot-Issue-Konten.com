@@ -475,12 +475,19 @@ def t_replika_asli_psycopg_read_only_dan_query_minimal():
         assert (km["5008"].banding, km["5012"].banding, km["5016"].banding, km["5020"].banding) == \
             ("dibatalkan", "dikuatkan", "menunggu", "dikuatkan"), [km[x].banding for x in ("5008", "5012", "5016", "5020")]
         assert km["5024"].banding == "dibatalkan", "banding_target kosong → semua baris appeals dipakai"
+        # 5012: banding payout (ap-7) LEBIH BARU tapi banding video (denied) tetap didahulukan saat banding_target kosong
+        # waktu banding selesai: resolved_at, cadangan admin_decided_at (5008); tanpa banding → None
+        assert km["5012"].banding_selesai.startswith("2026-10-01T03:00:00") and km["5008"].banding_selesai.startswith("2026-10-20T03:00:00"), \
+            (km["5012"].banding_selesai, km["5008"].banding_selesai)
+        assert km["5016"].banding_selesai is None and km["5004"].banding_selesai is None
         assert km["5007"].keputusan is None and km["5007"].status_sekarang == "pending_review" and "999" not in km
         assert km["5014"].keputusan == "approve" and km["5014"].status_sekarang == "approved_flag", "approved_flag = approve"
         # banding_target diisi → hanya appeals.target_type itu (banding payout 5024 tidak lagi dihitung)
         r.kolom.nilai["nilai"]["banding_target"] = ["tracked_video"]
         km2 = r.keputusan_manusia(["5008", "5024"])
         assert km2["5008"].banding == "dibatalkan" and km2["5024"].banding is None, (km2["5008"].banding, km2["5024"].banding)
+        km3 = r.keputusan_manusia(["5012"])
+        assert km3["5012"].banding == "dikuatkan", km3["5012"].banding
         r.kolom.nilai["nilai"]["banding_target"] = []
         r.kenali_skema(nilai=True)
         sk = json.loads((CFG.data / "skema.json").read_text(encoding="utf-8"))

@@ -28,7 +28,7 @@ create table alif.staff (id uuid primary key, name text, role text, admin_role t
 -- banding: TIDAK ada kolom video_id — penghubungnya target_type + target_id
 create table alif.appeals (
   id text primary key, user_id uuid, appeal_type text, target_type text, target_id text, reason text, status text,
-  admin1_notes text, created_at timestamptz, resolved_at timestamptz, resubmit_count int
+  admin1_notes text, created_at timestamptz, resolved_at timestamptz, admin_decided_at timestamptz, resubmit_count int
 );
 create table alif.video_status_history (
   id uuid primary key default gen_random_uuid(), tracked_video_id text, from_status text, to_status text, reason text,
@@ -83,13 +83,16 @@ values ('video_approve', '{"reason": null}', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb
 insert into alif.staff values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Nama Reviewer Fiktif', 'admin', 'reviewer');
 -- banding (status asli: granted / denied / under_review / resubmit_allowed), penghubung target_type + target_id:
 -- 5008 under_review lalu granted (dibatalkan), 5012 denied (dikuatkan), 5016 under_review (menunggu),
--- 5020 resubmit_allowed (dikuatkan: penolakan tetap), 5024 = banding PAYOUT (bukan video; ikut terbaca kalau banding_target kosong)
-insert into alif.appeals (id, user_id, appeal_type, target_type, target_id, reason, status, admin1_notes, created_at) values
- ('ap-1', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'banding lama @clipper.fiktif8', 'under_review', null, now() - interval '20 days'),
- ('ap-2', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'hubungi 0812-8888-0008', 'granted', 'ok', now() - interval '19 days'),
- ('ap-3', 'cccccccc-cccc-4ccc-8ccc-000000000012', 'video_reject', 'tracked_video', '5012', null, 'denied', 'catatan admin', now() - interval '30 days'),
- ('ap-4', 'cccccccc-cccc-4ccc-8ccc-000000000016', 'video_reject', 'tracked_video', '5016', null, 'under_review', null, now() - interval '40 days'),
- ('ap-5', 'cccccccc-cccc-4ccc-8ccc-000000000020', 'video_reject', 'tracked_video', '5020', null, 'resubmit_allowed', null, now() - interval '50 days'),
- ('ap-6', 'cccccccc-cccc-4ccc-8ccc-000000000024', 'payout', 'payout', '5024', null, 'granted', null, now() - interval '5 days');
+-- 5020 resubmit_allowed (dikuatkan: penolakan tetap), 5024 = banding PAYOUT (bukan video; ikut terbaca kalau banding_target kosong),
+-- 5012 juga punya banding PAYOUT yang lebih baru (ap-7) — tanpa banding_target, banding video tetap didahulukan.
+-- resolved_at / admin_decided_at = waktu banding diputuskan (ap-2 hanya admin_decided_at → cadangan COALESCE)
+insert into alif.appeals (id, user_id, appeal_type, target_type, target_id, reason, status, admin1_notes, created_at, resolved_at, admin_decided_at) values
+ ('ap-1', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'banding lama @clipper.fiktif8', 'under_review', null, now() - interval '20 days', null, null),
+ ('ap-2', 'cccccccc-cccc-4ccc-8ccc-000000000008', 'video_reject', 'tracked_video', '5008', 'hubungi 0812-8888-0008', 'granted', 'ok', now() - interval '19 days', null, '2026-10-20T03:00:00+00'),
+ ('ap-3', 'cccccccc-cccc-4ccc-8ccc-000000000012', 'video_reject', 'tracked_video', '5012', null, 'denied', 'catatan admin', now() - interval '30 days', '2026-10-01T03:00:00+00', '2026-09-30T03:00:00+00'),
+ ('ap-4', 'cccccccc-cccc-4ccc-8ccc-000000000016', 'video_reject', 'tracked_video', '5016', null, 'under_review', null, now() - interval '40 days', null, null),
+ ('ap-5', 'cccccccc-cccc-4ccc-8ccc-000000000020', 'video_reject', 'tracked_video', '5020', null, 'resubmit_allowed', null, now() - interval '50 days', null, null),
+ ('ap-6', 'cccccccc-cccc-4ccc-8ccc-000000000024', 'payout', 'payout', '5024', null, 'granted', null, now() - interval '5 days', null, null),
+ ('ap-7', 'cccccccc-cccc-4ccc-8ccc-000000000012', 'payout', 'payout', '5012', null, 'granted', null, now() - interval '2 days', null, null);
 insert into alif.video_status_history (tracked_video_id, from_status, to_status, changed_at)
 select id::text, 'pending_review', status, submitted_at from alif.tracked_videos;
