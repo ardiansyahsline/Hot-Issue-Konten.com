@@ -1,0 +1,71 @@
+# Pemetaan kolom DB replika Konten.com (schema "alif") — TEBAKAN AWAL. Nama kolom sebenarnya belum diketahui:
+# jalankan `review kenali-skema` (atau menu CEK di NYALAKAN-ASISTEN-REVIEW.bat), baca hasilnya, lalu sesuaikan nilai di kanan "=".
+# Kunci di kiri "=" JANGAN diubah (dipakai kode). Kolom opsional yang tidak ada di DB dilewati otomatis (dicatat di log);
+# kolom WAJIB yang tidak ada membuat worker berhenti dengan pesan jelas. Hanya kolom yang dibutuhkan yang dibaca —
+# nama / email / no HP / username clipper TIDAK PERNAH dipetakan. File ini TIDAK berisi password / data pribadi.
+
+schema = "alif"
+
+[tabel]
+videos = "tracked_videos"
+campaigns = "campaigns"
+audit = "audit_log"
+staff = "staff"                   # hanya untuk daftar kolom (kenali-skema); isinya tidak dibaca
+appeals = "appeals"               # opsional: tidak ada → banding dianggap tidak ada
+history = "video_status_history"  # opsional: hanya untuk daftar kolom
+
+[videos]              # wajib: id, campaign_id, url, status
+id = "id"
+campaign_id = "campaign_id"
+url = "video_url"                 # link hanya dipakai di laptop untuk mengunduh — tidak pernah dikirim ke AI / Supabase / log
+platform = "platform"
+# platform_video_id = "platform_video_id"   # buka komentar kalau ada kolom id video platform tersendiri (cari link lebih cepat)
+status = "status"
+caption = "caption"
+hashtags = "hashtags"
+hashtag_present = "hashtag_present"
+bot_score = "bot_score"
+current_views = "current_views"
+duration = "duration"
+created_at = "created_at"
+
+[campaigns]           # wajib: id, brief_detail (brief_instructions / brief_dos / brief_donts / brief_goal / brief_narrative KOSONG — tidak dipakai)
+id = "id"
+title = "title"
+brand = "brand"
+status = "status"
+rules = "rules"
+hashtags = "hashtags"
+min_video_duration = "min_video_duration"
+brief_detail = "brief_detail"
+source_video_url = "source_video_url"
+
+[audit]               # wajib: action, details, created_at, target_id. Dari details hanya ->>'reason' (details.notes TIDAK dibaca)
+action = "action"
+details = "details"
+user_id = "user_id"               # id reviewer → disamarkan jadi R-xxxxxx (nama staff tidak dibaca)
+created_at = "created_at"
+target_id = "target_id"           # id video yang diputuskan (bisa juga entity_id / video_id — cek kenali-skema)
+
+[staff]               # hanya id. Nama / email staff TIDAK dibaca.
+id = "id"
+
+[appeals]             # wajib (kalau tabel ada): video_id, status
+video_id = "video_id"
+status = "status"
+created_at = "created_at"         # banding terbaru per video yang dipakai
+
+[history]
+video_id = "video_id"
+status = "status"
+created_at = "created_at"
+
+[nilai]               # isi kolom yang berarti approve / reject / hasil banding (huruf besar-kecil diabaikan).
+# Cek nilai sebenarnya: `review kenali-skema --nilai` (hanya nilai unik + jumlah, tanpa data pribadi)
+status_approve = ["approved", "approve", "accepted"]
+status_reject = ["rejected", "reject", "declined"]
+audit_approve = ["video_approve"]
+audit_reject = ["video_reject"]
+banding_dibatalkan = ["accepted", "approved", "overturned", "granted"]   # banding diterima → keputusan reviewer dibatalkan
+banding_dikuatkan = ["rejected", "denied", "upheld", "declined"]
+banding_menunggu = ["pending", "open", "review", "in_review"]

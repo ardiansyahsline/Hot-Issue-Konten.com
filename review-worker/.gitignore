@@ -1,0 +1,12 @@
+# rahasia & data lokal laptop — JANGAN di-commit (video sementara, laporan, cache materi, sidik jari, log)
+.env
+.env.*
+!.env.example
+.venv/
+data/
+tools/jdk/
+tools/panako/
+__pycache__/
+*.pyc
+*.log
+.ruff_cache/

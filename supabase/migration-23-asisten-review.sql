@@ -158,10 +158,49 @@ create table if not exists public.review_jobs (
   updated_at   timestamptz not null default now()
 );
 create index if not exists review_jobs_queue_idx on public.review_jobs (status, created_at);
--- klaim atomik: hanya SATU pekerjaan berstatus 'proses' di seluruh sistem (laptop kedua gagal klaim → menunggu)
-create unique index if not exists review_jobs_one_running on public.review_jobs ((true)) where status = 'proses';
+-- klaim atomik (review_claim_job di bawah): paling banyak SATU uji akurasi 'proses' + SATU pekerjaan pendek 'proses'
+-- (video / materi / sinkron). Laptop tetap mengerjakan satu per satu: pekerjaan pendek diselipkan di antara video uji,
+-- jadi "cek 1 video" tidak menunggu uji 500 video selesai. Laptop kedua gagal klaim → menunggu.
+drop index if exists public.review_jobs_one_running;
+create unique index if not exists review_jobs_one_running_per_class on public.review_jobs ((kind = 'uji')) where status = 'proses';
 -- satu uji akurasi menunggu sekaligus (tombol 50 / 500 diklik berkali-kali tidak menumpuk)
 create unique index if not exists review_jobs_one_uji_waiting on public.review_jobs (kind) where status = 'antri' and kind = 'uji';
+
+-- ambil 1 pekerjaan 'antri' secara atomik untuk laptop (service role saja). p_kinds = jenis yang mau diambil, urutan
+-- prioritas: video → materi → sinkron → uji, lalu yang paling lama. Kosong = tidak ada / kelasnya sedang dikerjakan.
+create or replace function public.review_claim_job(p_worker text, p_kinds text[] default array['video', 'materi', 'sinkron', 'uji'])
+returns setof public.review_jobs
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  j public.review_jobs;
+begin
+  select * into j from public.review_jobs
+  where status = 'antri' and kind = any (p_kinds)
+    and not exists (select 1 from public.review_jobs b where b.status = 'proses' and (b.kind = 'uji') = (review_jobs.kind = 'uji'))
+  order by array_position(array['video', 'materi', 'sinkron', 'uji'], kind), created_at
+  limit 1
+  for update skip locked;
+  if not found then
+    return;
+  end if;
+  begin
+    update public.review_jobs
+    set status = 'proses', worker = p_worker, started_at = now(), finished_at = null, progress = 0, message = 'Mulai diproses di laptop…'
+    where id = j.id and status = 'antri'
+    returning * into j;
+  exception when unique_violation then
+    return; -- laptop lain baru saja mengambil pekerjaan sekelas
+  end;
+  if j.id is not null then
+    return next j;
+  end if;
+end;
+$$;
+revoke execute on function public.review_claim_job(text, text[]) from public, anon, authenticated;
+grant execute on function public.review_claim_job(text, text[]) to service_role;
 
 -- ---------- 7. Hasil per video ----------
 create table if not exists public.review_results (
@@ -354,6 +393,12 @@ drop policy if exists "review_jobs_cancel" on public.review_jobs;
 create policy "review_jobs_cancel" on public.review_jobs for update to authenticated
   using ((select public.can_use_asisten_review()) and status in ('antri', 'proses') and (created_by = auth.uid() or public.is_admin()))
   with check (status = 'batal');
+
+-- run uji lama boleh dihapus admin (hasil per video ikut terhapus; laporan HTML di bucket dihapus website)
+grant delete on public.review_runs to authenticated;
+drop policy if exists "review_runs_admin_delete" on public.review_runs;
+create policy "review_runs_admin_delete" on public.review_runs for delete to authenticated
+  using (public.is_admin() and status <> 'proses');
 
 -- umpan balik: milik sendiri
 grant insert, update, delete on public.review_feedback to authenticated;
