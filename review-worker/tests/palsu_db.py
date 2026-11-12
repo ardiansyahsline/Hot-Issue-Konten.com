@@ -341,6 +341,9 @@ class SupaPalsu:
     def detak(self, info: dict) -> None:
         self.insert("review_workers", {"id": self.worker, "last_seen": _now(), "info": info}, on_conflict="id", merge=True)
 
+    def mati(self, info: dict) -> None:
+        self.update("review_workers", {"id": f"eq.{self.worker}"}, {"last_seen": "2000-01-01T00:00:00Z", "info": {**info, "status": "mati"}})
+
     def simpan_hasil(self, row: dict) -> dict:
         got = self.insert("review_results", row, on_conflict="scope,video_id", merge=True)
         return got[0] if got else {}

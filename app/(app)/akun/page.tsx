@@ -10,7 +10,8 @@ import { TABS, TAB_IDS, firstOpenHome } from "@/lib/tabs";
 export default async function AkunPage() {
   const [{ user, supabase }, profile, access] = await Promise.all([getCurrentUser(), getProfile(), getTabAccess()]);
   // halaman Akun selalu boleh dibuka; di sini user diberi tahu tab mana yang ditutup admin
-  const closedNames = TABS.filter((t) => access.blocked.has(t.id)).map((t) => t.label);
+  // tab khusus (optIn) yang belum dibuka bukan "ditutup" -> tidak disebut di sini
+  const closedNames = TABS.filter((t) => !t.optIn && access.blocked.has(t.id)).map((t) => t.label);
   // semua tab ditutup / semua halaman ditutup tapi tombol 🎵 Musik masih boleh
   const allClosed = access.blocked.size === TAB_IDS.length;
   const pagesClosed = !allClosed && closedNames.length > 0 && !firstOpenHome(access.blocked);

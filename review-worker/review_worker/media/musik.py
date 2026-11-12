@@ -108,7 +108,10 @@ def _konfig(strategi: str, cache: Path) -> list[str]:
             f"PANAKO_LMDB_FOLDER={cache / 'tidak-dipakai'}", f"OLAF_LMDB_FOLDER={cache / 'tidak-dipakai'}",
             f"DECODER_PIPE_ENVIRONMENT={pipe_env}", f"DECODER_PIPE_ENVIRONMENT_ARG={pipe_arg}",
             f"DECODER_PIPE_LOG_FILE={cache / 'decoder_log.txt'}", "AVAILABLE_PROCESSORS=1", "CHECK_DUPLICATE_FILE_NAMES=FALSE",
-            "PANAKO_MIN_MATCH_DURATION=4", "OLAF_MIN_MATCH_DURATION=4", "NUMBER_OF_QUERY_RESULTS=20"]
+            "PANAKO_MIN_MATCH_DURATION=4", "OLAF_MIN_MATCH_DURATION=4", "NUMBER_OF_QUERY_RESULTS=20",
+            # sedikit lebih peka dari bawaan (10/5/2): musik di video clipper sering pelan di bawah suara & dikompres AAC.
+            # Dicek selftest: 11 lagu lain tetap 0 salah-cocok, lagu campaign +4% tempo/nada di bawah derau tetap ketemu.
+            "PANAKO_MIN_HITS_UNFILTERED=7", "PANAKO_MIN_HITS_FILTERED=4", "PANAKO_QUERY_RANGE=3"]
 
 
 def jalankan_panako(cfg, strategi: str, cache: Path, refs: list[Path], queries: list[Path], timeout: float = 600) -> dict:

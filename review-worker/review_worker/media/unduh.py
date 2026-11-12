@@ -81,6 +81,11 @@ def _rate_bytes(rate: str) -> float:
     return max(64 * 1024, float(m.group(1)) * mult)
 
 
+def _maks_byte(cfg) -> int:
+    v = getattr(cfg, "dl_max_mb", 200)
+    return int(max(0.01, float(200 if v is None else v)) * 1024 * 1024)
+
+
 def perintah(url: str, folder: Path, cfg) -> list[str]:
     """argumen yt-dlp (dipisah supaya bisa dites tanpa jaringan)"""
     args = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-cookies-from-browser", "--no-playlist",
@@ -88,7 +93,7 @@ def perintah(url: str, folder: Path, cfg) -> list[str]:
             "--restrict-filenames", "-f", FORMAT, "--merge-output-format", "mp4",
             "--retries", "2", "--fragment-retries", "2", "--socket-timeout", "30",
             "--limit-rate", str(getattr(cfg, "dl_rate", "4M") or "4M"),
-            "--max-filesize", f"{int(getattr(cfg, 'dl_max_mb', 200) or 200)}M",
+            "--max-filesize", str(_maks_byte(cfg)),
             "--match-filter", "!is_live & !was_live",
             "-o", str(folder / "video.%(ext)s")]
     ff = ffmpeg_bin()
@@ -108,7 +113,7 @@ def unduh_video(url: str, folder: Path, cfg) -> Path:
     if not url or not re.match(r"https?://", str(url).strip(), re.I):
         raise TidakBisaDiakses("Video tidak bisa diakses: link video tidak ada di data Konten.com.")
     folder.mkdir(parents=True, exist_ok=True)
-    maks_mb = int(getattr(cfg, "dl_max_mb", 200) or 200)
+    maks_mb = _maks_byte(cfg) / (1024 * 1024)
     batas_waktu = float(getattr(cfg, "dl_timeout", 0) or 0) or max(180.0, maks_mb * 1024 * 1024 / _rate_bytes(getattr(cfg, "dl_rate", "4M")) * 1.5 + 90)
     _jeda(cfg)
     mulai = time.monotonic()

@@ -5,10 +5,14 @@
  * Studio TIDAK di sini (diatur bagian "Akses Studio", maks 3). /admin hanya admin, /akun selalu boleh.
  *
  * Kalau menambah tab: tambahkan di TABS + daftar id di check constraint migration-22 (user_tab_blocks_known).
+ *
+ * Tab KHUSUS (`optIn: true`, mis. Asisten Review (Uji)): kebalikannya — bawaan TERTUTUP, dibuka admin per user.
+ * Disimpan di kolom user_tab_blocks.granted (daftar BUKA, migration-23), TIDAK pernah masuk `blocked`.
+ * Di TabAccess (server & browser) tab khusus yang belum dibuka ikut dihitung "ditutup", jadi menu, guard & pengalihan sama.
  */
 
 /** urutan = urutan menu (tab pertama yang boleh jadi tujuan pengalihan) */
-export const TAB_IDS = ["dashboard", "video_review", "catatan", "chat", "ai", "musik"] as const;
+export const TAB_IDS = ["dashboard", "video_review", "catatan", "chat", "ai", "musik", "asisten_review"] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 export type TabDef = {
@@ -21,6 +25,8 @@ export type TabDef = {
   paths: readonly string[];
   /** keterangan singkat di Admin */
   hint: string;
+  /** tab khusus: bawaan tertutup, dibuka admin per user (user_tab_blocks.granted) */
+  optIn?: boolean;
 };
 
 export const TABS: readonly TabDef[] = [
@@ -30,7 +36,21 @@ export const TABS: readonly TabDef[] = [
   { id: "chat", label: "Chat", icon: "💬", home: "/chat", paths: ["/chat"], hint: "Halaman chat, chat melayang & bunyinya" },
   { id: "ai", label: "AI", icon: "✨", home: "/ai", paths: ["/ai", "/api/ai"], hint: "Tab ✨ AI" },
   { id: "musik", label: "Musik AI", icon: "🎵", home: null, paths: ["/api/music"], hint: "Tombol 🎵 Musik di menu" },
+  {
+    id: "asisten_review",
+    label: "Asisten Review (Uji)",
+    icon: "🤖",
+    home: "/asisten-review",
+    paths: ["/asisten-review", "/api/asisten-review"],
+    hint: "Uji AI pembantu review video — bawaan tertutup, buka khusus untuk orang tertentu",
+    optIn: true,
+  },
 ];
+
+/** tab khusus (bawaan tertutup) & tab biasa (bawaan terbuka) */
+export const OPT_IN_TABS: readonly TabId[] = TABS.filter((t) => t.optIn).map((t) => t.id);
+export const BLOCKABLE_TABS: readonly TabDef[] = TABS.filter((t) => !t.optIn);
+export const isOptIn = (id: TabId) => OPT_IN_TABS.includes(id);
 
 export function isTabId(v: unknown): v is TabId {
   return typeof v === "string" && (TAB_IDS as readonly string[]).includes(v);
@@ -44,6 +64,22 @@ export function tabDef(id: TabId): TabDef {
 export function normalizeTabs(v: unknown): TabId[] {
   const list = Array.isArray(v) ? v : [];
   return TAB_IDS.filter((id) => list.includes(id));
+}
+
+/** Kolom `blocked` (daftar TUTUP): hanya tab biasa — tab khusus tidak pernah boleh masuk (constraint migration-22) */
+export function normalizeBlocked(v: unknown): TabId[] {
+  return normalizeTabs(v).filter((id) => !isOptIn(id));
+}
+
+/** Kolom `granted` (daftar BUKA): hanya tab khusus */
+export function normalizeGranted(v: unknown): TabId[] {
+  return normalizeTabs(v).filter(isOptIn);
+}
+
+/** daftar tutup efektif = blocked ∪ (tab khusus yang belum dibuka) — sama untuk server, Admin & halaman Akun */
+export function effectiveClosed(blocked: unknown, granted: unknown): TabId[] {
+  const b = new Set<TabId>([...normalizeBlocked(blocked), ...OPT_IN_TABS.filter((id) => !normalizeGranted(granted).includes(id))]);
+  return TAB_IDS.filter((id) => b.has(id));
 }
 
 /** Tab pemilik lampiran / reaksi / komentar menurut jenis targetnya (lib/attachments.ts, lib/reactions.ts) */
@@ -81,7 +117,8 @@ export function closedRedirect(blocked: Iterable<TabId>, tab: TabId | null): str
 }
 
 export function tabClosedText(tab: TabId): string {
-  return `Tab ${tabDef(tab).label} ditutup admin untuk akunmu.`;
+  const t = tabDef(tab);
+  return t.optIn ? `Tab ${t.label} belum dibuka admin untuk akunmu.` : `Tab ${t.label} ditutup admin untuk akunmu.`;
 }
 
 /** Error Supabase seputar akses tab -> kalimat awam (pola studioErrorText) */
@@ -89,6 +126,9 @@ export function tabErrorText(e: { code?: string; message?: string } | null | und
   const code = e?.code ?? "";
   const msg = e?.message ?? "";
   if (/semua tab/i.test(msg)) return "Admin selalu bisa membuka semua tab.";
+  // kolom granted (tab khusus) belum ada -> migration-23 belum dijalankan
+  if ((code === "42703" || code === "PGRST204") && /granted/i.test(msg))
+    return "Jalankan supabase/migration-23-asisten-review.sql dulu di Supabase (SQL Editor) untuk membuka tab khusus.";
   if (code === "42P01" || code === "PGRST205" || /schema cache|does not exist/i.test(msg))
     return "Jalankan supabase/migration-22-akses-tab.sql dulu di Supabase (SQL Editor), lalu muat ulang halaman.";
   if (code === "42501" || /row-level security|permission denied/i.test(msg)) return "Hanya admin yang boleh mengatur akses tab.";

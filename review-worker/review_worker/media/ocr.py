@@ -32,6 +32,11 @@ class OCR:
         self.error: Optional[str] = None
         self.lock = threading.Lock()
 
+    @property
+    def perangkat(self) -> Optional[str]:
+        """"gpu" / "cpu" / None (belum dimuat / mati) — dibaca detak jantung (runtime.py)"""
+        return {"easyocr-gpu": "gpu", "easyocr-cpu": "cpu"}.get(self.mode)
+
     def _muat(self) -> None:
         if self.reader is not None or self.mode == "mati":
             return
@@ -108,11 +113,30 @@ def _pribadi(teks: str, tetangga: list[str], boleh: set[str]) -> bool:
     t = teks.strip()
     if t.lower() in boleh:
         return False
+    for b in boleh:  # tag wajib campaign tidak dihitung sebagai @handle clipper
+        t = re.sub(re.escape(b) + r"(?![\w.])", " ", t, flags=re.I) if b.startswith("@") else t
     if "@" in t or privasi.ada_data_pribadi(t):
         return True
     if _MIRIP_HANDLE.match(t) and not t.isdigit() and any(_WATERMARK.match(x.strip()) for x in tetangga):
         return True  # watermark platform: logo "TikTok" + username di sebelahnya
-    return False
+    return mirip_username(t, boleh)
+
+
+def mirip_username(t: str, boleh: set[str] = frozenset()) -> bool:
+    """satu kata yang bentuknya nama akun walau OCR tidak membaca '@' (EasyOCR sering melewatkan '@'): huruf kecil/angka
+    dengan '_' atau '.', atau huruf+≥2 angka (mis. "clipper_rahasia", "budi.santoso", "rina1998"). Kata kapital biasa
+    ("TAYANG", "12DESEMBER") & hashtag tidak dihitung."""
+    t = t.strip().strip(",:;!?()[]\"'")
+    if not _MIRIP_HANDLE.match(t) or t.startswith("#") or len(t.lstrip("@")) < 4:
+        return False
+    inti = t.lstrip("@")
+    if inti.lower() in {b.lstrip("@").lower() for b in boleh}:
+        return False
+    if inti.isupper() or inti.isdigit():
+        return False
+    if re.search(r"[A-Za-z0-9][_.][A-Za-z0-9]", inti) or inti.startswith("_") or inti.endswith("_"):
+        return True
+    return bool(re.search(r"[a-z]", inti) and len(re.findall(r"\d", inti)) >= 2)
 
 
 def _blur(path: Path, kotak: list[list[int]]) -> None:
@@ -175,3 +199,21 @@ def dapatkan(rt) -> OCR:
     if o is None:
         o = rt.cache["ocr"] = OCR(rt.cfg)
     return o
+
+
+def cek(cfg) -> tuple[str, str]:
+    """untuk `review cek` & detak jantung TANPA memuat model: (easyocr-gpu / easyocr-cpu / mati, pesan awam)"""
+    if str(getattr(cfg, "ocr", "easyocr")).lower() in ("mati", "off", "0", ""):
+        return "mati", "OCR dimatikan (REVIEW_OCR=mati)."
+    import importlib.util
+
+    if importlib.util.find_spec("easyocr") is None:
+        return "mati", "EasyOCR belum terpasang (install.ps1 → requirements-gpu.txt)."
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "easyocr-gpu", f"EasyOCR siap di GPU ({torch.cuda.get_device_name(0)})."
+    except Exception:  # noqa: BLE001
+        pass
+    return "easyocr-cpu", "EasyOCR jalan di CPU (lebih lambat)."

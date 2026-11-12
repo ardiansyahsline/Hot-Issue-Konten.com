@@ -102,7 +102,7 @@ class KunciGPU:
         self.nama = nama
         self.folder = Path(folder) if folder else None
         self.menunggu = False  # sedang menunggu kunci (detak jantung: "menunggu_gpu")
-        self.mengalah = 0  # berapa kali BERTURUT-TURUT harus mengalah ke yang minta (review-worker: > 2 → lepas model)
+        self.mengalah = 0  # berapa kali BERTURUT-TURUT harus menunggu proses lain (review-worker: > 2 → lepas model)
 
     def _dir(self) -> Path:
         if self.folder is None:
@@ -150,9 +150,7 @@ class KunciGPU:
                     cek_batal()
                 try:
                     lawan_minta = (not prioritas) and self.ada_yang_minta()
-                    if lawan_minta:
-                        mengalah = True
-                    else:
+                    if not lawan_minta:
                         with _LOCK:
                             dipakai_thread_lain = key in _DIPEGANG
                         if not dipakai_thread_lain and _kunci_os(fh):
@@ -170,13 +168,17 @@ class KunciGPU:
                                 log.info("GPU didapat untuk %s sesudah menunggu %.0f dtk.", alasan, time.monotonic() - t0)
                             return key
                     if prioritas and time.monotonic() - minta_tulis > MINTA_PERBARUI:
-                        _tulis_json(minta, {"nama": self.nama, "pid": os.getpid(), "alasan": alasan, "sejak": time.time()})
-                        minta_tulis = time.monotonic()
+                        try:  # Windows: file sedang dibaca proses lain → coba lagi di putaran berikutnya
+                            _tulis_json(minta, {"nama": self.nama, "pid": os.getpid(), "alasan": alasan, "sejak": time.time()})
+                            minta_tulis = time.monotonic()
+                        except OSError:
+                            pass
                 except Exception as e:  # file kunci bermasalah → jalan tanpa kunci
                     log.warning("Kunci GPU bersama error (%s) — jalan tanpa kunci.", e)
                     self._batal(fh, minta, prioritas)
                     return None
                 self.menunggu = True
+                mengalah = True  # harus menunggu (proses lain memegang / meminta GPU)
                 if tunggu_maks is not None and time.monotonic() - t0 >= tunggu_maks:
                     p = self.pemegang() or {}
                     log.warning("GPU masih dipakai %s sesudah %.0f dtk — %s jalan tanpa menunggu lagi.", p.get("nama", "proses lain"),

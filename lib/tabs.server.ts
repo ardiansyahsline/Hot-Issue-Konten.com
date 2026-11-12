@@ -4,12 +4,12 @@ import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { getCurrentUser, getProfile } from "@/lib/auth";
 import type { Profile } from "@/lib/types";
-import { closedRedirect, normalizeTabs, tabClosedText, type TabId } from "@/lib/tabs";
+import { OPT_IN_TABS, closedRedirect, effectiveClosed, tabClosedText, type TabId } from "@/lib/tabs";
 
 /**
  * Akses tab per user (diatur admin). Cek di SERVER: halaman (requireTab / startTab), server action & route API (assertTab / tabDenied).
  * Batas data juga dijaga database (RLS migration-22), jadi ini lapisan menu, halaman & pesan ramah.
- * Tabel belum ada (migration-22 belum dijalankan) -> tidak ada yang ditutup (perilaku lama).
+ * Tabel belum ada (migration-22 belum dijalankan) -> tab biasa tidak ada yang ditutup (perilaku lama); tab khusus (optIn) tertutup.
  */
 
 export type TabAccess = {
@@ -25,16 +25,32 @@ type DB = Awaited<ReturnType<typeof getCurrentUser>>["supabase"];
 
 /** tabel user_tab_blocks belum dibuat (migration-22 belum dijalankan) */
 const missingTable = (e: { code?: string; message?: string }) =>
-  e.code === "42P01" || e.code === "PGRST205" || /schema cache|does not exist/i.test(e.message ?? "");
+  e.code === "42P01" || e.code === "PGRST205" || /relation .* does not exist|schema cache/i.test(e.message ?? "");
+/** kolom granted (tab khusus) belum ada (migration-23 belum dijalankan) */
+const missingGranted = (e: { code?: string; message?: string }) =>
+  (e.code === "42703" || e.code === "PGRST204") && /granted/i.test(e.message ?? "");
 
-/** Daftar tab yang ditutup untuk user ini. Tabel belum ada -> []. Error lain -> coba sekali lagi, tetap gagal -> null (+ log). */
+/**
+ * Daftar tab yang ditutup untuk user ini = blocked ∪ tab khusus yang belum dibuka (granted).
+ * Tabel belum ada -> hanya tab khusus (tab biasa terbuka, perilaku lama). Kolom granted belum ada -> tab khusus tertutup.
+ * Error lain -> coba sekali lagi, tetap gagal -> null (+ log).
+ */
 async function fetchBlocked(supabase: DB, uid: string): Promise<TabId[] | null> {
+  let withGranted = true;
   for (let i = 0; i < 2; i++) {
     try {
       // RLS: user hanya bisa membaca barisnya sendiri
-      const r = await supabase.from("user_tab_blocks").select("blocked").eq("user_id", uid).maybeSingle();
-      if (!r.error) return normalizeTabs((r.data as { blocked?: unknown } | null)?.blocked);
-      if (missingTable(r.error)) return [];
+      const r = await supabase.from("user_tab_blocks").select(withGranted ? "blocked, granted" : "blocked").eq("user_id", uid).maybeSingle();
+      if (!r.error) {
+        const row = r.data as { blocked?: unknown; granted?: unknown } | null;
+        return effectiveClosed(row?.blocked, row?.granted);
+      }
+      if (withGranted && missingGranted(r.error)) {
+        withGranted = false;
+        i--; // bukan percobaan gagal: ulangi tanpa kolom granted
+        continue;
+      }
+      if (missingTable(r.error)) return effectiveClosed([], []);
       if (i) console.error("[akses-tab] gagal cek tab yang ditutup:", r.error.code, r.error.message);
     } catch (e) {
       if (i) console.error("[akses-tab] gagal cek tab yang ditutup:", e);
@@ -52,8 +68,8 @@ export const getTabAccess = cache(async (): Promise<TabAccess> => {
   const [profile, blocked] = await Promise.all([getProfile(), fetchBlocked(supabase, user.id)]);
   // admin selalu semua tab (baris lama milik admin diabaikan)
   if (profile?.role === "admin") return { admin: true, blocked: new Set(), profile, sure: true };
-  // gagal dicek -> dianggap terbuka (aturan proyek); data tetap dijaga RLS di database
-  return { admin: false, blocked: new Set(blocked ?? []), profile, sure: blocked !== null };
+  // gagal dicek -> tab biasa dianggap terbuka (aturan proyek), tab khusus tetap tertutup; data tetap dijaga RLS di database
+  return { admin: false, blocked: new Set(blocked ?? OPT_IN_TABS), profile, sure: blocked !== null };
 });
 
 /**

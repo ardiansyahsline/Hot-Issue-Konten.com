@@ -11,6 +11,7 @@ import gc
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -19,6 +20,7 @@ from ..log import get
 from ..skema import SegmenTranskrip, Transkrip
 
 log = get("asr")
+COBA_LAGI_DETIK = 600.0  # model gagal dimuat → dicoba lagi paling cepat 10 mnt kemudian
 MAKS_TEKS = 4000  # karakter teks_penuh (±1K token) — cukup untuk video pendek
 _HALU = re.compile(
     r"^(terima kasih (telah|sudah|atas) (menonton|menyaksikan)|thanks for watching|subtitle[sd]? (by|oleh)|"
@@ -84,6 +86,7 @@ class ASR:
         self.model = None
         self.device: Optional[str] = None
         self.error: Optional[str] = None
+        self._gagal_pada = 0.0
         self.lock = threading.Lock()
 
     @property
@@ -93,6 +96,8 @@ class ASR:
     def _muat(self) -> None:
         if self.model is not None:
             return
+        if self.error and time.monotonic() - self._gagal_pada < COBA_LAGI_DETIK:
+            raise RuntimeError(self.error)  # baru gagal (mis. unduhan model terputus) → jangan coba tiap video
         try:
             from faster_whisper import WhisperModel
         except Exception as e:  # noqa: BLE001
@@ -126,9 +131,10 @@ class ASR:
                         return
                     except Exception as e:  # noqa: BLE001
                         errs.append(f"{dev}/{c}: {type(e).__name__}: {str(e)[:120]}")
-                        if lokal and ("local" in str(e).lower() or "not found" in str(e).lower() or "snapshot" in str(e).lower()):
-                            break  # model tidak ada di folder ini — perangkat lain tidak akan membantu
+                        if not re.search(r"cuda|cublas|cudnn|device|gpu|compute type|float16", str(e), re.I):
+                            break  # bukan masalah GPU (model tidak ada / unduhan gagal) — perangkat lain tidak membantu
         self.error = " | ".join(errs)[-500:] or "model whisper tidak bisa dimuat"
+        self._gagal_pada = time.monotonic()
         raise RuntimeError(self.error)
 
     def transkrip(self, audio: Path, boleh: Iterable[str] = ()) -> Transkrip:
@@ -188,3 +194,16 @@ def dapatkan(rt) -> ASR:
     if a is None:
         a = rt.cache["asr"] = ASR(rt.cfg)
     return a
+
+
+def cek(cfg) -> tuple[bool, str]:
+    """untuk `review cek` TANPA memuat model: (siap, pesan awam)"""
+    import importlib.util
+
+    if importlib.util.find_spec("faster_whisper") is None:
+        return False, "faster-whisper belum terpasang."
+    nama = str(getattr(cfg, "whisper_model", "large-v3-turbo") or "large-v3-turbo")
+    for f in folder_model(cfg):
+        if any(f.glob(f"models--*--faster-whisper-{nama}/snapshots/*/model.bin")) or any(f.glob(f"models--*{nama}*/snapshots/*/model.bin")):
+            return True, f"Model whisper {nama} siap."
+    return True, f"Model whisper {nama} belum diunduh — diunduh otomatis sekali saat video pertama (±1,6 GB)."

@@ -160,7 +160,7 @@ def _sidik_ref(m) -> Optional[list[tuple[list[int], list[int]]]]:
             pass
     ph, dh = data.get("phash") or [], data.get("dhash") or []
     if ph and isinstance(ph[0], list):  # trailer: list per keyframe
-        return [(_hex_list(p), _hex_list(d)) for p, d in zip(ph, dh)]
+        return [(_hex_list(p), _hex_list(d)) for p, d in zip(ph, dh, strict=False)]
     return [(_hex_list(ph), _hex_list(dh))]
 
 

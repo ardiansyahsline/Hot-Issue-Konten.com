@@ -85,6 +85,8 @@ export default function Nav({
     { href: "/catatan", label: "Catatan & Saran", icon: "📝", short: "Saran", show: open("catatan") },
     { href: "/chat", label: "Chat", icon: "💬", short: "Chat", show: open("chat") },
     { href: "/ai", label: "✨ AI", icon: "✨", short: "AI", show: open("ai") },
+    // tab khusus: hanya admin & user yang dibuka admin (bawaan tertutup — lib/tabs.ts optIn)
+    { href: "/asisten-review", label: "🤖 Asisten Review", icon: "🤖", short: "Asisten", show: open("asisten_review") },
     // Studio: admin, atau user yang diberi akses admin (dihitung di server oleh layout)
     { href: "/remotion", label: "🎬 Studio", icon: "🎬", short: "Studio", show: role === "admin" || studio },
     { href: "/admin", label: "Admin", icon: "⚙️", short: "Admin", show: role === "admin" },
