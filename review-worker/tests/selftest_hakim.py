@@ -79,8 +79,10 @@ def poin(b, kategori: str):
     return [p for p in b.poin if p.kategori == kategori]
 
 
-def ai_semua(b, hasil: str = "lolos", saran: str = "approve", keyakinan: int = 88, alasan_kode=None, kecuali: dict | None = None) -> dict:
-    """jawaban AI tiruan: semua poin DINILAI AI = hasil (kecuali {poin_id: (hasil, bukti)})"""
+def ai_semua(b, hasil: str = "lolos", saran: str = "approve", keyakinan: int = 88, alasan_kode=None, kecuali: dict | None = None,
+             condong="auto", keyakinan_condong=None) -> dict:
+    """jawaban AI tiruan: semua poin DINILAI AI = hasil (kecuali {poin_id: (hasil, bukti)}). condong "auto" = sama dengan saran
+    (cek_manusia → approve) dengan keyakinan sama; condong None = jawaban format lama (tanpa field condong)."""
     kecuali = kecuali or {}
     cl = []
     for p in b.poin:
@@ -88,8 +90,12 @@ def ai_semua(b, hasil: str = "lolos", saran: str = "approve", keyakinan: int = 8
             continue
         h, bk = kecuali.get(p.id, (hasil, f"frame 2 (detik 3.4): bukti untuk {p.id}"))
         cl.append({"poin_id": p.id, "hasil": h, "bukti": bk, "bukti_frame": [2], "bukti_detik": [3.4]})
-    return {"checklist": cl, "saran": saran, "alasan_kode": alasan_kode, "alasan_spesifik": "Kalimat spesifik dari AI.",
-            "keyakinan": keyakinan, "ringkasan": "Ringkasan AI."}
+    out = {"checklist": cl, "saran": saran, "alasan_kode": alasan_kode, "alasan_spesifik": "Kalimat spesifik dari AI.",
+           "keyakinan": keyakinan, "ringkasan": "Ringkasan AI."}
+    if condong is not None:
+        out["condong"] = (saran if saran in ("approve", "reject") else "approve") if condong == "auto" else condong
+        out["keyakinan_condong"] = keyakinan if keyakinan_condong is None else keyakinan_condong
+    return out
 
 
 def materi_ok(durasi: float = 24.6, caption: str = "Wajib nonton! FILM X tayang 12 Desember di bioskop. Tag @filmx_official #filmx #konten",
@@ -771,6 +777,157 @@ def brief_durasi_video_teks_bebas():
     return f"{len(kasus)} bentuk durasiVideo"
 
 
+# ================================================================== condong AI (approve/reject + keyakinan) — aturan a4
+@test
+def skema_dan_rubrik_condong():
+    sk = hakim.skema_keputusan()
+    pr = sk["properties"]
+    assert "condong" in sk["required"] and "keyakinan_condong" in sk["required"]
+    assert pr["condong"].get("enum") == ["approve", "reject"] and "anyOf" not in pr["condong"], pr["condong"]  # tanpa null: SELALU diisi
+    assert pr["keyakinan_condong"].get("type") == "integer" and "minimum" not in pr["keyakinan_condong"]
+    assert "Abaikan poin BUTUH CEK MANUSIA" in pr["condong"]["description"]
+    # rubrik terbaru menjelaskan condong; teks rubrik statis tetap blok system pertama (prefix cache)
+    r = rubrik.muat_rubrik()
+    assert r.versi == "v2" and "keyakinan_condong" in r.teks and "condong" in r.teks and "JANGAN menebak identitas" in r.teks
+    assert rubrik.muat_rubrik("v1").hash != r.hash and aturan.ATURAN_VERSI == "a4"
+    h, _ = hakim_palsu(ai_semua(brief_dari("film")))
+    req = h.bangun_permintaan(brief_dari("film"), materi_ok(), ref_ada())
+    assert req["system"][0]["text"] == r.teks and "condong" in req["messages"][0]["content"][-1]["text"]
+    # jawaban format lama (tanpa condong) tetap terbaca
+    assert KeputusanAI.model_validate(ai_semua(brief_dari("film"), condong=None)).condong is None
+
+
+@test
+def aturan_condong():
+    b = brief_dari("film")
+    cta = poin(b, "cta")[0].id
+    # approve bersih → condong approve, keyakinan dari AI
+    f = nilai(b, ai_semua(b, keyakinan=88, keyakinan_condong=83))
+    assert (f.saran, f.condong, f.keyakinan_condong) == ("approve", "approve", 83), (f.saran, f.condong, f.keyakinan_condong)
+    # AI menyerahkan ke manusia tapi condong reject 64 (CTA tidak ada, ada bukti) → tanda cek manusia TETAP + condong reject 64
+    j = ai_semua(b, saran="cek_manusia", keyakinan=60, condong="reject", keyakinan_condong=64,
+                 kecuali={cta: ("tidak", "transkrip 00:00-00:20 tanpa ajakan; OCR & caption juga tidak")})
+    f = nilai(b, j)
+    assert f.saran == "cek_manusia" and f.serah and (f.condong, f.keyakinan_condong) == ("reject", 64), (f.saran, f.condong, f.keyakinan_condong)
+    # keyakinan saran rendah → cek manusia, condong tetap ada
+    f = nilai(b, ai_semua(b, keyakinan=55, keyakinan_condong=58))
+    assert f.saran == "cek_manusia" and "keyakinan_rendah" in f.serah and (f.condong, f.keyakinan_condong) == ("approve", 58)
+    # dijepit 50..100
+    assert nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=40, keyakinan_condong=20)).keyakinan_condong == 50
+    assert nilai(b, ai_semua(b, keyakinan=88, keyakinan_condong=150)).keyakinan_condong == 100
+    # fakta kode: durasi 9.8 dtk < minimal 15 → condong reject (keyakinan fakta kode 90) walau AI condong approve 85
+    f = nilai(b, ai_semua(b, keyakinan=85), materi=materi_ok(durasi=9.8))
+    assert f.saran == "reject" and (f.condong, f.keyakinan_condong) == ("reject", 90), (f.saran, f.condong, f.keyakinan_condong)
+    f = nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=50, condong="reject", keyakinan_condong=95), materi=materi_ok(durasi=9.8))
+    assert (f.condong, f.keyakinan_condong) == ("reject", 95)
+    # hashtag wajib hilang (fakta kode) → condong reject 80
+    f = nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=60, condong="approve", keyakinan_condong=77),
+              materi=materi_ok(caption="Seru banget filmnya", hashtags=()))
+    assert f.condong == "reject" and f.keyakinan_condong == 80, (f.condong, f.keyakinan_condong)
+    # saran final reject (lolos aturan) tapi AI condong approve (tidak konsisten) → condong ikut saran
+    f = nilai(b, ai_semua(b, saran="reject", alasan_kode="cta_tidak_ada", keyakinan=84, condong="approve", keyakinan_condong=70,
+                          kecuali={cta: ("tidak", "transkrip 00:00-00:20 tanpa ajakan")}))
+    assert f.saran == "reject" and (f.condong, f.keyakinan_condong) == ("reject", 84)
+    # AI gagal / menolak / video tidak bisa diakses → tanpa condong
+    assert nilai(b, None, gagal="ai_gagal").condong is None and nilai(b, None, gagal="ai_menolak").keyakinan_condong is None
+    m = materi_ok().model_copy(update={"status": "tidak_bisa_diakses", "error": "Video tidak bisa diakses."})
+    f = nilai(b, ai_semua(b), materi=m)
+    assert f.condong is None and f.keyakinan_condong is None and f.saran == "cek_manusia"
+    # jawaban lama tanpa condong: saran approve → condong approve (keyakinan saran); cek_manusia + poin wajib "tidak" → reject 50
+    f = nilai(b, ai_semua(b, keyakinan=88, condong=None))
+    assert (f.condong, f.keyakinan_condong) == ("approve", 88)
+    f = nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=60, condong=None, kecuali={cta: ("tidak", "transkrip tanpa ajakan")}))
+    assert (f.condong, f.keyakinan_condong) == ("reject", 50)
+    return "approve/reject/cek_manusia + fakta kode + jepit + gagal = None"
+
+
+@test
+def aturan_condong_identitas_tidak_ditebak():
+    b = brief_dari("artis")
+    ids = [p.id for p in b.poin if p.alasan_manusia == "identitas_orang"]
+    # poin identitas → tetap tanda cek manusia; condong AI dari poin lain (approve 75) dipertahankan
+    f = nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=60, condong="approve", keyakinan_condong=75))
+    assert f.saran == "cek_manusia" and "identitas_orang" in f.serah and (f.condong, f.keyakinan_condong) == ("approve", 75)
+    # AI melanggar rubrik: menilai poin identitas "tidak" lalu condong reject yakin → tidak ada poin lain yang dilanggar →
+    # keyakinan dijepit 50 (identitas tidak boleh jadi dasar condong)
+    j = ai_semua(b, saran="cek_manusia", keyakinan=60, condong="reject", keyakinan_condong=85)
+    j["checklist"] += [{"poin_id": i, "hasil": "tidak", "bukti": "frame 1: bukan artis asli", "bukti_frame": [1], "bukti_detik": []}
+                       for i in ids]
+    f = nilai(b, j)
+    assert f.condong == "reject" and f.keyakinan_condong == 50 and "identitas_orang" in f.serah, (f.condong, f.keyakinan_condong)
+    assert all(c.oleh == "manusia" and c.hasil == "tidak_bisa_dinilai" for c in f.checklist if c.poin_id in ids)
+    # condong reject didukung poin lain (CTA tidak ada) → keyakinan AI dipakai, tanda identitas tetap
+    cta = poin(b, "cta")[0].id
+    f = nilai(b, ai_semua(b, saran="cek_manusia", keyakinan=60, condong="reject", keyakinan_condong=81,
+                          kecuali={cta: ("tidak", "transkrip & OCR tanpa ajakan nonton")}))
+    assert (f.condong, f.keyakinan_condong) == ("reject", 81) and "identitas_orang" in f.serah
+
+
+@test
+def hakim_condong_lewat_sdk_tiruan():
+    b = brief_dari("film")
+    h, _ = hakim_palsu(ai_semua(b, saran="cek_manusia", keyakinan=62, condong="approve", keyakinan_condong=82))
+    f = h.nilai(b, materi_ok(), ref_ada(trailer=True))
+    assert f.saran == "cek_manusia" and (f.condong, f.keyakinan_condong) == ("approve", 82), (f.saran, f.condong, f.keyakinan_condong)
+    # keyakinan_condong desimal / string di jawaban teks bebas → tetap terbaca (cadangan _urai)
+    j = ai_semua(b, keyakinan_condong=79)
+    j["keyakinan_condong"] = "79.4"
+    resp = pa.buat_respons("Hasil:\n" + json.dumps(j), "end_turn", {"input_tokens": 1, "output_tokens": 1}, "req_c")
+    ai = hakim.Hakim._urai(resp)
+    assert ai is not None and ai.condong == "approve" and ai.keyakinan_condong == 79
+
+
+@test
+def brief_identitas_benda_dan_brand():
+    """perbaikan: 'Nama Huruf Besar + terlihat/tampil/muncul' yang sebenarnya benda/produk/judul BUKAN identitas orang"""
+    d = brief.deteksi_identitas_orang
+    tidak = ["Kemasan Kopi Senja terlihat jelas", "Logo Brand X tampil", "Logo Kopi Kenangan tampil di akhir video",
+             "Judul film Agak Laen muncul di awal video", "Poster Film Agak Laen muncul", "Wajib menampilkan kemasan Kopi Senja",
+             "Produk Sabun Wangi harus terlihat", "Botol Teh Pucuk Harum terlihat di tangan", "Tulisan Promo Gajian tampil di layar",
+             "Wajib ada logo Kopi Kenangan", "Nama Aplikasi Gojek muncul", "Judul Film Pengabdi Setan tampil"]
+    ya = ["Artis bukan pemain film", "artis X sebelum berjilbab", "Tampilkan artis X sebelum berjilbab", "aktor pakai prostetik",
+          "Reza Rahadian harus tampil", "Wajib menampilkan Reza Rahadian", "Wajib ada cuplikan Reza Rahadian",
+          "Foto Reza Rahadian tampil di akhir", "Pastikan Dian Sastro muncul", "Footage wajib: adegan Dian Sastro menangis",
+          # kata benda di dekat (bukan TEPAT di depan) nama orang tidak boleh membatalkan deteksi
+          "Video menampilkan produk bersama Raffi Ahmad", "Tampilkan logo dan Raffi Ahmad", "Pastikan logo dan Raffi Ahmad tampil",
+          "Saat minum kopi Raffi Ahmad harus terlihat", "Di acara Raffi Ahmad muncul", "Pada adegan konser Raisa Andriana muncul",
+          "Video Dian Sastro tampil", "Bersama Novel Baswedan", "Tampilkan Video Dian Sastro", "Konser Raisa Andriana tampil",
+          "Tampilkan logo. Raffi Ahmad harus terlihat"]
+    tidak += ["Botol Aqua Life terlihat", "Menampilkan merek Kopi Senja", "Poster Agak Laen terlihat", "Festival Kopi Senja tampil",
+              "Ada Kopi Kenangan", "Produk Indomie Goreng terlihat", "Logo Brand Resmi harus terlihat"]
+    salah = [t for t in tidak if d(t)] + [t for t in ya if not d(t)]
+    assert not salah, salah
+    # namaBrandArtist: brand / produk (konteks bukan artis) → bukan orang; poin yang menyebut penyanyi/artis tetap orang
+    ab, nb = brief.pengecualian_identitas("Campaign Desember", "PT Minuman", "Kopi Senja", "Promosi produk minuman")
+    assert nb == ("Kopi Senja",) and not d("Kopi Senja harus tampil", ab, nb) and not d("Wajib menampilkan Kopi Senja", ab, nb)
+    assert d("Penyanyi Kopi Senja harus tampil", ab, nb) and d("Artis Kopi Senja wajib muncul", ab, nb)
+    # konteks artis/musik → namaBrandArtist = nama orang
+    ab, nb = brief.pengecualian_identitas("Single Baru", "Label X", "Raisa Andriana", "Promosi lagu baru")
+    assert nb == () and d("Raisa Andriana harus tampil", ab, nb) and d("Wajib menampilkan Raisa Andriana", ab, nb)
+    ab, nb = brief.pengecualian_identitas(None, None, "Artis: Raisa Andriana", None)
+    assert nb == () and d("Raisa Andriana harus tampil", ab, nb)
+    # lewat parser (jenisKampanye + namaBrandArtist di brief_detail) dan aturan memakai pengecualian yang sama
+    camp = CampaignDB(id="c-kopi", title="Ngopi Sore", brand="PT Senja", brief_detail={
+        "jenisKampanye": "Produk minuman", "namaBrandArtist": "Kopi Senja",
+        "elemenWajib": ["Kemasan Kopi Senja terlihat jelas", "Kopi Senja harus tampil", "Reza Rahadian harus tampil"]})
+    bk = brief.parse_brief(camp)
+    cara = {p.teks: p.cara_nilai for p in bk.poin}
+    assert cara["Kemasan Kopi Senja terlihat jelas"] == "ai" and cara["Kopi Senja harus tampil"] == "ai", cara
+    assert cara["Reza Rahadian harus tampil"] == "manusia", cara
+    assert brief.pengecualian_brief(bk)[1] == ("Kopi Senja",)
+    f = aturan.terapkan_aturan(KeputusanAI.model_validate(ai_semua(bk)), bk, materi_ok(), ref_ada(), Cfg())
+    oleh = {c.teks: c.oleh for c in f.checklist}
+    assert oleh["Kemasan Kopi Senja terlihat jelas"] == "ai" and oleh["Kopi Senja harus tampil"] == "ai" and oleh["Reza Rahadian harus tampil"] == "manusia"
+    camp2 = CampaignDB(id="c-lagu", title="Single Baru", brand="Label X", brief_detail={
+        "jenisKampanye": "Promosi lagu baru", "namaBrandArtist": "Raisa Andriana",
+        "elemenWajib": ["Raisa Andriana harus tampil", "Poster Single Baru terlihat jelas"]})
+    b2 = brief.parse_brief(camp2)
+    cara2 = {p.teks: p.cara_nilai for p in b2.poin}
+    assert cara2["Raisa Andriana harus tampil"] == "manusia" and cara2["Poster Single Baru terlihat jelas"] == "ai", cara2
+    assert brief.pengecualian_brief(b2)[1] == ()
+    return f"{len(tidak)} negatif + {len(ya)} positif + namaBrandArtist"
+
+
 # ================================================================== rubrik
 @test
 def rubrik_versi_hash_dan_panjang():
@@ -889,6 +1046,7 @@ def hakim_refusal_maxtokens_rusak():
         h, k = hakim_palsu(jawab, budget=bud)
         f = h.nilai(b, materi_ok(), ref_ada())
         assert f.saran == "cek_manusia" and f.serah[0] == serah, (jawab, f.serah)
+        assert f.condong is None and f.keyakinan_condong is None, (jawab, f.condong)  # gagal / menolak → tanpa condong (bukan tebakan)
         assert f.pemakaian.stop_reason in ("refusal", "max_tokens", "end_turn") and len(k.panggilan) == 1
         assert f.pemakaian.input > 0  # tetap ditagih → dicatat
     assert bud.terpakai() > 0
@@ -1036,7 +1194,7 @@ def hakim_dengan_pipeline_palsu():
     finally:
         susun.buat_materi_video, media_materi.referensi_campaign = asli
     assert h.pipeline_status == "ok" and h.suggestion == "approve", (h.pipeline_status, h.suggestion, h.error, h.handoff_reasons)
-    assert h.final_truth == "approve" and h.match is True and h.rubric_version == "v1" and h.cost_usd > 0
+    assert h.final_truth == "approve" and h.match is True and h.rubric_version == rubrik.daftar_versi()[-1] and h.cost_usd > 0
     assert h.tokens["cache_write_1h"] > 0 and h.stage_sec.get("hakim") is not None
     assert len(h.checklist) == len([p for p in b.poin if p.cara_nilai != "info"])
     row = supa.tabel["review_results"][0]

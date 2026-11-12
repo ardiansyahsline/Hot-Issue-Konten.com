@@ -19,6 +19,8 @@ export const AR_PAGES = [
 
 export type Saran = "approve" | "reject" | "cek_manusia";
 export type Keputusan = "approve" | "reject";
+/** condong AI sendiri (migration-24): SELALU approve/reject kalau AI sempat menilai; null = AI gagal / menolak / video tak bisa diakses */
+export type Condong = "approve" | "reject";
 export type HasilPoin = "lolos" | "tidak" | "tidak_bisa_dinilai";
 export type PipelineStatus = "ok" | "tidak_bisa_diakses" | "gagal" | "dilewati_biaya";
 export type Banding = "dibatalkan" | "dikuatkan" | "menunggu";
@@ -86,6 +88,10 @@ export type ReviewResult = {
   pipeline_status: PipelineStatus;
   suggestion: Saran | null;
   confidence: number | null;
+  /** migration-24 — undefined = kolom belum ada (migration belum dijalankan), null = AI tidak berpendapat */
+  ai_lean?: Condong | null;
+  /** 0–100: seberapa yakin condong itu benar */
+  ai_lean_confidence?: number | null;
   official_reason: string | null;
   official_code: KodeAlasan | null;
   specific_reason: string | null;
@@ -217,7 +223,35 @@ export type RunMetrics = {
   biaya: { total_usd: number; per_video_usd: number; per_video_idr: number; kurs: number; per_hari_idr: number; per_bulan_idr: number; video_per_hari: number; token: { input: number; output: number; cache_read: number; cache_write: number } };
   waktu: { rata_detik: number | null; median_detik: number | null; p90_detik: number | null; per_tahap: Record<string, number> };
   contoh: { benar: number[]; salah: number[] };
+  /** pendapat AI sendiri (KONTRAK-CONDONG.md §3) — run lama tidak punya → bagian condong disembunyikan */
+  condong?: CondongMetrics;
 };
+
+/** Persen + kisaran Wilson 95% (metrik.py) */
+export type PersenWilson = Persen & { ci95?: [number, number] | null };
+/** review_runs.metrics.condong — akurasi pendapat AI sendiri, tabel ambang, kalibrasi (KONTRAK-CONDONG.md §3) */
+export type CondongMetrics = {
+  versi: 1;
+  n_kebenaran: number;
+  n_ada: number;
+  n_tanpa: number;
+  cakupan: number | null;
+  akurasi: PersenWilson;
+  /** matriks[kebenaran][condong] */
+  matriks: Record<Condong, Record<Condong, number>>;
+  ambang: { min: number; n: number; ditangani_persen: number | null; akurasi: PersenWilson; salah_approve: number; salah_reject: number; n_bertanda: number }[];
+  kalibrasi: { dari: number; sampai: number; n: number; rata_yakin: number | null; akurasi: PersenWilson; selisih: number | null }[];
+  termasuk_di_luar_video?: PersenWilson;
+  per_condong?: Partial<Record<Condong, PersenWilson>>;
+  catatan_sampel?: string;
+};
+
+/** kolom condong AI (migration-24). Dipakai untuk select ulang tanpa kolom ini kalau migration-24 belum dijalankan. */
+export const CONDONG_COLS = "ai_lean, ai_lean_confidence";
+/** error Supabase karena kolom condong belum ada (42703 Postgres / PGRST204 cache skema PostgREST) */
+export const condongBelumAda = (e: { code?: string; message?: string } | null | undefined) =>
+  !!e && (e.code === "42703" || e.code === "PGRST204" || /ai_lean/i.test(e.message ?? ""));
+export const CONDONG_LABEL: Record<Condong, string> = { approve: "APPROVE", reject: "REJECT" };
 
 export const SARAN_LABEL: Record<Saran, string> = { approve: "Approve", reject: "Reject", cek_manusia: "Butuh cek manusia" };
 export const HASIL_POIN_LABEL: Record<HasilPoin, string> = { lolos: "Lolos", tidak: "Tidak", tidak_bisa_dinilai: "Tidak bisa dinilai" };
@@ -309,6 +343,7 @@ export function rupiah(usd: number | null | undefined, kurs = 18000): string {
 export function arErrorText(e: { code?: string; message?: string } | null | undefined, fallback = "Gagal. Coba lagi sebentar."): string {
   const code = e?.code ?? "";
   const msg = e?.message ?? "";
+  if (condongBelumAda(e)) return "Jalankan supabase/migration-24-asisten-review-condong.sql di Supabase (SQL Editor), lalu muat ulang halaman.";
   if (code === "42P01" || code === "PGRST205" || code === "42883" || code === "PGRST202" || /schema cache|does not exist/i.test(msg))
     return "Jalankan supabase/migration-23-asisten-review.sql dulu di Supabase (SQL Editor), lalu muat ulang halaman.";
   if (code === "23505" && /uji_waiting/.test(msg)) return "Sudah ada uji yang menunggu laptop. Tunggu selesai atau batalkan dulu.";

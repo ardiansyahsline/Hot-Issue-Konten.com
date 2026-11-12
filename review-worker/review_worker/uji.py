@@ -274,7 +274,35 @@ class Simpanan:
             if len(rows) < 500:
                 break
             offset += 500
+        # migration-24 belum dijalankan → kolom ai_lean tidak ada di Supabase; condong diambil dari data/condong-lokal.jsonl
+        tanpa = [r for r in out.values() if not r.get("ai_lean")]
+        if tanpa:
+            lokal_c = self._condong_lokal(f"run:{run_id}")
+            for r in tanpa:
+                c = lokal_c.get(str(r["video_id"]))
+                if c:
+                    r["ai_lean"], r["ai_lean_confidence"] = c
         return list(out.values())
+
+    def _condong_lokal(self, scope: str) -> dict[str, tuple]:
+        from .pipeline import CONDONG_LOKAL
+
+        f = self.data / CONDONG_LOKAL
+        out: dict[str, tuple] = {}
+        if not f.is_file():
+            return out
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for baris in fh:
+                    try:
+                        r = json.loads(baris)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and r.get("scope") == scope and r.get("ai_lean") in ("approve", "reject"):
+                        out[str(r.get("video_id"))] = (r["ai_lean"], r.get("ai_lean_confidence"))
+        except OSError as e:
+            log.warning("%s tidak terbaca: %s", CONDONG_LOKAL, e)
+        return out
 
     def simpan_rubrik(self, rubrik) -> None:
         if rubrik is None:

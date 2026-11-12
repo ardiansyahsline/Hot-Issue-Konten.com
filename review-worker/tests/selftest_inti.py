@@ -106,6 +106,11 @@ class HakimPalsu:
             raise AnggaranHabis("Batas biaya harian $2 tercapai — klik Lanjutkan besok.")
         cek = [CekPoin(poin_id="p01", kategori="cta", teks="Ajak nonton", wajib=True, hasil="lolos",
                        bukti="transkrip 00:03: 'nonton di bioskop' — dari @clipper_palsu1 0812-3456-7890", bukti_detik=[3.0])]
+        if self.mode == "condong":  # AI menyerahkan ke manusia tapi punya condong sendiri
+            return PenilaianFinal(saran="cek_manusia", keyakinan=60, checklist=cek, serah=["keyakinan_rendah"], condong="reject",
+                                  keyakinan_condong=64, alasan_spesifik="Butuh cek manusia.", ringkasan="Ragu.",
+                                  pemakaian=PemakaianAI(input=900, output=700, biaya_usd=0.0013, model="claude-haiku-5-5", detik=1.0),
+                                  rubrik_versi="v2", rubrik_hash="abcdef123456")
         return PenilaianFinal(saran="approve" if self.mode == "approve" else "reject", keyakinan=150, checklist=cek,
                               alasan_kode=None if self.mode == "approve" else "cta_tidak_ada", alasan_spesifik="CTA ada di detik 3.",
                               ringkasan="Sesuai brief.", serah=[],
@@ -592,6 +597,105 @@ def t_supa_retry_pesan_awam_dan_bentuk_request():
     except supa.SupaError as e:
         assert "tidak bisa dihubungi" in str(e)
     return "retry 503, migration belum ada & kunci salah → pesan awam"
+
+
+@test
+def t_supa_migration24_belum_jalan_simpan_tanpa_condong():
+    """Supabase asli (PostgREST) menolak kolom ai_lean (PGRST204) → simpan ulang tanpa kolom, log SEKALI, sesudahnya langsung
+    tanpa kolom; 30 menit kemudian dicoba lagi dengan kolom (migration-24 bisa dijalankan sambil laptop menyala)."""
+    ada_kolom = {"v": False}
+    kirim: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        kirim.append(body)
+        if not ada_kolom["v"] and "ai_lean" in body:
+            return httpx.Response(400, json={"code": "PGRST204", "details": None, "hint": None,
+                                             "message": "Could not find the 'ai_lean' column of 'review_results' in the schema cache"})
+        return httpx.Response(201, json=[{"id": len(kirim), **body}])
+
+    s = supa.Supa("https://x.supabase.co", "k", "review-tes", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    s.sleep = lambda d: None
+    pesan: list[str] = []
+    h = logging.Handler()
+    h.emit = lambda rec: pesan.append(rec.getMessage())
+    logging.getLogger("review.supa").addHandler(h)
+    try:
+        row = {"scope": "run:x", "video_id": "1", "suggestion": "cek_manusia", "ai_lean": "reject", "ai_lean_confidence": 64}
+        got = s.simpan_hasil(row)
+        assert got["video_id"] == "1" and "ai_lean" not in got and s.tanpa_condong, got
+        assert len(kirim) == 2 and "ai_lean" in kirim[0] and "ai_lean" not in kirim[1] and "ai_lean_confidence" not in kirim[1]
+        s.simpan_hasil({**row, "video_id": "2"})
+        assert len(kirim) == 3 and "ai_lean" not in kirim[2], "sesudah tahu kolom belum ada: langsung tanpa kolom (1 request)"
+        assert sum("migration-24" in m for m in pesan) == 1, pesan
+        # migration-24 dijalankan; 30 menit kemudian kolom dicoba lagi → condong kembali tersimpan
+        ada_kolom["v"] = True
+        s.tanpa_condong_sejak -= supa.CEK_ULANG_CONDONG_DETIK + 1
+        got = s.simpan_hasil({**row, "video_id": "3"})
+        assert got["ai_lean"] == "reject" and got["ai_lean_confidence"] == 64 and not s.tanpa_condong
+        # error lain (bukan kolom condong) tetap diteruskan apa adanya, bukan disangka migration-24
+        assert not supa._belum_migrasi(400, '{"code":"PGRST204","message":"Could not find the \'ai_lean\' column of \'review_results\' in the schema cache"}')
+        assert supa._belum_migrasi(404, '{"code":"PGRST205","message":"Could not find the table \'public.review_results\' in the schema cache"}')
+    finally:
+        logging.getLogger("review.supa").removeHandler(h)
+    return "PGRST204 → tanpa kolom, log sekali, cek ulang 30 mnt"
+
+
+@test
+def t_pipeline_condong_tersimpan_dan_tahan_migration24():
+    from review_worker import uji
+
+    rt, sp = rt_palsu(mode_hakim="condong")
+    with dunia_palsu():
+        h = pipeline.proses_video(rt, "1001", scope="run:r9", run_id="r9")
+    assert h.suggestion == "cek_manusia" and (h.ai_lean, h.ai_lean_confidence) == ("reject", 64), (h.suggestion, h.ai_lean)
+    assert sp.tabel["review_results"][0]["ai_lean"] == "reject" and sp.tabel["review_results"][0]["ai_lean_confidence"] == 64
+    # hakim gagal (tanpa condong) → kolom null, bukan tebakan
+    rt.hakim = HakimPalsu("approve")
+    with dunia_palsu():
+        h2 = pipeline.proses_video(rt, "1002", scope="run:r9", run_id="r9")
+    assert h2.ai_lean is None and h2.ai_lean_confidence is None
+    # video gagal diproses → tanpa condong
+    with dunia_palsu(mode_materi="error"):
+        h3 = pipeline.proses_video(rt, "1003", scope="run:r9", run_id="r9")
+    assert h3.pipeline_status == "gagal" and h3.ai_lean is None
+    # migration-24 belum dijalankan: Supabase tanpa kolom → hasil tetap tersimpan, condong ke data/condong-lokal.jsonl,
+    # uji.Simpanan.hasil_run menggabungkannya kembali (metrik & laporan tetap bisa menghitung condong)
+    rt2, sp2 = rt_palsu(mode_hakim="condong")
+    sp2.kolom_hilang = {"review_results": {"ai_lean", "ai_lean_confidence"}}
+    lokal = Path(rt2.cfg.data) / pipeline.CONDONG_LOKAL
+    lokal.unlink(missing_ok=True)
+    with dunia_palsu():
+        for vid in ("1001", "1002"):
+            pipeline.proses_video(rt2, vid, scope="run:r10", run_id="r10")
+    rows = sp2.tabel["review_results"]
+    assert len(rows) == 2 and all("ai_lean" not in r for r in rows) and sp2.tanpa_condong
+    assert lokal.is_file() and len(lokal.read_text(encoding="utf-8").splitlines()) == 2
+    gabung = uji.Simpanan(rt2).hasil_run("r10")
+    assert sorted((r["video_id"], r.get("ai_lean"), r.get("ai_lean_confidence")) for r in gabung) == [
+        ("1001", "reject", 64), ("1002", "reject", 64)], gabung
+    tanpa_pribadi(lokal.read_text(encoding="utf-8"))
+    # kolom masih belum ada: tulis-balik dicoba (mis. saat worker mulai) → gagal halus, cadangan lokal tetap utuh
+    assert pipeline.pulihkan_condong_lokal(rt2, paksa=True) is None and lokal.is_file()
+    sp2.tanpa_condong = False
+    assert pipeline.pulihkan_condong_lokal(rt2, paksa=True) is None and lokal.is_file()
+    sp2.tanpa_condong, sp2.tanpa_condong_sejak = True, 0.0
+    # migration-24 dijalankan: hasil berikutnya tersimpan DENGAN kolom (cek ulang 30 mnt) → condong lama ditulis balik ke
+    # review_results, kecuali baris yang sudah dinilai ulang (saran berbeda) — website & Ringkasan memakai angka yang sama
+    sp2.kolom_hilang = {}
+    beda = next(r for r in rows if r["video_id"] == "1002")
+    beda["suggestion"] = "approve" if beda["suggestion"] != "approve" else "reject"
+    rt2._pulih_condong_coba = None
+    sp2.tanpa_condong_sejak -= supa.CEK_ULANG_CONDONG_DETIK + 1
+    with dunia_palsu():
+        pipeline.proses_video(rt2, "1004", scope="run:r10", run_id="r10")
+    assert not sp2.tanpa_condong
+    per_vid = {r["video_id"]: (r.get("ai_lean"), r.get("ai_lean_confidence")) for r in sp2.tabel["review_results"]}
+    assert per_vid == {"1001": ("reject", 64), "1002": (None, None), "1004": ("reject", 64)}, per_vid
+    assert not lokal.is_file() and (Path(rt2.cfg.data) / pipeline.CONDONG_TERKIRIM).is_file()
+    (Path(rt2.cfg.data) / pipeline.CONDONG_TERKIRIM).unlink()
+    lokal.unlink(missing_ok=True)
+    return "ai_lean tersimpan; tanpa kolom → cadangan lokal digabung uji, ditulis balik sesudah migration-24"
 
 
 # ================================================================== JobCtx

@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { linkVideo, type HasilMusik, type KodeSerah, type Keputusan, type Saran } from "@/lib/asistenReview";
-import { ChecklistView, CocokBadge, KeputusanBadge, MusikRingkas, PipelineNote, RingkasCek, SaranBadge, SerahList, cekList } from "./Bits";
+import { CONDONG_COLS, linkVideo, type Condong, type HasilMusik, type KodeSerah, type Keputusan, type Saran } from "@/lib/asistenReview";
+import { ChecklistView, CocokBadge, CondongAI, KeputusanBadge, MusikRingkas, PipelineNote, RingkasCek, SaranBadge, SerahList, cekList, perluCekManusia } from "./Bits";
 import UmpanBalik, { type FeedbackMine } from "./UmpanBalik";
 
 /** kolom review_results yang dibutuhkan kartu daftar (tanpa token / tahap / visual) */
 export const KARTU_COLS =
   "id, scope, run_id, job_id, video_id, platform, platform_video_id, campaign_id, campaign_title, brand, rubric_version, pipeline_status, suggestion, confidence, official_reason, specific_reason, handoff_reasons, checklist, music, human_decision, human_reason, reviewer, appeal, final_truth, match, error, created_at";
+/** + kolom condong AI (migration-24); kalau kolom belum ada, halaman mengulang select dengan KARTU_COLS saja */
+export const KARTU_COLS_CONDONG = `${KARTU_COLS}, ${CONDONG_COLS}`;
 
 export type KartuRow = {
   id: number;
@@ -22,6 +24,9 @@ export type KartuRow = {
   pipeline_status: string;
   suggestion: Saran | null;
   confidence: number | null;
+  /** undefined = migration-24 belum dijalankan */
+  ai_lean?: Condong | null;
+  ai_lean_confidence?: number | null;
   official_reason: string | null;
   specific_reason: string | null;
   handoff_reasons: KodeSerah[] | null;
@@ -75,10 +80,12 @@ export default function HasilKartu({ r, mine, counts }: { r: KartuRow; mine: Fee
 
       <PipelineNote status={r.pipeline_status} error={r.error} />
 
+      <CondongAI lean={r.ai_lean} yakin={r.ai_lean_confidence} perluCek={perluCekManusia(r.suggestion)} akhir={r.final_truth} />
+
       {/* HP: 2 kolom; layar lebar: 4 kolom sejajar */}
       <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5 text-xs sm:grid-cols-4">
         <div className="min-w-0">
-          <dt className="label mb-1">Saran AI</dt>
+          <dt className="label mb-1">Saran akhir AI</dt>
           <dd>
             <SaranBadge saran={r.suggestion} yakin={r.confidence} />
           </dd>

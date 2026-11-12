@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useState, useTransition } from "react";
-import { ETA_RE, JOB_STATUS_LABEL, SARAN_LABEL, rupiah } from "@/lib/asistenReview";
+import { ETA_RE, JOB_STATUS_LABEL, rupiah } from "@/lib/asistenReview";
 import { antrikanUji, batalkanJob, lanjutkanRun, ulangRun } from "@/app/(app)/asisten-review/uji/actions";
 import { StatusLaptopView } from "./StatusLaptop";
 import TempelVideo from "./TempelVideo";
-import { RUN_STATUS_LABEL, latestWorker, workerOnline, type ArStatus, type JobLite, type RunLite } from "./statusTypes";
+import { RUN_STATUS_LABEL, latestWorker, teksHasilJob, workerOnline, type ArStatus, type JobLite, type RunLite } from "./statusTypes";
 import { useArStatus } from "./useArStatus";
 
 /** perkiraan kasar untuk tombol (angka nyata ada di Ringkasan sesudah uji) — KONTRAK §5.5: ±$0,0013/video, ±40 dtk/video */
@@ -245,7 +245,7 @@ function JobHistory({ jobs, hasil }: { jobs: JobLite[]; hasil: ArStatus["hasil"]
               {j.message && j.status !== "selesai" && <span className="min-w-0 basis-full break-words text-zinc-400 sm:basis-auto">{j.message.replace(ETA_RE, "")}</span>}
               {h && (
                 <Link href={`/asisten-review/hasil/${h.id}`} className="font-semibold text-orange-400 hover:underline">
-                  {h.suggestion ? `${SARAN_LABEL[h.suggestion]}${typeof h.confidence === "number" ? ` ${h.confidence}%` : ""}` : "Lihat hasil"} →
+                  {teksHasilJob(h)} →
                 </Link>
               )}
             </li>

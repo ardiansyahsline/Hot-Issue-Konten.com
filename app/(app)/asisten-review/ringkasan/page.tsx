@@ -1,4 +1,4 @@
-import { arErrorText } from "@/lib/asistenReview";
+import { CONDONG_COLS, arErrorText, condongBelumAda } from "@/lib/asistenReview";
 import { requireAsisten } from "@/lib/asistenReview.server";
 import { UUID_RE } from "@/lib/asistenReviewStorage.server";
 import BelumSiap from "@/components/asisten/BelumSiap";
@@ -38,12 +38,7 @@ export default async function RingkasanPage({ searchParams }: { searchParams: SP
   // contoh kasus benar / salah (id hasil dari metrics.contoh) + banding berpasangan (video yang sama di dua run)
   const ids = run && adaMetrik(run.metrics) ? [...(run.metrics.contoh?.benar ?? []), ...(run.metrics.contoh?.salah ?? [])].filter(Number.isSafeInteger).slice(0, 20) : [];
   const [contohRes, pasangan] = await Promise.all([
-    ids.length
-      ? sb
-          .from("review_results")
-          .select("id, video_id, campaign_title, suggestion, final_truth, official_reason, specific_reason, confidence")
-          .in("id", ids)
-      : Promise.resolve({ data: [] as ContohKasus[], error: null }),
+    ids.length ? ambilContoh(sb, ids) : Promise.resolve({ data: [] as ContohKasus[], error: null }),
     run && pembanding ? hitungPasangan(sb, pembanding.id, run.id) : Promise.resolve(null),
   ]);
   if (contohRes.error && !peringatan) peringatan = arErrorText(contohRes.error, "Contoh kasus gagal dibaca.");
@@ -66,6 +61,13 @@ export default async function RingkasanPage({ searchParams }: { searchParams: SP
 }
 
 type Sb = Awaited<ReturnType<typeof requireAsisten>>["supabase"];
+
+const CONTOH_COLS = "id, video_id, campaign_title, suggestion, final_truth, official_reason, specific_reason, confidence";
+/** contoh kasus + pendapat AI; kolom pendapat belum ada (migration-24 belum dijalankan) → baca ulang tanpa kolom itu */
+async function ambilContoh(sb: Sb, ids: number[]) {
+  const r = await sb.from("review_results").select(`${CONTOH_COLS}, ${CONDONG_COLS}`).in("id", ids);
+  return condongBelumAda(r.error) ? sb.from("review_results").select(CONTOH_COLS).in("id", ids) : r;
+}
 
 /** semua hasil dua run (maks 3000 per run, per 1000 baris) → banding berpasangan; gagal → null (bagian itu tidak tampil) */
 async function hitungPasangan(sb: Sb, lamaId: string, baruId: string): Promise<Pasangan | null> {

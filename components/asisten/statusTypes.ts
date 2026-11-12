@@ -1,6 +1,6 @@
 /** Bentuk data status laptop + antrian (dipakai server loader, route API & komponen browser) */
-import type { JobKind, JobStatus, ReviewWorker, RunStatus, Saran, WorkerInfo } from "@/lib/asistenReview";
-import { WORKER_DEAD_MS } from "@/lib/asistenReview";
+import type { Condong, JobKind, JobStatus, ReviewWorker, RunStatus, Saran, WorkerInfo } from "@/lib/asistenReview";
+import { CONDONG_LABEL, SARAN_LABEL, WORKER_DEAD_MS } from "@/lib/asistenReview";
 
 export type JobLite = {
   id: string;
@@ -37,7 +37,26 @@ export type RunLite = {
   finished_at: string | null;
 };
 
-export type HasilJob = { id: number; video_id: string; suggestion: Saran | null; confidence: number | null; pipeline_status: string };
+export type HasilJob = {
+  id: number;
+  video_id: string;
+  suggestion: Saran | null;
+  confidence: number | null;
+  pipeline_status: string;
+  /** pendapat AI sendiri (migration-24; tidak ada kalau kolomnya belum ada) */
+  ai_lean?: Condong | null;
+  ai_lean_confidence?: number | null;
+};
+
+/** teks tautan hasil cek video: "Reject 86%" / "Butuh cek manusia · AI: REJECT 64%" */
+export function teksHasilJob(h: HasilJob): string {
+  if (h.pipeline_status !== "ok") return "Lihat (tidak bisa diakses)";
+  if (!h.suggestion) return "Lihat hasil";
+  const saran = `${SARAN_LABEL[h.suggestion]}${typeof h.confidence === "number" ? ` ${h.confidence}%` : ""}`;
+  const lean = h.ai_lean === "approve" || h.ai_lean === "reject" ? h.ai_lean : null;
+  if (h.suggestion !== "cek_manusia" || !lean) return saran;
+  return `${SARAN_LABEL.cek_manusia} · AI: ${CONDONG_LABEL[lean]}${typeof h.ai_lean_confidence === "number" ? ` ${h.ai_lean_confidence}%` : ""}`;
+}
 
 export type ArStatus = {
   /** jam server saat data diambil (koreksi jam browser yang meleset) */

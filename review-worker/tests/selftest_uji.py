@@ -152,6 +152,11 @@ def proses_palsu(rt, video_id, *, scope, run_id=None, job_id=None, cek_batal=Non
             s = "cek_manusia"
         hasil.suggestion = s or "cek_manusia"
         hasil.confidence = 55 + h % 45
+        if hasil.suggestion in ("approve", "reject"):  # condong AI sejalan dengan saran (jaminan aturan a4)
+            hasil.ai_lean, hasil.ai_lean_confidence = hasil.suggestion, hasil.confidence
+        elif truth in ("approve", "reject"):  # cek manusia: condong benar ±2/3, keyakinan lebih rendah
+            hasil.ai_lean = truth if h % 3 else {"approve": "reject", "reject": "approve"}[truth]
+            hasil.ai_lean_confidence = 50 + h % 30
         if hasil.suggestion == "reject":
             hasil.official_code = kode_untuk_label(km.alasan_label) if km and km.alasan_label else "tidak_sesuai_brief"
             hasil.official_reason = "Konten tidak sesuai brief campaign"
@@ -315,6 +320,69 @@ def t_metrik_dihitung_tangan():
     t = m["termasuk_di_luar_video"]["setuju_akhir"]
     assert (t["n"], t["benar"]) == (8, 5)
     return "57,1% vs reviewer · 71,4% vs akhir · 55,6% tanpa cek · matriks 3×2 tepat"
+
+
+@test
+def t_condong_dihitung_tangan():
+    def c(i, s, h, lean, y, **kw):
+        r = _b(i, s, h, **kw)
+        r["ai_lean"], r["ai_lean_confidence"] = lean, y
+        return r
+
+    B = [
+        c(1, "approve", "approve", "approve", 92),                                   # benar
+        c(2, "approve", "approve", "approve", 85),                                   # benar
+        c(3, "reject", "reject", "reject", 95, code="cta_tidak_ada"),                # benar
+        c(4, "approve", "reject", "approve", 81, code="cta_tidak_ada"),              # salah approve (berbahaya)
+        c(5, "reject", "approve", "reject", 72),                                     # salah reject
+        c(6, "cek_manusia", "reject", "reject", 66, code="tidak_sesuai_brief"),      # benar, bertanda cek manusia
+        c(7, "cek_manusia", "approve", "approve", 55),                               # benar, bertanda
+        c(8, "cek_manusia", "reject", "approve", 50, code="tidak_sesuai_brief"),     # salah approve, bertanda
+        c(9, "cek_manusia", "approve", None, None, serah=["ai_gagal"]),              # AI gagal → tanpa condong
+        c(10, "approve", "reject", "approve", 90, code="followers_kurang"),          # di luar video (terpisah)
+        c(11, "cek_manusia", "reject", None, None, st="gagal"),                      # pipeline gagal
+    ]
+    m = metrik.hitung_metrik(B, SimpleNamespace(kurs_idr=18000, video_per_hari=2000))
+    cd = m["condong"]
+    assert (cd["n_kebenaran"], cd["n_ada"], cd["n_tanpa"], cd["cakupan"]) == (9, 8, 1, 88.9), cd
+    assert cd["akurasi"] == metrik.persen(5, 8) and cd["akurasi"]["persen"] == 62.5 and cd["akurasi"]["ci95"]
+    assert cd["matriks"] == {"approve": {"approve": 3, "reject": 1}, "reject": {"approve": 2, "reject": 2}}, cd["matriks"]
+    amb = {x["min"]: x for x in cd["ambang"]}
+    assert [x["min"] for x in cd["ambang"]] == [50, 60, 70, 80, 85, 90, 95]
+    harap = {50: (8, 88.9, 5, 2, 1, 3), 60: (6, 66.7, 4, 1, 1, 1), 70: (5, 55.6, 3, 1, 1, 0), 80: (4, 44.4, 3, 1, 0, 0),
+             85: (3, 33.3, 3, 0, 0, 0), 90: (2, 22.2, 2, 0, 0, 0), 95: (1, 11.1, 1, 0, 0, 0)}
+    for x, (n, dit, benar, sa, sr, tanda) in harap.items():
+        a = amb[x]
+        got = (a["n"], a["ditangani_persen"], a["akurasi"]["benar"], a["salah_approve"], a["salah_reject"], a["n_bertanda"])
+        assert got == (n, dit, benar, sa, sr, tanda), (x, got)
+    assert amb[60]["akurasi"]["persen"] == 66.7 and amb[85]["akurasi"]["persen"] == 100.0
+    kal = [(k["dari"], k["sampai"], k["n"], k["rata_yakin"], k["akurasi"]["persen"], k["selisih"]) for k in cd["kalibrasi"]]
+    assert kal == [(50, 59, 2, 52.5, 50.0, -2.5), (60, 69, 1, 66.0, 100.0, 34.0), (70, 79, 1, 72.0, 0.0, -72.0),
+                   (80, 89, 2, 83.0, 50.0, -33.0), (90, 100, 2, 93.5, 100.0, 6.5)], kal
+    assert cd["per_condong"]["approve"]["persen"] == 60.0 and cd["per_condong"]["reject"]["persen"] == 66.7
+    assert (cd["termasuk_di_luar_video"]["n"], cd["termasuk_di_luar_video"]["benar"]) == (9, 5)
+    assert "Sampel sangat kecil (8 video)" in cd["catatan_sampel"]
+    k80 = metrik.kalimat_kalibrasi(cd["kalibrasi"][3])
+    assert k80 == "Kalau AI bilang yakin 80–89% (rata-rata 83,0%), benarnya 50,0% (1 dari 2 video). (sampel terlalu sedikit)", k80
+    # metrik lama tetap sama (condong tidak mengubah saran / matriks lama)
+    assert m["matriks"]["reject"]["cek_manusia"] == 2 and m["n_dinilai"] == 9
+    # run lama tanpa kolom ai_lean: bagian condong kosong tapi aman
+    lama = metrik.hitung_metrik([{k: v for k, v in r.items() if not k.startswith("ai_lean")} for r in B], None)
+    assert lama["condong"]["n_ada"] == 0 and lama["condong"]["akurasi"]["persen"] is None and lama["condong"]["cakupan"] == 0.0
+    assert all(a["n"] == 0 and a["akurasi"]["ci95"] is None for a in lama["condong"]["ambang"])
+    isi = laporan.buat_laporan({"id": "r", "status": "selesai"}, lama, B)
+    assert "belum punya data condong AI" in isi
+    # laporan: bagian condong lengkap
+    isi = laporan.buat_laporan({"id": "r", "status": "selesai"}, m, B)
+    for kata in ("Kalau AI yang memutuskan (condong AI)", "Condong AI benar", "Kalau AI dibiarkan memutuskan sendiri saat yakin ≥ X%",
+                 "Tetap bertanda cek manusia", "kalibrasi", "Kalau AI bilang yakin 90–100% (rata-rata 93,5%), benarnya 100,0% (2 dari 2 video).",
+                 "Kalau AI condong <b>approve</b>, benarnya <b>60,0%</b>", "Sampel sangat kecil", "Condong AI sendiri: <b>APPROVE</b>"):
+        assert kata in isi, f"laporan kurang: {kata}"
+    # banding versi rubrik memuat akurasi condong
+    bv = metrik.bandingkan_versi(lama, m)
+    baris_c = next(x for x in bv["tabel"] if x["kunci"] == "condong.akurasi")
+    assert baris_c["lama"] is None and baris_c["baru"] == 62.5
+    return "akurasi 62,5% · ambang 50..95 · kalibrasi 5 rentang · matriks 2×2"
 
 
 @test
@@ -663,6 +731,10 @@ def t_laporan_500_baris_tanpa_data_pribadi():
                   "music": {"status": "cocok", "mesin": rng.choice(["panako", "chroma"])}, "handoff_reasons": ["keyakinan_rendah"] if s == "cek_manusia" else [],
                   "cost_usd": round(rng.uniform(0.0009, 0.0018), 6), "tokens": {"input": 3900, "output": 1300, "cache_read": 1800, "cache_write_1h": 4},
                   "process_sec": rng.uniform(15, 60), "stage_sec": {"unduh": 5.0, "frame": 1.2, "ocr": 2.5, "asr": 4.0, "musik": 6.0, "hakim": 7.5}})
+        if st == "ok":  # condong AI: makin yakin makin sering benar (kalibrasi kira-kira jujur)
+            y = rng.randrange(50, 101)
+            B[-1]["ai_lean"] = truth if rng.random() < y / 100 else {"approve": "reject", "reject": "approve"}[truth]
+            B[-1]["ai_lean_confidence"] = y
     cfg = SimpleNamespace(kurs_idr=18000, video_per_hari=2000)
     m = metrik.hitung_metrik(B, cfg, n_sampel=500)
     run = {"id": "12345678-aaaa-bbbb-cccc-1234567890ab", "label": "uji 500 video", "status": "selesai", "rubric_version": "v1",
@@ -678,7 +750,9 @@ def t_laporan_500_baris_tanpa_data_pribadi():
                  f"AI bilang approve padahal seharusnya reject: <b>{mt['reject']['approve']}</b>", "rentang wajar 95%",
                  "Akurasi per alasan reject", "di luar jangkauan AI", "Akurasi per campaign", "Perkiraan per bulan", "2.000 video/hari",
                  "Waktu proses", "Contoh kasus", "Video #8800", "Catatan &amp; keterbatasan", "claude-haiku-5-5", "0f1e2d3c4b5a",
-                 "prefers-color-scheme:dark", 'class="grafik"', 'name="viewport"', "R-0000", "<b>12345678-aaaa-bbbb-cccc-1234567890ab</b>"):
+                 "prefers-color-scheme:dark", 'class="grafik"', 'name="viewport"', "R-0000", "<b>12345678-aaaa-bbbb-cccc-1234567890ab</b>",
+                 "Kalau AI yang memutuskan (condong AI)", "Kalau AI dibiarkan memutuskan sendiri saat yakin ≥ X%", "Kalau AI bilang yakin 80–89%",
+                 "Tabel condong vs hasil akhir", "Condong AI benar (semua video)"):
         assert kata in isi, f"laporan kurang: {kata}"
     assert f"{m['setuju_akhir']['persen']:.1f}%".replace(".", ",") in isi
     assert "Angka sementara" not in isi and len(isi) < 400_000, len(isi)

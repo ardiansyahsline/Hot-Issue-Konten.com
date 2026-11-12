@@ -1,7 +1,7 @@
 import "server-only";
 import type { ArCtx } from "@/lib/asistenReview.server";
 import type { ArStatus, JobLite, RunLite } from "./statusTypes";
-import type { JobKind, JobStatus, ReviewWorker, RunStatus, Saran } from "@/lib/asistenReview";
+import { CONDONG_COLS, condongBelumAda, type Condong, type JobKind, type JobStatus, type ReviewWorker, type RunStatus, type Saran } from "@/lib/asistenReview";
 
 /**
  * Status laptop + antrian + run terakhir untuk halaman "Jalankan uji" & strip status di halaman Hasil.
@@ -98,9 +98,21 @@ export async function loadArStatus(ctx: ArCtx): Promise<ArStatus> {
     const videoJobs = jobs.filter((x) => x.kind === "video").map((x) => x.id);
     const hasil: ArStatus["hasil"] = {};
     if (videoJobs.length) {
-      const h = await sb.from("review_results").select("id, job_id, video_id, suggestion, confidence, pipeline_status").in("job_id", videoJobs);
-      for (const row of (h.data ?? []) as { id: number; job_id: string; video_id: string; suggestion: Saran | null; confidence: number | null; pipeline_status: string }[])
-        hasil[row.job_id] = { id: row.id, video_id: row.video_id, suggestion: row.suggestion, confidence: row.confidence, pipeline_status: row.pipeline_status };
+      // + pendapat AI (migration-24); kolom belum ada → baca ulang tanpa kolom itu
+      const cols = "id, job_id, video_id, suggestion, confidence, pipeline_status";
+      const ambil = (c: string) => sb.from("review_results").select(c).in("job_id", videoJobs);
+      let h = await ambil(`${cols}, ${CONDONG_COLS}`);
+      if (condongBelumAda(h.error)) h = await ambil(cols);
+      type Baris = { id: number; job_id: string; video_id: string; suggestion: Saran | null; confidence: number | null; pipeline_status: string; ai_lean?: Condong | null; ai_lean_confidence?: number | null };
+      for (const row of (h.data ?? []) as unknown as Baris[])
+        hasil[row.job_id] = {
+          id: row.id,
+          video_id: row.video_id,
+          suggestion: row.suggestion,
+          confidence: row.confidence,
+          pipeline_status: row.pipeline_status,
+          ...(row.ai_lean !== undefined ? { ai_lean: row.ai_lean, ai_lean_confidence: row.ai_lean_confidence ?? null } : {}),
+        };
     }
     return { now, workers, jobs, antri: q.count ?? jobs.filter((x) => x.status === "antri").length, runs, hasil, error: null };
   } catch {

@@ -30,7 +30,8 @@ Cara kerjanya singkat:
 | Supabase CS Tracker | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (sama dengan mesin suara). |
 | Ruang disk ±8–10 GB | Paket Python sendiri (torch + EasyOCR), Java portable, model OCR, dan model suara-ke-teks `large-v3-turbo` (±1,6 GB, diunduh sekali saat video pertama). |
 
-Admin website cukup sekali: jalankan `supabase/migration-23-asisten-review.sql` di Supabase → SQL Editor. Lalu buka akses tab
+Admin website cukup sekali: jalankan `supabase/migration-23-asisten-review.sql` lalu `supabase/migration-24-asisten-review-condong.sql`
+(condong AI approve/reject + keyakinan) di Supabase → SQL Editor. Lalu buka akses tab
 untuk reviewer di **Admin → Akses tab per user** (admin selalu bisa membuka tab ini).
 
 ---
@@ -151,7 +152,10 @@ yang disimpan hanya id-nya. Lewat PowerShell: `.venv\Scripts\python review.py vi
 
 Isi laporan: tingkat setuju AI vs reviewer dan vs hasil banding, tabel salah-benar, akurasi per alasan reject dan per
 campaign, persentase yang diserahkan ke manusia, biaya per video (Rp) dan perkiraan per bulan, waktu proses, serta contoh
-kasus benar dan salah. Laporan tidak memuat username, link, atau gambar frame.
+kasus benar dan salah. Bagian **condong AI**: tiap video AI juga memberi pendapat sendiri approve/reject + seberapa yakin
+(50–100%) walau sarannya "cek manusia"; laporan menghitung seberapa sering pendapat itu benar, tabel "kalau AI dibiarkan
+memutuskan sendiri saat yakin ≥ X%" (berapa video yang bisa ditangani AI, salah approve / salah reject), dan apakah angka
+yakin AI bisa dipercaya (kalibrasi). Laporan tidak memuat username, link, atau gambar frame.
 
 ---
 
@@ -204,6 +208,7 @@ Kunci bermasalah tidak pernah membuat job gagal. Kedua mesin tetap jalan.
 | "Login DB Konten.com ditolak" / "Password … tidak ditemukan" | Cek baris di `%APPDATA%\postgresql\pgpass.conf`. Host, port, database, dan user harus sama dengan env PG*. |
 | "Kolom alif.… tidak ada" | Jalankan `review.py kenali-skema`, lalu sesuaikan `kolom.toml`. |
 | "Tabel Asisten Review belum ada di Supabase" | Admin menjalankan `supabase/migration-23-asisten-review.sql`. |
+| "Kolom condong AI (ai_lean) belum ada di Supabase" | Admin menjalankan `supabase/migration-24-asisten-review-condong.sql`. Sementara itu laptop tetap jalan: condong disimpan di `data\condong-lokal.jsonl` dan tetap masuk laporan uji. Sesudah migration-24 dijalankan, laptop menulis condong itu balik ke Supabase otomatis (saat `review jalan` mulai / hasil berikutnya tersimpan), jadi website ikut menampilkannya. |
 | "Kunci SUPABASE_SERVICE_ROLE_KEY ditolak" | Salin lagi dari Supabase → Project Settings → API → service_role. |
 | "Video tidak bisa diakses" | Video dihapus, private, atau butuh login (sering terjadi di Instagram). Hasilnya diserahkan ke manusia. |
 | "Materi belum ada" | Link Google Drive di brief private atau kosong. Upload lagu, poster, atau trailer di halaman **Materi**. |

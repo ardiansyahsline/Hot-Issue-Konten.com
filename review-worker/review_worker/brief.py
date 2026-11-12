@@ -74,9 +74,6 @@ _HANDLE_BRIEF = re.compile(r"(?<![\w@.])@[A-Za-z0-9_](?:[A-Za-z0-9_.]{0,28}[A-Za
 _ORANG = (r"\b(?:artis|aktor|aktris|pemeran|pemain(?:\s+film)?|selebriti|seleb|selebgram|influencer|penyanyi|idol|tokoh|"
           r"figur(?:\s+publik)?|bintang(?:\s+film|\s+tamu)?|cast|talent|publik\s+figur|public\s+figure|youtuber|tiktoker|komedian|"
           r"presenter|atlet|brand\s+ambassador|ambassador)")
-# kata benda umum yang sering ditulis Huruf Besar di brief (bukan nama orang)
-_BUKAN_NAMA = (r"(?!(?:Logo|Poster|Caption|Hashtag|Lagu|Musik|Video|Teks|Judul|Link|Tanggal|Brand|Produk|Film|Trailer|Footage|"
-               r"Materi|Konten|Tag|Akun|Sound|Audio|Watermark|Subtitle|Durasi|Harga|Promo|Kode|Aplikasi|App|Tiket)\b)")
 _IDENTITAS_POLA = [
     # "bukan pemain film", "artis yang bukan pemain", "orang lain selain cast"
     re.compile(r"\bbukan\s+(?:para\s+)?" + _ORANG, re.I),
@@ -94,15 +91,43 @@ _IDENTITAS_POLA = [
     re.compile(r"\b(?:look\s*alike|lookalike|cosplay(?:er)?|impersonat\w*|kembaran)\b", re.I),
     re.compile(r"\b(?:identitas\s+(?:orang|artis|pemeran|pemain|tokoh)|siapa\s+(?:orang|pemeran|artis|pemain)|"
                r"(?:kenali|mengenali|dikenali)\s+(?:orang|wajah|artis|pemeran|pemain)|nama\s+(?:artis|aktor|pemain|pemeran|tokoh))\b", re.I),
-    # nama orang (2-3 kata Huruf Besar) diikuti kata kerja tampil/muncul
-    re.compile(r"\b" + _BUKAN_NAMA + r"[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){1,2}\s+(?:harus\s+|wajib\s+|tidak\s+boleh\s+|jangan\s+)?"
-               r"(?:tampil|muncul|terlihat)\b"),
 ]
+# nama orang (2-3 kata Huruf Besar) diikuti kata kerja tampil/muncul — dicek dengan konteks (_nama_orang): "Kemasan Kopi Senja
+# terlihat jelas" / "Logo Brand X tampil" / "judul film Agak Laen muncul" = benda, bukan orang. Deret Huruf Besar sampai 5 kata supaya
+# "Video Dian Sastro tampil" tetap tertangkap (kata depan "Video" dilewati, sisanya "Dian Sastro" dicek)
+_NAMA_TAMPIL = re.compile(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){1,4})\s+(?:harus\s+|wajib\s+|tidak\s+boleh\s+|jangan\s+)?"
+                          r"(?:tampil|muncul|terlihat)\b")
+_ORANG_RE = re.compile(_ORANG + r"\b", re.I)
 # kata kerja / benda tampil + (≤ 3 kata kecil) + Nama 2-3 kata Huruf Besar: "Wajib menampilkan Reza Rahadian", "adegan Dian Sastro
 # menangis", "Harus ada Raffi Ahmad di video", "menampilkan Joko Anwar sebagai sutradara" (nama SESUDAH kata kerja, tanpa "artis")
 _NAMA_SESUDAH = re.compile(r"(?i:\b(?:menampilkan|tampilkan|ditampilkan|tampil|munculkan|memunculkan|muncul|ada|hadir(?:kan)?|"
                            r"menghadirkan|adegan|wajah|muka|foto|footage|cuplikan|potongan|bersama|featuring|feat|ft|ajak|bareng)\b)"
-                           r"\.?\s+(?:[a-z]+\s+){0,3}?((?:[A-Z][a-z]{2,})(?:\s+[A-Z][a-z]{2,}){1,2})\b")
+                           r"\.?\s+((?:[a-z]+\s+){0,3}?)((?:[A-Z][a-z]{2,})(?:\s+[A-Z][a-z]{2,}){1,4})\b")
+# benda / produk / karya (bukan orang): kata ini DI DALAM "nama" Huruf Besar → itu nama benda ("Kemasan Kopi Senja", "Logo Brand X",
+# "Botol Aqua Life"). Kata yang juga nama orang (mis. "Novel" Baswedan) SENGAJA tidak dimasukkan.
+_BENDA = frozenset(("kemasan", "packaging", "package", "botol", "kaleng", "bungkus", "sachet", "kotak", "box", "dus", "label", "stiker",
+                    "sticker", "logo", "poster", "banner", "spanduk", "baliho", "judul", "film", "movie", "serial", "brand", "merek", "merk",
+                    "produk", "product", "tulisan", "teks", "text", "nama", "aplikasi", "app", "website", "situs",
+                    "menu", "toko", "store", "outlet", "gerai", "kafe", "cafe", "restoran", "minuman", "makanan", "snack", "kopi",
+                    "coffee", "teh", "susu", "mie", "sabun", "sampo", "shampoo", "parfum", "serum", "lipstik", "skincare", "game",
+                    "ponsel", "kartu", "voucher", "promo", "paket", "edisi", "varian", "rasa", "seri", "album", "single", "lagu",
+                    "buku", "maskot", "mascot", "kartun", "animasi", "watermark", "caption", "hashtag"))
+# kata benda kecil yang TEPAT di depan nama menandai nama itu benda: "merek Kopi Senja", "logo Kopi Kenangan", "judul film Agak Laen".
+# Lebih sempit dari _BENDA: kategori produk umum ("minum kopi Raffi Ahmad") & acara ("di acara Raffi Ahmad") tidak menandai benda.
+_PENANDA_BENDA = frozenset(("kemasan", "packaging", "package", "botol", "kaleng", "bungkus", "sachet", "kotak", "box", "dus", "label",
+                            "stiker", "sticker", "logo", "poster", "banner", "spanduk", "baliho", "judul", "film", "movie", "serial",
+                            "brand", "merek", "merk", "produk", "product", "tulisan", "teks", "text", "nama", "aplikasi", "app",
+                            "website", "situs", "menu", "toko", "store", "outlet", "gerai", "varian", "edisi", "album", "single",
+                            "lagu", "buku", "maskot", "mascot", "watermark", "caption", "hashtag", "voucher", "promo", "game"))
+# kata Huruf Besar di DEPAN nama yang hanya menyebut media / acara tempat orang itu muncul: dilewati, sisanya tetap dicek sebagai nama
+# ("Video Dian Sastro tampil", "Konser Raisa Andriana", "Footage Reza Rahadian")
+_LEWATI = frozenset(("video", "footage", "adegan", "scene", "foto", "cuplikan", "potongan", "klip", "wajah", "muka", "highlight",
+                     "trailer", "teaser", "konser", "acara", "event", "festival", "link", "tanggal", "materi", "konten", "tag",
+                     "akun", "sound", "audio", "subtitle", "durasi", "harga", "kode", "tiket", "bersama", "featuring", "feat"))
+# _BENDA / _PENANDA_BENDA SENGAJA tanpa foto / gambar / cuplikan / adegan / video / karakter / acara — "cuplikan Reza Rahadian" tetap orang
+# konteks campaign yang membuat namaBrandArtist = nama orang (artis / musisi): kalau tidak ada, nama itu dianggap brand / produk
+_ARTIS_KONTEKS = re.compile(r"\b(?:artis|aktor|aktris|pemain|pemeran|penyanyi|musisi|musik|music|lagu|song|single|album|band|idol|"
+                            r"rapper|konser|selebriti|seleb|selebgram|influencer|talent|kreator|youtuber|tiktoker|komedian)\b", re.I)
 # kata Huruf Besar umum di brief (bukan nama orang) — satu kata ini di "nama" → bukan orang
 _UMUM = frozenset(("logo", "poster", "caption", "hashtag", "lagu", "musik", "video", "teks", "judul", "link", "tanggal", "brand",
                    "produk", "film", "trailer", "footage", "materi", "konten", "tag", "akun", "sound", "audio", "watermark",
@@ -120,10 +145,49 @@ def _kata(s: Optional[str]) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(w) >= 3}
 
 
-def deteksi_identitas_orang(teks: str, abaikan: Iterable[str] = ()) -> bool:
+def pengecualian_identitas(judul: Optional[str] = None, brand: Optional[str] = None, nama_brand_artist: Optional[str] = None,
+                           jenis_kampanye: Optional[str] = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(abaikan, nama_brand) untuk deteksi_identitas_orang. abaikan = judul campaign + brand (selalu bukan orang). nama_brand =
+    namaBrandArtist HANYA kalau konteks campaign bukan artis/musik (jenisKampanye & isi namaBrandArtist tanpa kata artis/aktor/
+    penyanyi/lagu/…); konteks artis → nama itu tetap dianggap orang (kosong)."""
+    abaikan = tuple(x for x in (judul, brand) if x)
+    nba = (nama_brand_artist or "").strip()
+    if not nba or _ARTIS_KONTEKS.search(f"{nba} {jenis_kampanye or ''}"):
+        return abaikan, ()
+    return abaikan, (nba,)
+
+
+def pengecualian_brief(brief: BriefCampaign) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """pengecualian_identitas dari BriefCampaign (konteks namaBrandArtist / jenisKampanye yang dicatat parser)"""
+    kt = konteks_brief(brief)
+    return pengecualian_identitas(brief.judul, brief.brand, kt.get(_KONTEKS_LABEL["namaBrandArtist"]),
+                                  kt.get(_KONTEKS_LABEL["jenisKampanye"]))
+
+
+def _kata_tepat_sebelum(t: str, i: int) -> Optional[str]:
+    """kata (huruf saja) yang TEPAT di depan posisi i, hanya dipisah spasi — tanda baca / kata lain di antaranya → None"""
+    m = re.search(r"([A-Za-z]+)\s+$", t[max(0, i - 40):i])
+    return m.group(1).lower() if m else None
+
+
+def _nama_orang(nama: str, sebelum: Optional[str], kecuali: set[str]) -> bool:
+    """deret Huruf Besar = kemungkinan nama orang? Tidak kalau kata TEPAT di depannya penanda benda ("merek Kopi Senja"), atau
+    (sesudah kata media/acara di depan dilewati) memuat kata umum / benda / judul-brand campaign ("Kemasan Kopi Senja", "Logo
+    Brand X"). Sisa minimal 2 kata ("Video Dian Sastro" → "Dian Sastro" = orang)."""
+    if sebelum in _PENANDA_BENDA:
+        return False
+    kata = [w.lower() for w in nama.split()]
+    while kata and kata[0] in _LEWATI:
+        kata = kata[1:]
+    return len(kata) >= 2 and not any(w in _UMUM or w in _BENDA or w in kecuali for w in kata)
+
+
+def deteksi_identitas_orang(teks: str, abaikan: Iterable[str] = (), nama_brand: Iterable[str] = ()) -> bool:
     """poin menyangkut mengenali orang tertentu (artis / aktor / pemain / selebriti / tokoh X, "sebelum berjilbab", prostetik,
     "bukan pemain film", nama orang + kata kerja tampil/muncul, kata kerja tampil + nama orang) → True.
-    abaikan = judul campaign / brand: nama Huruf Besar yang memuat kata dari situ (judul film, nama produk) bukan orang."""
+    abaikan = judul campaign / brand: nama Huruf Besar yang memuat kata dari situ (judul film, nama produk) bukan orang.
+    nama_brand = namaBrandArtist di campaign non-artis (pengecualian_identitas): bukan orang, KECUALI poin itu sendiri menyebut
+    artis/aktor/pemain/penyanyi. Nama benda ("Kemasan Kopi Senja terlihat jelas", "Logo Brand X tampil") bukan orang."""
     if not teks:
         return False
     t = re.sub(r"\s+", " ", str(teks))
@@ -132,9 +196,14 @@ def deteksi_identitas_orang(teks: str, abaikan: Iterable[str] = ()) -> bool:
     if any(p.search(t) for p in _IDENTITAS_POLA):
         return True
     kecuali = set().union(*(_kata(a) for a in abaikan)) if abaikan else set()
+    if nama_brand and not _ORANG_RE.search(t):
+        kecuali |= set().union(*(_kata(a) for a in nama_brand))
+    for m in _NAMA_TAMPIL.finditer(t):
+        if _nama_orang(m.group(1), _kata_tepat_sebelum(t, m.start()), kecuali):
+            return True
     for m in _NAMA_SESUDAH.finditer(t):
-        kata = [w.lower() for w in m.group(1).split()]
-        if not any(w in _UMUM or w in kecuali for w in kata):
+        kecil = m.group(1).split()
+        if _nama_orang(m.group(2), kecil[-1].lower() if kecil else None, kecuali):
             return True
     return False
 
@@ -623,6 +692,11 @@ def _hash(d: Any) -> str:
 _KONTEKS: dict[str, dict[str, str]] = {}
 
 
+def _teks_konteks(d: dict, k: str, izinkan) -> str:
+    """teks konteks pendek (jenisKampanye / namaBrandArtist / judulFile) — sama persis untuk konteks prompt & pengecualian identitas"""
+    return " ".join(it["teks"] for it in _items(d.get(k), izinkan) if it.get("bool") is None).strip()[:300]
+
+
 def konteks_brief(brief: BriefCampaign) -> dict[str, str]:
     k = getattr(brief, "konteks", None)
     if isinstance(k, dict):
@@ -651,7 +725,9 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
     akun_tag, tag_tanpa_akun = _tag_akun(d.get("tagSocialMedia"))
     # akun brand yang wajib di-tag (juga yang ditulis tanpa '@') boleh tetap terlihat — data brand, bukan data clipper
     izinkan = sorted(set(_handles_brief(campaign.brief_detail)) | {a for _, a in akun_tag if a.startswith("@")})
-    abaikan = tuple(x for x in (campaign.title, campaign.brand) if x)  # judul film / brand bukan nama orang
+    # judul film / brand bukan nama orang; namaBrandArtist juga bukan orang kecuali konteks campaign artis/musik
+    abaikan, nama_brand = pengecualian_identitas(campaign.title, campaign.brand, _teks_konteks(d, "namaBrandArtist", izinkan),
+                                                 _teks_konteks(d, "jenisKampanye", izinkan))
     poin: list[PoinBrief] = []
     konteks: dict[str, str] = {}
 
@@ -665,7 +741,8 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         pil = [p[:200] for p in (pilihan or []) if p][:12]
         alasan_m = None
         # menyangkut mengenali orang tertentu → selalu butuh cek manusia (poin info tidak dinilai, dibiarkan)
-        if cara in ("ai", "kode") and (deteksi_identitas_orang(teks, abaikan) or any(deteksi_identitas_orang(p, abaikan) for p in pil)):
+        if cara in ("ai", "kode") and (deteksi_identitas_orang(teks, abaikan, nama_brand)
+                                       or any(deteksi_identitas_orang(p, abaikan, nama_brand) for p in pil)):
             cara, alasan_m = "manusia", "identitas_orang"
         if cara == "ai" and not butuh and _PAKAI_MATERI.search(teks) and kategori not in ("dilarang", "boleh", "footage_opsional"):
             butuh = True
@@ -810,9 +887,9 @@ def _parse(campaign: CampaignDB, catatan: list[str]) -> BriefCampaign:
         teks_contoh = " ".join(it["teks"] for it in _items(contoh) if "[tautan]" not in it["teks"]).strip()
         konteks["Contoh video"] = (f"{n} contoh video dari brand (link tidak dikirim)" + (f": {teks_contoh}" if teks_contoh else ""))[:600]
     for k, nama in _KONTEKS_LABEL.items():
-        isi = " ".join(it["teks"] for it in _items(d.get(k), izinkan) if it.get("bool") is None).strip()
+        isi = _teks_konteks(d, k, izinkan)
         if isi:
-            konteks[nama] = isi[:300]
+            konteks[nama] = isi
     links = _links(d.get("materi"))
 
     # --- cadangan: brief_detail kosong → kolom rules

@@ -3,10 +3,12 @@
  * Data di sini tidak pernah memuat nama / username / link clipper (lihat lib/asistenReview.ts).
  */
 import {
+  CONDONG_LABEL,
   HASIL_POIN_LABEL,
   SARAN_LABEL,
   SERAH_LABEL,
   type CekPoin,
+  type Condong,
   type HasilMusik,
   type HasilPoin,
   type HasilVisual,
@@ -31,6 +33,79 @@ export function SaranBadge({ saran, yakin }: { saran: Saran | null; yakin?: numb
       {SARAN_LABEL[saran]}
       {typeof yakin === "number" && <span className="font-medium opacity-80">· {yakin}%</span>}
     </span>
+  );
+}
+
+const CONDONG_CLS: Record<Condong, { chip: string; bar: string }> = {
+  approve: { chip: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30", bar: "bg-emerald-500" },
+  reject: { chip: "bg-red-500/10 text-red-300 ring-red-500/30", bar: "bg-red-500" },
+};
+const yakinAngka = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : null;
+
+/** tanda "perlu cek manusia" = saran akhir cek_manusia (KONTRAK-CONDONG §2) — terpisah dari pendapat AI */
+export const perluCekManusia = (saran: Saran | null) => saran === "cek_manusia";
+
+/**
+ * Condong AI sendiri: "AI: APPROVE · yakin 82%" (+ batang keyakinan, + tanda "perlu cek manusia", + sesuai/beda hasil akhir).
+ * lean undefined = kolom belum ada (migration-24 belum dijalankan) → tidak tampil apa-apa.
+ * lean null = AI tidak berpendapat (gagal / menolak / video tidak bisa diakses) — bukan tebakan.
+ */
+export function CondongAI({
+  lean,
+  yakin,
+  perluCek = false,
+  akhir = null,
+  besar = false,
+}: {
+  lean: Condong | null | undefined;
+  yakin: number | null | undefined;
+  perluCek?: boolean;
+  akhir?: Keputusan | null;
+  besar?: boolean;
+}) {
+  if (lean === undefined) return null;
+  const cek = perluCek ? (
+    <span className="badge bg-amber-500/10 text-amber-300 ring-amber-500/30" title="Keputusan tetap perlu dicek reviewer (lihat alasannya)">
+      <span aria-hidden>👀</span>perlu cek manusia
+    </span>
+  ) : null;
+  if (lean !== "approve" && lean !== "reject")
+    return (
+      <div className="flex flex-wrap items-center gap-1.5" data-condong="kosong">
+        <span className="badge bg-zinc-800 text-zinc-400 ring-zinc-700" title="AI gagal, menolak menilai, video tidak bisa diakses, atau hasil lama sebelum fitur ini — AI tidak menebak">
+          <span aria-hidden>🤖</span>AI: tanpa pendapat
+        </span>
+        {cek}
+      </div>
+    );
+  const y = yakinAngka(yakin);
+  const c = CONDONG_CLS[lean];
+  const sesuai = akhir === "approve" || akhir === "reject" ? akhir === lean : null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-condong={lean}>
+      <span
+        className={`badge ${c.chip} ${besar ? "px-2.5 py-1 text-[13px]" : ""}`}
+        title="Pendapat AI sendiri kalau harus memilih approve atau reject, dan seberapa yakin pendapat itu benar"
+      >
+        <span aria-hidden>🤖</span>
+        <span>
+          AI: <b className="font-bold">{CONDONG_LABEL[lean]}</b>
+          {y != null && <span className="font-medium opacity-90"> · yakin {y}%</span>}
+        </span>
+      </span>
+      {y != null && (
+        <span className={`inline-block h-1.5 shrink-0 overflow-hidden rounded-full bg-zinc-800 ${besar ? "w-24" : "w-14"}`} aria-hidden>
+          <span className={`block h-full rounded-full ${c.bar}`} style={{ width: `${Math.max(3, y)}%` }} />
+        </span>
+      )}
+      {cek}
+      {sesuai != null && (
+        <span className={`text-[11px] font-semibold ${sesuai ? "text-emerald-400" : "text-red-400"}`}>
+          {sesuai ? "✓ sesuai hasil akhir" : "✕ beda dari hasil akhir"}
+        </span>
+      )}
+    </div>
   );
 }
 

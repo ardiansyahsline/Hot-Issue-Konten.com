@@ -198,6 +198,9 @@ overflow:hidden;white-space:nowrap}
 .kasus h3{margin:4px 0}.kasus .baris{font-size:.88rem;color:var(--teks2)}
 .bukti{font-size:.85rem;margin:6px 0 0;padding-left:18px}.bukti li{margin:2px 0}
 footer{margin-top:36px;font-size:.8rem;color:var(--teks3)}
+.ci{display:block;white-space:nowrap;font-size:.72rem;color:var(--teks3);font-weight:400}
+.rapat td,.rapat th{padding:6px 4px}
+@media (max-width:480px){.rapat table{font-size:.78rem}.rapat th{font-size:.7rem}}
 """
 
 
@@ -237,10 +240,112 @@ def _kasus(r: dict, jenis: str) -> str:
         alasan += f"<div class=\"baris\">Alasan AI: {_t(r.get('specific_reason'), 300)}</div>"
     rev = SARAN_LABEL.get(r.get("human_decision") or "", "-")
     alasan_rev = f" — {_t(r.get('human_reason'), 120)}" if r.get("human_decision") == "reject" and r.get("human_reason") else ""
-    return (f'<div class="kartu kasus"><h3>{judul}</h3><div>{hasil}{bahaya}</div>'
+    c, y = mk.condong(r)
+    teks_condong = (f'<div class="baris">Condong AI sendiri: <b>{c.upper()}</b> · yakin {_n(y)}%'
+                    + (" (tetap ditandai perlu cek manusia)" if s == "cek_manusia" else "") + "</div>") if c else ""
+    return (f'<div class="kartu kasus"><h3>{judul}</h3><div>{hasil}{bahaya}</div>{teks_condong}'
             f'<div class="baris">Saran AI: <b>{SARAN_LABEL.get(s, "-")}</b> (keyakinan {_n(r.get("confidence"))}) · '
             f'Reviewer: <b>{rev}</b>{alasan_rev} · Hasil akhir: <b>{akhir}</b>{band}</div>{alasan}'
             + (f'<ul class="bukti">{bukti}</ul>' if bukti else "") + "</div>")
+
+
+def _ci_pendek(p: Any) -> str:
+    """rentang Wilson ringkas untuk sel tabel sempit (HP 390 px): "66–76%" """
+    ci = p.get("ci95") if isinstance(p, dict) else None
+    return f'<span class="ci">{_d(ci[0], 0)}–{_d(ci[1], 0)}%</span>' if ci else ""
+
+
+def _tabel_rapat(kepala: list[tuple[str, bool]], isi: list[list[str]]) -> str:
+    return _tabel(kepala, isi).replace('<div class="tabel">', '<div class="tabel rapat">', 1)
+
+
+def bagian_condong(cd: dict) -> str:
+    """bagian "Condong AI": akurasi semua video, tabel ambang, kalibrasi, matriks 2×2 — bahasa awam, jujur soal sampel"""
+    out = ["<h2>Kalau AI yang memutuskan (condong AI)</h2>",
+           "<p>Untuk setiap video yang dinilai, AI juga memberi <b>pendapat sendiri: approve atau reject</b>, plus seberapa yakin "
+           "(50% = menebak, 100% = sangat yakin) — termasuk video yang saran akhirnya \"butuh cek manusia\". Tanda cek manusia "
+           "tetap ada; bagian ini hanya mengukur seberapa sering pendapat AI itu benar menurut hasil akhir.</p>"]
+    n_ada, n_kb = int(cd.get("n_ada") or 0), int(cd.get("n_kebenaran") or 0)
+    if not n_ada:
+        out.append("<div class=\"kartu peringatan\">Run ini belum punya data condong AI (dibuat sebelum fitur condong, migration-24 "
+                   "belum dijalankan dan cadangan lokal tidak ada, atau AI gagal di semua video).</div>")
+        return "".join(out)
+    ak = cd.get("akurasi") or {}
+    out.append('<div class="tiles">'
+               + _tile("Condong AI benar", _pct(ak), f"{_n(ak.get('benar'))} dari {_n(ak.get('n'))} video · {_ci(ak)}")
+               + _tile("Video yang punya condong", _pct(cd.get("cakupan")),
+                       f"{_n(n_ada)} dari {_n(n_kb)} video yang punya hasil akhir · tanpa condong {_n(cd.get('n_tanpa'))} "
+                       "(AI gagal / menolak)")
+               + "</div>")
+    out.append(f'<div class="kartu{" peringatan" if n_ada < 200 else ""}"><b>Ukuran sampel.</b> {_t(cd.get("catatan_sampel"), 300)}</div>')
+    # matriks 2×2
+    mt = cd.get("matriks") or {}
+    a, rj = mt.get("approve") or {}, mt.get("reject") or {}
+    pc = cd.get("per_condong") or {}
+    out.append("<h3>Tabel condong vs hasil akhir</h3>")
+    out.append(_tabel([("Hasil akhir", False), ("AI condong approve", True), ("AI condong reject", True), ("Jumlah", True)], [
+        ["Seharusnya <b>approve</b>", f'<span class="benar">{_n(a.get("approve"))}</span>', f'<span class="salah">{_n(a.get("reject"))}</span>',
+         _n((a.get("approve") or 0) + (a.get("reject") or 0))],
+        ["Seharusnya <b>reject</b>", f'<span class="salah">{_n(rj.get("approve"))}</span>', f'<span class="benar">{_n(rj.get("reject"))}</span>',
+         _n((rj.get("approve") or 0) + (rj.get("reject") or 0))],
+    ]))
+    pa, pr = pc.get("approve") or {}, pc.get("reject") or {}
+    out.append('<ul class="daftar">'
+               f"<li>Kalau AI condong <b>approve</b>, benarnya <b>{_pct(pa)}</b> ({_n(pa.get('benar'))} dari {_n(pa.get('n'))}; {_ci(pa)}).</li>"
+               f"<li>Kalau AI condong <b>reject</b>, benarnya <b>{_pct(pr)}</b> ({_n(pr.get('benar'))} dari {_n(pr.get('n'))}; {_ci(pr)}).</li>"
+               f"<li><span class=\"salah\">✗</span> Condong approve padahal seharusnya reject (paling berbahaya): <b>{_n(rj.get('approve'))}</b>.</li>"
+               "</ul>")
+    # tabel ambang
+    amb = cd.get("ambang") or []
+    out.append("<h3>Kalau AI dibiarkan memutuskan sendiri saat yakin ≥ X%</h3>"
+               "<p>Tiap baris: AI memutuskan sendiri hanya video yang keyakinannya minimal X%; video lain tetap ke reviewer. "
+               "\"Ditangani AI\" dihitung dari semua video yang punya hasil akhir.</p>")
+    isi = []
+    for x in amb:
+        p = x.get("akurasi") or {}
+        isi.append([f'<span class="nw">≥ {_n(x.get("min"))}%</span>',
+                    f"{_n(x.get('n'))}<span class=\"ci\">{_pct(x.get('ditangani_persen'))}</span>",
+                    f"{_pct(p)}{_ci_pendek(p)}",
+                    f'<span class="{"salah" if x.get("salah_approve") else ""}">{_n(x.get("salah_approve"))}</span>',
+                    _n(x.get("salah_reject")), _n(x.get("n_bertanda"))])
+    out.append(_tabel_rapat([("Yakin minimal", False), ("Ditangani AI", True), ("Benar", True), ("Salah approve", True),
+                             ("Salah reject", True), ("Bertanda cek manusia", True)], isi))
+    out.append("<p class=\"sub\">Angka kecil di bawah \"Benar\" = rentang wajar 95%. Salah approve = AI approve padahal seharusnya "
+               "reject (paling berbahaya); salah reject = AI reject padahal seharusnya approve.</p>")
+    contoh = next((x for x in amb if x.get("min") == 80 and x.get("n")), None) or next((x for x in amb if x.get("n")), None)
+    if contoh:
+        p = contoh.get("akurasi") or {}
+        out.append(f"<p>Contoh cara baca: kalau AI dibiarkan memutuskan sendiri saat yakin ≥ {_n(contoh['min'])}%, AI menangani "
+                   f"<b>{_n(contoh['n'])}</b> video ({_pct(contoh.get('ditangani_persen'))}) dan benar <b>{_pct(p)}</b> — salah approve "
+                   f"{_n(contoh.get('salah_approve'))}, salah reject {_n(contoh.get('salah_reject'))}. Sisanya tetap dicek reviewer.</p>")
+    out.append("<p class=\"sub\">Tetap bertanda cek manusia = video yang AI anggap perlu dilihat manusia (misalnya ada poin mengenali "
+               "artis/aktor, materi referensi belum ada, atau bukti kurang), walau condongnya yakin. Kalau AI benar-benar dipakai memutuskan, "
+               "video bertanda sebaiknya tetap ke reviewer.</p>")
+    # kalibrasi
+    kal = cd.get("kalibrasi") or []
+    out.append("<h3>Apakah angka yakin AI bisa dipercaya? (kalibrasi)</h3>"
+               "<p>Kalau AI jujur, video dengan yakin sekitar 80% seharusnya benar sekitar 80%. Selisih negatif = AI terlalu percaya diri.</p>")
+    isi = []
+    for k in kal:
+        p = k.get("akurasi") or {}
+        sel = k.get("selisih")
+        sel_t = "-" if sel is None else (("+" if sel > 0 else "") + _d(sel) + " poin")
+        isi.append([f'<span class="nw">{_n(k.get("dari"))}–{_n(k.get("sampai"))}%</span>', _n(k.get("n")),
+                    "-" if k.get("rata_yakin") is None else f"{_d(k.get('rata_yakin'))}%",
+                    f"{_pct(p)}{_ci_pendek(p)}",
+                    f'<span class="{"salah" if sel is not None and sel <= -10 else ""}">{sel_t}</span>'])
+    out.append(_tabel_rapat([("AI bilang yakin", False), ("Video", True), ("Rata-rata yakin AI", True), ("Benar nyata", True),
+                             ("Selisih", True)], isi))
+    out.append('<ul class="daftar">' + "".join(f"<li>{html.escape(mk.kalimat_kalibrasi(k))}</li>" for k in kal if k.get("n")) + "</ul>")
+    tl = cd.get("termasuk_di_luar_video") or {}
+    if (tl.get("n") or 0) > n_ada:
+        out.append(f"<p class=\"sub\">Kalau video yang di-reject karena alasan di luar isi video (followers, link bio, duplikat, bot) "
+                   f"ikut dihitung, condong AI benar {_pct(tl)} ({_n(tl.get('benar'))} dari {_n(tl.get('n'))}) — alasan seperti itu "
+                   "memang tidak terlihat oleh AI.</p>")
+    out.append("<p class=\"sub\">Aturan yang tetap berlaku pada condong: pelanggaran yang dicek kode (durasi, hashtag, caption wajib) "
+               "membuat condong reject; poin yang butuh mengenali orang tidak pernah ditebak — condong dihitung dari poin lain dan "
+               "video tetap ditandai perlu cek manusia. AI gagal / menolak / video tidak bisa diakses = tanpa condong (tidak ditebak).</p>")
+    return "".join(out)
 
 
 # ------------------------------------------------------------------ utama
@@ -292,6 +397,9 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
                   + _tile("Setuju dengan hasil akhir (sesudah banding)", _pct(sa), f"dari {_n(sa.get('n'))} video yang diputuskan AI · {_ci(sa)}")
                   + _tile("Diserahkan ke manusia", _pct(m.get("persen_cek_manusia")),
                           f"{_n(cek)} dari {_n(n_dinilai)} video — AI ragu, bukti kurang, atau perlu mengenali orang")
+                  + (_tile("Condong AI benar (semua video)", _pct((m.get("condong") or {}).get("akurasi")),
+                           f"pendapat AI sendiri approve/reject pada {_n((m.get('condong') or {}).get('n_ada'))} video · "
+                           f"{_ci((m.get('condong') or {}).get('akurasi'))}") if (m.get("condong") or {}).get("n_ada") else "")
                   + "</div>")
     if n_dinilai:
         bagian.append(
@@ -355,6 +463,15 @@ def buat_laporan(run: dict, metrik: dict, baris: list[dict], pembanding: Optiona
             ["AI approve padahal seharusnya reject (dari keputusan AI)", _rasio(bahaya, diputus), _pct(ra["bahaya"])],
             ["Diserahkan ke manusia", _pct(m.get("persen_cek_manusia")), _pct(ra["cek_manusia"])],
         ]))
+
+    # ---------------- condong AI
+    cd = m.get("condong")
+    if not isinstance(cd, dict):  # metrik run lama (sebelum fitur condong) → hitung dari baris
+        semua = mk.unik(baris)
+        ok = [r for r in semua if r.get("pipeline_status", "ok") == "ok"]
+        cd = mk.hitung_condong([r for r in ok if mk.bisa_dinilai(r)],
+                               [r for r in ok if mk.kebenaran_baris(r) in mk.AR and mk.di_luar_video(r)])
+    bagian.append(bagian_condong(cd))
 
     # ---------------- per alasan
     pa = m.get("per_alasan") or []

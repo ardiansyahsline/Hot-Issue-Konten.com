@@ -2,7 +2,7 @@
  * Hitungan kecil halaman Ringkasan (murni, tanpa server/browser API — dipakai server component & harness uji UI).
  * Definisi SAMA dengan review-worker/review_worker/metrik.py (kebenaran_baris, bisa_dinilai, bandingkan_versi).
  */
-import type { KodeAlasan, Persen, ReviewRun, RunMetrics } from "@/lib/asistenReview";
+import type { CondongMetrics, KodeAlasan, Persen, ReviewRun, RunMetrics } from "@/lib/asistenReview";
 
 /** field tambahan dari metrik.py (di luar tipe RunMetrics) — semua opsional, data lama tetap aman */
 export type PersenCi = Persen & { ci95?: [number, number] | null };
@@ -29,6 +29,10 @@ export type RunRingkas = Omit<ReviewRun, "metrics" | "sample_params"> & {
 
 export const adaMetrik = (m: Partial<MetrikLengkap> | null | undefined): m is MetrikLengkap =>
   !!m && typeof m === "object" && m.versi === 1 && !!m.matriks && !!m.setuju_akhir;
+
+/** metrics.condong ada & bentuknya benar (run lama / worker lama → false → bagian pendapat AI disembunyikan) */
+export const adaCondong = (c: Partial<CondongMetrics> | null | undefined): c is CondongMetrics =>
+  !!c && typeof c === "object" && c.versi === 1 && !!c.akurasi && !!c.matriks && Array.isArray(c.ambang) && Array.isArray(c.kalibrasi);
 
 const nf1 = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1, minimumFractionDigits: 0 });
 const nf0 = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
@@ -91,13 +95,20 @@ export const BANDING_KUNCI: { kunci: keyof MetrikLengkap; label: string; naikBai
 
 export type BarisBanding = { label: string; lama: number | null; baru: number | null; selisih: number | null; membaik: boolean | null };
 
+const barisBanding = (label: string, a: number | null, b: number | null, naikBaik: boolean): BarisBanding => {
+  const selisih = a == null || b == null ? null : Math.round((b - a) * 10) / 10;
+  return { label, lama: a, baru: b, selisih, membaik: !selisih ? null : selisih > 0 === naikBaik };
+};
+
 export function bandingVersi(lama: Partial<MetrikLengkap>, baru: Partial<MetrikLengkap>): BarisBanding[] {
-  return BANDING_KUNCI.map(({ kunci, label, naikBaik }) => {
-    const a = nilaiPersen(lama[kunci] as PersenCi | number | null | undefined);
-    const b = nilaiPersen(baru[kunci] as PersenCi | number | null | undefined);
-    const selisih = a == null || b == null ? null : Math.round((b - a) * 10) / 10;
-    return { label, lama: a, baru: b, selisih, membaik: !selisih ? null : selisih > 0 === naikBaik };
-  });
+  const rows = BANDING_KUNCI.map(({ kunci, label, naikBaik }) =>
+    barisBanding(label, nilaiPersen(lama[kunci] as PersenCi | number | null | undefined), nilaiPersen(baru[kunci] as PersenCi | number | null | undefined), naikBaik),
+  );
+  // pendapat AI sendiri — hanya kalau salah satu run punya (run lama tanpa condong → "–")
+  const ca = adaCondong(lama.condong) ? lama.condong : null;
+  const cb = adaCondong(baru.condong) ? baru.condong : null;
+  if (ca || cb) rows.push(barisBanding("Pendapat AI sendiri benar (semua video)", nilaiPersen(ca?.akurasi), nilaiPersen(cb?.akurasi), true));
+  return rows;
 }
 
 /** baris hasil minimal untuk banding berpasangan (video yang sama di dua run) */

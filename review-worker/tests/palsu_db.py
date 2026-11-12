@@ -184,6 +184,10 @@ class SupaPalsu:
         self.admin: set[str] = set()
         self.granted: set[str] = set()
         self.gagal = 0
+        # kolom yang "belum ada" per tabel (meniru migration belum dijalankan): insert/update memakainya → error PGRST204
+        self.kolom_hilang: dict[str, set[str]] = {}
+        self.tanpa_condong = False
+        self.tanpa_condong_sejak = 0.0
         self.log: list[tuple[str, str]] = []  # (aksi, tabel/fungsi)
         self._id = itertools.count(1)
         self._lock = threading.RLock()
@@ -251,6 +255,7 @@ class SupaPalsu:
         with self._lock:
             self._req("insert", table)
             data = rows if isinstance(rows, list) else [rows]
+            self._cek_kolom(table, data)
             tbl = self._rows(table)
             out = []
             keys = [k.strip() for k in on_conflict.split(",")] if on_conflict else None
@@ -278,6 +283,10 @@ class SupaPalsu:
     def update(self, table: str, filters: dict[str, str], patch: dict) -> list[dict]:
         with self._lock:
             self._req("update", table)
+            self._cek_kolom(table, [patch])
+            for k in filters:
+                if k in (self.kolom_hilang.get(table) or set()):
+                    raise SupaError(f"PATCH /rest/v1/{table} → 400: {{\"code\":\"42703\",\"message\":\"column {table}.{k} does not exist\"}}", 400)
             hit = self._filter(self._rows(table), filters)
             if table == "review_jobs" and patch.get("status") == "antri":
                 for r in hit:
@@ -344,9 +353,18 @@ class SupaPalsu:
     def mati(self, info: dict) -> None:
         self.update("review_workers", {"id": f"eq.{self.worker}"}, {"last_seen": "2000-01-01T00:00:00Z", "info": {**info, "status": "mati"}})
 
+    def _cek_kolom(self, table: str, data: list[dict]) -> None:
+        hilang = self.kolom_hilang.get(table) or set()
+        for r in data:
+            for k in r:
+                if k in hilang:
+                    raise SupaError(f"POST /rest/v1/{table} → 400: {{\"code\":\"PGRST204\",\"details\":null,\"hint\":null,"
+                                    f"\"message\":\"Could not find the '{k}' column of '{table}' in the schema cache\"}}", 400)
+
     def simpan_hasil(self, row: dict) -> dict:
-        got = self.insert("review_results", row, on_conflict="scope,video_id", merge=True)
-        return got[0] if got else {}
+        from review_worker.supa import simpan_tahan_condong
+
+        return simpan_tahan_condong(self, row, lambda r: self.insert("review_results", r, on_conflict="scope,video_id", merge=True))
 
     def tambah_biaya(self, day: str, cost: float, calls: int, inp: int, out: int, cache_read: int, cache_write: int) -> float:
         return float(self.rpc("review_add_usage", {"p_day": str(day), "p_cost": cost, "p_calls": calls, "p_input": inp, "p_output": out,

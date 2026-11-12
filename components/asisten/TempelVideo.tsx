@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useId, useMemo, useState, useTransition } from "react";
-import { JOB_STATUS_LABEL, SARAN_LABEL, parseVideoRef } from "@/lib/asistenReview";
+import { JOB_STATUS_LABEL, parseVideoRef } from "@/lib/asistenReview";
 import { antrikanVideo } from "@/app/(app)/asisten-review/uji/actions";
-import type { ArStatus, JobLite } from "./statusTypes";
+import { teksHasilJob, type ArStatus, type JobLite } from "./statusTypes";
 
 const MAKS = 20;
 const pecah = (t: string) =>
@@ -123,7 +123,7 @@ export default function TempelVideo({
                 {j.status === "gagal" && j.message && <span className="basis-full break-words text-red-400">{j.message}</span>}
                 {h && (
                   <Link href={`/asisten-review/hasil/${h.id}`} className="font-semibold text-orange-400 hover:underline">
-                    {h.pipeline_status !== "ok" ? "Lihat (tidak bisa diakses)" : h.suggestion ? `${SARAN_LABEL[h.suggestion]}${typeof h.confidence === "number" ? ` ${h.confidence}%` : ""}` : "Lihat hasil"} →
+                    {teksHasilJob(h)} →
                   </Link>
                 )}
               </li>

@@ -7,7 +7,7 @@ import HasilKartu, { type KartuRow } from "./HasilKartu";
 import LiveBaru from "./LiveBaru";
 import type { FeedbackMine } from "./UmpanBalik";
 
-export type FilterHasil = { run: string; campaign: string; reviewer: string; saran: string; yakin: string; cocok: string };
+export type FilterHasil = { run: string; campaign: string; reviewer: string; saran: string; yakin: string; cocok: string; condong: string; yc: string };
 
 /** Isi halaman Hasil (tanpa ambil data → bisa diuji di harness): status laptop, filter, daftar kartu, paginasi */
 export default function HasilHalaman({
@@ -22,6 +22,7 @@ export default function HasilHalaman({
   hal,
   pages,
   f,
+  condongAda = true,
   galat,
 }: {
   status: ArStatus;
@@ -35,6 +36,8 @@ export default function HasilHalaman({
   hal: number;
   pages: number;
   f: FilterHasil;
+  /** false = kolom pendapat AI (migration-24) belum ada → filter pendapat AI disembunyikan */
+  condongAda?: boolean;
   /** pesan awam kalau daftar gagal dibaca */
   galat: string | null;
 }) {
@@ -48,7 +51,12 @@ export default function HasilHalaman({
   return (
     <div className="space-y-4">
       <StatusLaptop initial={status} />
-      <HasilFilter runs={runs} campaigns={campaigns} reviewers={reviewers} />
+      <HasilFilter runs={runs} campaigns={campaigns} reviewers={reviewers} condong={condongAda} />
+      {!condongAda && (f.condong || f.yc) && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          Filter pendapat AI belum aktif: jalankan supabase/migration-24-asisten-review-condong.sql dulu. Daftar di bawah tanpa filter itu.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-zinc-400">

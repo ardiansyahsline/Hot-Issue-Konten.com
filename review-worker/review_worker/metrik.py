@@ -12,6 +12,8 @@ Definisi (dipakai juga oleh laporan HTML — bahasa awam di laporan.py):
 - matriks[kebenaran][saran] hanya video yang bisa dinilai.
 - Tambahan di luar tipe RunMetrics (diabaikan website lama): setuju_reviewer_semua, presisi_reject, recall_reject, cakupan,
   n_di_luar_video, n_tanpa_keputusan, termasuk_di_luar_video, banding.dikuatkan/menunggu, biaya.n_video_ai/cache_hit_persen.
+- condong (KONTRAK-CONDONG.md §3): akurasi condong AI approve/reject (kolom ai_lean / ai_lean_confidence) pada video yang bisa
+  dinilai, tabel ambang "kalau AI memutuskan sendiri saat yakin ≥ X%", kalibrasi per rentang keyakinan, matriks 2×2.
 """
 from __future__ import annotations
 
@@ -152,6 +154,107 @@ def _ids(rows: list[dict]) -> list[int]:
         except (KeyError, TypeError, ValueError):
             pass  # baris lokal (tanpa Supabase) tidak punya id
     return out
+
+
+# ------------------------------------------------------------------ condong AI (approve/reject + keyakinan) — KONTRAK-CONDONG.md §3
+AMBANG_CONDONG = (50, 60, 70, 80, 85, 90, 95)
+RENTANG_KALIBRASI = ((50, 59), (60, 69), (70, 79), (80, 89), (90, 100))
+SAMPEL_KECIL = 10  # di bawah ini satu baris kalibrasi / ambang ditandai "sampel terlalu sedikit"
+
+
+def condong(r: dict) -> tuple[Optional[str], Optional[int]]:
+    """(condong, keyakinan 0..100) baris review_results; tidak ada / rusak → (None, None)"""
+    c = r.get("ai_lean")
+    if c not in AR:
+        return None, None
+    try:
+        y = int(round(float(r.get("ai_lean_confidence"))))
+    except (TypeError, ValueError):
+        return None, None
+    return c, max(0, min(100, y))
+
+
+def catatan_sampel(n: int) -> str:
+    """kalimat awam soal ukuran sampel (setengah lebar rentang Wilson 95% di akurasi 80%)"""
+    if n <= 0:
+        return "Belum ada video dengan condong AI dan hasil akhir — angka belum bisa dihitung."
+    ci = wilson(round(0.8 * n), n)
+    lebar = round((ci[1] - ci[0]) / 2) if ci else 0
+    if n < 30:
+        return (f"Sampel sangat kecil ({n} video): angka bisa meleset sekitar ±{lebar} poin persen. Pakai hanya sebagai gambaran "
+                "awal; jalankan uji 500 video sebelum memutuskan.")
+    if n < 200:
+        return (f"Sampel sedang ({n} video): angka bisa meleset sekitar ±{lebar} poin persen. Baris dengan sedikit video "
+                "lebih tidak pasti lagi.")
+    return f"Sampel {n} video: angka bisa meleset sekitar ±{lebar} poin persen (lihat rentang wajar 95% tiap angka)."
+
+
+def hitung_condong(E: list[dict], luar: Optional[list[dict]] = None) -> dict:
+    """akurasi condong AI pada video yang punya kebenaran akhir & bisa dinilai (E = sama dengan n_dinilai). luar = video reject
+    karena alasan di luar isi video (dihitung terpisah, termasuk_di_luar_video)."""
+    ada = [(r, *condong(r)) for r in E]
+    ada = [(r, c, y) for r, c, y in ada if c is not None]
+    n_kb = len(E)
+
+    def benar(x) -> bool:
+        return x[1] == kebenaran_baris(x[0])
+
+    def bertanda(r: dict) -> bool:
+        return saran(r) == "cek_manusia"
+
+    matriks = {t: {c: 0 for c in AR} for t in AR}
+    for r, c, _ in ada:
+        matriks[kebenaran_baris(r)][c] += 1
+    ambang = []
+    for x in AMBANG_CONDONG:
+        sub = [a for a in ada if a[2] >= x]
+        ambang.append({
+            "min": x, "n": len(sub), "ditangani_persen": _r1(len(sub) / n_kb * 100) if n_kb else None,
+            "akurasi": persen(sum(benar(a) for a in sub), len(sub)),
+            "salah_approve": sum(a[1] == "approve" and kebenaran_baris(a[0]) == "reject" for a in sub),
+            "salah_reject": sum(a[1] == "reject" and kebenaran_baris(a[0]) == "approve" for a in sub),
+            "n_bertanda": sum(bertanda(a[0]) for a in sub),
+        })
+    kalibrasi = []
+    for i, (lo, hi) in enumerate(RENTANG_KALIBRASI):
+        # baris pertama juga menampung keyakinan < 50 (semestinya tidak ada: worker menjepit 50..100)
+        sub = [a for a in ada if (a[2] <= hi) and (a[2] >= lo or i == 0)]
+        rata = _r1(sum(a[2] for a in sub) / len(sub)) if sub else None
+        p = persen(sum(benar(a) for a in sub), len(sub))
+        kalibrasi.append({"dari": lo, "sampai": hi, "n": len(sub), "rata_yakin": rata, "akurasi": p,
+                          "selisih": _r1(p["persen"] - rata) if sub and p["persen"] is not None else None})
+    per = {c: persen(sum(benar(a) for a in ada if a[1] == c), sum(a[1] == c for a in ada)) for c in AR}
+    luar_ada = [(r, *condong(r)) for r in (luar or [])]
+    luar_ada = [(r, c, y) for r, c, y in luar_ada if c is not None]
+    semua = ada + luar_ada
+    return {
+        "versi": 1,
+        "n_kebenaran": n_kb,
+        "n_ada": len(ada),
+        "n_tanpa": n_kb - len(ada),
+        "cakupan": _r1(len(ada) / n_kb * 100) if n_kb else None,
+        "akurasi": persen(sum(benar(a) for a in ada), len(ada)),
+        "matriks": matriks,
+        "ambang": ambang,
+        "kalibrasi": kalibrasi,
+        "termasuk_di_luar_video": persen(sum(benar(a) for a in semua), len(semua)),
+        "per_condong": per,
+        "catatan_sampel": catatan_sampel(len(ada)),
+    }
+
+
+def kalimat_kalibrasi(k: dict) -> str:
+    """"Kalau AI bilang yakin 80–89% (rata-rata 84%), benarnya 78% (31 dari 40 video)." """
+    rentang = f"{k['dari']}–{k['sampai']}%"
+    if not k.get("n"):
+        return f"Kalau AI bilang yakin {rentang}: belum ada video."
+    p = k.get("akurasi") or {}
+    rata = str(k.get("rata_yakin")).replace(".", ",")
+    pr = str(p.get("persen")).replace(".", ",")
+    s = f"Kalau AI bilang yakin {rentang} (rata-rata {rata}%), benarnya {pr}% ({p.get('benar')} dari {p.get('n')} video)."
+    if k["n"] < SAMPEL_KECIL:
+        s += " (sampel terlalu sedikit)"
+    return s
 
 
 # ------------------------------------------------------------------ utama
@@ -298,6 +401,7 @@ def hitung_metrik(baris: list[dict], cfg, n_sampel: Optional[int] = None) -> dic
         "biaya": biaya,
         "waktu": waktu,
         "contoh": {"benar": _ids(benar_c), "salah": _ids(salah_c)},
+        "condong": hitung_condong(E, luar),
     }
 
 
@@ -309,7 +413,17 @@ BANDING_KUNCI = [  # (kunci, label awam, lebih besar = lebih baik?)
     ("persen_cek_manusia", "Diserahkan ke manusia", False),
     ("presisi_reject", "Kalau AI bilang reject, benar-benar reject", True),
     ("recall_reject", "Video yang seharusnya reject dan tertangkap AI", True),
+    ("condong.akurasi", "Condong AI benar (semua video)", True),
 ]
+
+
+def _ambil_kunci(m: dict, k: str) -> Any:
+    """kunci bertitik ("condong.akurasi") → nilai bersarang"""
+    for bag in k.split("."):
+        if not isinstance(m, dict):
+            return None
+        m = m.get(bag)
+    return m
 
 
 def _nilai_persen(v: Any) -> Optional[float]:
@@ -322,7 +436,7 @@ def bandingkan_versi(lama: dict, baru: dict, baris_lama: Optional[list[dict]] = 
     """tabel rubrik lama vs baru + perbandingan berpasangan (video yang sama di kedua run)"""
     tabel = []
     for k, label, naik_baik in BANDING_KUNCI:
-        a, b = _nilai_persen(lama.get(k)), _nilai_persen(baru.get(k))
+        a, b = _nilai_persen(_ambil_kunci(lama, k)), _nilai_persen(_ambil_kunci(baru, k))
         d = None if a is None or b is None else round(b - a, 1)
         tabel.append({"kunci": k, "label": label, "lama": a, "baru": b, "selisih": d,
                       "membaik": None if not d else (d > 0) == naik_baik})

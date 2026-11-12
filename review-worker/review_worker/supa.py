@@ -4,6 +4,7 @@ Tabel & RPC: KONTRAK.md §1. Supabase tidak terjangkau → SupaError (pemanggil 
 httpx.Client aman dipakai bersama antar thread (detak jantung, pengirim progres, thread utama)."""
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,8 +42,47 @@ def norm_path(p: str) -> str:
     return p
 
 
+# kolom migration-24 (condong AI). Belum dijalankan → hasil disimpan tanpa kolom ini (log sekali), worker tetap jalan
+KOLOM_CONDONG = ("ai_lean", "ai_lean_confidence")
+CEK_ULANG_CONDONG_DETIK = 1800.0
+
+
+def _kolom_hilang(teks: str) -> bool:
+    """PostgREST PGRST204 "Could not find the 'x' column of 't' in the schema cache" / Postgres 42703 (kolom tidak ada)"""
+    return "PGRST204" in teks or "42703" in teks or bool(re.search(r"column .{0,80}(schema cache|does not exist)", teks))
+
+
 def _belum_migrasi(status: int, teks: str) -> bool:
+    if _kolom_hilang(teks):  # tabel ada, hanya kolom (mis. migration-24) yang belum — bukan "migration-23 belum"
+        return False
     return status in (404,) or any(k in teks for k in ("PGRST202", "PGRST205", "42P01", "42883", "schema cache"))
+
+
+def simpan_tahan_condong(supa: Any, row: dict, kirim: Callable[[dict], list]) -> dict:
+    """kirim(row) dengan cadangan: Supabase menolak kolom ai_lean / ai_lean_confidence (migration-24 belum dijalankan) → kirim
+    lagi tanpa kolom itu dan ingat (atribut supa.tanpa_condong; dipakai Supa asli & tiruan tes). Peringatan dicatat SEKALI.
+    Tiap 30 menit dicoba lagi dengan kolom (migration-24 bisa dijalankan sementara laptop menyala)."""
+    sejak = getattr(supa, "tanpa_condong_sejak", 0.0) or 0.0
+    if getattr(supa, "tanpa_condong", False) and time.monotonic() - sejak < CEK_ULANG_CONDONG_DETIK:
+        row = {k: v for k, v in row.items() if k not in KOLOM_CONDONG}
+        got = kirim(row)
+        return got[0] if got else {}
+    try:
+        got = kirim(row)
+    except SupaError as e:
+        teks = str(e)
+        if not (_kolom_hilang(teks) and any(k in teks for k in KOLOM_CONDONG)):
+            raise
+        if not getattr(supa, "tanpa_condong", False):
+            log.warning("Kolom condong AI (ai_lean) belum ada di Supabase — hasil disimpan tanpa condong. Jalankan "
+                        "supabase/migration-24-asisten-review-condong.sql di SQL Editor supaya condong AI ikut tersimpan.")
+        supa.tanpa_condong, supa.tanpa_condong_sejak = True, time.monotonic()
+        got = kirim({k: v for k, v in row.items() if k not in KOLOM_CONDONG})
+        return got[0] if got else {}
+    if getattr(supa, "tanpa_condong", False):
+        log.info("Kolom condong AI sudah ada di Supabase — condong kembali disimpan.")
+        supa.tanpa_condong = False
+    return got[0] if got else {}
 
 
 class Supa:
@@ -53,6 +93,8 @@ class Supa:
         self.http = client or httpx.Client(timeout=httpx.Timeout(60, connect=15), limits=httpx.Limits(max_connections=12, max_keepalive_connections=6))
         self._h = {"apikey": key, "Authorization": f"Bearer {key}"}
         self.sleep: Callable[[float], None] = time.sleep  # dipalsukan saat tes
+        self.tanpa_condong = False  # True sesudah Supabase menolak kolom ai_lean (migration-24 belum dijalankan)
+        self.tanpa_condong_sejak = 0.0
 
     def __repr__(self) -> str:  # kunci tidak pernah tercetak
         return f"Supa(url={self.url!r}, worker={self.worker!r})"
@@ -151,9 +193,9 @@ class Supa:
         self.update("review_workers", {"id": f"eq.{self.worker}"}, {"last_seen": "2000-01-01T00:00:00Z", "info": {**info, "status": "mati"}})
 
     def simpan_hasil(self, row: dict) -> dict:
-        """upsert review_results on_conflict=scope,video_id (merge) → baris tersimpan (dengan id)"""
-        got = self.insert("review_results", row, on_conflict="scope,video_id", merge=True)
-        return got[0] if got else {}
+        """upsert review_results on_conflict=scope,video_id (merge) → baris tersimpan (dengan id).
+        Kolom condong (migration-24) belum ada → simpan ulang tanpa kolom itu; sesudahnya selalu tanpa (log sekali)."""
+        return simpan_tahan_condong(self, row, lambda r: self.insert("review_results", r, on_conflict="scope,video_id", merge=True))
 
     def tambah_biaya(self, day: str, cost: float, calls: int, inp: int, out: int, cache_read: int, cache_write: int) -> float:
         """rpc review_add_usage → total biaya USD hari itu"""

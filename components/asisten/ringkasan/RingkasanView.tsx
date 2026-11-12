@@ -4,10 +4,11 @@
  * Angka = review_runs.metrics (review-worker metrik.py, KONTRAK.md §6.2). Tanpa data pribadi: video = id, reviewer = pseudonim.
  */
 import Link from "next/link";
-import { SARAN_LABEL, SERAH_LABEL, type KodeSerah, type Saran } from "@/lib/asistenReview";
+import { CONDONG_LABEL, SARAN_LABEL, SERAH_LABEL, type Condong, type KodeSerah, type Saran } from "@/lib/asistenReview";
 import {
   RUN_STATUS_LABEL,
   TAHAP_LABEL,
+  adaCondong,
   adaMetrik,
   angka,
   bandingVersi,
@@ -23,6 +24,7 @@ import {
   type PersenCi,
   type RunRingkas,
 } from "./hitung";
+import CondongView from "./CondongView";
 import RunPicker from "./RunPicker";
 import HapusRun from "./HapusRun";
 
@@ -35,6 +37,9 @@ export type ContohKasus = {
   official_reason: string | null;
   specific_reason: string | null;
   confidence: number | null;
+  /** migration-24 (undefined = kolom belum ada) */
+  ai_lean?: Condong | null;
+  ai_lean_confidence?: number | null;
 };
 export type PemakaianHarian = { day: string; cost_usd: number; calls: number };
 
@@ -180,6 +185,15 @@ function Isi({ m, run, contoh }: { m: MetrikLengkap; run: RunRingkas; contoh: Co
       </div>
 
       <Hitungan m={m} />
+
+      {adaCondong(m.condong) ? (
+        <CondongView c={m.condong} runId={run.id} />
+      ) : (
+        <p className="rounded-xl border border-zinc-800 px-3.5 py-2.5 text-xs text-zinc-500">
+          🤖 Run ini belum punya angka “kalau AI memutuskan sendiri” (dibuat sebelum fitur itu). Klik “Ulangi dengan rubrik terbaru” di menu Jalankan uji untuk
+          melihatnya.
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Matriks m={m} />
@@ -578,7 +592,15 @@ function Contoh({ contoh, m }: { contoh: ContohKasus[]; m: MetrikLengkap }) {
                   </div>
                   <p className="mt-0.5 text-xs text-zinc-400">
                     AI: <b className="text-zinc-200">{c.suggestion ? SARAN_LABEL[c.suggestion] : "–"}</b>
-                    {c.confidence != null && ` (${c.confidence})`} · hasil akhir: <b className="text-zinc-200">{c.final_truth ? SARAN_LABEL[c.final_truth] : "–"}</b>
+                    {c.confidence != null && ` (${c.confidence})`}
+                    {(c.ai_lean === "approve" || c.ai_lean === "reject") && (
+                      <>
+                        {" "}
+                        · pendapat: <b className="text-zinc-200">{CONDONG_LABEL[c.ai_lean]}</b>
+                        {c.ai_lean_confidence != null && ` ${c.ai_lean_confidence}%`}
+                      </>
+                    )}{" "}
+                    · hasil akhir: <b className="text-zinc-200">{c.final_truth ? SARAN_LABEL[c.final_truth] : "–"}</b>
                   </p>
                   {(c.specific_reason || c.official_reason) && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{c.specific_reason || c.official_reason}</p>}
                 </Link>
@@ -643,13 +665,14 @@ function BandingVersi({ lama, baru, pasangan }: { lama: RunRingkas; baru: RunRin
 function TabelVersi({ runs, aktif }: { runs: RunRingkas[]; aktif: string | null }) {
   return (
     <Kotak judul="Semua run per versi rubrik" sub="Ulangi uji setelah rubrik diperbaiki, lalu bandingkan di sini.">
-      <Tabel label="Semua run" lebar={480}>
+      <Tabel label="Semua run" lebar={560}>
         <thead>
           <tr>
             <th className={th}>Rubrik</th>
             <th className={th}>Run</th>
             <th className={`${th} text-right`}>Video</th>
             <th className={`${th} text-right`}>Setuju akhir</th>
+            <th className={`${th} text-right`}>Pendapat AI benar</th>
             <th className={`${th} text-right`}>Ke manusia</th>
             <th className={`${th} text-right`}>Rp/video</th>
           </tr>
@@ -673,6 +696,7 @@ function TabelVersi({ runs, aktif }: { runs: RunRingkas[]; aktif: string | null 
                   {angka(r.done)}/{angka(r.sample_size)}
                 </td>
                 <td className={`${td} text-right tabular-nums`}>{persenTeks(m ? nilaiPersen(m.setuju_akhir) : null)}</td>
+                <td className={`${td} text-right tabular-nums`}>{persenTeks(m && adaCondong(m.condong) ? nilaiPersen(m.condong.akurasi) : null)}</td>
                 <td className={`${td} text-right tabular-nums`}>{persenTeks(m?.persen_cek_manusia)}</td>
                 <td className={`${td} text-right tabular-nums`}>{m?.biaya ? rp(m.biaya.per_video_idr) : "–"}</td>
               </tr>
