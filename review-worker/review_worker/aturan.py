@@ -316,6 +316,11 @@ def terapkan_aturan(ai: Optional[KeputusanAI], brief: BriefCampaign, materi: Mat
             alasan_kode = None
             if ada_data_akun:
                 tambah("data_akun")  # hanya dicatat: syarat akun dicek reviewer, approve tetap
+        else:
+            # reject tetap jalan, tapi poin identitas orang / materi yang belum bisa dinilai tetap terlihat oleh reviewer
+            for k in ("identitas_orang", "materi_belum_ada"):
+                if k in flags:
+                    tambah(k)
     alasan_label = label_untuk_kode(alasan_kode, label_alasan) if alasan_kode else None
     return PenilaianFinal(saran=saran, keyakinan=keyakinan, alasan_kode=alasan_kode, alasan_label=alasan_label,
                           alasan_spesifik=spesifik, ringkasan=ringkasan, checklist=checklist, serah=serah)  # type: ignore[arg-type]
